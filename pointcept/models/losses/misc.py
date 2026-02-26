@@ -26,6 +26,7 @@ class CrossEntropyLoss(nn.Module):
         super(CrossEntropyLoss, self).__init__()
         weight = torch.tensor(weight).cuda() if weight is not None else None
         self.loss_weight = loss_weight
+        self.ignore_index = ignore_index
         self.loss = nn.CrossEntropyLoss(
             weight=weight,
             size_average=size_average,
@@ -36,7 +37,11 @@ class CrossEntropyLoss(nn.Module):
         )
 
     def forward(self, pred, target):
-        return self.loss(pred, target) * self.loss_weight
+        # When all targets are ignore_index, nn.CrossEntropyLoss returns NaN.
+        # Return 0 in the graph so loss.requires_grad stays True; gradient is 0.
+        if (target != self.ignore_index).any():
+            return self.loss(pred, target) * self.loss_weight
+        return (pred * 0).sum()
 
 
 @LOSSES.register_module()
