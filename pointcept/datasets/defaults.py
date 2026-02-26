@@ -54,6 +54,7 @@ class DefaultDataset(Dataset):
         cache=False,
         ignore_index=-1,
         loop=1,
+        max_sample=None,
     ):
         super(DefaultDataset, self).__init__()
         self.data_root = data_root
@@ -66,6 +67,7 @@ class DefaultDataset(Dataset):
         )  # force make loop = 1 while in test mode
         self.test_mode = test_mode
         self.test_cfg = test_cfg if test_mode else None
+        self.max_sample = max_sample
 
         if test_mode:
             self.test_voxelize = TRANSFORMS.build(self.test_cfg.voxelize)
@@ -76,6 +78,8 @@ class DefaultDataset(Dataset):
             self.aug_transform = [Compose(aug) for aug in self.test_cfg.aug_transform]
 
         self.data_list = self.get_data_list()
+        if self.max_sample is not None and self.max_sample < len(self.data_list):
+            self.data_list = self.data_list[: self.max_sample]
         logger = get_root_logger()
         logger.info(
             "Totally {} x {} samples in {} {} set.".format(
