@@ -2,11 +2,12 @@
 
 REPO_ROOT=/lustre/fswork/projects/rech/unv/usi32yh/Pointcept
 
-#SBATCH --output=${REPO_ROOT}/logs/slurm/%j/slurm.out
-#SBATCH --error=${REPO_ROOT}/logs/slurm/%j/slurm.err
+# Account must be first so sbatch parses it (variables in #SBATCH may not expand at submit time)
 #SBATCH -A unv@h100
 #SBATCH --partition=gpu_p6
 #SBATCH -C h100
+#SBATCH --output=/lustre/fswork/projects/rech/unv/usi32yh/Pointcept/logs/slurm/%j/slurm.out
+#SBATCH --error=/lustre/fswork/projects/rech/unv/usi32yh/Pointcept/logs/slurm/%j/slurm.err
 
 #SBATCH --time=02:30:00
 #SBATCH --nodes=1
