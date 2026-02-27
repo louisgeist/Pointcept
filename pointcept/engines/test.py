@@ -10,6 +10,7 @@ from uuid import uuid4
 import os
 import time
 import numpy as np
+import wandb
 from collections import OrderedDict
 import torch
 import torch.distributed as dist
@@ -338,7 +339,7 @@ class SemSegTester(TesterBase):
             allAcc = sum(intersection) / (sum(target) + 1e-10)
 
             logger.info(
-                "Val result: mIoU/mAcc/allAcc {:.4f}/{:.4f}/{:.4f}".format(
+                "Test result: mIoU/mAcc/allAcc {:.4f}/{:.4f}/{:.4f}".format(
                     mIoU, mAcc, allAcc
                 )
             )
@@ -351,6 +352,23 @@ class SemSegTester(TesterBase):
                         accuracy=accuracy_class[i],
                     )
                 )
+
+            # Optional logging to Weights & Biases for test metrics
+            if getattr(self.cfg, "enable_wandb", False):
+                
+                log_dict = {
+                    "test/mIoU": float(mIoU),
+                    "test/mAcc": float(mAcc),
+                    "test/allAcc": float(allAcc),
+                }
+                for i in range(self.cfg.data.num_classes):
+                    cls_name = self.cfg.data.names[i]
+                    log_dict[f"test/iou_{cls_name}"] = float(iou_class[i])
+                    log_dict[f"test/acc_{cls_name}"] = float(
+                        accuracy_class[i]
+                    )
+                wandb.log(log_dict)
+
             logger.info("<<<<<<<<<<<<<<<<< End Evaluation <<<<<<<<<<<<<<<<<")
 
     @staticmethod

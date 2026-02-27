@@ -199,9 +199,11 @@ class SemSegEvaluator(HookBase):
                 )
             )
         current_epoch = self.trainer.epoch + 1
+        m_iou_best = max(self.trainer.best_metric_value, m_iou)
         if self.trainer.writer is not None:
             self.trainer.writer.add_scalar("val/loss", loss_avg, current_epoch)
             self.trainer.writer.add_scalar("val/mIoU", m_iou, current_epoch)
+            self.trainer.writer.add_scalar("val/mIoU_best", m_iou_best, current_epoch)
             self.trainer.writer.add_scalar("val/mAcc", m_acc, current_epoch)
             self.trainer.writer.add_scalar("val/allAcc", all_acc, current_epoch)
             if self.trainer.cfg.enable_wandb:
@@ -210,6 +212,7 @@ class SemSegEvaluator(HookBase):
                         "Epoch": current_epoch,
                         "val/loss": loss_avg,
                         "val/mIoU": m_iou,
+                        "val/mIoU_best": m_iou_best,
                         "val/mAcc": m_acc,
                         "val/allAcc": all_acc,
                     },
