@@ -4,7 +4,7 @@ REPO_ROOT=/lustre/fswork/projects/rech/unv/usi32yh/Pointcept
 
 #SBATCH --output=${REPO_ROOT}/logs/slurm/%j/slurm.out
 #SBATCH --error=${REPO_ROOT}/logs/slurm/%j/slurm.err
-#SBATCH -A uhn@h100
+#SBATCH -A ppm@h100
 #SBATCH -C h100
 
 #SBATCH --time=02:30:00
