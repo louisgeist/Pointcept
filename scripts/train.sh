@@ -94,6 +94,10 @@ echo "Running code in: $CODE_DIR"
 
 echo " =========> RUN TASK <========="
 ulimit -n 65536
+# Extra options for Python (e.g. eval_epoch=1 epoch=34 for smoke test)
+OPTS="save_path=$EXP_DIR"
+[ -n "${EXTRA_OPTIONS-}" ] && OPTS="$OPTS $EXTRA_OPTIONS"
+
 if [ "${WEIGHT}" = "None" ]
 then
     $PYTHON "$CODE_DIR"/tools/$TRAIN_CODE \
@@ -102,7 +106,7 @@ then
     --num-machines "$NUM_MACHINE" \
     --machine-rank ${SLURM_NODEID:-0} \
     --dist-url ${DIST_URL} \
-    --options save_path="$EXP_DIR"
+    --options $OPTS
 else
     $PYTHON "$CODE_DIR"/tools/$TRAIN_CODE \
     --config-file "$CONFIG_DIR" \
