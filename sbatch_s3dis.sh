@@ -1,7 +1,5 @@
 #!/bin/bash
 
-REPO_ROOT=/lustre/fswork/projects/rech/unv/usi32yh/Pointcept
-
 # Account must be first so sbatch parses it (variables in #SBATCH may not expand at submit time)
 #SBATCH -A unv@h100
 #SBATCH -C h100
@@ -18,6 +16,7 @@ REPO_ROOT=/lustre/fswork/projects/rech/unv/usi32yh/Pointcept
 
 #SBATCH --job-name=s3dis_ptv3_test
 
+REPO_ROOT=/lustre/fswork/projects/rech/unv/usi32yh/Pointcept
 JOB_DIR=${REPO_ROOT}/logs/slurm/${SLURM_JOB_ID}
 mkdir -p ${JOB_DIR}
 
