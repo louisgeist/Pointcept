@@ -78,7 +78,7 @@ CONFIG_DIR=configs/${DATASET}/${CONFIG}.py
 
 
 echo " =========> CREATE EXP DIR <========="
-echo "Experiment dir: $ROOT_DIR/$EXP_DIR"
+case "$EXP_DIR" in /*) echo "Experiment dir: $EXP_DIR" ;; *) echo "Experiment dir: $ROOT_DIR/$EXP_DIR" ;; esac
 if [ "${RESUME}" = true ] && [ -d "$EXP_DIR" ]
 then
   CONFIG_DIR=${EXP_DIR}/config.py
@@ -90,7 +90,8 @@ else
 fi
 
 echo "Loading config in:" $CONFIG_DIR
-export PYTHONPATH=./$CODE_DIR
+# Use absolute path so Python finds pointcept when CODE_DIR is under logs/slurm/%j/
+export PYTHONPATH=$(cd "$CODE_DIR" && pwd)
 echo "Running code in: $CODE_DIR"
 
 
