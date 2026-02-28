@@ -42,7 +42,8 @@ module load arch/h100
 module load cuda/12.1.0
 module load miniforge/24.9.0
 
-mamba activate pointcept
+# although the env has been created with mamba, we can still use conda to activate it
+conda activate pointcept
 
 conda list > ${JOB_DIR}/conda_env.txt
 
