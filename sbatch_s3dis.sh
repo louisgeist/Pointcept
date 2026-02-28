@@ -52,7 +52,7 @@ cd ${REPO_ROOT}
 START_TIME=$(date +%s)
 
 
-export EXTRA_OPTIONS="save_path=exp/s3dis/ptv3_nonormal eval_epoch=2 epoch=10 data.train.max_sample=100 data.val.max_sample=100 data.test.max_sample=10"
+export EXTRA_OPTIONS="save_path=exp/s3dis/ptv3_nonormal eval_epoch=2 epoch=10 data.train.max_sample=2 data.val.max_sample=2 data.test.max_sample=10"
 sh scripts/train.sh -g 1 -d s3dis -c ptv3_nonormal -n ptv3_nonormal
 
 END_TIME=$(date +%s)
