@@ -53,14 +53,16 @@ def index_operator(data_dict, index, duplicate=False):
 
 @TRANSFORMS.register_module()
 class Collect(object):
-    def __init__(self, keys, offset_keys_dict=None, **kwargs):
+    def __init__(self, keys, offset_keys_dict=None, optional_keys=None, **kwargs):
         """
         e.g. Collect(keys=[coord], feat_keys=[coord, color])
+        optional_keys: keys to include only if present (e.g. "inverse" for test single-fragment).
         """
         if offset_keys_dict is None:
             offset_keys_dict = dict(offset="coord")
         self.keys = keys
         self.offset_keys = offset_keys_dict
+        self.optional_keys = optional_keys or ()
         self.kwargs = kwargs
 
     def __call__(self, data_dict):
@@ -69,6 +71,9 @@ class Collect(object):
             self.keys = [self.keys]
         for key in self.keys:
             data[key] = data_dict[key]
+        for key in self.optional_keys:
+            if key in data_dict:
+                data[key] = data_dict[key]
         for key, value in self.offset_keys.items():
             data[key] = torch.tensor([data_dict[value].shape[0]])
         for name, keys in self.kwargs.items():
@@ -853,6 +858,7 @@ class GridSample(object):
         return_min_coord=False,
         return_displacement=False,
         project_displacement=False,
+        test_single_fragment=False,
     ):
         self.grid_size = grid_size
         self.hash = self.fnv_hash_vec if hash_type == "fnv" else self.ravel_hash_vec
@@ -863,6 +869,7 @@ class GridSample(object):
         self.return_min_coord = return_min_coord
         self.return_displacement = return_displacement
         self.project_displacement = project_displacement
+        self.test_single_fragment = test_single_fragment
 
     def __call__(self, data_dict):
         assert "coord" in data_dict.keys()
@@ -914,13 +921,17 @@ class GridSample(object):
             return data_dict
 
         elif self.mode == "test":  # test mode
+            # When test_single_fragment=True: one point per voxel, one fragment; inverse
+            # maps each full-scene point to its voxel id so test can broadcast label.
+            num_fragments = 1 if self.test_single_fragment else count.max()
+            return_inverse_here = self.return_inverse or self.test_single_fragment
             data_part_list = []
-            for i in range(count.max()):
+            for i in range(num_fragments):
                 idx_select = np.cumsum(np.insert(count, 0, 0)[0:-1]) + i % count
                 idx_part = idx_sort[idx_select]
                 data_part = index_operator(data_dict, idx_part, duplicate=True)
                 data_part["index"] = idx_part
-                if self.return_inverse:
+                if return_inverse_here:
                     data_part["inverse"] = np.zeros_like(inverse)
                     data_part["inverse"][idx_sort] = inverse
                 if self.return_grid_coord:
