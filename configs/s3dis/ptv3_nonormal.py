@@ -2,7 +2,7 @@ _base_ = ["../_base_/default_runtime.py"]
 
 # misc custom setting
 batch_size = 3 #12  # bs: total bs in all gpus
-num_worker = 24
+num_worker = 4
 mix_prob = 0.8
 empty_cache = False
 enable_amp = True
