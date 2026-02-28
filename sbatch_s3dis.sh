@@ -53,11 +53,11 @@ START_TIME=$(date +%s)
 
 
 # Put exp inside logs/slurm/%j/ to keep everything under the sbatch log dir
-export SAVE_PATH="${JOB_DIR}/exp"
-export EXTRA_OPTIONS="save_path=${SAVE_PATH} eval_epoch=2 epoch=10 data.train.max_sample=2 data.val.max_sample=2 data.test.max_sample=10"
+export JOB_DIR
+export EXTRA_OPTIONS="save_path=${JOB_DIR} eval_epoch=2 epoch=10 data.train.max_sample=2 data.val.max_sample=2 data.test.max_sample=10"
 sh scripts/train.sh -g 1 -d s3dis -c ptv3_nonormal -n ptv3_nonormal
 
-echo "Exp dir: ${SAVE_PATH}" >> "${JOB_DIR}/job_info.log"
+echo "Exp dir: ${JOB_DIR}" >> "${JOB_DIR}/job_info.log"
 
 END_TIME=$(date +%s)
 DURATION=$((END_TIME - START_TIME))
