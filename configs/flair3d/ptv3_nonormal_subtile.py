@@ -89,7 +89,7 @@ param_dicts = [dict(keyword="block", lr=0.0006)]
 
 # dataset settings
 dataset_type = "Flair3DDataset"
-data_root = "data/flair3d_subtile"
+data_root = "data/flair3d"
 
 data = dict(
     num_classes=num_classes,
