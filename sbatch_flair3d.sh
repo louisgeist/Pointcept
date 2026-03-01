@@ -16,6 +16,9 @@
 
 #SBATCH --job-name=flair3d
 
+# Config name from first script arg, e.g. sbatch sbatch_flair3d.sh lowerlr
+CONFIG="${1:-ptv3_nonormal_subtile}"
+
 REPO_ROOT=/lustre/fswork/projects/rech/unv/usi32yh/Pointcept
 JOB_DIR=${REPO_ROOT}/logs/slurm/${SLURM_JOB_ID}
 mkdir -p ${JOB_DIR}
@@ -24,6 +27,7 @@ cp $0 ${JOB_DIR}/script.slurm
 
 {
     echo "Job ID: $SLURM_JOB_ID"
+    echo "Config: $CONFIG"
     echo "Starting job at: $(date)"
     echo "Running on host: $(hostname)"
     echo "Working directory: $(pwd)"
@@ -55,7 +59,7 @@ START_TIME=$(date +%s)
 # Put exp inside logs/slurm/%j/ to keep everything under the sbatch log dir
 export JOB_DIR
 export EXTRA_OPTIONS="save_path=${JOB_DIR} epoch=100 eval_epoch=10"
-sh scripts/train.sh -g 1 -d flair3d -c ptv3_nonormal_subtile -n ptv3_nonormal_subtile
+sh scripts/train.sh -g 1 -d flair3d -c "$CONFIG" -n "$CONFIG"
 
 echo "Exp dir: ${JOB_DIR}" >> "${JOB_DIR}/job_info.log"
 
