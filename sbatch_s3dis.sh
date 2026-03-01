@@ -14,7 +14,7 @@
 #SBATCH --hint=nomultithread
 
 
-#SBATCH --job-name=s3dis_ptv3_test
+#SBATCH --job-name=s3dis_ptv3_1gpu
 
 REPO_ROOT=/lustre/fswork/projects/rech/unv/usi32yh/Pointcept
 JOB_DIR=${REPO_ROOT}/logs/slurm/${SLURM_JOB_ID}
@@ -54,8 +54,8 @@ START_TIME=$(date +%s)
 
 # Put exp inside logs/slurm/%j/ to keep everything under the sbatch log dir
 export JOB_DIR
-export EXTRA_OPTIONS="save_path=${JOB_DIR} eval_epoch=2 epoch=10 data.train.max_sample=2 data.val.max_sample=2 data.test.max_sample=10"
-sh scripts/train.sh -g 1 -d s3dis -c ptv3_nonormal -n ptv3_nonormal
+export EXTRA_OPTIONS="save_path=${JOB_DIR}" #eval_epoch=2 epoch=10" # data.train.max_sample=2 data.val.max_sample=2 data.test.max_sample=10"
+sh scripts/train.sh -g 1 -d s3dis -c ptv3_nonormal_1gpu -n ptv3_nonormal_1gpu
 
 echo "Exp dir: ${JOB_DIR}" >> "${JOB_DIR}/job_info.log"
 
