@@ -79,15 +79,19 @@ class IterationTimer(HookBase):
 
 @HOOKS.register_module()
 class InformationWriter(HookBase):
-    def __init__(self, log_interval=1):
+    def __init__(self, log_interval=1, wandb_log_every_step=False):
         """
         Args:
             log_interval: Log to console/file every N steps (default 1).
                           TensorBoard/W&B are still updated every step.
+            wandb_log_every_step: If True, log train_batch/* and params/lr to wandb
+                                  every step. If False (default), log only at epoch
+                                  level to keep .wandb small.
         """
         self.curr_iter = 0
         self.model_output_keys = []
         self.log_interval = log_interval
+        self.wandb_log_every_step = wandb_log_every_step
 
     def before_train(self):
         self.trainer.comm_info["iter_info"] = ""
@@ -131,8 +135,7 @@ class InformationWriter(HookBase):
                     self.trainer.storage.history(key).val,
                     self.curr_iter,
                 )
-            if self.trainer.cfg.enable_wandb:
-
+            if self.trainer.cfg.enable_wandb and self.wandb_log_every_step:
                 wandb.log(
                     {"Iter": self.curr_iter, "params/lr": lr}, step=self.curr_iter
                 )
@@ -161,15 +164,15 @@ class InformationWriter(HookBase):
                 )
 
             if self.trainer.cfg.enable_wandb:
-
+                lr = self.trainer.optimizer.state_dict()["param_groups"][0]["lr"]
+                epoch_step = self.trainer.epoch + 1
+                wandb_dict = {
+                    "Epoch": epoch_step,
+                    "params/lr": lr,
+                }
                 for key in self.model_output_keys:
-                    wandb.log(
-                        {
-                            "Epoch": self.trainer.epoch + 1,
-                            f"train/{key}": self.trainer.storage.history(key).avg,
-                        },
-                        step=wandb.run.step,
-                    )
+                    wandb_dict[f"train/{key}"] = self.trainer.storage.history(key).avg
+                wandb.log(wandb_dict, step=epoch_step)
 
 
 @HOOKS.register_module()
