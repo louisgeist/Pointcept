@@ -3,11 +3,11 @@ _base_ = ["../../../../_base_/default_runtime.py"] # level experiment/wXX/DD/sub
 # Configs
 num_classes = 8
 ignore_index = 8
-grid_size = 0.05
+grid_size = 0.5
 
 num_gpu = 1
 
-epoch = 10
+epoch = 20
 eval_epoch = 10
 
 # Specific things I setted
@@ -28,7 +28,7 @@ hooks = [
 ]
 
 # misc custom setting
-batch_size = 1*num_gpu #12  # bs: total bs in all gpus
+batch_size = 8*num_gpu #12  # bs: total bs in all gpus
 num_worker = 6*num_gpu #24
 mix_prob = 0.0
 empty_cache = False
