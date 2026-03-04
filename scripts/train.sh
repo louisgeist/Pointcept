@@ -71,7 +71,7 @@ echo "Dist URL: $DIST_URL"
 
 # Use JOB_DIR if set (e.g. by sbatch to put exp inside logs/slurm/%j/), else default
 EXP_DIR=exp/${DATASET}/${EXP_NAME}
-[ -n "${JOB_DIR}" ] && EXP_DIR=${JOB_DIR}
+[ -n "${JOB_DIR}" ] && EXP_DIR=${JOB_DIR}  # override when running under Slurm with JOB_DIR exported
 MODEL_DIR=${EXP_DIR}/model
 CODE_DIR=${EXP_DIR}/code
 CONFIG_DIR=configs/${DATASET}/${CONFIG}.py

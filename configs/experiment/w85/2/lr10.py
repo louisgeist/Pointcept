@@ -1,4 +1,4 @@
-_base_ = ["../_base_/default_runtime.py"]
+_base_ = ["../../../_base_/default_runtime.py"]
 
 # Configs
 num_classes = 8

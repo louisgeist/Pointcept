@@ -84,7 +84,7 @@ fi
 EXP_DIR=${JOB_DIR}
 MODEL_DIR=${EXP_DIR}/model
 CODE_DIR=${EXP_DIR}/code
-CONFIG_DIR=configs/experiment/${CONFIG}.py
+CONFIG_DIR=configs/experiment/${CONFIG}
 
 
 echo " =========> CREATE EXP DIR <========="
