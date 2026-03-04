@@ -5,7 +5,7 @@ num_classes = 8
 ignore_index = 8
 grid_size = 0.05
 
-num_gpu = 4
+num_gpu = 1
 
 # Specific things I setted
 test_single_fragment = True
