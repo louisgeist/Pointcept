@@ -6,6 +6,7 @@ num_gpu = 4
 lr = 6e-5
 batch_size_per_gpu = 3
 batch_size = batch_size_per_gpu * num_gpu
+patch_size = 1024 
 
 optimizer = dict(type="AdamW", lr=lr, weight_decay=0.05)
 scheduler = dict(
