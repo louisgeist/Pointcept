@@ -6,17 +6,25 @@ _base_ = ["../../../../_base_/default_runtime.py"] # level experiment/wXX/DD/sub
 num_classes = 8
 ignore_index = 8
 grid_size = 0.2
-
+point_max = 204800
 
 
 num_gpu = 4
-
-epoch = 20
-eval_epoch = 5
+epoch = 800
+eval_epoch = epoch//10
+lr = 6e-2
 
 # Specific things I setted
 test_single_fragment = True
 tta = False # no TTA (cf. aug_transform)
+
+# misc custom setting
+batch_size_per_gpu = 12
+batch_size = batch_size_per_gpu*num_gpu #12  # bs: total bs in all gpus
+num_worker = 6*num_gpu #24
+mix_prob = 0.0
+empty_cache = False
+enable_amp = True
 
 # Hooks
 # Note: configs are imported as python modules before `_base_` is merged, so we
@@ -31,12 +39,6 @@ hooks = [
     dict(type="PreciseEvaluator", test_last=False),
 ]
 
-# misc custom setting
-batch_size = 16*num_gpu #12  # bs: total bs in all gpus
-num_worker = 6*num_gpu #24
-mix_prob = 0.0
-empty_cache = False
-enable_amp = True
 
 # model settings
 model = dict(
@@ -84,16 +86,16 @@ model = dict(
 
 # scheduler settings
 # epoch = 3000
-optimizer = dict(type="AdamW", lr=0.0006, weight_decay=0.05)  # lr / 10 vs base
+optimizer = dict(type="AdamW", lr=lr, weight_decay=0.05)
 scheduler = dict(
     type="OneCycleLR",
-    max_lr=[0.0006, 0.00006],  # max_lr / 10 vs base
+    max_lr=[lr, lr/10],
     pct_start=0.05,
     anneal_strategy="cos",
     div_factor=10.0,
     final_div_factor=1000.0,
 )
-param_dicts = [dict(keyword="block", lr=0.00006)]  # block lr / 10 vs base
+param_dicts = [dict(keyword="block", lr=lr/10)]
 
 # dataset settings
 dataset_type = "Flair3DDataset"
@@ -145,7 +147,7 @@ data = dict(
                 return_grid_coord=True,
             ),
             dict(type="SphereCrop", sample_rate=0.6, mode="random"),
-            dict(type="SphereCrop", point_max=204800//2, mode="random"),
+            dict(type="SphereCrop", point_max=point_max, mode="random"),
             dict(type="CenterShift", apply_z=False),
             dict(type="NormalizeColor"),
             # dict(type="ShufflePoint"),
@@ -245,4 +247,4 @@ data = dict(
 )
 
 
-wandb_run_name = f"grid_size_{grid_size} & bs={batch_size}"
+wandb_run_name = f"Exp 2.1 | effective_batch_size={batch_size}, lr={lr}"
