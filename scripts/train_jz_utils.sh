@@ -43,7 +43,6 @@ while getopts "p:d:c:n:w:g:m:r:" opt; do
       RESUME=$OPTARG
       ;;
     g)
-      echo "Note that with `train_jz_utils.sh`, giving a GPU number argument with `-g` has no effect. (`launch_experiments_v2` expects the number of GPUs to be set in the config file (.py file))" >&2
       NUM_GPU=$OPTARG
       ;;
     m)
@@ -55,16 +54,16 @@ while getopts "p:d:c:n:w:g:m:r:" opt; do
   esac
 done
 
-# if [ "${NUM_GPU}" = 'None' ]
-# then
-#   NUM_GPU=`$PYTHON -c 'import torch; print(torch.cuda.device_count())'`
-# fi
+if [ "${NUM_GPU}" = 'None' ]
+then
+  NUM_GPU=`$PYTHON -c 'import torch; print(torch.cuda.device_count())'`
+fi
 
 echo "Experiment name: $EXP_NAME"
 echo "Python interpreter dir: $PYTHON"
 # echo "Dataset: $DATASET"
 echo "Config: $CONFIG"
-# echo "GPU Num: $NUM_GPU"
+echo "GPU Num: $NUM_GPU"
 echo "Machine Num: $NUM_MACHINE"
 
 if [ -n "$SLURM_NODELIST" ]; then
@@ -111,11 +110,13 @@ ulimit -n 65536
 OPTS="save_path=$EXP_DIR"
 [ -n "${EXTRA_OPTIONS-}" ] && OPTS="$OPTS $EXTRA_OPTIONS"
 
-# Note that `--num-gpus` is not passed: it is expected to be already set in the config file (.py file) for proper slurm job submission.
+# Note that `--num-gpus` is need to be passed, even if it was already set in the config file, because the `default_argument_parser` expects it to be passed
+# and overrides it anyway
 if [ "${WEIGHT}" = "None" ]
 then
     $PYTHON "$CODE_DIR"/tools/$TRAIN_CODE \
     --config-file "$CONFIG_DIR" \
+    --num-gpus "$NUM_GPU" \
     --num-machines "$NUM_MACHINE" \
     --machine-rank ${SLURM_NODEID:-0} \
     --dist-url ${DIST_URL} \
@@ -123,6 +124,7 @@ then
 else
     $PYTHON "$CODE_DIR"/tools/$TRAIN_CODE \
     --config-file "$CONFIG_DIR" \
+    --num-gpus "$NUM_GPU" \
     --num-machines "$NUM_MACHINE" \
     --machine-rank ${SLURM_NODEID:-0} \
     --dist-url ${DIST_URL} \
