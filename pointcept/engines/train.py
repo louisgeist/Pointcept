@@ -270,9 +270,11 @@ class Trainer(TrainerBase):
         self.logger.info(f"Tensorboard writer logging dir: {self.cfg.save_path}")
         if self.cfg.enable_wandb and comm.is_main_process():
             tag, name = Path(self.cfg.save_path).parts[-2:]
+            # Allow overriding the W&B run name from config if provided
+            run_name = getattr(self.cfg, "wandb_run_name", f"{tag}/{name}")
             wandb.init(
                 project=self.cfg.wandb_project,
-                name=f"{tag}/{name}",
+                name=run_name,
                 tags=[tag],
                 dir=self.cfg.save_path,
                 settings=wandb.Settings(api_key=self.cfg.wandb_key),
