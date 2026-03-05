@@ -1,5 +1,7 @@
 _base_ = ["./1.py"]
 
+num_gpu = 4
+
 # Exp 2: lr=6e-4, effective_bs=48
 lr = 6e-4
 batch_size_per_gpu = 12
