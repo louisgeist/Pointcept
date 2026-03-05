@@ -243,4 +243,4 @@ data = dict(
 )
 
 
-wandb_run_name = f"grid_size_{grid_size}"
+wandb_run_name = f"grid_size_{grid_size} & bs={batch_size}"
