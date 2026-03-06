@@ -4,11 +4,14 @@ import torch_scatter
 import torch_cluster
 from peft import LoraConfig, get_peft_model
 from collections import OrderedDict
-
+from pointcept.utils.logger import get_root_logger
 from pointcept.models.losses import build_criteria
+from pointcept.utils.misc import intersection_and_union_gpu
 from pointcept.models.utils.structure import Point
 from pointcept.models.utils import offset2batch
 from .builder import MODELS, build_model
+
+logger = get_root_logger()
 
 
 @MODELS.register_module()
@@ -48,6 +51,7 @@ class DefaultSegmentorV2(nn.Module):
         freeze_backbone=False,
     ):
         super().__init__()
+        self.num_classes = num_classes
         self.seg_head = (
             nn.Linear(backbone_out_channels, num_classes)
             if num_classes > 0
@@ -55,10 +59,25 @@ class DefaultSegmentorV2(nn.Module):
         )
         self.backbone = build_model(backbone)
         self.criteria = build_criteria(criteria)
+        self._ignore_index = None
+        # Cache ignore_index at init to keep runtime deterministic.
+        self.get_ignore_index()
         self.freeze_backbone = freeze_backbone
         if self.freeze_backbone:
             for p in self.backbone.parameters():
                 p.requires_grad = False
+    
+    def get_ignore_index(self) -> int:
+        if self._ignore_index is not None:
+            return self._ignore_index
+        for c in getattr(self.criteria, "criteria", []):
+            if hasattr(c, "ignore_index"):
+                self._ignore_index = int(getattr(c, "ignore_index"))
+                return self._ignore_index
+            
+        logger.warning("No ignore_index found in criteria, using -1 as default.")
+        self._ignore_index = -1
+        return self._ignore_index
 
     def forward(self, input_dict, return_point=False):
         point = Point(input_dict)
@@ -84,6 +103,10 @@ class DefaultSegmentorV2(nn.Module):
         if self.training:
             loss = self.criteria(seg_logits, input_dict["segment"])
             return_dict["loss"] = loss
+            with torch.no_grad():
+                # Expose predictions for epoch-level confusion accumulation in hooks.
+                # (We avoid logging this tensor directly; the writer filters non-scalars.)
+                return_dict["pred"] = seg_logits.argmax(dim=1)
         # eval
         elif "segment" in input_dict.keys():
             loss = self.criteria(seg_logits, input_dict["segment"])
@@ -113,6 +136,7 @@ class DefaultLORASegmentorV2(nn.Module):
         replacements=None,
     ):
         super().__init__()
+        self.num_classes = num_classes
         self.seg_head = (
             nn.Linear(backbone_out_channels, num_classes)
             if num_classes > 0
@@ -128,6 +152,9 @@ class DefaultLORASegmentorV2(nn.Module):
         self.backbone_load(backbone_weight)
 
         self.criteria = build_criteria(criteria)
+        self._ignore_index = None
+        # Cache ignore_index at init to keep runtime deterministic.
+        self.get_ignore_index()
         self.freeze_backbone = freeze_backbone
         self.use_lora = use_lora
 
@@ -150,6 +177,17 @@ class DefaultLORASegmentorV2(nn.Module):
                 if "lora_" in name:
                     param.requires_grad = True
         self.backbone.enc.print_trainable_parameters()
+    
+    def get_ignore_index(self) -> int:
+        if self._ignore_index is not None:
+            return self._ignore_index
+        for c in getattr(self.criteria, "criteria", []):
+            if hasattr(c, "ignore_index"):
+                self._ignore_index = int(getattr(c, "ignore_index"))
+                return self._ignore_index
+        logger.warning("No ignore_index found in criteria, using -1 as default.")
+        self._ignore_index = -1
+        return self._ignore_index
 
     def backbone_load(self, checkpoint):
         weight = OrderedDict()
@@ -194,6 +232,8 @@ class DefaultLORASegmentorV2(nn.Module):
         if self.training:
             loss = self.criteria(seg_logits, input_dict["segment"])
             return_dict["loss"] = loss
+            with torch.no_grad(): # To compute metrics
+                return_dict["pred"] = seg_logits.argmax(dim=1)
         elif "segment" in input_dict.keys():
             loss = self.criteria(seg_logits, input_dict["segment"])
             return_dict["loss"] = loss

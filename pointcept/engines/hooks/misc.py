@@ -13,6 +13,7 @@ import time
 import gc
 import wandb
 import torch
+import torch.distributed as dist
 import torch.utils.data
 from collections import OrderedDict
 
@@ -25,6 +26,7 @@ from pointcept.utils.comm import is_main_process, synchronize
 from pointcept.utils.cache import shared_dict
 from pointcept.utils.scheduler import CosineScheduler
 import pointcept.utils.comm as comm
+from pointcept.utils.misc import intersection_and_union_gpu
 
 from .default import HookBase
 from .builder import HOOKS
@@ -92,6 +94,12 @@ class InformationWriter(HookBase):
         self.model_output_keys = []
         self.log_interval = log_interval
         self.wandb_log_every_step = wandb_log_every_step
+        self._train_intersection = None
+        self._train_union = None
+
+    def before_epoch(self):
+        self._train_intersection = None
+        self._train_union = None
 
     def before_train(self):
         self.trainer.comm_info["iter_info"] = ""
@@ -114,9 +122,54 @@ class InformationWriter(HookBase):
     def after_step(self):
         if "model_output_dict" in self.trainer.comm_info.keys():
             model_output_dict = self.trainer.comm_info["model_output_dict"]
-            self.model_output_keys = model_output_dict.keys()
-            for key in self.model_output_keys:
-                self.trainer.storage.put_scalar(key, model_output_dict[key].item())
+            scalar_keys = []
+            for key, value in model_output_dict.items():
+                if isinstance(value, torch.Tensor):
+                    if value.numel() != 1:
+                        continue
+                    value = value.item()
+                if not isinstance(value, (int, float)):
+                    continue
+                self.trainer.storage.put_scalar(key, float(value))
+                scalar_keys.append(key)
+            self.model_output_keys = scalar_keys
+
+            # Accumulate epoch-level confusion stats for segmentation.
+            if (
+                "pred" in model_output_dict
+                and "input_dict" in self.trainer.comm_info
+                and "segment" in self.trainer.comm_info["input_dict"]
+            ):
+                with torch.no_grad():
+                    pred = model_output_dict["pred"]
+                    target = self.trainer.comm_info["input_dict"]["segment"]
+                    num_classes = (
+                        self.trainer.cfg.data.num_classes
+                        if hasattr(self.trainer.cfg.data, "num_classes")
+                        else self.trainer.cfg.data.get("num_classes")
+                    )
+                    model = (
+                        self.trainer.model.module
+                        if hasattr(self.trainer.model, "module")
+                        else self.trainer.model
+                    )
+                    if hasattr(model, "get_ignore_index"):
+                        ignore_index = model.get_ignore_index()
+                    else:
+                        ignore_index = (
+                            self.trainer.cfg.data.ignore_index
+                            if hasattr(self.trainer.cfg.data, "ignore_index")
+                            else self.trainer.cfg.data.get("ignore_index", -1)
+                        )
+                    area_intersection, area_union, _ = intersection_and_union_gpu(
+                        pred.clone(), target, int(num_classes), ignore_index=int(ignore_index)
+                    )
+                    if self._train_intersection is None:
+                        self._train_intersection = area_intersection.detach()
+                        self._train_union = area_union.detach()
+                    else:
+                        self._train_intersection += area_intersection.detach()
+                        self._train_union += area_union.detach()
 
         for key in self.model_output_keys:
             self.trainer.comm_info["iter_info"] += "{key}: {value:.4f} ".format(
@@ -149,11 +202,27 @@ class InformationWriter(HookBase):
                     )
 
     def after_epoch(self):
+        # Compute epoch-level mIoU from accumulated confusion stats (preferred over batch-averaged mIoU).
+        epoch_miou = None
+        if self._train_intersection is not None and self._train_union is not None:
+            intersection = self._train_intersection
+            union = self._train_union
+            if comm.get_world_size() > 1 and dist.is_available() and dist.is_initialized():
+                dist.all_reduce(intersection, op=dist.ReduceOp.SUM)
+                dist.all_reduce(union, op=dist.ReduceOp.SUM)
+            valid = union > 0
+            if valid.any():
+                epoch_miou = (intersection[valid] / (union[valid] + 1e-10)).mean().item()
+            else:
+                epoch_miou = 0.0
+
         epoch_info = "Train result: "
         for key in self.model_output_keys:
             epoch_info += "{key}: {value:.4f} ".format(
                 key=key, value=self.trainer.storage.history(key).avg
             )
+        if epoch_miou is not None:
+            epoch_info += "mIoU: {:.4f} ".format(epoch_miou)
         self.trainer.logger.info(epoch_info)
         if self.trainer.writer is not None:
             for key in self.model_output_keys:
@@ -161,6 +230,10 @@ class InformationWriter(HookBase):
                     "train/" + key,
                     self.trainer.storage.history(key).avg,
                     self.trainer.epoch + 1,
+                )
+            if epoch_miou is not None:
+                self.trainer.writer.add_scalar(
+                    "train/mIoU", float(epoch_miou), self.trainer.epoch + 1
                 )
 
             if self.trainer.cfg.enable_wandb:
@@ -172,6 +245,8 @@ class InformationWriter(HookBase):
                 }
                 for key in self.model_output_keys:
                     wandb_dict[f"train/{key}"] = self.trainer.storage.history(key).avg
+                if epoch_miou is not None:
+                    wandb_dict["train/mIoU"] = float(epoch_miou)
                 wandb.log(wandb_dict, step=epoch_step)
 
 
