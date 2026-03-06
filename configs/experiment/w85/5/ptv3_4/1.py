@@ -1,0 +1,28 @@
+_base_ = ["../../4/3b/1.py"]
+
+num_exp = 1
+
+# Exp 5: lr=6e-4, effective_bs=12
+num_gpu = 4
+batch_size_per_gpu = 3
+batch_size = batch_size_per_gpu * num_gpu
+
+lr = 6e-4
+
+# Parameters
+patch_size = 1024
+epoch = 800
+mix_prob = 0.0
+
+optimizer = dict(type="AdamW", lr=lr, weight_decay=0.05)
+scheduler = dict(
+    type="OneCycleLR",
+    max_lr=[lr, lr / 10],
+    pct_start=0.05,
+    anneal_strategy="cos",
+    div_factor=10.0,
+    final_div_factor=1000.0,
+)
+param_dicts = [dict(keyword="block", lr=lr / 10)]
+
+wandb_run_name = f"4.{num_exp}| bs={batch_size}, lr={lr} | patch={patch_size}, epoch={epoch}, mix_prob={mix_prob}"
