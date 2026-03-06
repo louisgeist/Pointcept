@@ -79,7 +79,15 @@ class Collect(object):
         for name, keys in self.kwargs.items():
             name = name.replace("_keys", "")
             assert isinstance(keys, Sequence)
-            data[name] = torch.cat([data_dict[key].float() for key in keys], dim=1)
+            # Allow for tensors to be of shape (N,) and (N, D)
+            tensors = []
+            for key in keys:
+                t = data_dict[key].float()
+                if t.dim() == 1:
+                    t = t.unsqueeze(1)
+                tensors.append(t)
+            data[name] = torch.cat(tensors, dim=1)
+        
         return data
 
 
