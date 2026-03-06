@@ -3,7 +3,7 @@ _base_ = ["../../../../_base_/default_runtime.py"]
 num_gpu = 4
 
 
-num_worker = num_gpu * 8
+num_worker = num_gpu * 16
 
 num_classes = 8
 ignore_index = 8
