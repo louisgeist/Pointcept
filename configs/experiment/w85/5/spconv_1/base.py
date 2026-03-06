@@ -13,6 +13,11 @@ mix_prob = 0.8
 empty_cache = False
 enable_amp = True
 
+lr = 0.1
+
+epoch = 3000
+eval_epoch = epoch//10
+
 # model settings
 model = dict(
     type="DefaultSegmentor",
@@ -27,9 +32,7 @@ model = dict(
 )
 
 # scheduler settings
-epoch = 3000
-eval_epoch = epoch//10
-optimizer = dict(type="SGD", lr=0.1, momentum=0.9, weight_decay=0.0001, nesterov=True)
+optimizer = dict(type="SGD", lr=lr, momentum=0.9, weight_decay=0.0001, nesterov=True)
 scheduler = dict(type="PolyLR")
 
 # dataset settings
@@ -172,3 +175,5 @@ data = dict(
         ),
     ),
 )
+
+wandb_run_name = f"SpUNet| bs={batch_size}, lr={lr} | epoch={epoch}, mix_prob={mix_prob}"
