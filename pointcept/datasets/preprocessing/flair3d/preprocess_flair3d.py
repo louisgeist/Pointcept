@@ -169,7 +169,6 @@ def _build_scene_from_subtile(
     filepath: str,
     label_definition: str,
     save_strength: bool,
-    ignore_index: int,
 ) -> Dict[str, np.ndarray]:
     """Build a Pointcept scene dict from one ASCII PLY subtile."""
     attributes = read_ply_ascii_fast(filepath)
@@ -190,7 +189,6 @@ def _build_scene_from_subtile(
 
     segment = build_segment(
         attributes=attributes,
-        ignore_index=ignore_index,
         label_definition=label_definition,
     )
 
@@ -243,13 +241,11 @@ def _process_subtile_task(
     split: str,
     label_definition: str,
     save_strength: bool,
-    ignore_index: int,
 ) -> str:
     part = _build_scene_from_subtile(
         filepath=ply_path,
         label_definition=label_definition,
         save_strength=save_strength,
-        ignore_index=ignore_index,
     )
     scene_parent = os.path.dirname(ply_path)
     rc = _parse_subtile_indices(ply_path)
@@ -269,7 +265,6 @@ def _process_fulltile_task(
     split: str,
     label_definition: str,
     save_strength: bool,
-    ignore_index: int,
     center_coord: bool,
 ) -> str:
     ply_files = sorted(glob.glob(os.path.join(tile_dir, "*.ply")))
@@ -281,7 +276,6 @@ def _process_fulltile_task(
             filepath=ply_path,
             label_definition=label_definition,
             save_strength=save_strength,
-            ignore_index=ignore_index,
         )
         for ply_path in ply_files
     ]
@@ -355,12 +349,6 @@ def main_process():
         help="Label definition (simple or fusion) from Flair3D mappings",
     )
     parser.add_argument(
-        "--ignore_index",
-        type=int,
-        default=-1,
-        help="Ignore label id when label is missing/out-of-map-range",
-    )
-    parser.add_argument(
         "--save_strength",
         action="store_true",
         help="Save intensity as strength.npy when intensity exists",
@@ -413,7 +401,6 @@ def main_process():
                     split,
                     args.label_definition,
                     args.save_strength,
-                    args.ignore_index,
                 )
                 for path in task_list
             ]
@@ -433,7 +420,6 @@ def main_process():
                     split,
                     args.label_definition,
                     args.save_strength,
-                    args.ignore_index,
                     args.center_coord,
                 )
                 for path in task_list

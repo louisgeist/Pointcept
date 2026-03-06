@@ -48,6 +48,31 @@ COSIA_FINER_ALL6 = np.array(
     [0, 1, 8, 2, 3, 3, 8, 8, 4, 3, 3, 5, 6, 6, 6, 8, 8, 8, 8], dtype=np.int32
 )
 
+lidarhd_class_dictionary = {
+    1: ("#d3d3d3", "Non classé"),
+    2: ("#a0522d", "Sol"),
+    3: ("#b3b94d", "Végétation basse"),
+    4: ("#4e9a4e", "Végétation moyenne"),
+    5: ("#1f4e1f", "Végétation haute"),
+    6: ("#ff0000", "Bâtiment"),
+    9: ("#1e90ff", "Eau"),
+    17: ("#ffff00", "Pont"),
+    64: ("#ff8c00", "Sursol pérenne"),
+    65: ("#8b00ff", "Artefact"),
+    66: ("#000000", "Points virtuels (modélisation)")
+}
+
+LIDARHD_NUM_CLASSES = 10
+TRAINID = 0
+LIDARHD_ID2TRAINID = np.ones(max(lidarhd_class_dictionary.keys())+1, dtype=np.int32)*LIDARHD_NUM_CLASSES
+for k,v in lidarhd_class_dictionary.items():
+    if v[1] == 'Non classé':
+        # LIDARHD_ID2TRAINID[k] = LIDARHD_NUM_CLASSES (void class)
+        pass
+    else:
+        LIDARHD_ID2TRAINID[k] = TRAINID
+        TRAINID += 1
+
 SIMPLE_LABEL_REMAPS = {
     "coarse_cosia": ("cosia_class", COSIA_2_FLAIR3D),
     "coarse_lidarhd": ("lidarhd_class", LIDARHD_2_FLAIR3D),
@@ -57,10 +82,10 @@ SIMPLE_LABEL_REMAPS = {
     "finer_cosia_soil": ("cosia_class", COSIA_FINER_SOIL),
     "finer_cosia_vegetation": ("cosia_class", COSIA_FINER_VEGETATION),
     "finer_cosia_vegetation_beta": ("cosia_class", COSIA_FINER_VEGETATION_BETA),
-    "finer_cosia_all2": ("cosia_class", COSIA_FINER_ALL2),
-    "finer_cosia_all3": ("cosia_class", COSIA_FINER_ALL3),
-    "finer_cosia_all5": ("cosia_class", COSIA_FINER_ALL5),
-    "finer_cosia_all6": ("cosia_class", COSIA_FINER_ALL6),
+    "inter_finerall2": ("cosia_class", COSIA_FINER_ALL2),
+    "inter_finerall3": ("cosia_class", COSIA_FINER_ALL3),
+    "inter_finerall5": ("cosia_class", COSIA_FINER_ALL5),
+    "inter_finerall6": ("cosia_class", COSIA_FINER_ALL6),
     "finer_lidarhd": ("lidarhd_class", LIDARHD_FINER),
 }
 
@@ -79,14 +104,12 @@ FUSION_LABEL_REMAPS = {
     "inter_finerall6",
 }
 
-SUPPORTED_LABEL_REMAPS = sorted(set(SIMPLE_LABEL_REMAPS.keys()) | FUSION_LABEL_REMAPS)
+SUPPORTED_LABEL_REMAPS = FUSION_LABEL_REMAPS #sorted(set(SIMPLE_LABEL_REMAPS.keys()) | FUSION_LABEL_REMAPS)
 
 
-def _safe_take(mapping: np.ndarray, labels: np.ndarray, ignore_index: int) -> np.ndarray:
-    out = np.full(labels.shape, ignore_index, dtype=np.int32)
-    valid = (labels >= 0) & (labels < mapping.shape[0])
-    out[valid] = mapping[labels[valid]]
-    return out
+def map_labels(mapping: np.ndarray, labels: np.ndarray) -> np.ndarray:
+    """Remap labels via lookup."""
+    return mapping[labels.astype(np.intp)]
 
 
 def _require_field(attributes: Dict[str, np.ndarray], field: str) -> np.ndarray:
@@ -117,16 +140,19 @@ def _finer_mapping_from_mode(mode: str) -> np.ndarray:
     raise ValueError(f"Mode '{mode}' does not define a finer mapping")
 
 
-def _segment_from_fusion(attributes: Dict[str, np.ndarray], mode: str, ignore_index: int) -> np.ndarray:
+def _segment_from_fusion(attributes: Dict[str, np.ndarray], mode: str) -> np.ndarray:
     cosia = _require_field(attributes, "cosia_class")
     lidarhd = _require_field(attributes, "lidarhd_class")
-
+    
+    
+    # To consecutive labels (reproducing `Flair3DToConsecutiveLabels` in SPT)
     # Defensive fix from your previous transform: clamp unexpected lidar ids.
     lidarhd = lidarhd.copy()
     lidarhd[lidarhd > 66] = 1
+    lidarhd = map_labels(LIDARHD_ID2TRAINID, lidarhd)
 
-    coarse_cosia = _safe_take(COSIA_2_FLAIR3D, cosia, ignore_index)
-    coarse_lidarhd = _safe_take(LIDARHD_2_FLAIR3D, lidarhd, ignore_index)
+    coarse_cosia = map_labels(COSIA_2_FLAIR3D, cosia)
+    coarse_lidarhd = map_labels(LIDARHD_2_FLAIR3D, lidarhd)
 
     coarse_void = 3
     agreement = coarse_cosia == coarse_lidarhd
@@ -148,15 +174,15 @@ def _segment_from_fusion(attributes: Dict[str, np.ndarray], mode: str, ignore_in
 
     if mode in ("inter_finerall5", "inter_finerall6"):
         # Recompute agreement with coarse_B variant (your original behavior).
-        coarse_lidarhd_b = _safe_take(LIDARHD_2_COARSE_B, lidarhd, ignore_index)
+        coarse_lidarhd_b = map_labels(LIDARHD_2_COARSE_B, lidarhd)
         agreement = coarse_cosia == coarse_lidarhd_b
 
     if mode in ("inter_finerall4", "inter_finerall5", "inter_finerall6"):
         # Treat lidarhd void as "agreement" for these modes.
         agreement = agreement | (lidarhd == 10)
 
-    seg = np.full(cosia.shape, finer_void, dtype=np.int32)
-    cosia_finer = _safe_take(finer_map, cosia, finer_void)
+    seg = np.full(cosia.shape, finer_void, dtype=np.int32) # initialize with void label
+    cosia_finer = map_labels(finer_map, cosia)
     seg[agreement] = cosia_finer[agreement]
 
     if mode in ("inter_finerall3", "inter_finerall4"):
@@ -176,18 +202,15 @@ def _segment_from_fusion(attributes: Dict[str, np.ndarray], mode: str, ignore_in
 
 def build_segment(
     attributes: Dict[str, np.ndarray],
-    ignore_index: int,
     label_definition: str,
 ) -> np.ndarray:
     """
     Build the final segment vector from raw PLY attributes.
     """
-    if label_definition in SIMPLE_LABEL_REMAPS:
-        source_field, source_map = SIMPLE_LABEL_REMAPS[label_definition]
-        raw = _require_field(attributes, source_field)
-        return _safe_take(source_map, raw, ignore_index)
+    # Fusion takes precedence: it builds the real labels from COSIA+LIDARHD agreement.
+    # Simple remaps are fallback for single-source consecutive values only.
     if label_definition in FUSION_LABEL_REMAPS:
-        return _segment_from_fusion(attributes, label_definition, ignore_index)
+        return _segment_from_fusion(attributes, label_definition)
     supported = ", ".join(SUPPORTED_LABEL_REMAPS)
     raise ValueError(
         f"Unknown label_definition '{label_definition}'. Supported: {supported}"
