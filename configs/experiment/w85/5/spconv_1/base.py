@@ -1,5 +1,6 @@
-_base_ = ["../_base_/default_runtime.py"]
+_base_ = ["../../../../_base_/default_runtime.py"] 
 
+num_gpu = 4
 
 num_classes = 8
 ignore_index = 8
