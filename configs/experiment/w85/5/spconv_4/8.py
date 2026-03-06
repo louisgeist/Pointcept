@@ -1,5 +1,7 @@
 _base_ = ["./7.py"]
 
+num_gpu = 4
+
 # Exp 8: grid_size=0.2, lr=5e-3
 num_exp = 8
 lr = 5e-3
