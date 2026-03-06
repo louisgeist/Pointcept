@@ -14,7 +14,7 @@ mix_prob = 0.8
 empty_cache = False
 enable_amp = True
 
-lr = 0.1
+lr = 0.05
 
 epoch = 3000
 eval_epoch = epoch//10
@@ -34,7 +34,14 @@ model = dict(
 
 # scheduler settings
 optimizer = dict(type="SGD", lr=lr, momentum=0.9, weight_decay=0.0001, nesterov=True)
-scheduler = dict(type="PolyLR")
+scheduler = dict(
+    type="OneCycleLR",
+    max_lr=optimizer["lr"],
+    pct_start=0.05,
+    anneal_strategy="cos",
+    div_factor=10.0,
+    final_div_factor=10000.0,
+)
 
 # dataset settings
 dataset_type = "Flair3DDataset"
