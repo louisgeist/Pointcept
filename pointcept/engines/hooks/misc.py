@@ -13,7 +13,6 @@ import time
 import gc
 import wandb
 import torch
-import torch.distributed as dist
 import torch.utils.data
 from collections import OrderedDict
 
@@ -134,9 +133,10 @@ class InformationWriter(HookBase):
                 scalar_keys.append(key)
             self.model_output_keys = scalar_keys
 
-            # Accumulate epoch-level confusion stats for segmentation.
+            # Accumulate epoch-level confusion stats for segmentation (GPU rank 0 only).
             if (
-                "pred" in model_output_dict
+                comm.is_main_process()
+                and "pred" in model_output_dict
                 and "input_dict" in self.trainer.comm_info
                 and "segment" in self.trainer.comm_info["input_dict"]
             ):
@@ -177,7 +177,7 @@ class InformationWriter(HookBase):
             )
         lr = self.trainer.optimizer.state_dict()["param_groups"][0]["lr"]
         self.trainer.comm_info["iter_info"] += "Lr: {lr:.5f}".format(lr=lr)
-        if self.curr_iter % self.log_interval == 0:
+        if self.curr_iter % self.log_interval == 0 and comm.is_main_process():
             self.trainer.logger.info(self.trainer.comm_info["iter_info"])
         self.trainer.comm_info["iter_info"] = ""  # reset iter info
         if self.trainer.writer is not None:
@@ -202,14 +202,12 @@ class InformationWriter(HookBase):
                     )
 
     def after_epoch(self):
-        # Compute epoch-level mIoU from accumulated confusion stats (preferred over batch-averaged mIoU).
+        # Epoch-level metrics (rank 0 only): train/loss and train/mIoU are both
+        # computed from rank 0's batches; not aggregated across GPUs.
         epoch_miou = None
         if self._train_intersection is not None and self._train_union is not None:
             intersection = self._train_intersection
             union = self._train_union
-            if comm.get_world_size() > 1 and dist.is_available() and dist.is_initialized():
-                dist.all_reduce(intersection, op=dist.ReduceOp.SUM)
-                dist.all_reduce(union, op=dist.ReduceOp.SUM)
             valid = union > 0
             if valid.any():
                 epoch_miou = (intersection[valid] / (union[valid] + 1e-10)).mean().item()
