@@ -183,8 +183,8 @@ data = dict(
                 [
                     dict(type="RandomScale", scale=[1.1, 1.1]),
                     dict(type="RandomFlip", p=1),
-                ] if tta else [[dict(type="RandomRotateTargetAngle", angle=[0], axis="z", center=[0, 0, 0], p=1)]],
-            ],
+                ],
+            ] if tta else [[dict(type="RandomRotateTargetAngle", angle=[0], axis="z", center=[0, 0, 0], p=1)]],
         ),
     ),
 )
