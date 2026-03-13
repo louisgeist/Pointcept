@@ -47,6 +47,11 @@ COSIA_FINER_ALL5 = np.array(
 COSIA_FINER_ALL6 = np.array(
     [0, 1, 8, 2, 3, 3, 8, 8, 4, 3, 3, 5, 6, 6, 6, 8, 8, 8, 8], dtype=np.int32
 )
+# Finer all7: building=0, greenhouse=1, impervious_surface=2, other_soil=3, herbaceous=4,
+# vineyard=5, tree=6, sursol_perenne=7 (forced from LIDARHD), agricultural_soil=8, void=9.
+COSIA_FINER_ALL7 = np.array(
+    [0, 1, 9, 2, 3, 3, 9, 9, 4, 8, 8, 5, 6, 6, 6, 9, 9, 9, 9], dtype=np.int32
+)
 
 lidarhd_class_dictionary = {
     1: ("#d3d3d3", "Non classé"),
@@ -86,6 +91,7 @@ SIMPLE_LABEL_REMAPS = {
     "inter_finerall3": ("cosia_class", COSIA_FINER_ALL3),
     "inter_finerall5": ("cosia_class", COSIA_FINER_ALL5),
     "inter_finerall6": ("cosia_class", COSIA_FINER_ALL6),
+    "inter_finerall7": ("cosia_class", COSIA_FINER_ALL7),
     "finer_lidarhd": ("lidarhd_class", LIDARHD_FINER),
 }
 
@@ -102,6 +108,7 @@ FUSION_LABEL_REMAPS = {
     "inter_finerall4",
     "inter_finerall5",
     "inter_finerall6",
+    "inter_finerall7",
 }
 
 SUPPORTED_LABEL_REMAPS = FUSION_LABEL_REMAPS #sorted(set(SIMPLE_LABEL_REMAPS.keys()) | FUSION_LABEL_REMAPS)
@@ -137,6 +144,8 @@ def _finer_mapping_from_mode(mode: str) -> np.ndarray:
         return COSIA_FINER_ALL5
     if mode == "inter_finerall6":
         return COSIA_FINER_ALL6
+    if mode == "inter_finerall7":
+        return COSIA_FINER_ALL7
     raise ValueError(f"Mode '{mode}' does not define a finer mapping")
 
 
@@ -177,7 +186,7 @@ def _segment_from_fusion(attributes: Dict[str, np.ndarray], mode: str) -> np.nda
         coarse_lidarhd_b = map_labels(LIDARHD_2_COARSE_B, lidarhd)
         agreement = coarse_cosia == coarse_lidarhd_b
 
-    if mode in ("inter_finerall4", "inter_finerall5", "inter_finerall6"):
+    if mode in ("inter_finerall4", "inter_finerall5", "inter_finerall6", "inter_finerall7"):
         # Treat lidarhd void as "agreement" for these modes.
         agreement = agreement | (lidarhd == 10)
 
@@ -195,6 +204,9 @@ def _segment_from_fusion(attributes: Dict[str, np.ndarray], mode: str) -> np.nda
         seg[lidarhd == 7] = 8
     elif mode == "inter_finerall6":
         # Sursol perenne override from LIDARHD (class 7).
+        seg[lidarhd == 7] = 7
+    elif mode == "inter_finerall7":
+        # Other infrastructure override from LIDARHD (class 7).
         seg[lidarhd == 7] = 7
 
     return seg
