@@ -154,7 +154,7 @@ def _segment_from_fusion(attributes: Dict[str, np.ndarray], mode: str) -> np.nda
     lidarhd = _require_field(attributes, "lidarhd_class")
     
     
-    # To consecutive labels (reproducing `Flair3DToConsecutiveLabels` in SPT)
+    # LidarHD to consecutive labels (reproducing `Flair3DToConsecutiveLabels` in SPT)
     # Defensive fix from your previous transform: clamp unexpected lidar ids.
     lidarhd = lidarhd.copy()
     lidarhd[lidarhd > 66] = 1
@@ -181,7 +181,7 @@ def _segment_from_fusion(attributes: Dict[str, np.ndarray], mode: str) -> np.nda
     finer_map = _finer_mapping_from_mode(mode)
     finer_void = int(finer_map.max())
 
-    if mode in ("inter_finerall5", "inter_finerall6"):
+    if mode in ("inter_finerall5", "inter_finerall6", "inter_finerall7"):
         # Recompute agreement with coarse_B variant (your original behavior).
         coarse_lidarhd_b = map_labels(LIDARHD_2_COARSE_B, lidarhd)
         agreement = coarse_cosia == coarse_lidarhd_b
