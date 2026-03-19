@@ -62,9 +62,13 @@ echo "Machine Num: $NUM_MACHINE"
 
 if [ -n "$SLURM_NODELIST" ]; then
   MASTER_HOSTNAME=$(scontrol show hostname "$SLURM_NODELIST" | head -n 1)
-  MASTER_ADDR=$(getent hosts "$MASTER_HOSTNAME" | awk '{ print $1 }')
+  MASTER_ADDR=$(getent hosts "$MASTER_HOSTNAME" | head -n 1 | awk '{ print $1 }')
   MASTER_PORT=$((10000 + 0x$(echo -n "${DATASET}/${EXP_NAME}" | md5sum | cut -c 1-4 | awk '{print $1}') % 20000))
-  DIST_URL=tcp://$MASTER_ADDR:$MASTER_PORT
+  # IPv6 addresses need brackets in URL: tcp://[fe80::1]:port
+  case "$MASTER_ADDR" in
+    *:*) DIST_URL="tcp://[${MASTER_ADDR}]:${MASTER_PORT}" ;;
+    *)   DIST_URL="tcp://${MASTER_ADDR}:${MASTER_PORT}" ;;
+  esac
 fi
 
 echo "Dist URL: $DIST_URL"
