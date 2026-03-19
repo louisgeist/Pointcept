@@ -64,7 +64,7 @@ model = dict(
         inv_act='sigmoid',
         inv_grp_norm=True,
         kpx_upcut=False,
-        subsample_size=0.02,
+        subsample_size=grid_size,
         neighbor_limits=(12, 16, 20, 20, 20),
         layer_blocks=(3, 3, 9, 12, 3),
         init_channels=64,
@@ -94,7 +94,7 @@ model = dict(
 # scheduler settings
 # epoch = 1000
 # eval_epoch = 200
-epoch=10
+epoch=6
 eval_epoch=2
 
 optimizer = dict(type="AdamW", lr=lr, weight_decay=0.02)
