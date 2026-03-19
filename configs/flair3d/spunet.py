@@ -6,6 +6,8 @@ _base_ = ["../../../../_base_/default_runtime.py"]
 num_gpu = 1
 num_exp = 1
 
+wandb_run_name = f"SPUNet"
+
 num_worker = num_gpu * 8
 
 num_classes = 8
@@ -202,4 +204,3 @@ data = dict(
     ),
 )
 
-wandb_run_name = f"SpUNet 5.{num_exp}| bs={batch_size}, lr={lr}, grid_size={grid_size}, epoch={epoch}, point_max={point_max}, optimizer={optimizer['type']}"
