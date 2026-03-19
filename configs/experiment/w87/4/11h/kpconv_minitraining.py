@@ -26,9 +26,9 @@ hooks = [
 lr = 5e-3 # 0.005
 
 # minimal example settings
-num_gpu = 1
-num_worker = 8  # total worker in all gpu
-batch_size = 2  
+num_gpu = 4
+num_worker = 6*num_gpu  # total worker in all gpu
+batch_size = 2*num_gpu
 mix_prob = 0.8
 max_input_pts = 40000//2
 
@@ -91,8 +91,11 @@ model = dict(
 )
 
 # scheduler settings
-epoch = 1000
-eval_epoch = 200
+# epoch = 1000
+# eval_epoch = 200
+epoch=10
+eval_epoch=2
+
 optimizer = dict(type="AdamW", lr=lr, weight_decay=0.02)
 scheduler = dict(type="OneCycleLR",
                  max_lr=optimizer["lr"],
@@ -127,7 +130,6 @@ data = dict(
         # 19/03 : copied from the one I defined for LitePT on Flair3D (except for GridSample, Update grid size(specific LitePT) )
         transform=[
             dict(type="CenterShift", apply_z=True),
-            dict(type="SphereCrop", point_max=max_input_pts, mode="random"),
             dict(type="RandomDropout", dropout_ratio=0.2, dropout_application_ratio=0.2),
             dict(type="RandomRotate", angle=[-1, 1], axis="z", center=[0, 0, 0], p=0.5), # as waymo/nuscences
             dict(type="RandomRotate", angle=[-1 / 64, 1 / 64], axis="x", p=0.5),
