@@ -24,7 +24,7 @@ hooks = [
 
 # Parameters factorization for easier experiments
 lr = 5e-3 # 0.005
-grid_size = 0.02
+grid_size = 0.1
 
 # minimal example settings
 num_gpu = 4
