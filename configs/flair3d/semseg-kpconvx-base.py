@@ -30,7 +30,7 @@ num_gpu = 1
 num_worker = 8  # total worker in all gpu
 batch_size = 2  
 mix_prob = 0.8
-max_input_pts = 40000
+max_input_pts = 40000//2
 
 # # Settings for multigpu training with 8 80GB gpus
 # num_worker = 64  # total worker in all gpu
