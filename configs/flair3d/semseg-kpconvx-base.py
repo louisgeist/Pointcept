@@ -155,7 +155,7 @@ data = dict(
             
             dict(type="ShufflePoint"),
             dict(type="ToTensor"),
-            dict(type="Collect", keys=("coord", "grid_coord", "segment", "grid_size"), feat_keys=("coord", "color"))
+            dict(type="Collect", keys=("coord", "segment", "grid_size"), feat_keys=("coord", "color"))
         ],
         test_mode=False,
     ),
@@ -176,7 +176,7 @@ data = dict(
             dict(type="CenterShift", apply_z=False),
             dict(type="NormalizeColor"),
             dict(type="ToTensor"),
-            dict(type="Collect", keys=("coord", "grid_coord", "segment", "grid_size"), feat_keys=("coord", "color"))
+            dict(type="Collect", keys=("coord", "segment", "grid_size"), feat_keys=("coord", "color"))
         ],
         test_mode=False,
     ),
@@ -202,7 +202,7 @@ data = dict(
             post_transform=[
                 dict(type="CenterShift", apply_z=False),
                 dict(type="ToTensor"),
-                dict(type="Collect", keys=("coord", "grid_coord", "index"), optional_keys=("inverse"), feat_keys=("coord", "color"))
+                dict(type="Collect", keys=("coord", "index"), optional_keys=("inverse"), feat_keys=("coord", "color"))
             ],
             aug_transform=[
                 [dict(type="RandomRotateTargetAngle", angle=[0], axis="z", center=[0, 0, 0], p=1)],
