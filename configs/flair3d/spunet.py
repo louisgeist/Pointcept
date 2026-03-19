@@ -1,4 +1,4 @@
-_base_ = ["../../../../_base_/default_runtime.py"] 
+_base_ = ["../_base_/default_runtime.py"] 
 
 # copied from configs/experiment/w85/6/spconv_5/8.py 
 # adapted for num_gpu=1
