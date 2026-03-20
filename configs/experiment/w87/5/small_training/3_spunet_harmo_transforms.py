@@ -12,7 +12,7 @@ tta = False
 test_single_fragment = True
 
 # misc custom setting
-batch_size = 24 * num_gpu  # bs: total bs in all gpus
+batch_size = 48 * num_gpu  # bs: total bs in all gpus
 mix_prob = 0.8
 empty_cache = False
 enable_amp = True
@@ -25,7 +25,7 @@ epoch = 100 # Small training
 eval_epoch = epoch//10
 
 
-wandb_run_name = f"SpUNet {num_exp}) lab6  | eff_bs={batch_size} | harmonized transforms"
+wandb_run_name = f"SpUNet {num_exp}) lab6  | eff_bs={batch_size} + grid_size={grid_size}| harmonized transforms"
 
 # model settings
 model = dict(

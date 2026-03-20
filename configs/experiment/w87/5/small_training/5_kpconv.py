@@ -18,7 +18,7 @@ hooks = [
     dict(type="CheckpointLoader"),
     dict(type="ModelHook"),
     dict(type="IterationTimer", warmup_iter=2),
-    dict(type="InformationWriter", log_interval=100),
+    dict(type="InformationWriter", log_interval=1),
     dict(type="SemSegEvaluator", write_cls_iou=True),
     dict(type="CheckpointSaver", save_freq=None),
     dict(type="PreciseEvaluator", test_last=False),
@@ -151,9 +151,6 @@ data = dict(
             dict(type="ChromaticAutoContrast", p=0.2, blend_factor=None),
             dict(type="ChromaticTranslation", p=0.95, ratio=0.05),
             dict(type="ChromaticJitter", p=0.95, std=0.05),
-            
-            # dict(type="HueSaturationTranslation", hue_max=0.2, saturation_max=0.2),
-            # dict(type="RandomColorDrop", p=0.2, color_augment=0.0),
             dict(type="GridSample", 
                  grid_size=grid_size, 
                  hash_type="fnv", 

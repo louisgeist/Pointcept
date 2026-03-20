@@ -28,7 +28,7 @@ mix_prob = 0.8
 empty_cache = False
 enable_amp = True
 
-wandb_run_name = f"PTv3 {num_exp}) lab6  | eff_bs={batch_size} | harmonized transforms"
+wandb_run_name = f"PTv3 {num_exp}) lab6  | eff_bs={batch_size} | harmonized transforms | grid_size={grid_size}"
 
 # Hooks
 # Note: configs are imported as python modules before `_base_` is merged, so we
