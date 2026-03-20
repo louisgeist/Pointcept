@@ -4,7 +4,7 @@ _base_ = ["../../../../_base_/default_runtime.py"] # level experiment/wXX/DD/sub
 # wandb_run_name -> to define at the end of the file
 
 # label definition: inter_finerall6
-num_classes = 8 #
+num_classes = 8
 ignore_index = 8
 grid_size = 0.2
 point_max = 204800
@@ -23,7 +23,7 @@ tta = False # no TTA (cf. aug_transform)
 # misc custom setting
 batch_size_per_gpu = 3
 batch_size = batch_size_per_gpu * num_gpu
-num_worker = 6*num_gpu
+num_worker = 8 * num_gpu
 mix_prob = 0.8
 empty_cache = False
 enable_amp = True
