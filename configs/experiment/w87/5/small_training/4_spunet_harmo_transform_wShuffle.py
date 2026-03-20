@@ -1,38 +1,63 @@
-_base_ = ["../../../../_base_/default_runtime.py"] # level experiment/wXX/DD/subfolder/config.py
+_base_ = ["../../../../_base_/default_runtime.py"] 
 
-# Configs
-# wandb_run_name -> to define at the end of the file
+num_gpu = 1
+num_exp = 4
 
-# label definition: inter_finerall6
+num_worker = 8 * num_gpu
+
 num_classes = 8
 ignore_index = 8
-grid_size = 0.2
-point_max = 204800
 
-num_exp = 1
-num_gpu = 1
-epoch = 100 # Small training
-eval_epoch = epoch//10
-lr = 6e-4
-patch_size = 1024 #128, 1024
-
-# Specific things I setted
+tta = False
 test_single_fragment = True
-tta = False # no TTA (cf. aug_transform)
 
 # misc custom setting
-batch_size_per_gpu = 12
-batch_size = batch_size_per_gpu * num_gpu
-num_worker = 8 * num_gpu
+batch_size = 24 * num_gpu  # bs: total bs in all gpus
 mix_prob = 0.8
 empty_cache = False
 enable_amp = True
 
-wandb_run_name = f"PTv3 {num_exp}) lab6  | eff_bs={batch_size} | harmonized transforms"
+lr = 5e-3
+grid_size = 0.1
+point_max = 100000
 
-# Hooks
-# Note: configs are imported as python modules before `_base_` is merged, so we
-# must redefine `hooks` here instead of mutating it.
+epoch = 100 # Small training
+eval_epoch = epoch//10
+
+
+wandb_run_name = f"SpUNet {num_exp}) lab6  | eff_bs={batch_size} | harmonized transforms + shuffle"
+
+# model settings
+model = dict(
+    type="DefaultSegmentor",
+    backbone=dict(
+        type="SpUNet-v1m1",
+        in_channels=6, # RGB + Coords
+        num_classes=num_classes,
+        channels=(32, 64, 128, 256, 256, 128, 96, 96),
+        layers=(2, 3, 4, 6, 2, 2, 2, 2),
+    ),
+    criteria=[dict(type="CrossEntropyLoss", loss_weight=1.0, ignore_index=ignore_index)],
+)
+
+# scheduler settings
+optimizer = dict(type="AdamW", lr=lr, weight_decay=0.005)
+# scheduler = dict(
+#     type="OneCycleLR",
+#     max_lr=optimizer["lr"],
+#     pct_start=0.05,
+#     anneal_strategy="cos",
+#     div_factor=10.0,
+#     final_div_factor=10000.0,
+# )
+scheduler = dict(type="LinearLR", 
+                 start_factor = 1/10, # start with lr/10
+                 total_iters = 50, # number of epochs before reaching lr (and plateauing) 
+                 # As we have 100 epoch for small training:
+                 # 1. 50 epochs of linear increase, 
+                 # 2. then 50 epochs of constant lr
+                )
+
 hooks = [
     dict(type="CheckpointLoader"),
     dict(type="ModelHook"),
@@ -42,71 +67,6 @@ hooks = [
     dict(type="CheckpointSaver", save_freq=None),
     dict(type="PreciseEvaluator", test_last=False),
 ]
-
-
-# model settings
-model = dict(
-    type="DefaultSegmentorV2",
-    num_classes=num_classes,
-    backbone_out_channels=64,
-    backbone=dict(
-        type="PT-v3m1",
-        in_channels=3, # because no normal features
-        order=["z", "z-trans", "hilbert", "hilbert-trans"],
-        stride=(2, 2, 2, 2),
-        enc_depths=(2, 2, 2, 6, 2),
-        enc_channels=(32, 64, 128, 256, 512),
-        enc_num_head=(2, 4, 8, 16, 32),
-        enc_patch_size=(patch_size, patch_size, patch_size, patch_size, patch_size),
-        dec_depths=(2, 2, 2, 2),
-        dec_channels=(64, 64, 128, 256),
-        dec_num_head=(4, 4, 8, 16),
-        dec_patch_size=(patch_size, patch_size, patch_size, patch_size),
-        mlp_ratio=4,
-        qkv_bias=True,
-        qk_scale=None,
-        attn_drop=0.0,
-        proj_drop=0.0,
-        drop_path=0.3,
-        shuffle_orders=True,
-        pre_norm=True,
-        enable_rpe=False,
-        enable_flash=True,
-        upcast_attention=False,
-        upcast_softmax=False,
-        enc_mode=False,
-        pdnorm_bn=False,
-        pdnorm_ln=False,
-        pdnorm_decouple=True,
-        pdnorm_adaptive=False,
-        pdnorm_affine=True,
-        pdnorm_conditions=("ScanNet", "S3DIS", "Structured3D"),
-    ),
-    criteria=[
-        dict(type="CrossEntropyLoss", loss_weight=1.0, ignore_index=ignore_index),
-        dict(type="LovaszLoss", mode="multiclass", loss_weight=1.0, ignore_index=ignore_index),
-    ],
-)
-
-# scheduler settings
-# epoch = 3000
-optimizer = dict(type="AdamW", lr=lr, weight_decay=0.05)
-# scheduler = dict(
-#     type="OneCycleLR",
-#     max_lr=[lr, lr/10],
-#     pct_start=0.05,
-#     anneal_strategy="cos",
-#     div_factor=10.0,
-#     final_div_factor=1000.0,
-# )
-scheduler = dict(type="LinearLR", 
-                 start_factor = 1/10, # start with lr/10
-                 total_iters = 50, # number of epochs before reaching lr (and plateauing) 
-                 # As we have 100 epoch for small training:
-                 # 1. 50 epochs of linear increase, 
-                 # 2. then 50 epochs of constant lr
-                )
-param_dicts = [dict(keyword="block", lr=lr/10)]
 
 # dataset settings
 dataset_type = "Flair3DDataset"
@@ -124,7 +84,6 @@ data = dict(
         "Vineyard",
         "Tree",
         "Other infrastructure",
-        # "Agricultural soil", # label definition: inter_finerall7 
         "Void",
     ],
     train=dict(
@@ -150,23 +109,22 @@ data = dict(
                 mode="train",
                 return_grid_coord=True,
             ),
-
             dict(type="SphereCrop", point_max=point_max, mode="random"),
             dict(type="CenterShift", apply_z=False),
             dict(type="NormalizeColor"),
-            # dict(type="ShufflePoint"),
+            dict(type="ShufflePoint"), # might be worth to test
             dict(type="ToTensor"),
             dict(
                 type="Collect",
                 keys=("coord", "grid_coord", "segment"),
-                feat_keys=("color",), # "normal"),
+                feat_keys=("color", "coord",), # "normal"),
             ),
         ],
         test_mode=False,
     ),
     val=dict(
         type=dataset_type,
-        split="val",        
+        split="val",
         data_root=data_root,
         transform=[
             dict(type="CenterShift", apply_z=True),
@@ -185,7 +143,7 @@ data = dict(
             dict(
                 type="Collect",
                 keys=("coord", "grid_coord", "segment", "origin_segment", "inverse"),
-                feat_keys=("color",), # "normal"),
+                feat_keys=["coord", "color"],
             ),
         ],
         test_mode=False,
@@ -194,10 +152,7 @@ data = dict(
         type=dataset_type,
         split="test",
         data_root=data_root,
-        transform=[
-            dict(type="CenterShift", apply_z=True),
-            dict(type="NormalizeColor"),
-        ],
+        transform=[dict(type="CenterShift", apply_z=True), dict(type="NormalizeColor")],
         test_mode=True,
         test_cfg=dict(
             voxelize=dict(
@@ -216,7 +171,7 @@ data = dict(
                     type="Collect",
                     keys=("coord", "grid_coord", "index"),
                     optional_keys=("inverse",),  # for test_single_fragment broadcast
-                    feat_keys=("color",), # "normal"),
+                    feat_keys=("coord", "color"),
                 ),
             ],
             aug_transform=[
@@ -233,10 +188,7 @@ data = dict(
                     dict(type="RandomScale", scale=[0.95, 0.95]),
                     dict(type="RandomFlip", p=1),
                 ],
-                [
-                    dict(type="RandomScale", scale=[1, 1]),
-                    dict(type="RandomFlip", p=1),
-                ],
+                [dict(type="RandomScale", scale=[1, 1]), dict(type="RandomFlip", p=1)],
                 [
                     dict(type="RandomScale", scale=[1.05, 1.05]),
                     dict(type="RandomFlip", p=1),
@@ -249,4 +201,3 @@ data = dict(
         ),
     ),
 )
-

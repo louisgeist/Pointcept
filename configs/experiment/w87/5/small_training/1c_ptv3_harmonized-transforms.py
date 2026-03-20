@@ -6,7 +6,7 @@ _base_ = ["../../../../_base_/default_runtime.py"] # level experiment/wXX/DD/sub
 # label definition: inter_finerall6
 num_classes = 8
 ignore_index = 8
-grid_size = 0.2
+grid_size = 0.1
 point_max = 204800
 
 num_exp = 1
@@ -21,14 +21,14 @@ test_single_fragment = True
 tta = False # no TTA (cf. aug_transform)
 
 # misc custom setting
-batch_size_per_gpu = 12
+batch_size_per_gpu = 6
 batch_size = batch_size_per_gpu * num_gpu
 num_worker = 8 * num_gpu
 mix_prob = 0.8
 empty_cache = False
 enable_amp = True
 
-wandb_run_name = f"PTv3 {num_exp}) lab6  | eff_bs={batch_size} | harmonized transforms"
+wandb_run_name = f"PTv3 {num_exp}.b) lab6  | eff_bs={batch_size} | harmonized transforms | grid_size={grid_size}"
 
 # Hooks
 # Note: configs are imported as python modules before `_base_` is merged, so we

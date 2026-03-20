@@ -21,7 +21,7 @@ test_single_fragment = True
 tta = False # no TTA (cf. aug_transform)
 
 # misc custom setting
-batch_size_per_gpu = 3
+batch_size_per_gpu = 4
 batch_size = batch_size_per_gpu * num_gpu
 num_worker = 8 * num_gpu
 mix_prob = 0.8
