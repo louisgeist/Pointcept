@@ -153,7 +153,7 @@ class OneCycleLR(lr_scheduler.OneCycleLR):
         )
 
 @SCHEDULERS.register_module()
-class LinearLR(lr_scheduler.LambdaLR):
+class LinearLR(lr_scheduler.LinearLR):
     def __init__(
         self,
         optimizer,
