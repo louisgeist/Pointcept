@@ -161,6 +161,7 @@ class LinearLR(lr_scheduler.LinearLR):
         end_factor=1.0,
         total_iters=5,
         last_epoch=-1,
+        total_steps=None, # useless, just for compatibility with configs
     ):
         super().__init__(
             optimizer=optimizer,
