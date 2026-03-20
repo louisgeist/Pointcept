@@ -68,7 +68,13 @@ echo "Machine Num: $NUM_MACHINE"
 
 if [ -n "$SLURM_NODELIST" ]; then
   MASTER_HOSTNAME=$(scontrol show hostname "$SLURM_NODELIST" | head -n 1)
-  MASTER_ADDR=$(getent hosts "$MASTER_HOSTNAME" | head -n 1 | awk '{ print $1 }')
+  # Prefer IPv4 for torch.distributed rendezvous on SLURM clusters.
+  # getent hosts may return IPv6 first (often link-local, e.g. fe80::/10),
+  # which can break c10d socket connection depending on node networking.
+  MASTER_ADDR=$(getent ahostsv4 "$MASTER_HOSTNAME" | awk 'NR==1 { print $1 }')
+  if [ -z "$MASTER_ADDR" ]; then
+    MASTER_ADDR=$(getent hosts "$MASTER_HOSTNAME" | head -n 1 | awk '{ print $1 }')
+  fi
   MASTER_PORT=$((10000 + 0x$(echo -n "${EXP_NAME}" | md5sum | cut -c 1-4 | awk '{print $1}') % 20000))
   # IPv6 addresses need brackets in URL: tcp://[fe80::1]:port. Use first address only (getent can return multiple).
   case "$MASTER_ADDR" in
