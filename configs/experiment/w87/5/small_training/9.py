@@ -25,13 +25,13 @@ hooks = [
 ]
 
 # Parameters factorization for easier experiments
-lr = 5e-3 # 0.005
+lr = 5e-4 # 0.005
 grid_size = 0.1
 
 # minimal example settings
 num_gpu = 1
 num_worker = 8 * num_gpu  # total worker in all gpu
-batch_size = 2 * num_gpu
+batch_size = 4 * num_gpu
 mix_prob = 0.8
 max_input_pts = 40000//2
 

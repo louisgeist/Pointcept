@@ -25,7 +25,7 @@ hooks = [
 ]
 
 # Parameters factorization for easier experiments
-lr = 5e-3 # 0.005
+lr = 5e-5 # 0.005
 grid_size = 0.1
 
 # minimal example settings
