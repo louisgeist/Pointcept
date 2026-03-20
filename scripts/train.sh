@@ -95,7 +95,11 @@ fi
 
 echo "Loading config in:" $CONFIG_DIR
 # Use absolute path so Python finds pointcept when CODE_DIR is under logs/slurm/%j/
-export PYTHONPATH=$(cd "$CODE_DIR" && pwd)
+# 20/03/26: if PYTHONPATH is already set, reuse it instead of overriding it
+# This is needed when `pointops` was compiled for a specific GPU architecture (A100 vs H100).
+# In that case, we rely on PYTHONPATH being exported beforehand (e.g. by the jz_utils scripts).
+export PYTHONPATH="$(cd "$CODE_DIR" && pwd)${PYTHONPATH:+:$PYTHONPATH}"
+
 echo "Running code in: $CODE_DIR"
 
 
