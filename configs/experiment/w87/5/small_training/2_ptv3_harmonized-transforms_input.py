@@ -9,7 +9,7 @@ ignore_index = 8
 grid_size = 0.2
 point_max = 204800
 
-num_exp = 1
+num_exp = 4
 num_gpu = 1
 epoch = 100 # Small training
 eval_epoch = epoch//10
