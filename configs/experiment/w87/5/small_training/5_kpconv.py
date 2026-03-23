@@ -27,6 +27,7 @@ hooks = [
 # Parameters factorization for easier experiments
 lr = 5e-3 # 0.005
 grid_size = 0.1
+warmup_steps = 5000
 
 # minimal example settings
 num_gpu = 1
@@ -109,7 +110,7 @@ optimizer = dict(type="AdamW", lr=lr, weight_decay=0.02)
 #                  final_div_factor=1000.0)
 scheduler = dict(type="LinearLR", 
                  start_factor = 1/10, # start with lr/10
-                 total_iters = 50, # number of epochs before reaching lr (and plateauing) 
+                 total_iters = warmup_steps, # number of epochs before reaching lr (and plateauing) 
                  # As we have 100 epoch for small training:
                  # 1. 50 epochs of linear increase, 
                  # 2. then 50 epochs of constant lr

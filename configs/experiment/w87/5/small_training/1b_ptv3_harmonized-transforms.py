@@ -14,6 +14,7 @@ num_gpu = 1
 epoch = 100 # Small training
 eval_epoch = epoch//10
 lr = 6e-4
+warmup_steps = 5000
 patch_size = 1024 #128, 1024
 
 # Specific things I setted
@@ -101,7 +102,7 @@ optimizer = dict(type="AdamW", lr=lr, weight_decay=0.05)
 # )
 scheduler = dict(type="LinearLR", 
                  start_factor = 1/10, # start with lr/10
-                 total_iters = 50, # number of epochs before reaching lr (and plateauing) 
+                 total_iters = warmup_steps, # number of epochs before reaching lr (and plateauing) 
                  # As we have 100 epoch for small training:
                  # 1. 50 epochs of linear increase, 
                  # 2. then 50 epochs of constant lr

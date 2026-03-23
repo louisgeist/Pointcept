@@ -18,6 +18,7 @@ empty_cache = False
 enable_amp = True
 
 lr = 5e-3
+warmup_steps = 5000
 grid_size = 0.1
 point_max = 100000
 
@@ -52,7 +53,7 @@ optimizer = dict(type="AdamW", lr=lr, weight_decay=0.005)
 # )
 scheduler = dict(type="LinearLR", 
                  start_factor = 1/10, # start with lr/10
-                 total_iters = 50, # number of epochs before reaching lr (and plateauing) 
+                 total_iters = warmup_steps, # number of epochs before reaching lr (and plateauing) 
                  # As we have 100 epoch for small training:
                  # 1. 50 epochs of linear increase, 
                  # 2. then 50 epochs of constant lr
