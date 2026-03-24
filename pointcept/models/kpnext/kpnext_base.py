@@ -23,7 +23,7 @@ import numpy as np
 from easydict import EasyDict
 
 import einops
-from timm.models.layers import DropPath
+from timm.layers import DropPath
 import pointops
 
 from pointcept.models.builder import MODELS
