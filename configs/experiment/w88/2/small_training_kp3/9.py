@@ -1,6 +1,6 @@
 _base_ = ["../../../../_base_/default_runtime.py"] # level experiment/wXX/DD/subfolder/config.py
 
-num_exp = 5
+num_exp = 9
 
 # Flair3D settings
 num_classes = 8
@@ -18,7 +18,7 @@ hooks = [
     dict(type="CheckpointLoader"),
     dict(type="ModelHook"),
     dict(type="IterationTimer", warmup_iter=2),
-    dict(type="InformationWriter", log_interval=1),
+    dict(type="InformationWriter", log_interval=100),
     dict(type="SemSegEvaluator", write_cls_iou=True),
     dict(type="CheckpointSaver", save_freq=None),
     dict(type="PreciseEvaluator", test_last=False),

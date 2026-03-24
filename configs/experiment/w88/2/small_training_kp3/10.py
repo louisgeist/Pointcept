@@ -1,6 +1,6 @@
 _base_ = ["../../../../_base_/default_runtime.py"] # level experiment/wXX/DD/subfolder/config.py
 
-num_exp = 6
+num_exp = 10
 
 # Flair3D settings
 num_classes = 8
