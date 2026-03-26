@@ -3,7 +3,7 @@ SONATA model config adapted from the Sonata-v1m2 config,
 on dataset: Flair3D
 """
 
-_base_ = ["../_base_/default_runtime.py"]
+_base_ = ["../../../../_base_/default_runtime.py"] # level experiment/wXX/DD/subfolder/config.py
 
 # misc custom setting
 num_gpu = 4
