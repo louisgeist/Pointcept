@@ -1,6 +1,6 @@
 _base_ = ["../../../../_base_/default_runtime.py"] 
 
-num_gpu = 1
+num_gpu = 5
 experiment_group = 7
 num_exp = 1
 
@@ -28,7 +28,7 @@ epoch = 100 # Small training
 eval_epoch = epoch//10
 feat_keys = ["coord", "color"]
 
-wandb_run_name = f"SpUNet {experiment_group}.{num_exp}) lab6  | eff_bs={batch_size*gradient_accumulation_steps} | harmonized transforms + shuffle | warmup={warmup_steps} | lr={lr}"
+wandb_run_name = f"SpUNet {experiment_group}.{num_exp}) lab6  | eff_bs={batch_size*gradient_accumulation_steps} | harmonized transforms | No_shuffle | warmup={warmup_steps} | lr={lr}"
 
 # model settings
 model = dict(
@@ -115,7 +115,7 @@ data = dict(
             dict(type="SphereCrop", point_max=point_max, mode="random"),
             dict(type="CenterShift", apply_z=False),
             dict(type="NormalizeColor"),
-            dict(type="ShufflePoint"), # might be worth to test
+            # dict(type="ShufflePoint"), # might be worth to test
             dict(type="ToTensor"),
             dict(
                 type="Collect",
