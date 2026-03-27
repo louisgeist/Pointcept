@@ -185,6 +185,7 @@ class SemSegTester(TesterBase):
                     segment = data_dict["origin_segment"]
             else:
                 pred = torch.zeros((segment.size, self.cfg.data.num_classes)).cuda()
+                print(f"pred shape: {pred.shape}")
                 # Single-fragment mode: one point per voxel, broadcast via inverse
                 use_voxel_broadcast = "inverse" in fragment_list[0]
                 for i in range(len(fragment_list)):
@@ -287,6 +288,10 @@ class SemSegTester(TesterBase):
                     )
                 )
 
+            print("ignore index: ", self.cfg.data.ignore_index)
+            print("pred shape: ", pred.shape)
+            print("segment shape: ", segment.shape)
+            print("num classes: ", self.cfg.data.num_classes)
             intersection, union, target = intersection_and_union(
                 pred, segment, self.cfg.data.num_classes, self.cfg.data.ignore_index
             )
