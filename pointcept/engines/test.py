@@ -232,6 +232,7 @@ class SemSegTester(TesterBase):
                     pred = pred.topk(3, dim=1)[1].data.cpu().numpy()
                 else:
                     print("pred before max: ", pred)
+                    print("pred.sum(1): ", pred.sum(1))
                     pred = pred.max(1)[1].data.cpu().numpy()
                     print("pred after max: ", pred)
                 if "origin_segment" in data_dict.keys():
