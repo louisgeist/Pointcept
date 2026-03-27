@@ -161,6 +161,7 @@ class InformationWriter(HookBase):
                             if hasattr(self.trainer.cfg.data, "ignore_index")
                             else self.trainer.cfg.data.get("ignore_index", -1)
                         )
+                        print(f"ignore_index: {ignore_index}")
                     area_intersection, area_union, _ = intersection_and_union_gpu(
                         pred.clone(), target, int(num_classes), ignore_index=int(ignore_index)
                     )

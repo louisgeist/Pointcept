@@ -199,7 +199,9 @@ class SemSegTester(TesterBase):
                     idx_part = input_dict["index"]
                     with torch.no_grad():
                         pred_part = self.model(input_dict)["seg_logits"]  # (n, k)
+                        print(f"pred before softmax (for point 0): {pred_part[0]}")
                         pred_part = F.softmax(pred_part, -1)
+                        print(f"pred after softmax (for point 0): {pred_part[0]}")
                         if self.cfg.empty_cache:
                             torch.cuda.empty_cache()
                         if use_voxel_broadcast:
