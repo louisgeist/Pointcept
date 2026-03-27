@@ -235,9 +235,9 @@ class SemSegTester(TesterBase):
                     summed = pred.sum(1)
                     print("pred.sum(1): ", summed)
                     print("# (pred.sum(1)<1e-6): ", torch.sum((summed<1e-6).int()))
-                    print("mean (pred.sum(1)<1e-6): ", torch.mean((summed<1e-6).int()))
+                    print("mean (pred.sum(1)<1e-6): ", torch.mean((summed<1e-6).float()))
                     print("# (pred.sum(1)<0.5): ", torch.sum((summed<0.5).int()))
-                    print("mean (pred.sum(1)<0.5): ", torch.mean((summed<0.5).int()))
+                    print("mean (pred.sum(1)<0.5): ", torch.mean((summed<0.5).float()))
                     pred = pred.max(1)[1].data.cpu().numpy()
                     print("pred after max: ", pred)
                 if "origin_segment" in data_dict.keys():
