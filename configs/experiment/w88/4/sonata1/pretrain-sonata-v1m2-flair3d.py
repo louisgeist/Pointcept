@@ -8,7 +8,7 @@ _base_ = ["../../../../_base_/default_runtime.py"] # level experiment/wXX/DD/sub
 # misc custom setting
 num_nodes = 1
 num_gpu = 4
-batch_size_per_gpu = 3
+batch_size_per_gpu = 2
 batch_size = batch_size_per_gpu * num_gpu * num_nodes
 num_worker = 8 * num_gpu * num_nodes
 mix_prob = 0
