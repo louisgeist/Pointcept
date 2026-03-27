@@ -292,6 +292,7 @@ class SemSegTester(TesterBase):
             print("pred shape: ", pred.shape)
             print("segment shape: ", segment.shape)
             print("num classes: ", self.cfg.data.num_classes)
+            print("pred[0] given to intersection_and_union: ", pred[0])
             intersection, union, target = intersection_and_union(
                 pred, segment, self.cfg.data.num_classes, self.cfg.data.ignore_index
             )
