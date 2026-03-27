@@ -231,7 +231,9 @@ class SemSegTester(TesterBase):
                 if self.cfg.data.test.type == "ScanNetPPDataset":
                     pred = pred.topk(3, dim=1)[1].data.cpu().numpy()
                 else:
+                    print("pred before max: ", pred)
                     pred = pred.max(1)[1].data.cpu().numpy()
+                    print("pred after max: ", pred)
                 if "origin_segment" in data_dict.keys():
                     assert "inverse" in data_dict.keys()
                     pred = pred[data_dict["inverse"]]
@@ -292,7 +294,7 @@ class SemSegTester(TesterBase):
             print("pred shape: ", pred.shape)
             print("segment shape: ", segment.shape)
             print("num classes: ", self.cfg.data.num_classes)
-            print("pred[0] given to intersection_and_union: ", pred[0])
+            print("pred given to intersection_and_union: ", pred)
             intersection, union, target = intersection_and_union(
                 pred, segment, self.cfg.data.num_classes, self.cfg.data.ignore_index
             )
