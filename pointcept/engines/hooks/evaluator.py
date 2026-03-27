@@ -230,7 +230,7 @@ class SemSegEvaluator(HookBase):
                         wandb.log(
                             {
                                 "Epoch": current_epoch,
-                                f"val/cls_{i}-{self.trainer.cfg.data.names[i]} IoU": iou_class[
+                                f"val/iou_{self.trainer.cfg.data.names[i]}": iou_class[
                                     i
                                 ],
                             },
