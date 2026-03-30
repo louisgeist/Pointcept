@@ -218,7 +218,7 @@ data = dict(
             post_transform=[
                 dict(type="CenterShift", apply_z=False),
                 dict(type="ToTensor"),
-                dict(type="Collect", keys=("coord", "index"), optional_keys=("inverse"), feat_keys=["color"])
+                dict(type="Collect", keys=("coord", "index"), optional_keys=("inverse",), feat_keys=["color"])
             ],
             aug_transform=[
                 [dict(type="RandomRotateTargetAngle", angle=[0], axis="z", center=[0, 0, 0], p=1)],
