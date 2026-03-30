@@ -933,6 +933,7 @@ class GridSample(object):
             # maps each full-scene point to its voxel id so test can broadcast label.
             num_fragments = 1 if self.test_single_fragment else count.max()
             return_inverse_here = self.return_inverse or self.test_single_fragment
+            print(f" Return inverse in test: {return_inverse_here}")
             data_part_list = []
             for i in range(num_fragments):
                 idx_select = np.cumsum(np.insert(count, 0, 0)[0:-1]) + i % count
