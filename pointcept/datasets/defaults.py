@@ -195,7 +195,9 @@ class DefaultDataset(Dataset):
         for i in range(len(fragment_list)):
             fragment_list[i] = self.post_transform(fragment_list[i])
         result_dict["fragment_list"] = fragment_list
-        print(f"Inverse is found  after post transform: {result_dict["fragment_list"][0]["inverse"]}")
+        print(
+            f"Inverse is found after post transform: {result_dict['fragment_list'][0].get('inverse', None)}"
+        )
         return result_dict
 
     def __getitem__(self, idx):
