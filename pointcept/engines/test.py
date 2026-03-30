@@ -188,6 +188,7 @@ class SemSegTester(TesterBase):
                 print(f"pred shape: {pred.shape}")
                 # Single-fragment mode: one point per voxel, broadcast via inverse
                 use_voxel_broadcast = "inverse" in fragment_list[0]
+                print(f"use_voxel_broadcast: {use_voxel_broadcast}")
                 for i in range(len(fragment_list)):
                     fragment_batch_size = 1
                     s_i, e_i = i * fragment_batch_size, min(
