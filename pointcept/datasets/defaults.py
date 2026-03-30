@@ -168,6 +168,7 @@ class DefaultDataset(Dataset):
         data_dict = self.get_data(idx)
         data_dict = self.transform(data_dict)
         result_dict = dict(segment=data_dict.pop("segment"), name=data_dict.pop("name"))
+        print(f"origin_segment is found: {data_dict.keys()}")
         if "origin_segment" in data_dict:
             assert "inverse" in data_dict
             result_dict["origin_segment"] = data_dict.pop("origin_segment")
@@ -194,6 +195,7 @@ class DefaultDataset(Dataset):
         for i in range(len(fragment_list)):
             fragment_list[i] = self.post_transform(fragment_list[i])
         result_dict["fragment_list"] = fragment_list
+        print(f"Inverse is found  after post transform: {result_dict["fragment_list"][0]["inverse"]}")
         return result_dict
 
     def __getitem__(self, idx):
