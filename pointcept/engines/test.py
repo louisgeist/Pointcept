@@ -185,10 +185,8 @@ class SemSegTester(TesterBase):
                     segment = data_dict["origin_segment"]
             else:
                 pred = torch.zeros((segment.size, self.cfg.data.num_classes)).cuda()
-                print(f"pred shape: {pred.shape}")
                 # Single-fragment mode: one point per voxel, broadcast via inverse
                 use_voxel_broadcast = "inverse" in fragment_list[0]
-                print(f"use_voxel_broadcast: {use_voxel_broadcast}")
                 for i in range(len(fragment_list)):
                     fragment_batch_size = 1
                     s_i, e_i = i * fragment_batch_size, min(
@@ -201,9 +199,7 @@ class SemSegTester(TesterBase):
                     idx_part = input_dict["index"]
                     with torch.no_grad():
                         pred_part = self.model(input_dict)["seg_logits"]  # (n, k)
-                        print(f"pred before softmax (for point 0): {pred_part[0]}")
                         pred_part = F.softmax(pred_part, -1)
-                        print(f"pred after softmax (for point 0): {pred_part[0]}")
                         if self.cfg.empty_cache:
                             torch.cuda.empty_cache()
                         if use_voxel_broadcast:
@@ -232,15 +228,8 @@ class SemSegTester(TesterBase):
                 if self.cfg.data.test.type == "ScanNetPPDataset":
                     pred = pred.topk(3, dim=1)[1].data.cpu().numpy()
                 else:
-                    print("pred before max: ", pred)
                     summed = pred.sum(1)
-                    print("pred.sum(1): ", summed)
-                    print("# (pred.sum(1)<1e-6): ", torch.sum((summed<1e-6).int()))
-                    print("mean (pred.sum(1)<1e-6): ", torch.mean((summed<1e-6).float()))
-                    print("# (pred.sum(1)<0.5): ", torch.sum((summed<0.5).int()))
-                    print("mean (pred.sum(1)<0.5): ", torch.mean((summed<0.5).float()))
                     pred = pred.max(1)[1].data.cpu().numpy()
-                    print("pred after max: ", pred)
                 if "origin_segment" in data_dict.keys():
                     assert "inverse" in data_dict.keys()
                     pred = pred[data_dict["inverse"]]
@@ -297,11 +286,6 @@ class SemSegTester(TesterBase):
                     )
                 )
 
-            print("ignore index: ", self.cfg.data.ignore_index)
-            print("pred shape: ", pred.shape)
-            print("segment shape: ", segment.shape)
-            print("num classes: ", self.cfg.data.num_classes)
-            print("pred given to intersection_and_union: ", pred)
             intersection, union, target = intersection_and_union(
                 pred, segment, self.cfg.data.num_classes, self.cfg.data.ignore_index
             )
