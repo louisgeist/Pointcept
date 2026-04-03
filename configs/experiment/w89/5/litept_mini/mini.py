@@ -40,7 +40,7 @@ hooks = [
     dict(type="CheckpointLoader"),
     dict(type="ModelHook"),
     dict(type="IterationTimer", warmup_iter=2),
-    dict(type="InformationWriter", log_interval=100, log_train_miou=True),
+    dict(type="InformationWriter", log_interval=100,),
     dict(type="SemSegEvaluator", write_cls_iou=True),
     dict(type="CheckpointSaver", save_freq=3),
     dict(type="PreciseEvaluator", test_last=False),
