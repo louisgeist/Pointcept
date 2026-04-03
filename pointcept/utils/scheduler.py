@@ -171,6 +171,7 @@ class LinearLR(lr_scheduler.LinearLR):
             last_epoch=last_epoch,
         )
 
+@SCHEDULERS.register_module()
 class CosineScheduler(object):
     def __init__(
         self,
