@@ -19,7 +19,7 @@ hooks = [
     dict(type="CheckpointLoader"),
     dict(type="ModelHook"),
     dict(type="IterationTimer", warmup_iter=2),
-    dict(type="InformationWriter", log_interval=1),
+    dict(type="InformationWriter", log_interval=100),
     dict(type="SemSegEvaluator", write_cls_iou=True),
     dict(type="CheckpointSaver", save_freq=None),
     dict(type="PreciseEvaluator", test_last=False),
@@ -217,7 +217,7 @@ data = dict(
             post_transform=[
                 dict(type="CenterShift", apply_z=False),
                 dict(type="ToTensor"),
-                dict(type="Collect", keys=("coord", "index"), optional_keys=("inverse"), feat_keys=feat_keys)
+                dict(type="Collect", keys=("coord", "index"), optional_keys=("inverse",), feat_keys=feat_keys)
             ],
             aug_transform=[
                 [dict(type="RandomRotateTargetAngle", angle=[0], axis="z", center=[0, 0, 0], p=1)],
