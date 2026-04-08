@@ -9,7 +9,6 @@ from .utils import point_collate_fn, collate_fn
 
 # indoor scene
 from .s3dis import S3DISDataset
-from .flair3d import Flair3DDataset
 from .scannet import (
     ScanNetDataset,
     ScanNet200Dataset,
@@ -25,6 +24,10 @@ from .semantic_kitti import SemanticKITTIDataset, SemanticKITTIImagePointDataset
 from .nuscenes import NuScenesDataset, NuScenesImagePointDataset
 from .waymo import WaymoDataset
 from .hk import HKDataset
+
+# aerial lidar
+from .flair3d import Flair3DDataset
+from .dales import DALESDataset
 
 # object
 from .modelnet import ModelNetDataset
