@@ -14,7 +14,6 @@ test_single_fragment = True
 
 # misc custom setting
 batch_size = 48 * num_gpu  # bs: total bs in all gpus
-gradient_accumulation_steps = 2
 mix_prob = 0.8
 empty_cache = False
 enable_amp = True
