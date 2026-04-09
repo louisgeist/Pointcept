@@ -4,7 +4,7 @@ _base_ = ["../../../../_base_/default_runtime.py"] # level experiment/wXX/DD/sub
 num_classes = 8
 ignore_index = 8
 grid_size = 0.1
-point_max = 204800
+point_max = 10000
 
 grp_exp = 1
 num_exp = 3
