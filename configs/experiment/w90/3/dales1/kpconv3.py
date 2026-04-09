@@ -44,7 +44,7 @@ max_input_pts = 40000
 # batch_size = 12  
 # mix_prob = 0.8
 empty_cache = False
-enable_amp = True
+enable_amp = False
 # sync_bn = True
 # max_input_pts = 80000
 
@@ -176,7 +176,7 @@ data = dict(
 
     val=dict(
         type=dataset_type,
-        split="val",
+        split="test",
         data_root=data_root,
         transform=[
             dict(type="CenterShift", apply_z=True),

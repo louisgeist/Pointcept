@@ -16,7 +16,7 @@ test_single_fragment = True
 batch_size = 48 * num_gpu  # bs: total bs in all gpus
 mix_prob = 0.8
 empty_cache = False
-enable_amp = True
+enable_amp = False
 
 lr = 5e-2
 warmup_steps = 2500
@@ -126,7 +126,7 @@ data = dict(
     ),
     val=dict(
         type=dataset_type,
-        split="val",
+        split="test",
         data_root=data_root,
         transform=[
             dict(type="CenterShift", apply_z=True),

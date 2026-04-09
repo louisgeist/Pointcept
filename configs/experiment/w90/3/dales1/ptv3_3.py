@@ -25,7 +25,7 @@ batch_size = batch_size_per_gpu * num_gpu
 num_worker = 8 * num_gpu
 mix_prob = 0.8
 empty_cache = False
-enable_amp = True
+enable_amp = False
 
 
 # dataset settings
@@ -170,7 +170,7 @@ data = dict(
     ),
     val=dict(
         type=dataset_type,
-        split="val",        
+        split="test",        
         data_root=data_root,
         transform=[
             dict(type="CenterShift", apply_z=True),
