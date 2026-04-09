@@ -128,10 +128,21 @@ python -m tools.train \
   --options save_path=logs/local/test
 ```
 
+### Other datasets
+
+#### Dales
+Preprocessing:
+```
+python pointcept/datasets/preprocessing/dales/preprocess_dales.py \
+  --dataset_root data/dales/raw \ #DALESObjects
+  --output_root data/dales \
+  --num_workers 8 \
+  --chunking 3
+```
 
 # Brouillon
 python -m tools.train \
-  --config-file configs/experiment/w88/5/kpconv_debug/6.py \
+  --config-file configs/experiment/w90/4/dales_test/ptv3_3.py \
   --num-gpus 1 \
   --num-machines 1 \
   --machine-rank 0 \
