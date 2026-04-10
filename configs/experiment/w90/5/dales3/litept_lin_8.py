@@ -1,7 +1,7 @@
 _base_ = ["../../../../_base_/default_runtime.py"]
 
 grp_exp = 3
-num_exp = 1
+num_exp = 8
 
 num_classes = 8
 ignore_index = 8
@@ -10,15 +10,14 @@ point_max = 102400
 
 
 num_gpu = 1
-epoch = 100
-eval_epoch = epoch//10
-lr = 2e-3 #LitePT waymo : lr=0.002
+epoch = 50
+eval_epoch = epoch//5
+lr = 2e-3
 warmup_steps = 500
-patch_size = 1024 #LitePT : 1024
+patch_size = 1024
 
 # Specific things I setted
 test_single_fragment = True
-tta = False # no TTA (cf. aug_transform)
 
 # misc custom setting
 batch_size_per_gpu = 24
@@ -34,7 +33,7 @@ data_root = "data/dales"
 
 weight = "/lustre/fswork/projects/rech/unv/usi32yh/Pointcept/logs/slurm/1871733/model/model_best.pth"
 
-wandb_run_name = f"LitePT transfert {grp_exp}.{num_exp}) lr={lr}, epoch={epoch}, bs={batch_size}"
+wandb_run_name = f"LitePT Lin. {grp_exp}.{num_exp}) lr={lr}, epoch={epoch}"
 wandb_project = f"pointcept_{dataset_type[:-7].lower()}"
 
 # Hooks
@@ -102,10 +101,6 @@ scheduler = dict(
     div_factor=10.0,
     final_div_factor=1000.0,
 )
-# scheduler = dict(type="LinearLR", 
-#                  start_factor = 1/10, # start with lr/10
-#                  total_iters = warmup_steps, # number of steps before reaching lr (and plateauing) 
-#                 )
 param_dicts = [dict(keyword="block", lr=lr/10)]
 
 data = dict(
