@@ -311,10 +311,13 @@ class CheckpointSaver(HookBase):
 
 @HOOKS.register_module()
 class CheckpointLoader(HookBase):
-    def __init__(self, keywords="", replacement=None, strict=False):
+    def __init__(self, keywords="", replacement=None, strict=False, exclude_keys=None):
         self.keywords = keywords
         self.replacement = replacement if replacement is not None else keywords
         self.strict = strict
+        # Exclude checkpoint keys by substring match before loading.
+        # Example: exclude_keys=("seg_head",)
+        self.exclude_keys = tuple(exclude_keys) if exclude_keys is not None else tuple()
 
     def before_train(self):
         self.trainer.logger.info("=> Loading checkpoint & weight ...")
@@ -329,11 +332,17 @@ class CheckpointLoader(HookBase):
                 f"Loading layer weights with keyword: {self.keywords}, "
                 f"replace keyword with: {self.replacement}"
             )
+            if self.exclude_keys:
+                self.trainer.logger.info(
+                    f"Excluding checkpoint keys containing: {self.exclude_keys}"
+                )
             weight = OrderedDict()
             for key, value in checkpoint["state_dict"].items():
                 if not key.startswith("module."):
                     key = "module." + key  # xxx.xxx -> module.xxx.xxx
                 # Now all keys contain "module." no matter DDP or not.
+                if self.exclude_keys and any(k in key for k in self.exclude_keys):
+                    continue # the key is not stored in `weight`
                 if self.keywords in key:
                     key = key.replace(self.keywords, self.replacement, 1)
                 if comm.get_world_size() == 1:
