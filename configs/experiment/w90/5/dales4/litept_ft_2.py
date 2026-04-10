@@ -1,7 +1,7 @@
 _base_ = ["../../../../_base_/default_runtime.py"]
 
 grp_exp = 4
-num_exp = 1
+num_exp = 2
 
 num_classes = 8
 ignore_index = 8
@@ -32,7 +32,7 @@ data_root = "data/dales"
 
 weight = "/lustre/fswork/projects/rech/unv/usi32yh/Pointcept/logs/slurm/1871733/model/model_best.pth"
 
-wandb_run_name = f"LitePT FT {grp_exp}.{num_exp}) lr={lr}, epoch={epoch}"
+wandb_run_name = f"LitePT FT {grp_exp}.{num_exp}) lr={lr}, lr_head_scale={lr_head_scale}, epoch={epoch}"
 wandb_project = f"pointcept_{dataset_type[:-7].lower()}"
 
 # Hooks
