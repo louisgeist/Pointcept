@@ -26,7 +26,7 @@ hooks = [
 ]
 
 # Parameters factorization for easier experiments
-lr = 5e-4
+lr = 5e-3
 warmup_steps = 5000*4
 grid_size = 0.1
 
