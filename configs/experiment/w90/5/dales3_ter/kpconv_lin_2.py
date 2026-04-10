@@ -51,8 +51,8 @@ enable_amp = False
 # scheduler settings
 # epoch = 1000
 # eval_epoch = 200
-epoch=100
-eval_epoch=epoch//10
+epoch=50
+eval_epoch=epoch//5
 
 # dataset settings
 dataset_type = "DALESDataset"
@@ -60,7 +60,7 @@ data_root = "data/dales"
 
 weight = "/lustre/fswork/projects/rech/unv/usi32yh/Pointcept/logs/slurm/1871731/model/model_best.pth"
 
-wandb_run_name = f"KPConvX Lin. {grp_exp}.{num_exp}) lr={lr}"
+wandb_run_name = f"KPConvX Lin. {grp_exp}.{num_exp}) lr={lr}, epoch={epoch}"
 
 feat_keys = ["coord", "strength"]
 

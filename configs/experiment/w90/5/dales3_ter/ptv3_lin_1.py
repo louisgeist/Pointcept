@@ -33,7 +33,7 @@ data_root = "data/dales"
 
 weight = "/lustre/fswork/projects/rech/unv/usi32yh/Pointcept/logs/slurm/1871735/model/model_best.pth"
 
-wandb_run_name = f"PTv3 Lin. {grp_exp}.{num_exp}) lr={lr}"
+wandb_run_name = f"PTv3 Lin. {grp_exp}.{num_exp}) lr={lr}, epoch={epoch}"
 
 # Hooks
 # Note: configs are imported as python modules before `_base_` is merged, so we

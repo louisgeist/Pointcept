@@ -33,7 +33,7 @@ data_root = "data/dales"
 
 weight = "/lustre/fswork/projects/rech/unv/usi32yh/Pointcept/logs/slurm/1871738/model/model_best.pth"
 
-wandb_run_name = f"SpUNet Lin. {grp_exp}.{num_exp}) lr={lr}"
+wandb_run_name = f"SpUNet Lin. {grp_exp}.{num_exp}) lr={lr}, epoch={epoch}"
 
 # model settings
 model = dict(
