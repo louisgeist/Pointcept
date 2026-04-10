@@ -51,7 +51,7 @@ enable_amp = False
 # scheduler settings
 # epoch = 1000
 # eval_epoch = 200
-epoch=100*2
+epoch=100*8
 eval_epoch=epoch//10
 
 # dataset settings
