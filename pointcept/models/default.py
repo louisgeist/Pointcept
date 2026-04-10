@@ -16,10 +16,19 @@ logger = get_root_logger()
 
 @MODELS.register_module()
 class DefaultSegmentor(nn.Module):
-    def __init__(self, backbone=None, criteria=None):
+    def __init__(self, backbone=None, criteria=None, freeze_backbone=False):
         super().__init__()
         self.backbone = build_model(backbone)
         self.criteria = build_criteria(criteria)
+        self.freeze_backbone = freeze_backbone
+        if self.freeze_backbone:
+            # Keep segmentation heads trainable for backbones that own their
+            # own output classifier (e.g., SpUNet: "final", KPConvX: "final").
+            keep_segmentation_head_prefixes = ("final.")
+            for name, param in self.backbone.named_parameters():
+                if name.startswith(keep_segmentation_head_prefixes):
+                    continue
+                param.requires_grad = False
 
     def forward(self, input_dict):
         if "condition" in input_dict.keys():
