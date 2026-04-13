@@ -61,6 +61,7 @@ data_root = "data/dales"
 weight = "/lustre/fswork/projects/rech/unv/usi32yh/Pointcept/logs/slurm/1871731/model/model_best.pth"
 
 wandb_run_name = f"KPConvX Lin. {grp_exp}.{num_exp}) lr={lr}, epoch={epoch}"
+wandb_project = f"pointcept_{dataset_type[:-7].lower()}"
 
 feat_keys = ["coord", "strength"]
 

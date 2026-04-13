@@ -59,6 +59,7 @@ dataset_type = "DALESDataset"
 data_root = "data/dales"
 
 wandb_run_name = f"KPConvX on {dataset_type[:-7]}: {grp_exp}.{num_exp}) lr={lr}"
+wandb_project = f"pointcept_{dataset_type[:-7].lower()}"
 
 feat_keys = ["coord", "strength"]
 
