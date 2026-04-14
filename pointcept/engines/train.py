@@ -280,6 +280,7 @@ class Trainer(TrainerBase):
         if self.cfg.sync_bn:
             model = nn.SyncBatchNorm.convert_sync_batchnorm(model)
         n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        self.n_free_parameters = n_parameters
         # logger.info(f"Model: \n{self.model}")
         self.logger.info(f"Num params: {n_parameters}")
         model = create_ddp_model(
@@ -304,6 +305,7 @@ class Trainer(TrainerBase):
                 settings=wandb.Settings(api_key=self.cfg.wandb_key),
                 config=self.cfg,
             )
+            wandb.log({"model/free_params": self.n_free_parameters})
         return writer
 
     def build_train_loader(self):
