@@ -8,6 +8,7 @@ Please cite our work if the code is helpful to you.
 import os
 import sys
 import weakref
+import time
 import wandb
 import torch
 import torch.nn as nn
@@ -54,6 +55,8 @@ class TrainerBase:
         self.data_iterator: Iterator = enumerate([])
         self.storage: EventStorage
         self.writer: SummaryWriter
+        # End-to-end runtime timer from trainer creation to final after_train hooks.
+        self.total_runtime_start_time = time.perf_counter()
 
     def register_hooks(self, hooks) -> None:
         hooks = build_hooks(hooks)
@@ -118,6 +121,26 @@ class TrainerBase:
         comm.synchronize()
         for h in self.hooks:
             h.after_train()
+        if torch.cuda.is_available(): # synchronize GPU before measuring runtime
+            torch.cuda.synchronize()
+        total_runtime_seconds = time.perf_counter() - self.total_runtime_start_time
+        if (
+            comm.is_main_process()
+            and getattr(self, "cfg", None) is not None
+            and self.cfg.enable_wandb
+            and wandb.run is not None
+        ):
+            wandb.log(
+                {
+                    "runtime/total_s": float(total_runtime_seconds),
+                    "runtime/total_h": float(total_runtime_seconds / 3600.0),
+                }
+            )
+        if hasattr(self, "logger"):
+            self.logger.info(
+                "Total end-to-end runtime (model init -> test end): "
+                f"{total_runtime_seconds:.2f}s ({total_runtime_seconds / 3600.0:.4f}h)"
+            )
         if comm.is_main_process():
             self.writer.close()
 
