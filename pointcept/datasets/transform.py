@@ -747,6 +747,33 @@ class HueSaturationTranslation(object):
             )
         return data_dict
 
+@TRANSFORMS.register_module()
+class RandomDropStrength(object):
+    def __init__(
+        self,
+        drop_ratio=0.2,
+        drop_application_ratio=0.5,
+        keep_mask=False,
+    ):
+        self.drop_ratio = drop_ratio
+        self.drop_application_ratio = drop_application_ratio
+        self.keep_mask = keep_mask
+        self.drop_value = 0.0
+
+    def __call__(self, data_dict):
+        if "strength" in data_dict.keys():
+            n = len(data_dict["strength"])
+            drop_mask = np.zeros(n, dtype=bool)
+            if random.random() < self.drop_application_ratio:
+                num_to_drop = int(n * self.drop_ratio)
+                idx = np.random.choice(n, num_to_drop, replace=False)
+                drop_mask[idx] = True
+                data_dict["strength"][idx] = self.drop_value
+            if self.keep_mask:
+                data_dict["strength_mask"] = drop_mask
+        return data_dict
+
+
 
 @TRANSFORMS.register_module()
 class RandomDropColor(object):
