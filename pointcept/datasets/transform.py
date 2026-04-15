@@ -781,7 +781,10 @@ class RandomDropStrength(object):
     def __call__(self, data_dict):
         if "strength" in data_dict.keys():
             n = len(data_dict["strength"])
-            drop_mask = np.zeros(n, dtype=bool)
+            if self.keep_mask and "strength_mask" in data_dict:
+                drop_mask = data_dict["strength_mask"].astype(bool, copy=True)
+            else:
+                drop_mask = np.zeros(n, dtype=bool)
             if random.random() < self.drop_application_ratio:
                 num_to_drop = int(n * self.drop_ratio)
                 idx = np.random.choice(n, num_to_drop, replace=False)
@@ -812,7 +815,10 @@ class RandomDropColor(object):
     def __call__(self, data_dict):
         if "color" in data_dict.keys():
             n = len(data_dict["color"])
-            drop_mask = np.zeros(n, dtype=bool)
+            if self.keep_mask and "color_mask" in data_dict:
+                drop_mask = data_dict["color_mask"].astype(bool, copy=True)
+            else:
+                drop_mask = np.zeros(n, dtype=bool)
             if random.random() < self.drop_application_ratio:
                 idx = np.random.choice(n, int(n * self.drop_ratio), replace=False)
                 drop_mask[idx] = True
@@ -838,7 +844,10 @@ class RandomDropNormal(object):
     def __call__(self, data_dict):
         if "normal" in data_dict.keys():
             n = len(data_dict["normal"])
-            drop_mask = np.zeros(n, dtype=bool)
+            if self.keep_mask and "normal_mask" in data_dict:
+                drop_mask = data_dict["normal_mask"].astype(bool, copy=True)
+            else:
+                drop_mask = np.zeros(n, dtype=bool)
             if random.random() < self.drop_application_ratio:
                 num_to_drop = int(n * self.drop_ratio)
                 idx = np.random.choice(n, num_to_drop, replace=False)
