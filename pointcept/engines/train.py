@@ -230,6 +230,10 @@ class Trainer(TrainerBase):
                 output_dict["loss"] / self.cfg.gradient_accumulation_steps
             )  # scale loss
 
+        model_for_debug = self.model.module if hasattr(self.model, "module") else self.model
+        if hasattr(model_for_debug, "_print_learned_masked_feat"):
+            model_for_debug._print_learned_masked_feat()
+
         # Backward pass
         if self.cfg.enable_amp:
             self.scaler.scale(loss).backward()

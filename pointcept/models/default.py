@@ -72,6 +72,15 @@ class LearnedMaskedFeatMixin:
                 learned_mask_value,
                 feat[:, start:end],
             )
+            
+    def _print_learned_masked_feat(self):
+        if not self.enable_learned_masked_feat:
+            print("Learned masked feat is not enabled.")
+            return
+        print(f"Learned masked feat keys: {self.learned_masked_feat_keys}")
+        print(f"Color mask value: {self.color_mask_value}")
+        print(f"Normal mask value: {self.normal_mask_value}")
+        print(f"Strength mask value: {self.strength_mask_value}")
 
 
 @MODELS.register_module()
