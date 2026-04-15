@@ -141,6 +141,12 @@ class TrainerBase:
                 "Total end-to-end runtime (model init -> test end): "
                 f"{total_runtime_seconds:.2f}s ({total_runtime_seconds / 3600.0:.4f}h)"
             )
+        if comm.is_main_process() and hasattr(self, "model"):
+            model_for_debug = (
+                self.model.module if hasattr(self.model, "module") else self.model
+            )
+            if hasattr(model_for_debug, "_print_learned_masked_feat"):
+                model_for_debug._print_learned_masked_feat()
         if comm.is_main_process():
             self.writer.close()
 
@@ -229,10 +235,6 @@ class Trainer(TrainerBase):
             loss = (
                 output_dict["loss"] / self.cfg.gradient_accumulation_steps
             )  # scale loss
-
-        model_for_debug = self.model.module if hasattr(self.model, "module") else self.model
-        if hasattr(model_for_debug, "_print_learned_masked_feat"):
-            model_for_debug._print_learned_masked_feat()
 
         # Backward pass
         if self.cfg.enable_amp:

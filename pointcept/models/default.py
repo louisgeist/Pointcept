@@ -80,9 +80,16 @@ class LearnedMaskedFeatMixin:
         print(f"Learned masked feat keys: {self.learned_masked_feat_keys}")
         for feat_key in self.learned_masked_feat_keys:
             if hasattr(self, f"{feat_key}_mask_value"):
+                value = (
+                    getattr(self, f"{feat_key}_mask_value")
+                    .detach()
+                    .cpu()
+                    .flatten()
+                    .tolist()
+                )
                 print(
                     f"{feat_key.capitalize()} mask value: "
-                    f"{getattr(self, f'{feat_key}_mask_value')}"
+                    f"{value}"
                 )
 
 
