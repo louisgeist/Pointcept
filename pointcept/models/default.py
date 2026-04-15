@@ -14,13 +14,80 @@ from .builder import MODELS, build_model
 logger = get_root_logger()
 
 
+class LearnedMaskedFeatMixin:
+    def _init_learned_masked_feat(self, feature_mask_values=None):
+        cfg = feature_mask_values or {}
+        self.enable_learned_masked_feat = bool(cfg.get("enable", False))
+        self.learned_masked_feat_keys = tuple(
+            cfg.get("masked_feat_keys", ("color", "normal", "strength"))
+        )
+
+        if "color" in self.learned_masked_feat_keys:
+            self.color_mask_value = nn.Parameter(torch.zeros(1, 3))
+        if "normal" in self.learned_masked_feat_keys:
+            self.normal_mask_value = nn.Parameter(torch.zeros(1, 3))
+        if "strength" in self.learned_masked_feat_keys:
+            self.strength_mask_value = nn.Parameter(torch.zeros(1, 1))
+
+    def _apply_learned_masked_feat(self, input_dict):
+        if not self.enable_learned_masked_feat:
+            return
+        assert "feat" in input_dict, "'feat' is required in input_dict."
+        expected_dims = {"color": 3, "normal": 3, "strength": 1}
+        feat = input_dict["feat"]
+        for feat_key in self.learned_masked_feat_keys:
+            # Get the mask of points where the feature is masked.
+            mask_key = f"{feat_key}_mask" 
+            # The features (color, normal, coord, etc.) are already concatenated
+            # in the "feat" tensor. Thus, the start and end keys are necessary to
+            # locate the slice of the feature in the "feat" tensor.
+            start_key = f"{feat_key}_feat_start"
+            end_key = f"{feat_key}_feat_end"
+            
+            # Assert required keys are present.
+            assert mask_key in input_dict, f"'{mask_key}' is required in input_dict."
+            assert start_key in input_dict, f"'{start_key}' is required in input_dict."
+            assert end_key in input_dict, f"'{end_key}' is required in input_dict."
+
+            start_value = input_dict[start_key]
+            end_value = input_dict[end_key]
+            start = int(start_value[0].item()) if torch.is_tensor(start_value) else int(start_value)
+            end = int(end_value[0].item()) if torch.is_tensor(end_value) else int(end_value)
+            feat_dim = end - start
+            if feat_dim <= 0:
+                continue
+
+            expected_dim = expected_dims.get(feat_key, feat_dim)
+            assert feat_dim == expected_dim, (
+                f"Unexpected {feat_key} feature dim: expected {expected_dim}, got {feat_dim}."
+            )
+
+            mask = input_dict[mask_key].bool().unsqueeze(-1)
+            assert hasattr(self, f"{feat_key}_mask_value"), (
+                f"Missing learned parameter '{feat_key}_mask_value'."
+            )
+            learned_mask_value = getattr(self, f"{feat_key}_mask_value").to(feat.dtype)
+            feat[:, start:end] = torch.where(
+                mask,
+                learned_mask_value,
+                feat[:, start:end],
+            )
+
+
 @MODELS.register_module()
-class DefaultSegmentor(nn.Module):
-    def __init__(self, backbone=None, criteria=None, freeze_backbone=False):
+class DefaultSegmentor(nn.Module, LearnedMaskedFeatMixin):
+    def __init__(
+        self,
+        backbone=None,
+        criteria=None,
+        freeze_backbone=False,
+        feature_mask_values=None,
+    ):
         super().__init__()
         self.backbone = build_model(backbone)
         self.criteria = build_criteria(criteria)
         self.freeze_backbone = freeze_backbone
+        self._init_learned_masked_feat(feature_mask_values=feature_mask_values)
         if self.freeze_backbone:
             # Keep segmentation heads trainable for backbones that own their
             # own output classifier (e.g., SpUNet: "final", KPConvX: "final").
@@ -31,6 +98,7 @@ class DefaultSegmentor(nn.Module):
                 param.requires_grad = False
 
     def forward(self, input_dict):
+        self._apply_learned_masked_feat(input_dict)
         if "condition" in input_dict.keys():
             # PPT (https://arxiv.org/abs/2308.09718)
             # currently, only support one batch one condition
@@ -55,7 +123,7 @@ class DefaultSegmentor(nn.Module):
 
 
 @MODELS.register_module()
-class DefaultSegmentorV2(nn.Module):
+class DefaultSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
     def __init__(
         self,
         num_classes,
@@ -63,6 +131,7 @@ class DefaultSegmentorV2(nn.Module):
         backbone=None,
         criteria=None,
         freeze_backbone=False,
+        feature_mask_values=None,
     ):
         super().__init__()
         self.num_classes = num_classes
@@ -73,6 +142,7 @@ class DefaultSegmentorV2(nn.Module):
         )
         self.backbone = build_model(backbone)
         self.criteria = build_criteria(criteria)
+        self._init_learned_masked_feat(feature_mask_values=feature_mask_values)
         self._ignore_index = None
         # Cache ignore_index at init to keep runtime deterministic.
         self.get_ignore_index()
@@ -94,6 +164,7 @@ class DefaultSegmentorV2(nn.Module):
         return self._ignore_index
 
     def forward(self, input_dict, return_point=False):
+        self._apply_learned_masked_feat(input_dict)
         point = Point(input_dict)
         point = self.backbone(point)
         # Backbone added after v1.5.0 return Point instead of feat and use DefaultSegmentorV2
@@ -133,7 +204,7 @@ class DefaultSegmentorV2(nn.Module):
 
 
 @MODELS.register_module()
-class DefaultLORASegmentorV2(nn.Module):
+class DefaultLORASegmentorV2(nn.Module, LearnedMaskedFeatMixin):
     def __init__(
         self,
         num_classes,
@@ -148,6 +219,7 @@ class DefaultLORASegmentorV2(nn.Module):
         backbone_path=None,
         keywords=None,
         replacements=None,
+        feature_mask_values=None,
     ):
         super().__init__()
         self.num_classes = num_classes
@@ -166,6 +238,7 @@ class DefaultLORASegmentorV2(nn.Module):
         self.backbone_load(backbone_weight)
 
         self.criteria = build_criteria(criteria)
+        self._init_learned_masked_feat(feature_mask_values=feature_mask_values)
         self._ignore_index = None
         # Cache ignore_index at init to keep runtime deterministic.
         self.get_ignore_index()
@@ -220,6 +293,7 @@ class DefaultLORASegmentorV2(nn.Module):
         print(f"Unexpected keys: {load_state_info[1]}")
 
     def forward(self, input_dict, return_point=False):
+        self._apply_learned_masked_feat(input_dict)
         point = Point(input_dict)
         if self.freeze_backbone and not self.use_lora:
             with torch.no_grad():
@@ -258,7 +332,7 @@ class DefaultLORASegmentorV2(nn.Module):
 
 
 @MODELS.register_module()
-class DINOEnhancedSegmentor(nn.Module):
+class DINOEnhancedSegmentor(nn.Module, LearnedMaskedFeatMixin):
     def __init__(
         self,
         num_classes,
@@ -266,6 +340,7 @@ class DINOEnhancedSegmentor(nn.Module):
         backbone=None,
         criteria=None,
         freeze_backbone=False,
+        feature_mask_values=None,
     ):
         super().__init__()
         self.seg_head = (
@@ -275,12 +350,14 @@ class DINOEnhancedSegmentor(nn.Module):
         )
         self.backbone = build_model(backbone) if backbone is not None else None
         self.criteria = build_criteria(criteria)
+        self._init_learned_masked_feat(feature_mask_values=feature_mask_values)
         self.freeze_backbone = freeze_backbone
         if self.backbone is not None and self.freeze_backbone:
             for p in self.backbone.parameters():
                 p.requires_grad = False
 
     def forward(self, input_dict, return_point=False):
+        self._apply_learned_masked_feat(input_dict)
         point = Point(input_dict)
         if self.backbone is not None:
             if self.freeze_backbone:
@@ -341,7 +418,7 @@ class DINOEnhancedSegmentor(nn.Module):
 
 
 @MODELS.register_module()
-class DefaultClassifier(nn.Module):
+class DefaultClassifier(nn.Module, LearnedMaskedFeatMixin):
     def __init__(
         self,
         backbone=None,
@@ -349,6 +426,7 @@ class DefaultClassifier(nn.Module):
         num_classes=40,
         backbone_embed_dim=256,
         freeze_backbone=False,
+        feature_mask_values=None,
     ):
         super().__init__()
         self.backbone = build_model(backbone)
@@ -356,6 +434,7 @@ class DefaultClassifier(nn.Module):
         self.num_classes = num_classes
         self.backbone_embed_dim = backbone_embed_dim
         self.freeze_backbone = freeze_backbone
+        self._init_learned_masked_feat(feature_mask_values=feature_mask_values)
         self.cls_head = nn.Sequential(
             nn.Linear(backbone_embed_dim, 256),
             nn.BatchNorm1d(256),
@@ -373,6 +452,7 @@ class DefaultClassifier(nn.Module):
             self.backbone.eval()
 
     def forward(self, input_dict):
+        self._apply_learned_masked_feat(input_dict)
         point = Point(input_dict)
         if self.freeze_backbone:
             with torch.no_grad():

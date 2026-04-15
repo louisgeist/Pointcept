@@ -66,6 +66,11 @@ class Collect(object):
 
     def __call__(self, data_dict):
         data = dict()
+        mask_keys = {
+            "color": "color_mask",
+            "normal": "normal_mask",
+            "strength": "strength_mask",
+        } # Remark: coord can also be used as features, but are never masked.
         data_dict["offset"] = torch.cumsum(
             torch.tensor([data.shape[0] for data in data_dict["coord"]]), dim=0
         )
@@ -83,11 +88,24 @@ class Collect(object):
             assert isinstance(keys, Sequence)
             # Allow for tensors to be of shape (N,) and (N, D)
             tensors = []
+            feat_offset = 0
             for key in keys:
                 t = data_dict[key].float()
                 if t.dim() == 1:
                     t = t.unsqueeze(1)
                 tensors.append(t)
+                if name == "feat" and key in mask_keys:
+                    mask_key = mask_keys[key]
+                    if mask_key in data_dict:
+                        mask = data_dict[mask_key]
+                        if isinstance(mask, np.ndarray):
+                            mask = torch.from_numpy(mask)
+                        data[mask_key] = mask.bool()
+                        # Store per-modality slice bounds so models can replace
+                        # only masked parts of feat without changing in_channels.
+                        data[f"{key}_feat_start"] = feat_offset
+                        data[f"{key}_feat_end"] = feat_offset + t.shape[1]
+                feat_offset += t.shape[1]
             data[name] = torch.cat(tensors, dim=1)
         
         return data
@@ -777,41 +795,57 @@ class RandomDropStrength(object):
 
 @TRANSFORMS.register_module()
 class RandomDropColor(object):
-    def __init__(self, drop_ratio=0.2, drop_application_ratio=0.5):
+    def __init__(
+        self,
+        drop_ratio=0.2,
+        drop_application_ratio=0.5,
+        keep_mask=False,
+    ):
         """
         upright_axis: axis index among x,y,z, i.e. 2 for z
         """
         self.drop_ratio = drop_ratio
         self.drop_application_ratio = drop_application_ratio
+        self.keep_mask = keep_mask
         self.drop_value = 0.0
 
     def __call__(self, data_dict):
-        if (
-            "color" in data_dict.keys()
-            and random.random() < self.drop_application_ratio
-        ):
+        if "color" in data_dict.keys():
             n = len(data_dict["color"])
-            idx = np.random.choice(n, int(n * self.drop_ratio), replace=False)
-            data_dict["color"][idx] = self.drop_value
+            drop_mask = np.zeros(n, dtype=bool)
+            if random.random() < self.drop_application_ratio:
+                idx = np.random.choice(n, int(n * self.drop_ratio), replace=False)
+                drop_mask[idx] = True
+                data_dict["color"][idx] = self.drop_value
+            if self.keep_mask:
+                data_dict["color_mask"] = drop_mask
         return data_dict
 
 
 @TRANSFORMS.register_module()
 class RandomDropNormal(object):
-    def __init__(self, drop_ratio=0.2, drop_application_ratio=0.5):
+    def __init__(
+        self,
+        drop_ratio=0.2,
+        drop_application_ratio=0.5,
+        keep_mask=False,
+    ):
         self.drop_ratio = drop_ratio
         self.drop_application_ratio = drop_application_ratio
+        self.keep_mask = keep_mask
         self.drop_value = 0.0
 
     def __call__(self, data_dict):
-        if (
-            "normal" in data_dict.keys()
-            and random.random() < self.drop_application_ratio
-        ):
+        if "normal" in data_dict.keys():
             n = len(data_dict["normal"])
-            num_to_drop = int(n * self.drop_ratio)
-            idx = np.random.choice(n, num_to_drop, replace=False)
-            data_dict["normal"][idx] = self.drop_value
+            drop_mask = np.zeros(n, dtype=bool)
+            if random.random() < self.drop_application_ratio:
+                num_to_drop = int(n * self.drop_ratio)
+                idx = np.random.choice(n, num_to_drop, replace=False)
+                drop_mask[idx] = True
+                data_dict["normal"][idx] = self.drop_value
+            if self.keep_mask:
+                data_dict["normal_mask"] = drop_mask
         return data_dict
 
 
