@@ -29,7 +29,7 @@ class LearnedMaskedFeatMixin:
         if "strength" in self.learned_masked_feat_keys:
             self.strength_mask_value = nn.Parameter(torch.zeros(1, 1))
 
-    def _apply_learned_masked_feat(self, input_dict):
+    def _fill_masked_feat_with_learned_value(self, input_dict):
         if not self.enable_learned_masked_feat:
             return
         assert "feat" in input_dict, "'feat' is required in input_dict."
@@ -38,16 +38,16 @@ class LearnedMaskedFeatMixin:
         for feat_key in self.learned_masked_feat_keys:
             # Get the mask of points where the feature is masked.
             mask_key = f"{feat_key}_mask" 
+            
+            if mask_key not in input_dict:
+                # If no mask, then there is no need to apply filling with the learned value.
+                continue
+            
             # The features (color, normal, coord, etc.) are already concatenated
             # in the "feat" tensor. Thus, the start and end keys are necessary to
             # locate the slice of the feature in the "feat" tensor.
             start_key = f"{feat_key}_feat_start"
             end_key = f"{feat_key}_feat_end"
-            
-            # Assert required keys are present.
-            assert mask_key in input_dict, f"'{mask_key}' is required in input_dict."
-            assert start_key in input_dict, f"'{start_key}' is required in input_dict."
-            assert end_key in input_dict, f"'{end_key}' is required in input_dict."
 
             start_value = input_dict[start_key]
             end_value = input_dict[end_key]
@@ -110,7 +110,7 @@ class DefaultSegmentor(nn.Module, LearnedMaskedFeatMixin):
                 param.requires_grad = False
 
     def forward(self, input_dict):
-        self._apply_learned_masked_feat(input_dict)
+        self._fill_masked_feat_with_learned_value(input_dict)
         if "condition" in input_dict.keys():
             # PPT (https://arxiv.org/abs/2308.09718)
             # currently, only support one batch one condition
@@ -176,7 +176,7 @@ class DefaultSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
         return self._ignore_index
 
     def forward(self, input_dict, return_point=False):
-        self._apply_learned_masked_feat(input_dict)
+        self._fill_masked_feat_with_learned_value(input_dict)
         point = Point(input_dict)
         point = self.backbone(point)
         # Backbone added after v1.5.0 return Point instead of feat and use DefaultSegmentorV2
@@ -305,7 +305,7 @@ class DefaultLORASegmentorV2(nn.Module, LearnedMaskedFeatMixin):
         print(f"Unexpected keys: {load_state_info[1]}")
 
     def forward(self, input_dict, return_point=False):
-        self._apply_learned_masked_feat(input_dict)
+        self._fill_masked_feat_with_learned_value(input_dict)
         point = Point(input_dict)
         if self.freeze_backbone and not self.use_lora:
             with torch.no_grad():
@@ -369,7 +369,7 @@ class DINOEnhancedSegmentor(nn.Module, LearnedMaskedFeatMixin):
                 p.requires_grad = False
 
     def forward(self, input_dict, return_point=False):
-        self._apply_learned_masked_feat(input_dict)
+        self._fill_masked_feat_with_learned_value(input_dict)
         point = Point(input_dict)
         if self.backbone is not None:
             if self.freeze_backbone:
@@ -464,7 +464,7 @@ class DefaultClassifier(nn.Module, LearnedMaskedFeatMixin):
             self.backbone.eval()
 
     def forward(self, input_dict):
-        self._apply_learned_masked_feat(input_dict)
+        self._fill_masked_feat_with_learned_value(input_dict)
         point = Point(input_dict)
         if self.freeze_backbone:
             with torch.no_grad():
