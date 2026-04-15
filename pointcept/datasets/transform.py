@@ -766,6 +766,32 @@ class HueSaturationTranslation(object):
         return data_dict
 
 @TRANSFORMS.register_module()
+class FillMissingFeat(object):
+    def __init__(
+        self,
+        feat_key,
+        feat_dim,
+        fill_value=0.0,
+    ):
+        self.feat_key = feat_key
+        self.feat_dim = int(feat_dim)
+        self.fill_value = float(fill_value)
+        self.mask_key = f"{feat_key}_mask"
+
+    def __call__(self, data_dict):
+        n = data_dict["coord"].shape[0]
+        
+        # If the key `feat_key` is not in data_dict, create it and set the mask to True.
+        if self.feat_key not in data_dict:
+            data_dict[self.feat_key] = np.full(
+                (n, self.feat_dim), self.fill_value, dtype=np.float32
+            )
+            data_dict[self.mask_key] = np.ones(n, dtype=bool)
+            return data_dict
+
+        return data_dict
+
+@TRANSFORMS.register_module()
 class RandomDropStrength(object):
     def __init__(
         self,
