@@ -42,7 +42,7 @@ model = dict(
         layers=(2, 3, 4, 6, 2, 2, 2, 2),
     ),
     feature_mask_values=dict(
-        enable=False,
+        enable=learned_masked_feat,
         masked_feat_keys=["color", "strength"],
     ),
     criteria=[dict(type="CrossEntropyLoss", loss_weight=1.0, ignore_index=ignore_index)],

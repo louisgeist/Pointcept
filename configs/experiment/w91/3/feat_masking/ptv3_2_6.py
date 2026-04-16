@@ -85,7 +85,7 @@ model = dict(
         pdnorm_conditions=("ScanNet", "S3DIS", "Structured3D"),
     ),
     feature_mask_values=dict(
-        enable=False,
+        enable=learned_masked_feat,
         masked_feat_keys=["color", "strength"],
     ),
     criteria=[
