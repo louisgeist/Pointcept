@@ -49,7 +49,7 @@ hooks = [
     dict(type="PreciseEvaluator", test_last=False),
 ]
 
-feat_keys = ['strength']
+feat_keys = ['color', 'strength']
 
 
 # model settings

@@ -63,7 +63,7 @@ weight = "/lustre/fswork/projects/rech/unv/usi32yh/Pointcept/logs/slurm/2145536/
 wandb_run_name = f"KPConvX FT. {grp_exp}.{num_exp}) lr={lr}, epoch={epoch}, bs={batch_size}"
 wandb_project = f"pointcept_{dataset_type[:-7].lower()}"
 
-feat_keys = ["coord", "strength"]
+feat_keys = ["coord", "color", "strength"]
 
 # model settings
 model = dict(

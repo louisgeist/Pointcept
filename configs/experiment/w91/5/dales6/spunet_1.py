@@ -25,7 +25,7 @@ point_max = 100000
 
 epoch = 200
 eval_epoch = epoch//10
-feat_keys = ["coord", "strength"]
+feat_keys = ["coord", "color", "strength"]
 
 # dataset settings
 dataset_type = "DALESDataset"
