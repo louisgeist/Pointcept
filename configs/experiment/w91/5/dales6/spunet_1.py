@@ -122,6 +122,10 @@ data = dict(
             dict(type="SphereCrop", point_max=point_max, mode="random"),
             dict(type="CenterShift", apply_z=False),
             dict(type="NormalizeColor"),
+            
+            dict(type="FillMissingFeat", feat_key="color", feat_dim=3,),
+            dict(type="FillMissingFeat", feat_key="strength", feat_dim=1,),
+            
             dict(type="ShufflePoint"), # might be worth to test
             dict(type="ToTensor"),
             dict(
