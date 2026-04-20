@@ -28,8 +28,11 @@ def index_operator(data_dict, index, duplicate=False):
             "coord",
             "color",
             "normal",
+            "color_mask",
+            "normal_mask",
             "superpoint",
             "strength",
+            "strength_mask",
             "segment",
             "instance",
         ]
