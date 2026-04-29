@@ -44,9 +44,9 @@ hooks = [
     
     dict(
         type="RuntimeProfilerV2",
-        wait=1,
+        wait=10,
         warmup=1,
-        active=10,
+        active=2,
         repeat=1,
         interrupt=True,
         row_limit=30,

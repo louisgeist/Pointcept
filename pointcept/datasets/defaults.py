@@ -21,7 +21,7 @@ from pointcept.utils.logger import get_root_logger
 from pointcept.utils.cache import shared_dict
 
 from .builder import DATASETS, build_dataset
-from .transform import Compose, TRANSFORMS
+from .transform import Compose, TRANSFORMS, record_data_pipeline
 
 INTERPOLATION_MODE = {
     "bilinear": InterpolationMode.BILINEAR,
@@ -157,13 +157,15 @@ class DefaultDataset(Dataset):
 
     def prepare_train_data(self, idx):
         # load data
-        data_dict = self.get_data(idx)
+        with record_data_pipeline("dataset.get_data"):
+            data_dict = self.get_data(idx)
         data_dict = self.transform(data_dict)
         return data_dict
 
     def prepare_test_data(self, idx):
         # load data
-        data_dict = self.get_data(idx)
+        with record_data_pipeline("dataset.get_data"):
+            data_dict = self.get_data(idx)
         data_dict = self.transform(data_dict)
         result_dict = dict(segment=data_dict.pop("segment"), name=data_dict.pop("name"))
         if "origin_segment" in data_dict:
@@ -432,13 +434,15 @@ class DefaultImagePointDataset(Dataset):
 
     def prepare_train_data(self, idx):
         # load data
-        data_dict = self.get_data(idx)
+        with record_data_pipeline("dataset.get_data"):
+            data_dict = self.get_data(idx)
         data_dict = self.transform(data_dict)
         return data_dict
 
     def prepare_test_data(self, idx):
         # load data
-        data_dict = self.get_data(idx)
+        with record_data_pipeline("dataset.get_data"):
+            data_dict = self.get_data(idx)
         data_dict = self.transform(data_dict)
         result_dict = dict(segment=data_dict.pop("segment"), name=data_dict.pop("name"))
         if "origin_segment" in data_dict:

@@ -5,6 +5,9 @@ Author: Xiaoyang Wu (xiaoyang.wu.cs@gmail.com), Yujia Zhang (yujia.zhang.cs@gmai
 Please cite our work if the code is helpful to you.
 """
 
+import os
+from contextlib import nullcontext
+
 import copy
 import random
 import numbers
@@ -18,6 +21,25 @@ from collections.abc import Sequence, Mapping
 from pointcept.utils.registry import Registry
 
 TRANSFORMS = Registry("transforms")
+
+
+def profile_data_regions_enabled():
+    """True when POINTCEPT_PROFILE_DATA is 1/true/yes (Torch profiler spans for data pipeline)."""
+    return (
+        os.environ.get("POINTCEPT_PROFILE_DATA", "").strip().lower() in ("1", "true", "yes")
+    )
+
+
+def record_data_pipeline(name):
+    """
+    Torch profiler span for dataset load/transform; no-op unless POINTCEPT_PROFILE_DATA is set.
+    Use with the PyTorch profiler (e.g. wrap the training step or set num_workers=0 for worker-local spans).
+    """
+    if not profile_data_regions_enabled():
+        return nullcontext()
+    from torch.profiler import record_function
+
+    return record_function(name)
 
 
 def index_operator(data_dict, index, duplicate=False):
@@ -1478,10 +1500,18 @@ class Compose(object):
         self.transforms = []
         for t_cfg in self.cfg:
             self.transforms.append(TRANSFORMS.build(t_cfg))
+        self._profile_data_regions = profile_data_regions_enabled()
 
     def __call__(self, data_dict):
-        for t in self.transforms:
-            data_dict = t(data_dict)
+        if not self._profile_data_regions:
+            for t in self.transforms:
+                data_dict = t(data_dict)
+            return data_dict
+        from torch.profiler import record_function
+
+        for i, t in enumerate(self.transforms):
+            with record_function(f"transform.{i}_{type(t).__name__}"):
+                data_dict = t(data_dict)
         return data_dict
 
 
