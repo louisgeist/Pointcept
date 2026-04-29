@@ -28,6 +28,7 @@ from .hk import HKDataset
 # aerial lidar
 from .flair3d import Flair3DDataset
 from .dales import DALESDataset
+from .h3d import H3DDataset
 
 # object
 from .modelnet import ModelNetDataset
