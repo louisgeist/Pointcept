@@ -43,7 +43,7 @@ hooks = [
     dict(type="PreciseEvaluator", test_last=False),
     
     dict(
-        type="RuntimeProfiler",
+        type="RuntimeProfilerV2",
         forward=True,
         backward=True,
         interrupt=True,
