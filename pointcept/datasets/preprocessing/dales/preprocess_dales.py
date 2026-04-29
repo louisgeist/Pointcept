@@ -25,9 +25,12 @@ import argparse
 import glob
 import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from typing import Dict, List, Tuple
+from typing import Dict, Tuple
 
 import numpy as np
+
+from pointcept.datasets.preprocessing.xy_grid_chunking import split_scene_xy_regular
+
 try:
     from plyfile import PlyData
 except ImportError as error:
@@ -76,72 +79,25 @@ def save_scene(output_scene_dir: str, scene: Dict[str, np.ndarray]) -> None:
     np.save(os.path.join(output_scene_dir, "strength.npy"), scene["strength"].astype(np.float32))
 
 
-def split_scene_xy_regular(
-    scene: Dict[str, np.ndarray],
-    chunking: int,
-) -> List[Tuple[str, Dict[str, np.ndarray]]]:
-    """
-    Split one scene into a regular XY grid of `chunking x chunking`.
-
-    When using `chunking`, each raw input cloud will be split into
-    `chunking * chunking` tiles based on a regular XY grid.
-    This is blind to cloud orientation and shape and is most useful for
-    dense, approximately square clouds (e.g. DALES-style tiles).
-    """
-    if chunking <= 1:
-        return [("0-0", scene)]
-
-    coord = scene["coord"]
-    x_min, y_min = coord[:, 0].min(), coord[:, 1].min()
-    x_max, y_max = coord[:, 0].max(), coord[:, 1].max()
-
-    x_edges = np.linspace(x_min, x_max, chunking + 1, dtype=np.float32)
-    y_edges = np.linspace(y_min, y_max, chunking + 1, dtype=np.float32)
-
-    parts: List[Tuple[str, Dict[str, np.ndarray]]] = []
-    for row in range(chunking):
-        for col in range(chunking):
-            x0, x1 = x_edges[row], x_edges[row + 1]
-            y0, y1 = y_edges[col], y_edges[col + 1]
-
-            if row == chunking - 1:
-                x_mask = (coord[:, 0] >= x0) & (coord[:, 0] <= x1)
-            else:
-                x_mask = (coord[:, 0] >= x0) & (coord[:, 0] < x1)
-
-            if col == chunking - 1:
-                y_mask = (coord[:, 1] >= y0) & (coord[:, 1] <= y1)
-            else:
-                y_mask = (coord[:, 1] >= y0) & (coord[:, 1] < y1)
-
-            mask = x_mask & y_mask
-
-            sub_scene = {
-                "coord": scene["coord"][mask],
-                "segment": scene["segment"][mask],
-                "strength": scene["strength"][mask],
-            }
-            parts.append((f"{row}-{col}", sub_scene))
-    return parts
-
-
 def process_one_file(
     ply_path: str,
     output_root: str,
     split: str,
     chunking: int,
-) -> str:
+) -> Tuple[str, int]:
     scene = build_scene(ply_path=ply_path)
     scene_id = os.path.splitext(os.path.basename(ply_path))[0]
     sub_scenes = split_scene_xy_regular(
         scene=scene,
         chunking=chunking,
     )
+    written = 0
     for suffix, sub_scene in sub_scenes:
         tiled_scene_id = scene_id if chunking <= 1 else f"{scene_id}_{suffix}"
         output_scene_dir = os.path.join(output_root, split, tiled_scene_id)
         save_scene(output_scene_dir, sub_scene)
-    return scene_id
+        written += 1
+    return scene_id, written
 
 
 def main_process():
@@ -180,7 +136,7 @@ def main_process():
         if total == 0:
             continue
 
-        scene_ids = []
+        scenes_after_chunking = 0
         with ProcessPoolExecutor(max_workers=args.num_workers) as pool:
             futures = [
                 pool.submit(
@@ -193,10 +149,14 @@ def main_process():
                 for ply_path in file_list
             ]
             for idx, future in enumerate(as_completed(futures), start=1):
-                scene_ids.append(future.result())
+                _, n_written = future.result()
+                scenes_after_chunking += n_written
                 print(f"\rProgress: {idx}/{total}", end="", flush=True)
         print()
-        print(f"Done. Processed {len(scene_ids)} scenes into {split_output_dir}")
+        print(
+            f"Done. {scenes_after_chunking} scene folder(s) after chunking "
+            f"({total} source PLY file(s)) → {split_output_dir}"
+        )
 
 
 if __name__ == "__main__":
