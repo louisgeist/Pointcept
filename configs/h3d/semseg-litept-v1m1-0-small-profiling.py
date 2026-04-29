@@ -44,10 +44,11 @@ hooks = [
     
     dict(
         type="RuntimeProfilerV2",
-        forward=True,
-        backward=True,
+        wait=1,
+        warmup=1,
+        active=10,
+        repeat=1,
         interrupt=True,
-        warm_up=2,
         row_limit=30,
     ),
 ]
