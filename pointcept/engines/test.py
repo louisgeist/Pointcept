@@ -25,6 +25,7 @@ from pointcept.utils.logger import get_root_logger
 from pointcept.utils.registry import Registry
 from pointcept.utils.misc import (
     AverageMeter,
+    f1_scores_from_hist,
     intersection_and_union,
     intersection_and_union_gpu,
     make_dirs,
@@ -364,9 +365,25 @@ class SemSegTester(TesterBase):
                     )
                 )
 
+            log_test_f1 = getattr(self.cfg, "log_test_f1", False)
+            if log_test_f1:
+                f1_class, macro_f1 = f1_scores_from_hist(
+                    intersection, union, target
+                )
+                logger.info(
+                    "Test result: macro-F1 {:.4f}".format(macro_f1)
+                )
+                for i in range(self.cfg.data.num_classes):
+                    logger.info(
+                        "Class_{idx} - {name} Result: f1 {f1:.4f}".format(
+                            idx=i,
+                            name=self.cfg.data.names[i],
+                            f1=f1_class[i],
+                        )
+                    )
+
             # Optional logging to Weights & Biases for test metrics
-            if getattr(self.cfg, "enable_wandb", False):
-                
+            if getattr(self.cfg, "enable_wandb", False) and wandb.run is not None:
                 log_dict = {
                     "test/mIoU": float(mIoU),
                     "test/mAcc": float(mAcc),
@@ -378,6 +395,11 @@ class SemSegTester(TesterBase):
                     log_dict[f"test/acc_{cls_name}"] = float(
                         accuracy_class[i]
                     )
+                if log_test_f1:
+                    log_dict["test/f1_macro"] = float(macro_f1)
+                    for i in range(self.cfg.data.num_classes):
+                        cls_name = self.cfg.data.names[i]
+                        log_dict[f"test/f1_{cls_name}"] = float(f1_class[i])
                 wandb.log(log_dict)
 
             logger.info("<<<<<<<<<<<<<<<<< End Evaluation <<<<<<<<<<<<<<<<<")
@@ -635,6 +657,41 @@ class DINOSemSegTester(TesterBase):
                         accuracy=accuracy_class[i],
                     )
                 )
+
+            log_test_f1 = getattr(self.cfg, "log_test_f1", False)
+            if log_test_f1:
+                f1_class, macro_f1 = f1_scores_from_hist(
+                    intersection, union, target
+                )
+                logger.info(
+                    "Test result: macro-F1 {:.4f}".format(macro_f1)
+                )
+                for i in range(self.cfg.data.num_classes):
+                    logger.info(
+                        "Class_{idx} - {name} Result: f1 {f1:.4f}".format(
+                            idx=i,
+                            name=self.cfg.data.names[i],
+                            f1=f1_class[i],
+                        )
+                    )
+
+            if getattr(self.cfg, "enable_wandb", False) and wandb.run is not None:
+                log_dict = {
+                    "test/mIoU": float(mIoU),
+                    "test/mAcc": float(mAcc),
+                    "test/allAcc": float(allAcc),
+                }
+                for i in range(self.cfg.data.num_classes):
+                    cls_name = self.cfg.data.names[i]
+                    log_dict[f"test/iou_{cls_name}"] = float(iou_class[i])
+                    log_dict[f"test/acc_{cls_name}"] = float(accuracy_class[i])
+                if log_test_f1:
+                    log_dict["test/f1_macro"] = float(macro_f1)
+                    for i in range(self.cfg.data.num_classes):
+                        cls_name = self.cfg.data.names[i]
+                        log_dict[f"test/f1_{cls_name}"] = float(f1_class[i])
+                wandb.log(log_dict)
+
             logger.info("<<<<<<<<<<<<<<<<< End Evaluation <<<<<<<<<<<<<<<<<")
 
     @staticmethod
@@ -753,6 +810,43 @@ class ClsTester(TesterBase):
                         accuracy=accuracy_class[i],
                     )
                 )
+
+            log_test_f1 = getattr(self.cfg, "log_test_f1", False)
+            if log_test_f1:
+                f1_class, macro_f1 = f1_scores_from_hist(
+                    intersection, union, target
+                )
+                logger.info(
+                    "Test result: macro-F1 {:.4f}".format(macro_f1)
+                )
+                for i in range(self.cfg.data.num_classes):
+                    logger.info(
+                        "Class_{idx} - {name} Result: f1 {f1:.4f}".format(
+                            idx=i,
+                            name=self.cfg.data.names[i],
+                            f1=f1_class[i],
+                        )
+                    )
+
+            if getattr(self.cfg, "enable_wandb", False) and wandb.run is not None:
+                log_dict = {
+                    "test/mIoU": float(mIoU),
+                    "test/mAcc": float(mAcc),
+                    "test/allAcc": float(allAcc),
+                }
+                for i in range(self.cfg.data.num_classes):
+                    cls_name = self.cfg.data.names[i]
+                    log_dict[f"test/iou_{cls_name}"] = float(iou_class[i])
+                    log_dict[f"test/acc_{cls_name}"] = float(
+                        accuracy_class[i]
+                    )
+                if log_test_f1:
+                    log_dict["test/f1_macro"] = float(macro_f1)
+                    for i in range(self.cfg.data.num_classes):
+                        cls_name = self.cfg.data.names[i]
+                        log_dict[f"test/f1_{cls_name}"] = float(f1_class[i])
+                wandb.log(log_dict)
+
         logger.info("<<<<<<<<<<<<<<<<< End Evaluation <<<<<<<<<<<<<<<<<")
 
     @staticmethod

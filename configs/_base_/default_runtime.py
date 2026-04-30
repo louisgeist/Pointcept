@@ -22,6 +22,7 @@ empty_cache_per_epoch = False
 find_unused_parameters = False
 
 enable_wandb = True
+log_test_f1 = False  # if True, log per-class and macro F1 on test (console + wandb when enabled)
 wandb_project = "pointcept"  # custom your project name e.g. Sonata, PTv3
 wandb_key = None  # wandb token, default is None. If None, login with `wandb login` in your terminal
 

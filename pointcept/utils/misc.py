@@ -69,6 +69,38 @@ def intersection_and_union_gpu(output, target, k, ignore_index=-1):
     return area_intersection, area_union, area_target
 
 
+def f1_scores_from_hist(intersection, union, target):
+    """Per-class F1 and macro-F1 from aggregated intersection/union/target counts.
+
+    intersection[c] is TP_c; union = pred_count + target - TP (per class).
+    """
+    intersection = np.asarray(intersection, dtype=np.float64)
+    union = np.asarray(union, dtype=np.float64)
+    target = np.asarray(target, dtype=np.float64)
+    pred_count = union + intersection - target
+    precision = np.divide(
+        intersection,
+        pred_count,
+        out=np.zeros_like(intersection, dtype=np.float64),
+        where=pred_count > 0,
+    )
+    recall = np.divide(
+        intersection,
+        target,
+        out=np.zeros_like(intersection, dtype=np.float64),
+        where=target > 0,
+    )
+    pr_sum = precision + recall
+    f1 = np.divide(
+        2 * precision * recall,
+        pr_sum,
+        out=np.zeros_like(intersection, dtype=np.float64),
+        where=pr_sum > 0,
+    )
+    macro_f1 = float(np.mean(f1))
+    return f1, macro_f1
+
+
 def make_dirs(dir_name):
     if not os.path.exists(dir_name):
         os.makedirs(dir_name, exist_ok=True)
