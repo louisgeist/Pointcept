@@ -61,6 +61,8 @@ data_root = "data/h3d"
 wandb_run_name = f"KPConvX on {dataset_type[:-7]}: {grp_exp}.{num_exp}) lr={lr}, epoch={epoch}, bs={batch_size}"
 wandb_project = f"pointcept_{dataset_type[:-7].lower()}"
 
+log_test_f1 = True
+
 feat_keys = ["coord", "color"]
 
 # model settings

@@ -35,6 +35,8 @@ data_root = "data/h3d"
 wandb_run_name = f"PTv3 on {dataset_type[:-7]}: {grp_exp}.{num_exp}) lr={lr}, epoch={epoch}, bs={batch_size}"
 wandb_project = f"pointcept_{dataset_type[:-7].lower()}"
 
+log_test_f1 = True
+
 # Hooks
 # Note: configs are imported as python modules before `_base_` is merged, so we
 # must redefine `hooks` here instead of mutating it.
