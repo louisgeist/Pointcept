@@ -1,16 +1,22 @@
 """
 Unzip Flair3D+ archives into a standardized raw directory tree.
 
+Parallel extraction (--workers > 1) uses one thread per archive. It helps most on
+fast local SSD/NVMe; on HDD or network storage, raising workers can increase
+seek contention and slow things down—start with 2–4 and measure.
+
 Example:
 python pointcept/datasets/preprocessing/flair3d_plus/unzip_flair3d.py \
     --source_root /data/geist/Pointcept/data/flair3d_plus/flair3d_plus_067 \
-    --target_root /data/geist/Pointcept/data/flair3d_plus/raw
+    --target_root /data/geist/Pointcept/data/flair3d_plus/raw \
+    --workers 8
 """
 
 from __future__ import annotations
 
 import argparse
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from zipfile import ZipFile
 
@@ -49,14 +55,42 @@ def resolve_extract_dir(dst_dir: Path, modality: str, zip_path: Path, archive: Z
     return dst_dir / expected_subdir
 
 
+def run_extract_one_zip(
+    zip_path: Path,
+    dst_dir: Path,
+    modality: str,
+    overwrite: bool,
+) -> None:
+    """Open one zip and extract into dst_dir (no DEM post-normalize)."""
+    with ZipFile(zip_path, "r") as archive:
+        extract_dir = resolve_extract_dir(
+            dst_dir=dst_dir, modality=modality, zip_path=zip_path, archive=archive
+        )
+        extract_dir.mkdir(parents=True, exist_ok=True)
+        print(f"Extracting {zip_path.name} -> {extract_dir}")
+        if overwrite:
+            archive.extractall(extract_dir)
+        else:
+            for member in archive.infolist():
+                output_path = extract_dir / member.filename
+                if not output_path.exists():
+                    archive.extract(member, extract_dir)
+
+
 def extract_modality_archives(
     source_root: Path,
     target_root: Path,
     modality: str,
     overwrite: bool = False,
+    workers: int = 1,
 ) -> int:
     """
     Extract all .zip files from one modality folder.
+
+    DEM_ELEV is always processed sequentially: parallel extraction plus
+    normalize_dem_elev_layout on a shared directory would race.
+
+    Non-DEM modalities may use workers > 1 (thread pool, one task per archive).
 
     Returns:
         Number of extracted archives.
@@ -76,22 +110,30 @@ def extract_modality_archives(
     dst_dir.mkdir(parents=True, exist_ok=True)
     print(f"\n== {modality} ==")
 
+    use_parallel = workers > 1 and modality != "DEM_ELEV"
+    if use_parallel:
+        print(f"Using {workers} worker thread(s) for this modality.")
+        extracted_count = 0
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = {
+                executor.submit(
+                    run_extract_one_zip, zp, dst_dir, modality, overwrite
+                ): zp
+                for zp in zip_files
+            }
+            for future in as_completed(futures):
+                future.result()
+                extracted_count += 1
+        return extracted_count
+
     extracted_count = 0
     for zip_path in zip_files:
-        with ZipFile(zip_path, "r") as archive:
-            extract_dir = resolve_extract_dir(
-                dst_dir=dst_dir, modality=modality, zip_path=zip_path, archive=archive
-            )
-            extract_dir.mkdir(parents=True, exist_ok=True)
-            print(f"Extracting {zip_path.name} -> {extract_dir}")
-            if overwrite:
-                archive.extractall(extract_dir)
-            else:
-                for member in archive.infolist():
-                    output_path = extract_dir / member.filename
-                    if not output_path.exists():
-                        archive.extract(member, extract_dir)
-
+        run_extract_one_zip(
+            zip_path=zip_path,
+            dst_dir=dst_dir,
+            modality=modality,
+            overwrite=overwrite,
+        )
         if modality == "DEM_ELEV":
             normalize_dem_elev_layout(dst_dir=dst_dir, zip_path=zip_path)
         extracted_count += 1
@@ -156,11 +198,26 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Overwrite already existing files in target_root.",
     )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        metavar="N",
+        help=(
+            "Number of parallel extractor threads per non-DEM modality (default: 1). "
+            "DEM_ELEV always runs sequentially. Prefer low values on HDD/NFS; "
+            "local NVMe often tolerates larger N (try 4–16)."
+        ),
+    )
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
+    if args.workers < 1:
+        print("[ERROR] --workers must be >= 1.")
+        return 1
+
     source_root = args.source_root.resolve()
     target_root = args.target_root.resolve()
 
@@ -177,6 +234,7 @@ def main() -> int:
             target_root=target_root,
             modality=modality,
             overwrite=args.overwrite,
+            workers=args.workers,
         )
 
     print(f"\nDone. Extracted {total_extracted} archive(s) into {target_root}.")
