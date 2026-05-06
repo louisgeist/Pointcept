@@ -15,6 +15,7 @@ python pointcept/datasets/preprocessing/flair3d_plus/unzip_flair3d.py \
 from __future__ import annotations
 
 import argparse
+import shutil
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -28,6 +29,37 @@ EXPECTED_MODALITIES = (
     "LIDARHD",
     "NATURAL_HABITAT",
 )
+
+SOURCE_ROOT_SIDE_CAR_FILES = (
+    "lidarhd_aerial_date_gap.gpkg",
+    "natural_habitat_classes.txt",
+    "land_use_classes.txt",
+    "missing_in_zone.json",
+    "zone_completeness.json",
+    "forest_classes.txt",
+)
+
+
+def copy_source_root_files(
+    source_root: Path, target_root: Path, overwrite: bool
+) -> int:
+    """
+    Copy auxiliary files that live at the dataset root (next to modality folders)
+    into target_root. Missing sources are warned and skipped.
+    """
+    copied = 0
+    for name in SOURCE_ROOT_SIDE_CAR_FILES:
+        src = source_root / name
+        dst = target_root / name
+        if not src.is_file():
+            print(f"[WARN] Missing source file: {src}")
+            continue
+        if dst.exists() and not overwrite:
+            continue
+        print(f"Copying {name} -> {target_root}")
+        shutil.copy2(src, dst)
+        copied += 1
+    return copied
 
 
 def resolve_extract_dir(dst_dir: Path, modality: str, zip_path: Path, archive: ZipFile) -> Path:
@@ -227,6 +259,12 @@ def main() -> int:
 
     target_root.mkdir(parents=True, exist_ok=True)
 
+    root_files_copied = copy_source_root_files(
+        source_root=source_root,
+        target_root=target_root,
+        overwrite=args.overwrite,
+    )
+
     total_extracted = 0
     for modality in EXPECTED_MODALITIES:
         total_extracted += extract_modality_archives(
@@ -237,7 +275,10 @@ def main() -> int:
             workers=args.workers,
         )
 
-    print(f"\nDone. Extracted {total_extracted} archive(s) into {target_root}.")
+    print(
+        f"\nDone. Copied {root_files_copied} root file(s); "
+        f"extracted {total_extracted} archive(s) into {target_root}."
+    )
     return 0
 
 
