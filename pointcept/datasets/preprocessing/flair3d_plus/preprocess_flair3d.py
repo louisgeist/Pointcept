@@ -1,42 +1,52 @@
 """
-Preprocessing script for Flair3D+ (LidarHD).
+Preprocessing script for Flair3D+ (LidarHD) — manifest-driven.
 
-This script converts raw tiles/subtiles into Pointcept scene folders containing:
+The split manifest CSV (e.g. ``data/flair3d_plus/raw/scene_split_manifest.csv``)
+is the single source of truth: one row per patch, and only rows with
+``LIDARHD=True`` produce a Pointcept scene folder containing:
+
 - coord.npy
 - color.npy
 - segment.npy
-- strength.npy (LiDAR intensity)
-- forest.npy (from GeoTIFF when present; no column in the manifest)
-- natural_habitat.npy, land_use.npy, elevation.npy — only when enabled in the manifest
+- strength.npy   (LiDAR intensity)
+- forest.npy     (FOREST GeoTIFF — always sampled; missing raster reported)
+- natural_habitat.npy   (only when NATURAL_HABITAT=True in the manifest)
+- land_use.npy          (only when LAND_USE=True in the manifest)
+- elevation.npy         (only when DEM_ELEV=True in the manifest)
+- meta.json      (date_gap_days)
 
-Required manifest CSV (one row per patch), e.g. ``data/flair3d_plus/raw/scene_split_manifest.csv``:
-  split, dept_year, roi, patch_id, LIDARHD, NATURAL_HABITAT, LAND_USE, DEM_ELEV
-(plus optional extra columns which are ignored)
+Required manifest columns (extra columns are ignored):
+    split, dept_year, roi, scene_i_j, patch_id,
+    LIDARHD, NATURAL_HABITAT, LAND_USE, DEM_ELEV,
+    date_gap_days
 
-Rules:
-- Rows with LIDARHD=False are skipped (no scene output for that patch).
-- When NATURAL_HABITAT / LAND_USE / DEM_ELEV is False, the matching .npy is not written.
+Conventions (must match scripts/build_csv_manifest.py):
+    patch_id = f"{dept_year}_{roi}_{scene_i_j}"
+    PLY path = LIDARHD/{dept_year}_LIDARHD/{roi}/{dept_year}_LIDARHD_{roi}_{scene_i_j}.ply
+
+Examples:
 
 python pointcept/datasets/preprocessing/flair3d_plus/preprocess_flair3d.py \\
     --dataset_root data/flair3d_plus/raw \\
     --output_root data/flair3d_plus \\
     --label_definition inter_finerall6 \\
     --split_manifest_csv data/flair3d_plus/raw/scene_split_manifest.csv
-    
-python pointcept/datasets/preprocessing/flair3d_plus/preprocess_flair3d.py --dataset_root data/flair3d_plus/raw --output_root data/flair3d_plus --label_definition inter_finerall8 --split_manifest_csv data/flair3d_plus/raw/scene_split_manifest.csv  
 
+python pointcept/datasets/preprocessing/flair3d_plus/preprocess_flair3d.py \\
+    --dataset_root data/flair3d_plus/raw \\
+    --output_root data/flair3d_plus \\
+    --label_definition inter_finerall8 \\
+    --split_manifest_csv data/flair3d_plus/raw/scene_split_manifest_D067.csv
 """
 
 import argparse
 import csv
-import glob
 import json
 import logging
 import os
-import re
-import sqlite3
 import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -61,13 +71,32 @@ REQUIRED_MANIFEST_COLUMNS = frozenset(
         "split",
         "dept_year",
         "roi",
+        "scene_i_j",
         "patch_id",
         "LIDARHD",
         "NATURAL_HABITAT",
         "LAND_USE",
         "DEM_ELEV",
+        "date_gap_days",
     }
 )
+
+_DATE_NA_TOKENS = frozenset({"", "<na>", "na", "none", "n/a", "nan", "null"})
+
+
+@dataclass(frozen=True)
+class PatchTask:
+    """One patch to preprocess, fully specified by its manifest row."""
+
+    split: str
+    dept_year: str
+    roi: str
+    scene_i_j: str
+    patch_id: str
+    has_natural_habitat: bool
+    has_land_use: bool
+    has_dem_elev: bool
+    date_gap_days: Optional[float]
 
 
 def _parse_csv_bool(raw: Optional[str], field: str, patch_id: str, csv_path: str) -> bool:
@@ -81,13 +110,24 @@ def _parse_csv_bool(raw: Optional[str], field: str, patch_id: str, csv_path: str
     )
 
 
+def _parse_csv_float_optional(raw: Optional[str]) -> Optional[float]:
+    """Parse an optional float column; '<NA>'/'nan'/empty → None."""
+    token = (raw or "").strip().lower()
+    if token in _DATE_NA_TOKENS:
+        return None
+    try:
+        return float(token)
+    except ValueError:
+        return None
+
+
 def read_ply_binary(filepath: str) -> Dict[str, np.ndarray]:
     """
     Read a PLY file using plyfile (supports binary and ASCII formats).
 
     Returns a dict mapping attribute names to numpy arrays.
     """
-    
+
     ply_data = PlyData.read(filepath)
     if len(ply_data.elements) == 0:
         raise ValueError(f"No element found in PLY file: {filepath}")
@@ -228,9 +268,14 @@ def sample_raster_to_points_float(
     return values, stats
 
 
-def build_lidar_roi_dir(dataset_root: str, dept_year: str, roi: str) -> str:
-    """Build the expected LiDAR ROI directory from split metadata."""
-    return os.path.join(dataset_root, "LIDARHD", f"{dept_year}_LIDARHD", roi)
+def build_lidar_ply_path(
+    dataset_root: str, dept_year: str, roi: str, scene_i_j: str
+) -> str:
+    """Expected LiDAR PLY path for one patch (mirrors scripts/build_csv_manifest.py)."""
+    stem = f"{dept_year}_LIDARHD_{roi}_{scene_i_j}"
+    return os.path.join(
+        dataset_root, "LIDARHD", f"{dept_year}_LIDARHD", roi, f"{stem}.ply"
+    )
 
 
 def build_modality_patch_path(
@@ -268,44 +313,6 @@ def build_modality_patch_path(
     )
 
 
-def collect_split_groups(
-    dataset_root: str, split: str, split_rois: Dict[str, List[Tuple[str, str]]]
-) -> Tuple[List[Tuple[str, str, List[str]]], List[Dict[str, str]]]:
-    """Collect valid (dept_year, roi, ply_files) groups and missing ROIs for one split."""
-    rois = split_rois.get(split, [])
-    groups: List[Tuple[str, str, List[str]]] = []
-    missing_rois: List[Dict[str, str]] = []
-    for dept_year, roi in rois:
-        roi_dir = build_lidar_roi_dir(dataset_root, dept_year, roi)
-        if not os.path.isdir(roi_dir):
-            print(f"[WARN] Missing LiDAR ROI directory, skipped: {roi_dir}")
-            missing_rois.append(
-                {
-                    "split": split,
-                    "dept_year": dept_year,
-                    "roi": roi,
-                    "reason": "missing_roi_directory",
-                    "path": roi_dir,
-                }
-            )
-            continue
-        ply_files = sorted(glob.glob(os.path.join(roi_dir, "*.ply")))
-        if not ply_files:
-            print(f"[WARN] No .ply files found in ROI directory: {roi_dir}")
-            missing_rois.append(
-                {
-                    "split": split,
-                    "dept_year": dept_year,
-                    "roi": roi,
-                    "reason": "missing_ply_files",
-                    "path": roi_dir,
-                }
-            )
-            continue
-        groups.append((dept_year, roi, ply_files))
-    return groups, missing_rois
-
-
 def setup_file_logger(log_file_path: str) -> logging.Logger:
     """Create a logger writing both to console and a log file."""
     logger = logging.getLogger("preprocess_flair3d")
@@ -327,23 +334,34 @@ def setup_file_logger(log_file_path: str) -> logging.Logger:
 
 def write_missing_scenes_report(
     output_path: str,
-    missing_rois: List[Dict[str, str]],
+    missing_ply: List[Dict[str, str]],
+    missing_modalities: List[Dict[str, str]],
     failed_tasks: List[Dict[str, str]],
 ) -> None:
-    """Write a text report listing missing scenes and task failures."""
+    """Write a text report listing missing files and task failures."""
     with open(output_path, "w", encoding="utf-8") as f:
         f.write("# Missing scenes report\n\n")
-        f.write(f"missing_rois={len(missing_rois)}\n")
+        f.write(f"missing_ply={len(missing_ply)}\n")
+        f.write(f"missing_modalities={len(missing_modalities)}\n")
         f.write(f"failed_tasks={len(failed_tasks)}\n\n")
 
-        f.write("## Missing ROIs (from split manifest)\n")
-        if not missing_rois:
+        f.write("## Missing PLY files (LIDARHD=True but file not found)\n")
+        if not missing_ply:
             f.write("none\n")
         else:
-            for item in missing_rois:
+            for item in missing_ply:
                 f.write(
-                    f"{item['split']},{item['dept_year']},{item['roi']},"
-                    f"{item['reason']},{item['path']}\n"
+                    f"{item['split']},{item['patch_id']},{item['ply_path']}\n"
+                )
+
+        f.write("\n## Missing modality rasters\n")
+        if not missing_modalities:
+            f.write("none\n")
+        else:
+            for item in missing_modalities:
+                f.write(
+                    f"{item['split']},{item['patch_id']},{item['modality']},"
+                    f"{item['path']}\n"
                 )
 
         f.write("\n## Failed preprocessing tasks\n")
@@ -352,33 +370,24 @@ def write_missing_scenes_report(
         else:
             for item in failed_tasks:
                 f.write(
-                    f"{item['split']},{item['dept_year']},{item['roi']},"
-                    f"{item['ply_path']},{item['error']}\n"
+                    f"{item['split']},{item['patch_id']},{item['error']}\n"
                 )
 
 
-def load_scene_split_manifest(
-    csv_path: str,
-) -> Tuple[
-    Dict[str, List[Tuple[str, str]]],
-    Dict[str, bool],
-    Dict[str, Tuple[bool, bool, bool]],
-]:
+def load_manifest_tasks(csv_path: str, splits: List[str]) -> List[PatchTask]:
     """
-    Load ``scene_split_manifest.csv`` with required columns (see REQUIRED_MANIFEST_COLUMNS).
+    Load ``scene_split_manifest.csv`` and return one PatchTask per row that:
+    - belongs to one of ``splits``,
+    - has ``LIDARHD=True``.
 
-    Returns:
-        split_rois: deduped (dept_year, roi) lists per split (preserving first-seen order).
-        patch_lidarhd: patch_id -> whether to run LiDAR preprocessing for that patch.
-        patch_modalities: patch_id -> (NATURAL_HABITAT, LAND_USE, DEM_ELEV) availability flags.
+    Other rows are filtered out silently. Duplicates with inconsistent flags
+    raise a ``ValueError``.
     """
     if not os.path.isfile(csv_path):
         raise FileNotFoundError(f"Split manifest CSV not found: {csv_path}")
 
-    split_rois: Dict[str, List[Tuple[str, str]]] = {"train": [], "val": [], "test": []}
-    roi_seen: set = set()
-    patch_lidarhd: Dict[str, bool] = {}
-    patch_modalities: Dict[str, Tuple[bool, bool, bool]] = {}
+    splits_set = set(splits)
+    tasks_by_patch: Dict[str, PatchTask] = {}
 
     with open(csv_path, "r", encoding="utf-8", newline="") as f:
         reader = csv.DictReader(f)
@@ -395,61 +404,87 @@ def load_scene_split_manifest(
             split = (row.get("split") or "").strip().lower()
             dept_year = (row.get("dept_year") or "").strip()
             roi = (row.get("roi") or "").strip()
+            scene_i_j = (row.get("scene_i_j") or "").strip()
             patch_id = (row.get("patch_id") or "").strip()
-            if not split or not dept_year or not roi or not patch_id:
+            if not split or not dept_year or not roi or not scene_i_j or not patch_id:
                 continue
-            if split not in split_rois:
+            if split not in splits_set:
+                continue
+
+            expected_pid = f"{dept_year}_{roi}_{scene_i_j}"
+            if patch_id != expected_pid:
                 raise ValueError(
-                    f"Unsupported split '{split}' in {csv_path}. Expected one of: train, val, test."
+                    f"Inconsistent patch_id in {csv_path}: "
+                    f"row says '{patch_id}' but components yield '{expected_pid}'."
                 )
 
             lidarhd = _parse_csv_bool(row.get("LIDARHD", ""), "LIDARHD", patch_id, csv_path)
+            if not lidarhd:
+                continue
+
             nh = _parse_csv_bool(
                 row.get("NATURAL_HABITAT", ""), "NATURAL_HABITAT", patch_id, csv_path
             )
             lu = _parse_csv_bool(row.get("LAND_USE", ""), "LAND_USE", patch_id, csv_path)
             dem = _parse_csv_bool(row.get("DEM_ELEV", ""), "DEM_ELEV", patch_id, csv_path)
-            mods = (nh, lu, dem)
+            date_gap = _parse_csv_float_optional(row.get("date_gap_days", ""))
 
-            if patch_id in patch_lidarhd:
-                prev_l = patch_lidarhd[patch_id]
-                prev_m = patch_modalities[patch_id]
-                if prev_l != lidarhd or prev_m != mods:
+            task = PatchTask(
+                split=split,
+                dept_year=dept_year,
+                roi=roi,
+                scene_i_j=scene_i_j,
+                patch_id=patch_id,
+                has_natural_habitat=nh,
+                has_land_use=lu,
+                has_dem_elev=dem,
+                date_gap_days=date_gap,
+            )
+
+            if patch_id in tasks_by_patch:
+                prev = tasks_by_patch[patch_id]
+                if prev != task:
                     raise ValueError(
                         f"Inconsistent duplicate patch_id '{patch_id}' in {csv_path}: "
-                        f"first=({prev_l}, {prev_m}), duplicate=({lidarhd}, {mods})"
+                        f"first={prev}, duplicate={task}"
                     )
             else:
-                patch_lidarhd[patch_id] = lidarhd
-                patch_modalities[patch_id] = mods
+                tasks_by_patch[patch_id] = task
 
-            roi_key = (split, dept_year, roi)
-            if roi_key not in roi_seen:
-                roi_seen.add(roi_key)
-                split_rois[split].append((dept_year, roi))
-
-    return split_rois, patch_lidarhd, patch_modalities
+    return list(tasks_by_patch.values())
 
 
 def _build_scene_from_subtile(
-    filepath: str,
+    task: PatchTask,
     dataset_root: str,
-    dept_year: str,
-    roi: str,
     label_definition: str,
-    include_natural_habitat: bool,
-    include_land_use: bool,
-    include_dem_elev: bool,
-) -> Dict[str, np.ndarray]:
-    """Build a Pointcept scene dict from one PLY subtile."""
-    attributes = read_ply_binary(filepath)
+) -> Tuple[Dict[str, np.ndarray], List[Dict[str, str]]]:
+    """
+    Build a Pointcept scene dict from one PatchTask.
+
+    Returns:
+        scene: dict of numpy arrays to save (keys: coord, color, segment, and
+            optionally strength, forest, natural_habitat, land_use, elevation).
+        missing_modalities: list of {split, patch_id, modality, path} entries
+            for rasters expected (per FOREST/manifest flags) but absent on disk.
+
+    Raises:
+        FileNotFoundError: if the LiDAR PLY itself is missing.
+    """
+    ply_path = build_lidar_ply_path(
+        dataset_root, task.dept_year, task.roi, task.scene_i_j
+    )
+    if not os.path.isfile(ply_path):
+        raise FileNotFoundError(f"LiDAR PLY not found: {ply_path}")
+
+    attributes = read_ply_binary(ply_path)
 
     for axis in ("x", "y", "z"):
         if axis not in attributes:
-            raise KeyError(f"Missing '{axis}' in {filepath}")
-    coord = np.stack([attributes["x"], attributes["y"], attributes["z"]], axis=1).astype(
-        np.float32
-    )
+            raise KeyError(f"Missing '{axis}' in {ply_path}")
+    coord = np.stack(
+        [attributes["x"], attributes["y"], attributes["z"]], axis=1
+    ).astype(np.float32)
 
     if all(k in attributes for k in ("red", "green", "blue")):
         color = np.stack(
@@ -463,7 +498,7 @@ def _build_scene_from_subtile(
         label_definition=label_definition,
     )
 
-    out = {
+    out: Dict[str, np.ndarray] = {
         "coord": coord,
         "color": color,
         "segment": segment,
@@ -473,31 +508,40 @@ def _build_scene_from_subtile(
         strength = np.clip(attributes["intensity"].astype(np.float32), 0, 60000) / 60000
         out["strength"] = strength.astype(np.float32)
 
-    # FOREST point-wise labels from GeoTIFF.
-    lidar_patch_stem = os.path.splitext(os.path.basename(filepath))[0]
+    missing_modalities: List[Dict[str, str]] = []
+    lidar_patch_stem = f"{task.dept_year}_LIDARHD_{task.roi}_{task.scene_i_j}"
+
+    # FOREST: always sampled (assumed available everywhere by dataset convention).
     forest_raster_path = build_modality_patch_path(
         dataset_root=dataset_root,
         modality="FOREST",
-        dept_year=dept_year,
-        roi=roi,
+        dept_year=task.dept_year,
+        roi=task.roi,
         lidar_patch_stem=lidar_patch_stem,
     )
     if os.path.isfile(forest_raster_path):
         forest_values, _ = sample_raster_to_points(
             raster_path=forest_raster_path,
             xy=coord[:, :2],
-            fill_value=2, # Void idx
+            fill_value=2,  # Void idx
         )
         out["forest"] = forest_values.astype(np.int16, copy=False)
     else:
-        print(f"[WARN] Missing FOREST raster for {filepath}: {forest_raster_path}")
+        missing_modalities.append(
+            {
+                "split": task.split,
+                "patch_id": task.patch_id,
+                "modality": "FOREST",
+                "path": forest_raster_path,
+            }
+        )
 
-    if include_natural_habitat:
+    if task.has_natural_habitat:
         natural_habitat_raster_path = build_modality_patch_path(
             dataset_root=dataset_root,
             modality="NATURAL_HABITAT",
-            dept_year=dept_year,
-            roi=roi,
+            dept_year=task.dept_year,
+            roi=task.roi,
             lidar_patch_stem=lidar_patch_stem,
         )
         if os.path.isfile(natural_habitat_raster_path):
@@ -508,17 +552,21 @@ def _build_scene_from_subtile(
             )
             out["natural_habitat"] = natural_habitat_values.astype(np.int16, copy=False)
         else:
-            print(
-                f"[WARN] Missing NATURAL_HABITAT raster for {filepath}: "
-                f"{natural_habitat_raster_path}"
+            missing_modalities.append(
+                {
+                    "split": task.split,
+                    "patch_id": task.patch_id,
+                    "modality": "NATURAL_HABITAT",
+                    "path": natural_habitat_raster_path,
+                }
             )
 
-    if include_land_use:
+    if task.has_land_use:
         land_use_raster_path = build_modality_patch_path(
             dataset_root=dataset_root,
             modality="LAND_USE",
-            dept_year=dept_year,
-            roi=roi,
+            dept_year=task.dept_year,
+            roi=task.roi,
             lidar_patch_stem=lidar_patch_stem,
         )
         if os.path.isfile(land_use_raster_path):
@@ -527,20 +575,23 @@ def _build_scene_from_subtile(
                 xy=coord[:, :2],
                 fill_value=19,  # "Usage inconnu" index from land_use_classes.txt
             )
-
-            # Mapping from 1-20 to 0-19 (we want "dense" indices).
-            # land_use_values = land_use_values - 1  # Already dense in raster.
-
             out["land_use"] = land_use_values.astype(np.int16, copy=False)
         else:
-            print(f"[WARN] Missing LAND_USE raster for {filepath}: {land_use_raster_path}")
+            missing_modalities.append(
+                {
+                    "split": task.split,
+                    "patch_id": task.patch_id,
+                    "modality": "LAND_USE",
+                    "path": land_use_raster_path,
+                }
+            )
 
-    if include_dem_elev:
+    if task.has_dem_elev:
         dem_elev_raster_path = build_modality_patch_path(
             dataset_root=dataset_root,
             modality="DEM_ELEV",
-            dept_year=dept_year,
-            roi=roi,
+            dept_year=task.dept_year,
+            roi=task.roi,
             lidar_patch_stem=lidar_patch_stem,
         )
         if os.path.isfile(dem_elev_raster_path):
@@ -548,23 +599,34 @@ def _build_scene_from_subtile(
                 raster_path=dem_elev_raster_path,
                 xy=coord[:, :2],
                 fill_value=np.nan,
-                band_index=2,  # 1 : DSM, 2 : DTM
+                band_index=2,  # 1: DSM, 2: DTM
             )
             elevation = coord[:, 2].astype(np.float32, copy=False) - dtm_values
             out["elevation"] = elevation.astype(np.float32, copy=False)
         else:
-            print(f"[WARN] Missing DEM_ELEV raster for {filepath}: {dem_elev_raster_path}")
+            missing_modalities.append(
+                {
+                    "split": task.split,
+                    "patch_id": task.patch_id,
+                    "modality": "DEM_ELEV",
+                    "path": dem_elev_raster_path,
+                }
+            )
 
-    return out
+    return out, missing_modalities
 
 
 def _save_scene(
     output_scene_dir: str,
     scene: Dict[str, np.ndarray],
-    include_natural_habitat: bool,
-    include_land_use: bool,
-    include_dem_elev: bool,
+    task: PatchTask,
 ) -> None:
+    """Persist scene arrays under the patch output directory.
+
+    Files are written when present in ``scene``; for optional modalities, any
+    stale file from a previous run is removed when the modality is disabled or
+    its raster was missing.
+    """
     os.makedirs(output_scene_dir, exist_ok=True)
     np.save(os.path.join(output_scene_dir, "coord.npy"), scene["coord"].astype(np.float32))
     np.save(os.path.join(output_scene_dir, "color.npy"), scene["color"].astype(np.uint8))
@@ -574,38 +636,21 @@ def _save_scene(
             os.path.join(output_scene_dir, "strength.npy"),
             scene["strength"].astype(np.float32),
         )
-    if "forest" in scene:
-        np.save(
-            os.path.join(output_scene_dir, "forest.npy"),
-            scene["forest"].astype(np.int16),
-        )
-    if include_natural_habitat and "natural_habitat" in scene:
-        np.save(
-            os.path.join(output_scene_dir, "natural_habitat.npy"),
-            scene["natural_habitat"].astype(np.int16),
-        )
-    elif not include_natural_habitat:
-        nh_path = os.path.join(output_scene_dir, "natural_habitat.npy")
-        if os.path.isfile(nh_path):
-            os.remove(nh_path)
-    if include_land_use and "land_use" in scene:
-        np.save(
-            os.path.join(output_scene_dir, "land_use.npy"),
-            scene["land_use"].astype(np.int16),
-        )
-    elif not include_land_use:
-        lu_path = os.path.join(output_scene_dir, "land_use.npy")
-        if os.path.isfile(lu_path):
-            os.remove(lu_path)
-    if include_dem_elev and "elevation" in scene:
-        np.save(
-            os.path.join(output_scene_dir, "elevation.npy"),
-            scene["elevation"].astype(np.float32),
-        )
-    elif not include_dem_elev:
-        el_path = os.path.join(output_scene_dir, "elevation.npy")
-        if os.path.isfile(el_path):
-            os.remove(el_path)
+
+    def _save_or_clean(filename: str, key: str, dtype, enabled: bool) -> None:
+        path = os.path.join(output_scene_dir, filename)
+        if enabled and key in scene:
+            np.save(path, scene[key].astype(dtype))
+        elif os.path.isfile(path):
+            os.remove(path)
+
+    # FOREST is conceptually always enabled; any stale file is overwritten or kept.
+    _save_or_clean("forest.npy", "forest", np.int16, enabled=True)
+    _save_or_clean(
+        "natural_habitat.npy", "natural_habitat", np.int16, enabled=task.has_natural_habitat
+    )
+    _save_or_clean("land_use.npy", "land_use", np.int16, enabled=task.has_land_use)
+    _save_or_clean("elevation.npy", "elevation", np.float32, enabled=task.has_dem_elev)
 
 
 def _save_scene_meta(output_scene_dir: str, meta: Dict[str, Any]) -> None:
@@ -614,96 +659,63 @@ def _save_scene_meta(output_scene_dir: str, meta: Dict[str, Any]) -> None:
         json.dump(meta, f, indent=2, sort_keys=True)
 
 
-def _build_scene_id(dept_year: str, roi: str, ply_path: str) -> str:
-    stem = os.path.splitext(os.path.basename(ply_path))[0]
-    suffix_match = re.search(r"(\d+-\d+)$", stem)
-    if suffix_match:
-        subtile_id = suffix_match.group(1)
-    else:
-        # Keep previous behavior when pattern is not present.
-        print(f"[WARN] Could not extract '<num>-<num>' suffix from '{stem}', using full stem.")
-        subtile_id = stem
-    return f"{dept_year}_{roi}_{subtile_id}"
-
-
-def load_date_gap_days_by_patch(gpkg_path: str) -> Dict[str, Optional[float]]:
-    """Load patch_id -> date_gap_days from lidarhd_aerial_date_gap.gpkg."""
-    if not os.path.isfile(gpkg_path):
-        print(f"[WARN] Missing date gap geopackage: {gpkg_path}")
-        return {}
-
-    conn = sqlite3.connect(gpkg_path)
-    try:
-        rows = conn.execute(
-            "SELECT patch_id, date_gap_days FROM date_per_patch_with_lidar"
-        ).fetchall()
-    finally:
-        conn.close()
-
-    out: Dict[str, Optional[float]] = {}
-    for patch_id, date_gap_days in rows:
-        if patch_id is None:
-            continue
-        out[str(patch_id)] = None if date_gap_days is None else float(date_gap_days)
-    return out
-
-
 def _process_subtile_task(
-    ply_path: str,
-    dept_year: str,
-    roi: str,
+    task: PatchTask,
     dataset_root: str,
     output_root: str,
-    split: str,
     label_definition: str,
-    date_gap_days: Optional[float],
-    include_natural_habitat: bool,
-    include_land_use: bool,
-    include_dem_elev: bool,
-) -> str:
-    part = _build_scene_from_subtile(
-        filepath=ply_path,
+) -> Tuple[str, List[Dict[str, str]]]:
+    """Worker entry point: build and save one scene from a PatchTask.
+
+    Returns the patch_id and a list of missing modality raster entries.
+    Raises FileNotFoundError if the LiDAR PLY is missing.
+    """
+    scene, missing_modalities = _build_scene_from_subtile(
+        task=task,
         dataset_root=dataset_root,
-        dept_year=dept_year,
-        roi=roi,
         label_definition=label_definition,
-        include_natural_habitat=include_natural_habitat,
-        include_land_use=include_land_use,
-        include_dem_elev=include_dem_elev,
     )
-    scene_id = _build_scene_id(dept_year=dept_year, roi=roi, ply_path=ply_path)
-    output_scene_dir = os.path.join(output_root, split, scene_id)
-    _save_scene(
-        output_scene_dir,
-        part,
-        include_natural_habitat=include_natural_habitat,
-        include_land_use=include_land_use,
-        include_dem_elev=include_dem_elev,
-    )
-    _save_scene_meta(output_scene_dir, {"date_gap_days": date_gap_days})
-    return scene_id
+    output_scene_dir = os.path.join(output_root, task.split, task.patch_id)
+    _save_scene(output_scene_dir, scene, task)
+    _save_scene_meta(output_scene_dir, {"date_gap_days": task.date_gap_days})
+    return task.patch_id, missing_modalities
 
 
-def _run_task(args_tuple):
-    """Pool helper to avoid lambda pickling issues."""
-    process_fn, fn_args = args_tuple
-    return process_fn(*fn_args)
+def _split_tasks_by_ply_existence(
+    tasks: List[PatchTask], dataset_root: str
+) -> Tuple[List[PatchTask], List[Dict[str, str]]]:
+    """Pre-flight check: separate tasks with a present PLY from missing ones."""
+    present: List[PatchTask] = []
+    missing: List[Dict[str, str]] = []
+    for task in tasks:
+        ply_path = build_lidar_ply_path(
+            dataset_root, task.dept_year, task.roi, task.scene_i_j
+        )
+        if os.path.isfile(ply_path):
+            present.append(task)
+        else:
+            missing.append(
+                {
+                    "split": task.split,
+                    "patch_id": task.patch_id,
+                    "ply_path": ply_path,
+                }
+            )
+    return present, missing
 
 
 def main_process():
     parser = argparse.ArgumentParser()
-    
+
     parser.add_argument(
         "--dataset_root",
         type=str,
-        # required=True,
         default="/data/geist/datasets/sample_flairhub_3d",
         help="Root directory containing Flair3D/LidarHD tiles",
     )
     parser.add_argument(
         "--output_root",
         type=str,
-        # required=True,
         default="/data/geist/Pointcept/data/flair3d",
         help="Output root directory for Pointcept-formatted scenes",
     )
@@ -737,15 +749,6 @@ def main_process():
         "--num_workers", default=1, type=int, help="Number of workers for preprocessing"
     )
     parser.add_argument(
-        "--date_gap_gpkg",
-        type=str,
-        default="",
-        help=(
-            "Optional path to lidarhd_aerial_date_gap.gpkg. "
-            "If empty, defaults to <dirname(dataset_root)>/flair3d_plus_010/lidarhd_aerial_date_gap.gpkg"
-        ),
-    )
-    parser.add_argument(
         "--log_file",
         type=str,
         default="",
@@ -769,139 +772,106 @@ def main_process():
     )
     logger = setup_file_logger(log_file_path)
 
-    # Normalize to list (argparse with nargs='+' returns list; default was single element)
     splits = args.split if isinstance(args.split, list) else [args.split]
 
     logger.info("Using label definition '%s'", args.label_definition)
     logger.info("Splits to process: %s", splits)
-
-    split_rois, patch_lidarhd, patch_modalities = load_scene_split_manifest(
-        args.split_manifest_csv
-    )
     logger.info("Using split manifest CSV: %s", args.split_manifest_csv)
 
-    if args.date_gap_gpkg:
-        date_gap_gpkg_path = args.date_gap_gpkg
-    else:
-        date_gap_gpkg_path = os.path.join(
-            os.path.dirname(os.path.abspath(args.dataset_root)),
-            "flair3d_plus_010",
-            "lidarhd_aerial_date_gap.gpkg",
-        )
-    date_gap_by_patch = load_date_gap_days_by_patch(date_gap_gpkg_path)
-    logger.info("Date gap source: %s", date_gap_gpkg_path)
-
-    all_missing_rois: List[Dict[str, str]] = []
-    all_failed_tasks: List[Dict[str, str]] = []
-
+    tasks = load_manifest_tasks(args.split_manifest_csv, splits)
+    logger.info("Loaded %d tasks (LIDARHD=True) from manifest.", len(tasks))
     for split in splits:
+        n = sum(1 for t in tasks if t.split == split)
+        logger.info("  split '%s': %d tasks", split, n)
+
+    # Pre-create output split directories (only for splits that have tasks).
+    for split in {t.split for t in tasks}:
         os.makedirs(os.path.join(args.output_root, split), exist_ok=True)
 
-        logger.info("--- Split '%s' ---", split)
-        split_groups, missing_rois = collect_split_groups(
-            args.dataset_root, split, split_rois
-        )
-        all_missing_rois.extend(missing_rois)
-        logger.info("Configured split ROIs: %d", len(split_rois.get(split, [])))
-        if missing_rois:
-            logger.warning("Found %d missing ROIs for split '%s'", len(missing_rois), split)
-
-        process_fn = _process_subtile_task
-
-        if len(split_groups) == 0:
-            logger.warning("No task found for split '%s', skipping.", split)
-            continue
-
-        task_count = 0
-        for dept_year, roi, ply_files in split_groups:
-            for ply_path in ply_files:
-                pid = _build_scene_id(dept_year=dept_year, roi=roi, ply_path=ply_path)
-                if pid in patch_lidarhd and patch_lidarhd[pid]:
-                    task_count += 1
-        logger.info(
-            "Found %d LiDAR patches to process for split '%s' (after LIDARHD manifest filter).",
-            task_count,
-            split,
+    # Pre-flight: split into present-on-disk vs missing PLY.
+    present_tasks, missing_ply = _split_tasks_by_ply_existence(tasks, args.dataset_root)
+    if missing_ply:
+        logger.warning(
+            "%d patch(es) have LIDARHD=True but their PLY file is missing on disk.",
+            len(missing_ply),
         )
 
-        scene_ids: List[str] = []
+    missing_modalities: List[Dict[str, str]] = []
+    failed_tasks: List[Dict[str, str]] = []
+    scene_ids: List[str] = []
+
+    if not present_tasks:
+        logger.warning("No task to process after PLY existence check.")
+    else:
         with ProcessPoolExecutor(max_workers=args.num_workers) as pool:
-            for dept_year, roi, ply_files in tqdm(
-                split_groups,
-                desc=f"{split}_rois",
-                unit="roi",
-                total=len(split_groups),
+            futures = {
+                pool.submit(
+                    _process_subtile_task,
+                    task,
+                    args.dataset_root,
+                    args.output_root,
+                    args.label_definition,
+                ): task
+                for task in present_tasks
+            }
+            for future in tqdm(
+                as_completed(futures),
+                total=len(futures),
+                desc="patches",
+                unit="patch",
             ):
-                process_args: List[tuple] = []
-                for ply_path in ply_files:
-                    patch_id = _build_scene_id(
-                        dept_year=dept_year, roi=roi, ply_path=ply_path
-                    )
-                    if patch_id not in patch_lidarhd:
+                task = futures[future]
+                try:
+                    patch_id, task_missing = future.result()
+                    scene_ids.append(patch_id)
+                    for entry in task_missing:
+                        missing_modalities.append(entry)
                         logger.warning(
-                            "PLY not listed in manifest (patch_id=%s), skipping: %s",
-                            patch_id,
-                            ply_path,
+                            "Missing %s raster for %s: %s",
+                            entry["modality"],
+                            entry["patch_id"],
+                            entry["path"],
                         )
-                        continue
-                    if not patch_lidarhd[patch_id]:
-                        continue
-                    nh, lu, dem = patch_modalities[patch_id]
-                    process_args.append(
-                        (
-                            ply_path,
-                            dept_year,
-                            roi,
-                            args.dataset_root,
-                            args.output_root,
-                            split,
-                            args.label_definition,
-                            date_gap_by_patch.get(patch_id),
-                            nh,
-                            lu,
-                            dem,
-                        )
+                except FileNotFoundError as exc:
+                    # Should be rare here (we pre-checked PLY existence) but keep
+                    # the safety net for any per-modality file missing in a way
+                    # that escalates to an exception.
+                    missing_ply.append(
+                        {
+                            "split": task.split,
+                            "patch_id": task.patch_id,
+                            "ply_path": str(exc),
+                        }
                     )
-                if not process_args:
-                    continue
-
-                futures = {
-                    pool.submit(_run_task, (process_fn, process_arg)): process_arg
-                    for process_arg in process_args
-                }
-                for future in as_completed(futures):
-                    process_arg = futures[future]
-                    try:
-                        scene_ids.append(future.result())
-                    except Exception as exc:
-                        failed_entry = {
-                            "split": split,
-                            "dept_year": process_arg[1],
-                            "roi": process_arg[2],
-                            "ply_path": process_arg[0],
+                    logger.warning("Missing file for %s: %s", task.patch_id, exc)
+                except Exception as exc:
+                    failed_tasks.append(
+                        {
+                            "split": task.split,
+                            "patch_id": task.patch_id,
                             "error": repr(exc),
                         }
-                        all_failed_tasks.append(failed_entry)
-                        logger.exception(
-                            "Failed task for split=%s dept_year=%s roi=%s ply_path=%s",
-                            split,
-                            process_arg[1],
-                            process_arg[2],
-                            process_arg[0],
-                        )
-        out_split_dir = os.path.join(args.output_root, split)
-        logger.info("Done. Processed %d scenes into %s", len(scene_ids), out_split_dir)
+                    )
+                    logger.exception(
+                        "Failed task for split=%s patch_id=%s",
+                        task.split,
+                        task.patch_id,
+                    )
+
+    logger.info("Done. Processed %d scenes into %s", len(scene_ids), args.output_root)
 
     write_missing_scenes_report(
         output_path=missing_scenes_path,
-        missing_rois=all_missing_rois,
-        failed_tasks=all_failed_tasks,
+        missing_ply=missing_ply,
+        missing_modalities=missing_modalities,
+        failed_tasks=failed_tasks,
     )
     logger.info("Wrote missing-scenes report to: %s", missing_scenes_path)
     logger.info(
-        "Summary: missing_rois=%d failed_tasks=%d",
-        len(all_missing_rois),
-        len(all_failed_tasks),
+        "Summary: missing_ply=%d missing_modalities=%d failed_tasks=%d",
+        len(missing_ply),
+        len(missing_modalities),
+        len(failed_tasks),
     )
     logger.info("Detailed logs saved to: %s", log_file_path)
 
