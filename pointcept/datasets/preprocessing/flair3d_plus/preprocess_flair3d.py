@@ -1,4 +1,4 @@
-"""
+r"""
 Preprocessing script for Flair3D+ (LidarHD) — manifest-driven.
 
 The split manifest CSV (e.g. ``data/flair3d_plus/raw/scene_split_manifest.csv``)
@@ -26,16 +26,16 @@ Conventions (must match scripts/build_csv_manifest.py):
 
 Examples:
 
-python pointcept/datasets/preprocessing/flair3d_plus/preprocess_flair3d.py \\
-    --dataset_root data/flair3d_plus/raw \\
-    --output_root data/flair3d_plus \\
-    --label_definition inter_finerall6 \\
+python pointcept/datasets/preprocessing/flair3d_plus/preprocess_flair3d.py \
+    --dataset_root data/flair3d_plus/raw \
+    --output_root data/flair3d_plus \
+    --label_definition inter_finerall6 \
     --split_manifest_csv data/flair3d_plus/raw/scene_split_manifest.csv
 
-python pointcept/datasets/preprocessing/flair3d_plus/preprocess_flair3d.py \\
-    --dataset_root data/flair3d_plus/raw \\
-    --output_root data/flair3d_plus \\
-    --label_definition inter_finerall8 \\
+python pointcept/datasets/preprocessing/flair3d_plus/preprocess_flair3d.py \
+    --dataset_root data/flair3d_plus/raw \
+    --output_root data/flair3d_plus \
+    --label_definition inter_finerall8 \
     --split_manifest_csv data/flair3d_plus/raw/scene_split_manifest_D067.csv
 """
 
