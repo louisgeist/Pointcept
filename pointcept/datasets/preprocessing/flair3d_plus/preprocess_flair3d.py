@@ -5,7 +5,7 @@ The split manifest CSV (e.g. ``data/flair3d_plus/raw/scene_split_manifest.csv``)
 is the single source of truth: one row per patch, and only rows with
 ``LIDARHD=True`` produce a Pointcept scene folder containing:
 
-- coord.npy
+- coord.npy      (written LAST; acts as the completion marker for resume)
 - color.npy
 - segment.npy
 - strength.npy   (LiDAR intensity)
@@ -24,19 +24,34 @@ Conventions (must match scripts/build_csv_manifest.py):
     patch_id = f"{dept_year}_{roi}_{scene_i_j}"
     PLY path = LIDARHD/{dept_year}_LIDARHD/{roi}/{dept_year}_LIDARHD_{roi}_{scene_i_j}.ply
 
+Reports written under ``--output_root``:
+- ``missing_ply_preflight.txt``: written immediately after the PLY existence
+  check (before any scene is processed). Lists every patch with
+  ``LIDARHD=True`` whose ``.ply`` file is missing on disk.
+- ``missing_scenes.txt``: written at the end of the run. Consolidates missing
+  PLY, missing modality rasters, and failed preprocessing tasks.
+
+Resume behaviour:
+By default, scenes whose ``coord.npy`` already exists in the output directory
+are skipped (idempotent re-runs). Use ``--force`` to reprocess everything,
+which is required when ``--label_definition`` or the manifest modality flags
+(NATURAL_HABITAT/LAND_USE/DEM_ELEV) changed since the previous run.
+
 Examples:
 
 python pointcept/datasets/preprocessing/flair3d_plus/preprocess_flair3d.py \
     --dataset_root data/flair3d_plus/raw \
     --output_root data/flair3d_plus \
-    --label_definition inter_finerall6 \
-    --split_manifest_csv data/flair3d_plus/raw/scene_split_manifest.csv
+    --label_definition inter_finerall8 \
+    --split_manifest_csv data/flair3d_plus/raw/scene_split_manifest.csv \
+    --num_workers 8
 
 python pointcept/datasets/preprocessing/flair3d_plus/preprocess_flair3d.py \
     --dataset_root data/flair3d_plus/raw \
     --output_root data/flair3d_plus \
     --label_definition inter_finerall8 \
-    --split_manifest_csv data/flair3d_plus/raw/scene_split_manifest_D067.csv
+    --split_manifest_csv data/flair3d_plus/raw/scene_split_manifest_D067.csv \
+    --force
 """
 
 import argparse
@@ -330,6 +345,28 @@ def setup_file_logger(log_file_path: str) -> logging.Logger:
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
     return logger
+
+
+def write_missing_ply_preflight_report(
+    output_path: str,
+    missing_ply: List[Dict[str, str]],
+) -> None:
+    """Write the pre-flight report listing patches whose PLY is missing on disk.
+
+    Called right after the PLY existence check so the list is available
+    without waiting for the full preprocessing run to finish.
+    """
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write("# Missing PLY pre-flight report\n\n")
+        f.write(f"missing_ply={len(missing_ply)}\n\n")
+        f.write("## Missing PLY files (LIDARHD=True but file not found)\n")
+        if not missing_ply:
+            f.write("none\n")
+        else:
+            for item in missing_ply:
+                f.write(
+                    f"{item['split']},{item['patch_id']},{item['ply_path']}\n"
+                )
 
 
 def write_missing_scenes_report(
@@ -626,9 +663,12 @@ def _save_scene(
     Files are written when present in ``scene``; for optional modalities, any
     stale file from a previous run is removed when the modality is disabled or
     its raster was missing.
+
+    ``coord.npy`` is intentionally written LAST so its presence on disk acts as
+    a reliable completion marker for the resume / skip-existing logic in
+    ``main_process``.
     """
     os.makedirs(output_scene_dir, exist_ok=True)
-    np.save(os.path.join(output_scene_dir, "coord.npy"), scene["coord"].astype(np.float32))
     np.save(os.path.join(output_scene_dir, "color.npy"), scene["color"].astype(np.uint8))
     np.save(os.path.join(output_scene_dir, "segment.npy"), scene["segment"].astype(np.int32))
     if "strength" in scene:
@@ -651,6 +691,10 @@ def _save_scene(
     )
     _save_or_clean("land_use.npy", "land_use", np.int16, enabled=task.has_land_use)
     _save_or_clean("elevation.npy", "elevation", np.float32, enabled=task.has_dem_elev)
+
+    # Write coord.npy LAST: it is the completion marker used to skip already
+    # processed scenes on a re-run.
+    np.save(os.path.join(output_scene_dir, "coord.npy"), scene["coord"].astype(np.float32))
 
 
 def _save_scene_meta(output_scene_dir: str, meta: Dict[str, Any]) -> None:
@@ -676,8 +720,12 @@ def _process_subtile_task(
         label_definition=label_definition,
     )
     output_scene_dir = os.path.join(output_root, task.split, task.patch_id)
-    _save_scene(output_scene_dir, scene, task)
+    # Order matters: write meta.json first, then the scene arrays. ``_save_scene``
+    # writes ``coord.npy`` last, so its on-disk presence reliably indicates that
+    # both the metadata and every other array have been fully persisted.
+    os.makedirs(output_scene_dir, exist_ok=True)
     _save_scene_meta(output_scene_dir, {"date_gap_days": task.date_gap_days})
+    _save_scene(output_scene_dir, scene, task)
     return task.patch_id, missing_modalities
 
 
@@ -702,6 +750,27 @@ def _split_tasks_by_ply_existence(
                 }
             )
     return present, missing
+
+
+def _split_tasks_by_completion(
+    tasks: List[PatchTask], output_root: str
+) -> Tuple[List[PatchTask], List[PatchTask]]:
+    """Resume check: separate tasks already processed from those still to do.
+
+    A task is considered already processed when ``coord.npy`` exists in its
+    output directory. ``coord.npy`` is the last file written by ``_save_scene``,
+    so its presence indicates that every other array and ``meta.json`` were
+    fully persisted by a previous run.
+    """
+    to_process: List[PatchTask] = []
+    already_done: List[PatchTask] = []
+    for task in tasks:
+        coord_path = os.path.join(output_root, task.split, task.patch_id, "coord.npy")
+        if os.path.isfile(coord_path):
+            already_done.append(task)
+        else:
+            to_process.append(task)
+    return to_process, already_done
 
 
 def main_process():
@@ -763,12 +832,35 @@ def main_process():
             "Defaults to <output_root>/missing_scenes.txt"
         ),
     )
+    parser.add_argument(
+        "--missing_ply_preflight_file",
+        type=str,
+        default="",
+        help=(
+            "Optional path for the pre-flight report listing patches whose PLY "
+            "is missing on disk. Written immediately after the existence check, "
+            "before any scene is processed. "
+            "Defaults to <output_root>/missing_ply_preflight.txt"
+        ),
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        default=False,
+        help=(
+            "Reprocess every patch even if its output coord.npy already exists. "
+            "By default the script resumes by skipping already-processed scenes."
+        ),
+    )
     args = parser.parse_args()
 
     os.makedirs(args.output_root, exist_ok=True)
     log_file_path = args.log_file or os.path.join(args.output_root, "preprocess_flair3d.log")
     missing_scenes_path = args.missing_scenes_file or os.path.join(
         args.output_root, "missing_scenes.txt"
+    )
+    missing_ply_preflight_path = args.missing_ply_preflight_file or os.path.join(
+        args.output_root, "missing_ply_preflight.txt"
     )
     logger = setup_file_logger(log_file_path)
 
@@ -796,12 +888,51 @@ def main_process():
             len(missing_ply),
         )
 
+    # Persist the pre-flight report immediately so the missing-PLY list is
+    # available without waiting for the whole run to finish.
+    write_missing_ply_preflight_report(missing_ply_preflight_path, missing_ply)
+    logger.info(
+        "Wrote missing-PLY pre-flight report (%d entries) to: %s",
+        len(missing_ply),
+        missing_ply_preflight_path,
+    )
+
+    # Resume / skip-existing filter. A task is considered already processed
+    # when its ``coord.npy`` exists on disk (last file written by ``_save_scene``).
+    if args.force:
+        tasks_to_process: List[PatchTask] = list(present_tasks)
+        already_done: List[PatchTask] = []
+        logger.info(
+            "--force enabled: reprocessing all %d patches with present PLY.",
+            len(tasks_to_process),
+        )
+    else:
+        tasks_to_process, already_done = _split_tasks_by_completion(
+            present_tasks, args.output_root
+        )
+        if already_done:
+            logger.info(
+                "Resume mode: skipping %d already-processed patch(es); processing %d remaining.",
+                len(already_done),
+                len(tasks_to_process),
+            )
+            logger.warning(
+                "Skip is based on coord.npy presence only. If --label_definition or "
+                "manifest modality flags (NATURAL_HABITAT/LAND_USE/DEM_ELEV) changed "
+                "since the previous run, re-run with --force to refresh outputs."
+            )
+        else:
+            logger.info(
+                "Resume mode: no existing scene found; processing all %d patches.",
+                len(tasks_to_process),
+            )
+
     missing_modalities: List[Dict[str, str]] = []
     failed_tasks: List[Dict[str, str]] = []
     scene_ids: List[str] = []
 
-    if not present_tasks:
-        logger.warning("No task to process after PLY existence check.")
+    if not tasks_to_process:
+        logger.warning("No task to process after PLY existence and resume checks.")
     else:
         with ProcessPoolExecutor(max_workers=args.num_workers) as pool:
             futures = {
@@ -812,7 +943,7 @@ def main_process():
                     args.output_root,
                     args.label_definition,
                 ): task
-                for task in present_tasks
+                for task in tasks_to_process
             }
             for future in tqdm(
                 as_completed(futures),
@@ -868,7 +999,9 @@ def main_process():
     )
     logger.info("Wrote missing-scenes report to: %s", missing_scenes_path)
     logger.info(
-        "Summary: missing_ply=%d missing_modalities=%d failed_tasks=%d",
+        "Summary: processed=%d skipped=%d missing_ply=%d missing_modalities=%d failed_tasks=%d",
+        len(scene_ids),
+        len(already_done),
         len(missing_ply),
         len(missing_modalities),
         len(failed_tasks),
