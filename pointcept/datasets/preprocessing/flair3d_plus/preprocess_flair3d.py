@@ -37,6 +37,16 @@ are skipped (idempotent re-runs). Use ``--force`` to reprocess everything,
 which is required when ``--label_definition`` or the manifest modality flags
 (NATURAL_HABITAT/LAND_USE/DEM_ELEV) changed since the previous run.
 
+Generated directory structure (example):
+data/flair3d/
+└── train/
+    └── D004-2021_LIDARHD/           <-- Department/Year Level
+        └── AA-S1-32/                <-- Zone/ROI Level
+            ├── D004-2021_AA-S1-32_1-1/   <-- Patch Level
+            │   ├── coord.npy
+            │   ├── color.npy
+            │   └── ...
+
 Examples:
 
 python pointcept/datasets/preprocessing/flair3d_plus/preprocess_flair3d.py \
@@ -719,7 +729,7 @@ def _process_subtile_task(
         dataset_root=dataset_root,
         label_definition=label_definition,
     )
-    output_scene_dir = os.path.join(output_root, task.split, task.patch_id)
+    output_scene_dir = os.path.join(output_root, task.split, f"{task.dept_year}_LIDARHD", task.roi, task.patch_id)
     # Order matters: write meta.json first, then the scene arrays. ``_save_scene``
     # writes ``coord.npy`` last, so its on-disk presence reliably indicates that
     # both the metadata and every other array have been fully persisted.
@@ -729,48 +739,45 @@ def _process_subtile_task(
     return task.patch_id, missing_modalities
 
 
-def _split_tasks_by_ply_existence(
-    tasks: List[PatchTask], dataset_root: str
-) -> Tuple[List[PatchTask], List[Dict[str, str]]]:
-    """Pre-flight check: separate tasks with a present PLY from missing ones."""
-    present: List[PatchTask] = []
-    missing: List[Dict[str, str]] = []
+def _filter_tasks_for_processing(
+    tasks: List[PatchTask], dataset_root: str, output_root: str, force: bool
+) -> Tuple[List[PatchTask], List[PatchTask], List[Dict[str, str]]]:
+    """Pre-flight and resume check in a single pass.
+
+    Returns:
+        tasks_to_process: Tasks with a present PLY that need processing.
+        already_done: Tasks skipped because coord.npy exists (empty if force=True).
+        missing_ply: Tasks whose PLY file is missing on disk.
+    """
+    tasks_to_process: List[PatchTask] = []
+    already_done: List[PatchTask] = []
+    missing_ply: List[Dict[str, str]] = []
+
     for task in tasks:
+        # 1. Check PLY existence
         ply_path = build_lidar_ply_path(
             dataset_root, task.dept_year, task.roi, task.scene_i_j
         )
-        if os.path.isfile(ply_path):
-            present.append(task)
-        else:
-            missing.append(
+        if not os.path.isfile(ply_path):
+            missing_ply.append(
                 {
                     "split": task.split,
                     "patch_id": task.patch_id,
                     "ply_path": ply_path,
                 }
             )
-    return present, missing
+            continue
 
+        # 2. Check completion (resume)
+        if not force:
+            coord_path = os.path.join(output_root, task.split, f"{task.dept_year}_LIDARHD", task.roi, task.patch_id, "coord.npy")
+            if os.path.isfile(coord_path):
+                already_done.append(task)
+                continue
 
-def _split_tasks_by_completion(
-    tasks: List[PatchTask], output_root: str
-) -> Tuple[List[PatchTask], List[PatchTask]]:
-    """Resume check: separate tasks already processed from those still to do.
+        tasks_to_process.append(task)
 
-    A task is considered already processed when ``coord.npy`` exists in its
-    output directory. ``coord.npy`` is the last file written by ``_save_scene``,
-    so its presence indicates that every other array and ``meta.json`` were
-    fully persisted by a previous run.
-    """
-    to_process: List[PatchTask] = []
-    already_done: List[PatchTask] = []
-    for task in tasks:
-        coord_path = os.path.join(output_root, task.split, task.patch_id, "coord.npy")
-        if os.path.isfile(coord_path):
-            already_done.append(task)
-        else:
-            to_process.append(task)
-    return to_process, already_done
+    return tasks_to_process, already_done, missing_ply
 
 
 def main_process():
@@ -880,8 +887,11 @@ def main_process():
     for split in {t.split for t in tasks}:
         os.makedirs(os.path.join(args.output_root, split), exist_ok=True)
 
-    # Pre-flight: split into present-on-disk vs missing PLY.
-    present_tasks, missing_ply = _split_tasks_by_ply_existence(tasks, args.dataset_root)
+    # Pre-flight and resume checks in a single pass
+    tasks_to_process, already_done, missing_ply = _filter_tasks_for_processing(
+        tasks, args.dataset_root, args.output_root, args.force
+    )
+
     if missing_ply:
         logger.warning(
             "%d patch(es) have LIDARHD=True but their PLY file is missing on disk.",
@@ -897,19 +907,13 @@ def main_process():
         missing_ply_preflight_path,
     )
 
-    # Resume / skip-existing filter. A task is considered already processed
-    # when its ``coord.npy`` exists on disk (last file written by ``_save_scene``).
+    # Log resume status
     if args.force:
-        tasks_to_process: List[PatchTask] = list(present_tasks)
-        already_done: List[PatchTask] = []
         logger.info(
             "--force enabled: reprocessing all %d patches with present PLY.",
             len(tasks_to_process),
         )
     else:
-        tasks_to_process, already_done = _split_tasks_by_completion(
-            present_tasks, args.output_root
-        )
         if already_done:
             logger.info(
                 "Resume mode: skipping %d already-processed patch(es); processing %d remaining.",

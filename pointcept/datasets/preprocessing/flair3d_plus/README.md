@@ -37,7 +37,7 @@ raw/
 `preprocess_flair3d.py` is driven entirely by a split manifest CSV (built by
 `scripts/build_csv_manifest.py`). The script never globs the `raw/` tree to
 discover scenes: every patch to process is taken from the manifest, and any
-on-disk discrepancy is reported in `<output_root>/missing_scenes.txt`.
+on-disk discrepancy is reported in dedicated text files under `<output_root>`.
 
 Required manifest columns:
 
@@ -59,3 +59,28 @@ Rules applied per row:
   as `Missing modality raster`.
 - `date_gap_days` is read directly from the manifest and stored in
   `<scene>/meta.json` (no GeoPackage dependency).
+
+## Reports
+
+- `<output_root>/missing_ply_preflight.txt`: written immediately after the
+  PLY existence pre-flight (before any scene is processed). Lists every
+  patch with `LIDARHD=True` whose `.ply` is missing on disk. Useful when
+  you need the list right away on a long run. Override path with
+  `--missing_ply_preflight_file`.
+- `<output_root>/missing_scenes.txt`: written at the end of the run.
+  Consolidates missing PLY, missing modality rasters, and failed
+  preprocessing tasks. Override path with `--missing_scenes_file`.
+
+## Resume / re-run
+
+By default, the script skips scenes whose `coord.npy` already exists in the
+output directory. `coord.npy` is written last, so its presence reliably
+indicates that every other array and `meta.json` were fully persisted. This
+makes re-runs incremental: only patches still missing or interrupted mid-write
+are processed.
+
+Use `--force` to reprocess every patch unconditionally. This is required when:
+
+- `--label_definition` is changed between runs.
+- Manifest modality flags (`NATURAL_HABITAT`, `LAND_USE`, `DEM_ELEV`) are
+  toggled, since stale outputs from a previous run would otherwise be kept.
