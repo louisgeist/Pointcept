@@ -18,6 +18,31 @@ from .builder import DATASETS
 class Flair3DDataset(DefaultDataset):
     """Dataset for Flair3D / LidarHD preprocessed Pointcept scenes."""
 
+    HARDCODED_EXCLUDED_TILES = {
+        ("train", "D032-2019_AF-S1-V16_4-1"),
+        ("train", "D033-2021_UU-S1-3_2-2"),
+        ("val", "D034-2021_FU-S1-39_2-15"),
+        ("train", "D038-2021_NN-S1-10_5-5"),
+        ("train", "D044-2020_UA-S1-23_5-9"),
+        ("train", "D046-2019_UF-S1-52_4-4"),
+        ("train", "D049-2020_UU-S1-20_3-6"),
+        ("train", "D051-2019_NN-S1-15_5-5"),
+        ("train", "D052-2019_FA-S1-22_5-4"),
+        ("train", "D063-2019_FF-S2-2_5-2"),
+        ("test", "D064-2021_AA-S1-26_10-2"),
+        ("val", "D065-2019_NN-S1-2_4-1"),
+        ("train", "D066-2021_UU-S1-43_3-1"),
+        ("val", "D067-2021_UA-S1-2_5-3"),
+        ("test", "D068-2021_FF-S1-21_2-8"),
+        ("test", "D069-2020_UU-S1-69_8-7"),
+        ("test", "D069-2020_UU-S1-76_7-4"),
+        ("train", "D070-2020_UA-S1-16_3-18"),
+        ("train", "D070-2020_UF-S1-3_5-18"),
+        ("test", "D071-2020_FF-S1-32_5-6"),
+        ("train", "D072-2019_HV-S1-9_8-12"),
+        ("train", "D086-2020_AU-S1-6_3-5"),
+    }
+
     def __init__(self, csv_manifest=None, missing_tiles_manifest=None, **kwargs):
         self.csv_manifest = csv_manifest
         self.missing_tiles_manifest = missing_tiles_manifest
@@ -48,6 +73,9 @@ class Flair3DDataset(DefaultDataset):
         self._missing_tiles = missing_tiles
         return self._missing_tiles
 
+    def _get_excluded_tiles(self):
+        return self.HARDCODED_EXCLUDED_TILES | self._get_missing_tiles()
+
     def get_data_list(self):
         if self.csv_manifest is None:
             return super().get_data_list()
@@ -59,13 +87,13 @@ class Flair3DDataset(DefaultDataset):
         else:
             raise NotImplementedError
 
-        missing_tiles = self._get_missing_tiles()
+        excluded_tiles = self._get_excluded_tiles()
         data_list = []
         with open(self.csv_manifest, 'r', encoding='utf-8') as f:
             reader = csv.DictReader(f)
             for row in reader:
                 if row['split'] in split_list and row.get('LIDARHD') == 'True':
-                    if (row['split'], row['patch_id']) in missing_tiles:
+                    if (row['split'], row['patch_id']) in excluded_tiles:
                         continue
                     dept_year = row.get('dept_year') or row['patch_id'].split('_')[0]
                     roi = row.get('roi') or row['patch_id'].split('_')[1]
