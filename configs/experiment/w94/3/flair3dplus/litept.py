@@ -13,8 +13,8 @@ point_max = 102400
 
 
 num_gpu = 1
-epoch = 100
-eval_epoch = epoch//10
+epoch = 6 #~1h40 per epoch for LitePT on H100 x1
+eval_epoch = epoch//2
 lr = 2e-3
 warmup_steps = 500
 patch_size = 1024
@@ -31,7 +31,7 @@ empty_cache = False
 enable_amp = True
 
 learned_masked_feat = True
-wandb_run_name = f"LitePT {exp_group}.{num_exp}) base - input=RGB+strengt"
+wandb_run_name = f"Flair3D+ ) LitePT {exp_group}.{num_exp}) base - input=RGB+strengt"
 
 hooks = [
     dict(type="CheckpointLoader"),
