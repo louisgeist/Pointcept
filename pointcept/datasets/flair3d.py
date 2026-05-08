@@ -106,10 +106,11 @@ class Flair3DDataset(DefaultDataset):
         """Return scene id (folder name) for logging and saving."""
         return os.path.basename(self.data_list[idx % len(self.data_list)])
 
-    def _validate_non_empty_coord(self, data_dict, idx):
+    def _is_non_empty_coord(self, data_dict):
         coord = data_dict.get("coord", None)
-        if coord is not None and coord.shape[0] > 0:
-            return
+        return coord is not None and coord.shape[0] > 0
+
+    def _log_empty_scene(self, idx):
         scene_name = self.get_data_name(idx)
         scene_split = self.get_split_name(idx)
         scene_path = self.data_list[idx % len(self.data_list)]
@@ -120,11 +121,23 @@ class Flair3DDataset(DefaultDataset):
             scene_name,
             scene_path,
         )
-        raise ValueError(
-            f"Empty scene detected: split={scene_split}, name={scene_name}, path={scene_path}"
-        )
 
     def get_data(self, idx):
-        data_dict = super().get_data(idx)
-        self._validate_non_empty_coord(data_dict, idx)
-        return data_dict
+        total = len(self.data_list)
+        for offset in range(total):
+            candidate_idx = idx + offset
+            data_dict = super().get_data(candidate_idx)
+            if self._is_non_empty_coord(data_dict):
+                if offset > 0:
+                    logger = get_root_logger()
+                    logger.warning(
+                        "Recovered from empty scene(s): requested_idx=%d recovered_idx=%d",
+                        idx,
+                        candidate_idx,
+                    )
+                return data_dict
+            self._log_empty_scene(candidate_idx)
+
+        raise RuntimeError(
+            "All scenes are empty in Flair3DDataset after exclusions; cannot build a valid batch."
+        )
