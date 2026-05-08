@@ -6,8 +6,8 @@ _base_ = ["../../../../_base_/default_runtime.py"] # level experiment/wXX/DD/sub
 exp_group = 1
 num_exp = 1
 
-num_classes = 8
-ignore_index = 8
+num_classes = 13
+ignore_index = num_classes
 grid_size = 0.1
 point_max = 102400
 
@@ -114,16 +114,25 @@ csv_manifest = "data/flair3d_plus/raw/scene_split_manifest.csv"
 data = dict(
     num_classes=num_classes,
     ignore_index=ignore_index,
+    
+    # label definition: inter_finerall8
     names=[
-        "Building",
-        "Greenhouse",
-        "Impervious surface",
-        "Other soil",
-        "Herbaceous",
-        "Vineyard",
-        "Tree",
-        "Other infrastructure",
-        "Void",
+        'Building',
+        'Greenhouse',
+        'Impervious surface',
+        'Other soil',
+        'Herbaceous',
+        'Vineyard',
+        'Other vegetation',
+        # 'Brushwood',
+        'Other infrastructures',
+        'Swimming pool',
+        'Water',
+        'Deciduous',
+        'Coniferous',
+        'Bridge',
+
+        'Void',
     ],
     train=dict(
         type=dataset_type,
