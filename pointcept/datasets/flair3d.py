@@ -15,11 +15,37 @@ from .builder import DATASETS
 from pointcept.utils.logger import get_root_logger
 
 
+def _load_missing_lidarhd_tiles():
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    details_csv = os.path.join(
+        repo_root, "data", "flair3d_plus", "missing_coord_tiles.details.csv"
+    )
+    if not os.path.exists(details_csv):
+        logger = get_root_logger()
+        logger.warning(
+            "Flair3D missing tiles file not found: %s. Continuing with empty hardcoded missing tiles set.",
+            details_csv,
+        )
+        return set()
+
+    missing_tiles = set()
+    with open(details_csv, "r", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            if row.get("reason") == "missing_coord_file":
+                split = row.get("split")
+                patch_id = row.get("patch_id")
+                if split and patch_id:
+                    missing_tiles.add((split, patch_id))
+    return missing_tiles
+
+
 @DATASETS.register_module()
 class Flair3DDataset(DefaultDataset):
     """Dataset for Flair3D / LidarHD preprocessed Pointcept scenes."""
 
-    HARDCODED_EXCLUDED_TILES = {
+    CORRUPTED_TILES = {
+        # LIDARHD .ply found, but corrupted ?
         ("train", "D032-2019_AF-S1-V16_4-1"),
         ("train", "D033-2021_UU-S1-3_2-2"),
         ("val", "D034-2021_FU-S1-39_2-15"),
@@ -43,6 +69,10 @@ class Flair3DDataset(DefaultDataset):
         ("train", "D072-2019_HV-S1-9_8-12"),
         ("train", "D086-2020_AU-S1-6_3-5"),
     }
+    
+    MISSING_LIDARHD_TILES = _load_missing_lidarhd_tiles()
+    
+    HARDCODED_EXCLUDED_TILES = CORRUPTED_TILES | MISSING_LIDARHD_TILES
 
     def __init__(self, csv_manifest=None, missing_tiles_manifest=None, **kwargs):
         self.csv_manifest = csv_manifest
