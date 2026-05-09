@@ -1,7 +1,20 @@
+"""
+# Dry-run (inchangé)
+python scripts/delete_corrupted_files_from_unzip.py --workers 24
+
+# Suppression réelle avec 8 workers
+python scripts/delete_corrupted_files_from_unzip.py --apply --workers 24
+
+# Suppression + prune des dossiers vides
+python scripts/delete_corrupted_files_from_unzip.py --apply --workers 24 --prune_empty_dirs
+
+"""
+
 from __future__ import annotations
 
 import argparse
 import ast
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 
@@ -53,6 +66,16 @@ def get_parser() -> argparse.ArgumentParser:
         "--apply",
         action="store_true",
         help="Actually delete files. If omitted, performs dry-run only.",
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        metavar="N",
+        help=(
+            "Number of worker threads used for file deletion when --apply is set "
+            "(default: 1)."
+        ),
     )
     parser.add_argument(
         "--prune_empty_dirs",
@@ -132,16 +155,27 @@ def prune_empty_ancestors(path: Path, stop_at: Path) -> int:
     return removed
 
 
+def delete_one_file(path: Path) -> bool:
+    try:
+        path.unlink()
+        return True
+    except FileNotFoundError:
+        return False
+
+
 def main() -> int:
     args = get_parser().parse_args()
     dataset_file = args.dataset_file.resolve()
     raw_root = args.raw_root.resolve()
     modalities = parse_modalities(args.modalities)
+    workers = args.workers
 
     if not dataset_file.is_file():
         raise FileNotFoundError(f"dataset_file not found: {dataset_file}")
     if not raw_root.is_dir():
         raise FileNotFoundError(f"raw_root not found: {raw_root}")
+    if workers < 1:
+        raise ValueError("--workers must be >= 1.")
 
     tiles = load_corrupted_tiles(dataset_file=dataset_file, expected_count=args.expected_count)
     targets = []
@@ -168,10 +202,13 @@ def main() -> int:
         print("\nDry-run mode. Use --apply to delete targeted files.")
         return 0
 
-    for path in targets:
-        path.unlink()
+    if workers == 1:
+        deleted_count = sum(1 for path in targets if delete_one_file(path))
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            deleted_count = sum(executor.map(delete_one_file, targets))
 
-    print(f"\nDeleted {len(targets)} file(s).")
+    print(f"\nDeleted {deleted_count} file(s) using {workers} worker(s).")
 
     if args.prune_empty_dirs:
         removed_dirs = 0
