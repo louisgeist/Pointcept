@@ -119,6 +119,8 @@ class Flair3DDataset(DefaultDataset):
             raise NotImplementedError
 
         excluded_tiles = self._get_excluded_tiles()
+        logger = get_root_logger()
+        logger.info(f"Excluded {len(excluded_tiles)} tiles")
         data_list = []
         with open(self.csv_manifest, 'r', encoding='utf-8') as f:
             reader = csv.DictReader(f)
