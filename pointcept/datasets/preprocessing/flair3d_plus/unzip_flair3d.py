@@ -7,9 +7,15 @@ seek contention and slow things down—start with 2–4 and measure.
 
 Example:
 python pointcept/datasets/preprocessing/flair3d_plus/unzip_flair3d.py \
-    --source_root /data/geist/Pointcept/data/flair3d_plus/flair3d_plus_067 \
-    --target_root /data/geist/Pointcept/data/flair3d_plus/raw \
+    --source_root data/flair3d_plus/flair3d_plus_067 \ #Clean@Geist
+    --target_root data/flair3d_plus/raw \
     --workers 8
+    
+JZ: #Clean@Geist
+python pointcept/datasets/preprocessing/flair3d_plus/unzip_flair3d.py \
+    --source_root $SCRATCH/FLAIR_HUB \ 
+    --target_root data/flair3d_plus/raw \
+    --workers 24
 """
 
 from __future__ import annotations
@@ -276,8 +282,10 @@ def main() -> int:
         )
 
     print(
-        f"\nDone. Copied {root_files_copied} root file(s); "
-        f"extracted {total_extracted} archive(s) into {target_root}."
+        "\nDone. "
+        f"Copied {root_files_copied} source-root side-car file(s) "
+        "(for example: metadata/class/json files), "
+        f"and extracted {total_extracted} modality archive(s) into {target_root}."
     )
     return 0
 
