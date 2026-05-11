@@ -997,6 +997,13 @@ class GridSample(object):
 
     def __call__(self, data_dict):
         assert "coord" in data_dict.keys()
+        if data_dict["coord"].shape[0] == 0:
+            scene_name = data_dict.get("name", "<unknown>")
+            scene_split = data_dict.get("split", "<unknown>")
+            raise ValueError(
+                "Empty point cloud before GridSample "
+                f"(scene={scene_name}, split={scene_split})."
+            )
         scaled_coord = data_dict["coord"] / np.array(self.grid_size)
         grid_coord = np.floor(scaled_coord).astype(int)
         min_coord = grid_coord.min(0)
