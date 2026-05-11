@@ -147,9 +147,26 @@ class Flair3DDataset(DefaultDataset):
         else:
             raise NotImplementedError
 
-        excluded_tiles = self._get_excluded_tiles()
+        hardcoded_excluded = self.HARDCODED_EXCLUDED_TILES
+        missing_excluded = self._get_missing_tiles()
+        too_small_excluded = self._get_too_small_tiles()
+        excluded_tiles = hardcoded_excluded | missing_excluded | too_small_excluded
         logger = get_root_logger()
-        logger.info(f"Excluded {len(excluded_tiles)} tiles")
+        raw_total = (
+            len(hardcoded_excluded) + len(missing_excluded) + len(too_small_excluded)
+        )
+        overlap_count = raw_total - len(excluded_tiles)
+        logger.info(
+            (
+                "Excluded tiles breakdown: "
+                "hardcoded=%d, missing_manifest=%d, too_small=%d, overlap=%d, total_unique=%d"
+            ),
+            len(hardcoded_excluded),
+            len(missing_excluded),
+            len(too_small_excluded),
+            overlap_count,
+            len(excluded_tiles),
+        )
         data_list = []
         with open(self.csv_manifest, 'r', encoding='utf-8') as f:
             reader = csv.DictReader(f)
