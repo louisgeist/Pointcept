@@ -53,9 +53,18 @@ class Flair3DDataset(DefaultDataset):
     
     HARDCODED_EXCLUDED_TILES = CORRUPTED_TILES | MISSING_LIDARHD_TILES
 
-    def __init__(self, csv_manifest=None, missing_tiles_manifest=None, **kwargs):
+    def __init__(
+        self,
+        csv_manifest=None,
+        missing_tiles_manifest=None,
+        min_points=1,
+        min_points_train_only=True,
+        **kwargs,
+    ):
         self.csv_manifest = csv_manifest
         self.missing_tiles_manifest = missing_tiles_manifest
+        self.min_points = int(min_points)
+        self.min_points_train_only = bool(min_points_train_only)
         self._missing_tiles = None
         super().__init__(**kwargs)
 
@@ -121,16 +130,35 @@ class Flair3DDataset(DefaultDataset):
         coord = data_dict.get("coord", None)
         return coord is not None and coord.shape[0] > 0
 
-    def _log_empty_scene(self, idx):
+    def _get_min_points_for_scene(self, idx):
+        if self.min_points <= 1:
+            return 1
+        if not self.min_points_train_only:
+            return self.min_points
+        scene_split = self.get_split_name(idx)
+        return self.min_points if scene_split == "train" else 1
+
+    def _has_enough_points(self, data_dict, idx):
+        coord = data_dict.get("coord", None)
+        if coord is None:
+            return False
+        return coord.shape[0] >= self._get_min_points_for_scene(idx)
+
+    def _log_rejected_scene(self, idx, data_dict):
         scene_name = self.get_data_name(idx)
         scene_split = self.get_split_name(idx)
         scene_path = self.data_list[idx % len(self.data_list)]
+        coord = data_dict.get("coord", None)
+        num_points = int(coord.shape[0]) if coord is not None else -1
+        min_points = self._get_min_points_for_scene(idx)
         logger = get_root_logger()
-        logger.error(
-            "Empty scene detected in Flair3DDataset: split=%s name=%s path=%s",
+        logger.warning(
+            "Rejected scene in Flair3DDataset: split=%s name=%s path=%s num_points=%d min_points=%d",
             scene_split,
             scene_name,
             scene_path,
+            num_points,
+            min_points,
         )
 
     def get_data(self, idx):
@@ -138,7 +166,9 @@ class Flair3DDataset(DefaultDataset):
         for offset in range(total):
             candidate_idx = idx + offset
             data_dict = super().get_data(candidate_idx)
-            if self._is_non_empty_coord(data_dict):
+            if self._is_non_empty_coord(data_dict) and self._has_enough_points(
+                data_dict, candidate_idx
+            ):
                 if offset > 0:
                     logger = get_root_logger()
                     logger.warning(
@@ -147,8 +177,8 @@ class Flair3DDataset(DefaultDataset):
                         candidate_idx,
                     )
                 return data_dict
-            self._log_empty_scene(candidate_idx)
+            self._log_rejected_scene(candidate_idx, data_dict)
 
         raise RuntimeError(
-            "All scenes are empty in Flair3DDataset after exclusions; cannot build a valid batch."
+            "All scenes were rejected in Flair3DDataset after exclusions and min_points filtering; cannot build a valid batch."
         )
