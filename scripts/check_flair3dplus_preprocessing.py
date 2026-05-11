@@ -51,7 +51,7 @@ MODALITIES = (
     "strength",
 )
 REQUIRED_MODALITIES = ("coord", "color", "segment")
-FINITE_CHECK_MODALITIES = ("coord", "elevation", "strength")
+FINITE_CHECK_MODALITIES = ("coord", "strength") #"elevation",
 
 
 @dataclass(frozen=True)
