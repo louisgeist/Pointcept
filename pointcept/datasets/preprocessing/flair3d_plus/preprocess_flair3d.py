@@ -704,7 +704,10 @@ def _save_scene(
 
     # Write coord.npy LAST: it is the completion marker used to skip already
     # processed scenes on a re-run.
-    np.save(os.path.join(output_scene_dir, "coord.npy"), scene["coord"].astype(np.float32))
+    coord = scene["coord"].astype(np.float32, copy=False)
+    if coord.shape[0] > 0:
+        coord = coord - coord[0]
+    np.save(os.path.join(output_scene_dir, "coord.npy"), coord)
 
 
 def _save_scene_meta(output_scene_dir: str, meta: Dict[str, Any]) -> None:
