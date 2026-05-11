@@ -69,7 +69,6 @@ class CheckResult:
     severity: str
     reason: str
     details: str
-    excluded_hardcoded: bool
 
 
 def resolve_repo_path(path: str) -> str:
@@ -190,9 +189,8 @@ def load_scene_records(
     csv_manifest: str,
     target_splits: set[str],
     excluded_tiles: set[tuple[str, str]],
-) -> tuple[list[SceneRecord], list[CheckResult]]:
+) -> list[SceneRecord]:
     scene_records: list[SceneRecord] = []
-    skipped_excluded: list[CheckResult] = []
 
     with open(csv_manifest, "r", encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle)
@@ -212,17 +210,6 @@ def load_scene_records(
                 continue
 
             if (split, patch_id) in excluded_tiles:
-                skipped_excluded.append(
-                    CheckResult(
-                        split=split,
-                        patch_id=patch_id,
-                        scene_path="",
-                        severity="info",
-                        reason="skipped_excluded_tile",
-                        details="Excluded by hardcoded or missing-tiles manifest.",
-                        excluded_hardcoded=True,
-                    )
-                )
                 continue
 
             dept_year = (row.get("dept_year") or "").strip() or patch_id.split("_", 2)[0]
@@ -230,7 +217,7 @@ def load_scene_records(
             scene_path = build_scene_path(data_root, split, patch_id, dept_year, roi)
             scene_records.append(SceneRecord(split=split, patch_id=patch_id, scene_path=scene_path))
 
-    return scene_records, skipped_excluded
+    return scene_records
 
 
 def _get_point_count(modality: str, arr: np.ndarray) -> tuple[int | None, str | None]:
@@ -263,12 +250,11 @@ def _result(scene: SceneRecord, severity: str, reason: str, details: str) -> Che
         severity=severity,
         reason=reason,
         details=details,
-        excluded_hardcoded=False,
     )
 
 
-def _check_one_scene(task: tuple[SceneRecord, int, int]) -> list[CheckResult]:
-    scene, min_points, warn_min_unique_labels = task
+def _check_one_scene(task: tuple[SceneRecord, int]) -> list[CheckResult]:
+    scene, min_points = task
     issues: list[CheckResult] = []
 
     if not os.path.isdir(scene.scene_path):
@@ -383,29 +369,15 @@ def _check_one_scene(task: tuple[SceneRecord, int, int]) -> list[CheckResult]:
                 )
             )
 
-    segment = loaded.get("segment")
-    if segment is not None and segment.size > 0 and warn_min_unique_labels > 0:
-        unique_labels = int(np.unique(segment.reshape(-1)).shape[0])
-        if unique_labels < warn_min_unique_labels:
-            issues.append(
-                _result(
-                    scene,
-                    "warning",
-                    "low_segment_cardinality",
-                    f"segment.npy has {unique_labels} unique labels (< {warn_min_unique_labels}).",
-                )
-            )
-
     return issues
 
 
 def scan_scenes(
     scene_records: list[SceneRecord],
     min_points: int,
-    warn_min_unique_labels: int,
     num_workers: int,
 ) -> list[CheckResult]:
-    tasks = [(scene, min_points, warn_min_unique_labels) for scene in scene_records]
+    tasks = [(scene, min_points) for scene in scene_records]
     if num_workers <= 1:
         nested = [_check_one_scene(task) for task in tasks]
     else:
@@ -435,7 +407,6 @@ def write_detailed_csv(path: str, rows: Iterable[CheckResult]) -> None:
                 "reason",
                 "details",
                 "scene_path",
-                "excluded_hardcoded",
             ],
         )
         writer.writeheader()
@@ -448,7 +419,6 @@ def write_detailed_csv(path: str, rows: Iterable[CheckResult]) -> None:
                     "reason": row.reason,
                     "details": row.details,
                     "scene_path": row.scene_path,
-                    "excluded_hardcoded": row.excluded_hardcoded,
                 }
             )
 
@@ -470,25 +440,22 @@ def write_manifest_output(path: str, rows: Iterable[CheckResult], include_warnin
 def summarize_results(
     scene_records: list[SceneRecord],
     issues: list[CheckResult],
-    skipped_excluded: list[CheckResult],
 ) -> str:
     scanned_by_split = Counter(scene.split for scene in scene_records)
     issue_by_split = Counter(row.split for row in issues)
-    skipped_by_split = Counter(row.split for row in skipped_excluded)
     reason_count = Counter((row.severity, row.reason) for row in issues)
     severity_count = Counter(row.severity for row in issues)
 
-    ordered_splits = sorted(set(scanned_by_split) | set(issue_by_split) | set(skipped_by_split))
+    ordered_splits = sorted(set(scanned_by_split) | set(issue_by_split))
     lines = [
         f"Scanned scenes: {len(scene_records)}",
         f"Issues: total={len(issues)}, errors={severity_count['error']}, warnings={severity_count['warning']}",
-        f"Skipped excluded tiles: {len(skipped_excluded)}",
         "Per split:",
     ]
     for split in ordered_splits:
         lines.append(
             f"  - {split}: scanned={scanned_by_split[split]}, "
-            f"issues={issue_by_split[split]}, skipped_excluded={skipped_by_split[split]}"
+            f"issues={issue_by_split[split]}"
         )
 
     if reason_count:
@@ -539,12 +506,6 @@ def get_parser() -> argparse.ArgumentParser:
         help="Warn when the scene point count is below this threshold.",
     )
     parser.add_argument(
-        "--warn_min_unique_labels",
-        type=int,
-        default=2,
-        help="Warn when segment unique-label count is below this threshold (0 disables).",
-    )
-    parser.add_argument(
         "--num_workers",
         type=int,
         default=1,
@@ -577,9 +538,6 @@ def main() -> None:
         raise ValueError("--num_workers must be >= 1.")
     if args.min_points < 0:
         raise ValueError("--min_points must be >= 0.")
-    if args.warn_min_unique_labels < 0:
-        raise ValueError("--warn_min_unique_labels must be >= 0.")
-
     data_root = resolve_repo_path(args.data_root)
     csv_manifest = resolve_repo_path(args.csv_manifest)
     output_report = resolve_repo_path(args.output_report_csv)
@@ -590,7 +548,7 @@ def main() -> None:
     extra_excluded = load_missing_tiles_manifest(resolve_repo_path(args.missing_tiles_manifest)) if args.missing_tiles_manifest else set()
     excluded_tiles = hardcoded_excluded | extra_excluded
 
-    scene_records, skipped_excluded = load_scene_records(
+    scene_records = load_scene_records(
         data_root=data_root,
         csv_manifest=csv_manifest,
         target_splits=target_splits,
@@ -600,18 +558,17 @@ def main() -> None:
     issues = scan_scenes(
         scene_records=scene_records,
         min_points=args.min_points,
-        warn_min_unique_labels=args.warn_min_unique_labels,
         num_workers=args.num_workers,
     )
 
-    write_detailed_csv(output_report, [*issues, *skipped_excluded])
+    write_detailed_csv(output_report, issues)
     issue_count = write_manifest_output(
         output_manifest,
         issues,
         include_warnings=args.manifest_include_warnings,
     )
 
-    print(summarize_results(scene_records, issues, skipped_excluded))
+    print(summarize_results(scene_records, issues))
     print(f"Wrote detailed report: {output_report}")
     print(
         f"Wrote issue manifest: {output_manifest} "
