@@ -24,7 +24,7 @@ test_single_fragment = True
 
 
 # misc custom setting
-batch_size_per_gpu = 24
+batch_size_per_gpu = 20
 batch_size = batch_size_per_gpu * num_gpu
 num_worker = 8 * num_gpu
 mix_prob = 0.8
