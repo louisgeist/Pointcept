@@ -10,6 +10,7 @@ num_classes = 13
 ignore_index = num_classes
 grid_size = 0.1
 point_max = 102400
+min_points = 1000
 
 
 num_gpu = 1
@@ -141,6 +142,8 @@ data = dict(
         data_root=data_root,
         csv_manifest=csv_manifest,
         missing_tiles_manifest=missing_tiles_manifest,
+        min_points=min_points,
+        min_points_train_only=True,
         transform=[
             dict(type="CenterShift", apply_z=True),
             dict(type="RandomDropout", dropout_ratio=0.2, dropout_application_ratio=0.2),
