@@ -66,6 +66,7 @@ class Flair3DDataset(DefaultDataset):
         self.min_points = int(min_points)
         self.min_points_train_only = bool(min_points_train_only)
         self._missing_tiles = None
+        self._too_small_tiles = None
         super().__init__(**kwargs)
 
     def _get_missing_tiles(self):
@@ -91,9 +92,49 @@ class Flair3DDataset(DefaultDataset):
 
         self._missing_tiles = missing_tiles
         return self._missing_tiles
+    
+    def _get_too_small_tiles(self, split=["train"]):
+        if self._too_small_tiles is not None:
+            return self._too_small_tiles
+
+        if isinstance(split, str):
+            split_filter = {split}
+        elif isinstance(split, Sequence):
+            split_filter = set(split)
+        else:
+            raise NotImplementedError
+
+        too_small_tiles = set()
+        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+        too_small_csv = os.path.join(
+            repo_root, "data", "flair3d_plus", "raw", "too_small_tiles.csv"
+        )
+        if not os.path.exists(too_small_csv):
+            logger = get_root_logger()
+            logger.warning(
+                "Flair3D too-small tiles file not found: %s. Continuing with empty too-small tiles set.",
+                too_small_csv,
+            )
+            self._too_small_tiles = too_small_tiles
+            return self._too_small_tiles
+
+        with open(too_small_csv, "r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                row_split = row.get("split")
+                patch_id = row.get("patch_id")
+                if row_split in split_filter and row_split and patch_id:
+                    too_small_tiles.add((row_split, patch_id))
+
+        self._too_small_tiles = too_small_tiles
+        return self._too_small_tiles
 
     def _get_excluded_tiles(self):
-        return self.HARDCODED_EXCLUDED_TILES | self._get_missing_tiles()
+        return (
+            self.HARDCODED_EXCLUDED_TILES
+            | self._get_missing_tiles()
+            | self._get_too_small_tiles()
+        )
 
     def get_data_list(self):
         if self.csv_manifest is None:
@@ -126,59 +167,5 @@ class Flair3DDataset(DefaultDataset):
         """Return scene id (folder name) for logging and saving."""
         return os.path.basename(self.data_list[idx % len(self.data_list)])
 
-    def _is_non_empty_coord(self, data_dict):
-        coord = data_dict.get("coord", None)
-        return coord is not None and coord.shape[0] > 0
-
-    def _get_min_points_for_scene(self, idx):
-        if self.min_points <= 1:
-            return 1
-        if not self.min_points_train_only:
-            return self.min_points
-        scene_split = self.get_split_name(idx)
-        return self.min_points if scene_split == "train" else 1
-
-    def _has_enough_points(self, data_dict, idx):
-        coord = data_dict.get("coord", None)
-        if coord is None:
-            return False
-        return coord.shape[0] >= self._get_min_points_for_scene(idx)
-
-    def _log_rejected_scene(self, idx, data_dict):
-        scene_name = self.get_data_name(idx)
-        scene_split = self.get_split_name(idx)
-        scene_path = self.data_list[idx % len(self.data_list)]
-        coord = data_dict.get("coord", None)
-        num_points = int(coord.shape[0]) if coord is not None else -1
-        min_points = self._get_min_points_for_scene(idx)
-        logger = get_root_logger()
-        logger.warning(
-            "Rejected scene in Flair3DDataset: split=%s name=%s path=%s num_points=%d min_points=%d",
-            scene_split,
-            scene_name,
-            scene_path,
-            num_points,
-            min_points,
-        )
-
     def get_data(self, idx):
-        total = len(self.data_list)
-        for offset in range(total):
-            candidate_idx = idx + offset
-            data_dict = super().get_data(candidate_idx)
-            if self._is_non_empty_coord(data_dict) and self._has_enough_points(
-                data_dict, candidate_idx
-            ):
-                if offset > 0:
-                    logger = get_root_logger()
-                    logger.warning(
-                        "Recovered from empty scene(s): requested_idx=%d recovered_idx=%d",
-                        idx,
-                        candidate_idx,
-                    )
-                return data_dict
-            self._log_rejected_scene(candidate_idx, data_dict)
-
-        raise RuntimeError(
-            "All scenes were rejected in Flair3DDataset after exclusions and min_points filtering; cannot build a valid batch."
-        )
+        return super().get_data(idx)
