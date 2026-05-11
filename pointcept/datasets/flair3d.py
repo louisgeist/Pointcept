@@ -129,13 +129,6 @@ class Flair3DDataset(DefaultDataset):
         self._too_small_tiles = too_small_tiles
         return self._too_small_tiles
 
-    def _get_excluded_tiles(self):
-        return (
-            self.HARDCODED_EXCLUDED_TILES
-            | self._get_missing_tiles()
-            | self._get_too_small_tiles()
-        )
-
     def get_data_list(self):
         if self.csv_manifest is None:
             return super().get_data_list()
