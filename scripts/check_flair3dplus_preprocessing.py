@@ -14,6 +14,14 @@ For each non-excluded scene, the checker validates:
 - load errors and basic shape checks
 - NaN/Inf for selected float modalities
 - optional warnings for low segment label cardinality
+
+python scripts/check_flair3dplus_preprocessing.py \
+  --data_root data/flair3d_plus \
+  --csv_manifest data/flair3d_plus/raw/scene_split_manifest.csv \
+  --splits train,val,test \
+  --min_points 10000 \
+  --num_workers 24
+
 """
 
 from __future__ import annotations
@@ -88,19 +96,71 @@ def load_hardcoded_excluded_tiles() -> set[tuple[str, str]]:
 
     This avoids importing the whole package and optional runtime dependencies.
     """
+    def _load_missing_lidarhd_tiles_default() -> set[tuple[str, str]]:
+        details_csv = os.path.join(REPO_ROOT, "data", "flair3d_plus", "missing_coord_tiles.details.csv")
+        missing_tiles: set[tuple[str, str]] = set()
+        if not os.path.exists(details_csv):
+            return missing_tiles
+
+        with open(details_csv, "r", encoding="utf-8", newline="") as handle:
+            reader = csv.DictReader(handle)
+            for row in reader:
+                if row.get("reason") != "missing_coord_file":
+                    continue
+                split = (row.get("split") or "").strip()
+                patch_id = (row.get("patch_id") or "").strip()
+                if split and patch_id:
+                    missing_tiles.add((split, patch_id))
+        return missing_tiles
+
+    def _eval_expr(node: ast.AST, env: dict[str, object]) -> object:
+        if isinstance(node, ast.Constant):
+            return node.value
+        if isinstance(node, ast.Tuple):
+            return tuple(_eval_expr(elt, env) for elt in node.elts)
+        if isinstance(node, ast.List):
+            return [_eval_expr(elt, env) for elt in node.elts]
+        if isinstance(node, ast.Set):
+            return {_eval_expr(elt, env) for elt in node.elts}
+        if isinstance(node, ast.Name):
+            if node.id not in env:
+                raise KeyError(node.id)
+            return env[node.id]
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
+            left = _eval_expr(node.left, env)
+            right = _eval_expr(node.right, env)
+            if not isinstance(left, set) or not isinstance(right, set):
+                raise TypeError("BitOr is only supported for sets in this parser.")
+            return left | right
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            # Mirror Flair3D dataset's default missing-tiles source.
+            if node.func.id == "_load_missing_lidarhd_tiles":
+                return _load_missing_lidarhd_tiles_default()
+        raise TypeError(f"Unsupported AST node for exclusion parsing: {node.__class__.__name__}")
+
     with open(FLAIR3D_DATASET_FILE, "r", encoding="utf-8") as handle:
         module_ast = ast.parse(handle.read(), filename=FLAIR3D_DATASET_FILE)
 
     for node in module_ast.body:
         if not isinstance(node, ast.ClassDef) or node.name != "Flair3DDataset":
             continue
+
+        env: dict[str, object] = {}
         for stmt in node.body:
             if not isinstance(stmt, ast.Assign):
                 continue
-            for target in stmt.targets:
-                if isinstance(target, ast.Name) and target.id == "HARDCODED_EXCLUDED_TILES":
-                    value = ast.literal_eval(stmt.value)
-                    return {(str(split), str(patch_id)) for split, patch_id in value}
+            if len(stmt.targets) != 1 or not isinstance(stmt.targets[0], ast.Name):
+                continue
+            target_name = stmt.targets[0].id
+            try:
+                env[target_name] = _eval_expr(stmt.value, env)
+            except Exception:
+                continue
+            if target_name == "HARDCODED_EXCLUDED_TILES":
+                value = env[target_name]
+                if not isinstance(value, set):
+                    break
+                return {(str(split), str(patch_id)) for split, patch_id in value}
     raise RuntimeError("Could not locate Flair3DDataset.HARDCODED_EXCLUDED_TILES in flair3d.py.")
 
 
