@@ -42,7 +42,21 @@ def _load_missing_lidarhd_tiles():
 
 @DATASETS.register_module()
 class Flair3DDataset(DefaultDataset):
-    """Dataset for Flair3D / LidarHD preprocessed Pointcept scenes."""
+    """Dataset for Flair3D / LidarHD preprocessed Pointcept scenes.
+    
+    
+    
+    :param csv_manifest: CSV manifest file path
+        Lists all the scences in the dataset. It indicates wether the LIDARHD
+        is available for the scene.
+        
+    :param missing_tiles_manifest: Missing tiles manifest file path
+        Lists all the tiles that are missing from the dataset (but that were expected
+        to be there). This file is usually produced by the preprocessing script
+        (`missing_ply_preflight.txt"`).
+        
+    :param **kwargs: Additional arguments
+    """
 
     CORRUPTED_TILES = {
         # LIDARHD .ply found, but corrupted ?
@@ -57,15 +71,15 @@ class Flair3DDataset(DefaultDataset):
         self,
         csv_manifest=None,
         missing_tiles_manifest=None,
-        min_points=1,
-        min_points_train_only=True,
+        too_small_tiles_manifest=None,
         **kwargs,
     ):
         self.csv_manifest = csv_manifest
+        
         self.missing_tiles_manifest = missing_tiles_manifest
-        self.min_points = int(min_points)
-        self.min_points_train_only = bool(min_points_train_only)
         self._missing_tiles = None
+        
+        self.too_small_tiles_manifest = too_small_tiles_manifest
         self._too_small_tiles = None
         super().__init__(**kwargs)
 
@@ -74,7 +88,14 @@ class Flair3DDataset(DefaultDataset):
             return self._missing_tiles
 
         missing_tiles = set()
-        if not self.missing_tiles_manifest or not os.path.exists(self.missing_tiles_manifest):
+        if not self.missing_tiles_manifest:
+            self._missing_tiles = missing_tiles
+            return self._missing_tiles
+        elif not os.path.exists(self.missing_tiles_manifest):
+            logger = get_root_logger()
+            logger.warning(
+                f"Flair3D missing tiles file not found: {self.missing_tiles_manifest}. Continuing with empty missing tiles set.",
+            )
             self._missing_tiles = missing_tiles
             return self._missing_tiles
 
@@ -93,37 +114,33 @@ class Flair3DDataset(DefaultDataset):
         self._missing_tiles = missing_tiles
         return self._missing_tiles
     
-    def _get_too_small_tiles(self, split=["train"]):
+    def _get_too_small_tiles(self, ):
+        """
+        Only filtering train tiles.
+        """
         if self._too_small_tiles is not None:
             return self._too_small_tiles
 
-        if isinstance(split, str):
-            split_filter = {split}
-        elif isinstance(split, Sequence):
-            split_filter = set(split)
-        else:
-            raise NotImplementedError
 
         too_small_tiles = set()
-        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-        too_small_csv = os.path.join(
-            repo_root, "data", "flair3d_plus", "raw", "too_small_tiles.csv"
-        )
-        if not os.path.exists(too_small_csv):
+        if not self.too_small_tiles_manifest:
+            self._too_small_tiles = too_small_tiles
+            return self._too_small_tiles
+        
+        elif not os.path.exists(self.too_small_tiles_manifest):
             logger = get_root_logger()
             logger.warning(
-                "Flair3D too-small tiles file not found: %s. Continuing with empty too-small tiles set.",
-                too_small_csv,
+                f"Flair3D too-small tiles file not found: {self.too_small_tiles_manifest}. Continuing with empty too-small tiles set.",
             )
             self._too_small_tiles = too_small_tiles
             return self._too_small_tiles
 
-        with open(too_small_csv, "r", encoding="utf-8") as f:
+        with open(self.too_small_tiles_manifest, "r", encoding="utf-8") as f:
             reader = csv.DictReader(f)
             for row in reader:
                 row_split = row.get("split")
                 patch_id = row.get("patch_id")
-                if row_split in split_filter and row_split and patch_id:
+                if row_split == "train" and row_split and patch_id:
                     too_small_tiles.add((row_split, patch_id))
 
         self._too_small_tiles = too_small_tiles
@@ -138,7 +155,7 @@ class Flair3DDataset(DefaultDataset):
         elif isinstance(self.split, Sequence):
             split_list = self.split
         else:
-            raise NotImplementedError
+            raise TypeError
 
         hardcoded_excluded = self.HARDCODED_EXCLUDED_TILES
         missing_excluded = self._get_missing_tiles()
