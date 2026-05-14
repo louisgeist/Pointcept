@@ -104,7 +104,7 @@ task_criteria = {
     for task_name in semantic_target_keys
 }
 task_criteria["elevation"] = [
-    dict(type="MaskedSmoothL1Loss", beta=1.0, loss_weight=1.0),
+    dict(type="SmoothL1Loss", beta=1.0, loss_weight=1.0),
 ]
 
 task_weights = {task_name: 1.0 for task_name in task_configs.keys()}
