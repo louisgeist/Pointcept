@@ -166,7 +166,8 @@ scheduler = dict(
 # -----------------------------------------------------------------------------
 dataset_type = "Flair3DDataset"
 data_root = "data/flair3d_plus"
-csv_manifest =  "data/flair3d_plus/raw/scene_split_manifest_D067.csv" # "data/flair3d_plus/raw/scene_split_manifest.csv"
+# csv_manifest =  "data/flair3d_plus/raw/scene_split_manifest_D067.csv" 
+csv_manifest =  "data/flair3d_plus/raw/scene_split_manifest.csv"
 missing_tiles_manifest = "data/flair3d_plus/missing_ply_preflight.txt"
 too_small_tiles_manifest = "data/flair3d_plus/too_small_tiles.csv"
 
