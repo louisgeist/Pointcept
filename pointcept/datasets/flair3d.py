@@ -80,7 +80,9 @@ class Flair3DDataset(DefaultDataset):
     MISSING_LIDARHD_TILES = _load_missing_lidarhd_tiles()
     
     HARDCODED_EXCLUDED_TILES = CORRUPTED_TILES | MISSING_LIDARHD_TILES
-    FLAIR3D_OPTIONAL_TARGETS = ("land_use", "natural_habitat")
+    FLAIR3D_OPTIONAL_TARGETS = ("land_use", "natural_habitat", "elevation")
+    #TODO@Geist : elevation should be complete, but I noticed some missing part in D049
+    # e.g.: UU-S1-15
 
     def __init__(
         self,
