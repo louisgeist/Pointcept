@@ -410,6 +410,558 @@ class SemSegTester(TesterBase):
 
 
 @TESTERS.register_module()
+class MultiTaskTester(TesterBase):
+    """Fragment-based test for MultiTaskSegmentorV2 (semantic IoU + regression MAE/RMSE).
+
+    Expects cfg.data.task_configs and cfg.data.main_task (required when multiple tasks).
+    Ground-truth tensors for each task must be present at full resolution in the sample dict
+    (see Flair3DDataset.prepare_test_data).
+    """
+
+    def __init__(self, write_cls_iou=False, **kwargs):
+        super().__init__(**kwargs)
+        self.write_cls_iou = write_cls_iou
+
+    @staticmethod
+    def _cfg_get(obj, key, default=None):
+        if isinstance(obj, dict):
+            return obj.get(key, default)
+        return getattr(obj, key, default)
+
+    def _get_task_configs(self):
+        data_cfg = self.cfg.data
+        task_configs = self._cfg_get(data_cfg, "task_configs", None)
+        if isinstance(task_configs, dict) and len(task_configs) > 0:
+            return {str(k): dict(v) for k, v in task_configs.items()}
+        raise ValueError(
+            "MultiTaskTester requires cfg.data.task_configs to be a non-empty dict."
+        )
+
+    def _main_task_name(self, task_configs):
+        data_cfg = self.cfg.data
+        main_task = self._cfg_get(data_cfg, "main_task", None)
+        keys = list(task_configs.keys())
+        if main_task is not None:
+            if str(main_task) in keys:
+                return str(main_task)
+            raise ValueError(
+                f"cfg.data.main_task is {main_task!r} but that key is not in task_configs "
+                f"(keys: {keys})."
+            )
+        if len(keys) == 1:
+            return keys[0]
+        raise ValueError(
+            "cfg.data.main_task is not defined (and cannot be inferred as there are "
+            "multiple tasks)"
+        )
+
+    @staticmethod
+    def _task_origin_target_key(task_name):
+        return f"origin_{task_name}"
+
+    @staticmethod
+    def _gather_masked(pred, target):
+        mask = torch.isfinite(pred) & torch.isfinite(target)
+        if mask.sum() == 0:
+            return None, None
+        return pred[mask], target[mask]
+
+    @staticmethod
+    def _semantic_task_names(task_configs):
+        return [
+            k
+            for k, task_config in task_configs.items()
+            if task_config.get("task_type") == "semantic"
+        ]
+
+    @staticmethod
+    def _regression_task_names(task_configs):
+        return [
+            k
+            for k, task_config in task_configs.items()
+            if task_config.get("task_type") == "regression"
+        ]
+
+    @staticmethod
+    def _apply_inverse_origin_np(pred_np, target_np, scene_extra, task_name):
+        origin_key = MultiTaskTester._task_origin_target_key(task_name)
+        if "inverse" not in scene_extra or origin_key not in scene_extra:
+            return pred_np, target_np
+        inv = scene_extra["inverse"]
+        if isinstance(inv, torch.Tensor):
+            inv = inv.cpu().numpy()
+        pred_np = np.asarray(pred_np).reshape(-1)[inv]
+        target_np = np.asarray(scene_extra[origin_key]).reshape(-1)
+        return pred_np, target_np
+
+    @staticmethod
+    def _target_for_metrics(task_name, targets_by_task, scene_extra):
+        """Ground-truth aligned with saved predictions (after optional inverse/origin remap)."""
+        origin_key = MultiTaskTester._task_origin_target_key(task_name)
+        if origin_key in scene_extra:
+            return np.asarray(scene_extra[origin_key]).reshape(-1)
+        return np.asarray(targets_by_task[task_name]).reshape(-1)
+
+    def test(self):
+        assert self.test_loader.batch_size == 1
+        logger = get_root_logger()
+        logger.info(">>>>>>>>>>>>>>>> Start Multi-task Evaluation >>>>>>>>>>>>>>>>")
+
+        task_configs = self._get_task_configs()
+        main_task = self._main_task_name(task_configs)
+        semantic_tasks = self._semantic_task_names(task_configs)
+        regression_tasks = self._regression_task_names(task_configs)
+
+        batch_time = AverageMeter()
+        self.model.eval()
+
+        save_path = os.path.join(self.cfg.save_path, "result")
+        make_dirs(save_path)
+        comm.synchronize()
+
+        reg_sums_global = {
+            t: {"mae": 0.0, "mse": 0.0, "count": 0.0} for t in regression_tasks
+        }
+
+        running_iou = {t: AverageMeter() for t in semantic_tasks}
+
+        record = {}
+
+        for idx, batch in enumerate(self.test_loader):
+            start = time.time()
+            data_dict = batch[0]
+            fragment_list = data_dict.pop("fragment_list")
+            data_name = data_dict.pop("name")
+
+            # Pop every configured task label still present (includes segment).
+            targets_by_task = {}
+            for tn in task_configs:
+                if tn in data_dict:
+                    targets_by_task[tn] = data_dict.pop(tn)
+            scene_extra = data_dict
+
+            ref_arr = None
+            for cand in ("segment", main_task, *semantic_tasks):
+                cs = str(cand)
+                if cs in targets_by_task:
+                    ref_arr = targets_by_task[cs]
+                    break
+            if ref_arr is None and targets_by_task:
+                ref_arr = next(iter(targets_by_task.values()))
+            if ref_arr is None:
+                raise RuntimeError(
+                    f"Scene {data_name}: no labels found for any task in task_configs."
+                )
+            n_ref = int(np.asarray(ref_arr).size)
+
+            sem_cache_paths = {
+                t: os.path.join(save_path, f"{data_name}_pred_{t}.npy")
+                for t in semantic_tasks
+            }
+            reg_cache_paths = {
+                t: os.path.join(save_path, f"{data_name}_reg_{t}.npy")
+                for t in regression_tasks
+            }
+            all_sem_cached = all(os.path.isfile(p) for p in sem_cache_paths.values())
+            all_reg_cached = all(os.path.isfile(p) for p in reg_cache_paths.values())
+
+            pred_cls_np = {}
+            pred_reg_np = {}
+
+            if all_sem_cached and (
+                len(regression_tasks) == 0 or all_reg_cached
+            ):
+                logger.info(
+                    "{}/{}: {}, loaded cached multitask predictions.".format(
+                        idx + 1, len(self.test_loader), data_name
+                    )
+                )
+                for t in semantic_tasks:
+                    pred_cls_np[t] = np.load(sem_cache_paths[t])
+                for t in regression_tasks:
+                    pred_reg_np[t] = np.load(reg_cache_paths[t])
+            else:
+                pred_sem = {
+                    t: torch.zeros(
+                        (n_ref, int(task_configs[t]["num_classes"])),
+                        device="cuda",
+                    )
+                    for t in semantic_tasks
+                }
+                reg_sum = {
+                    t: torch.zeros((n_ref,), device="cuda") for t in regression_tasks
+                }
+                reg_cnt = {
+                    t: torch.zeros((n_ref,), device="cuda") for t in regression_tasks
+                }
+
+                use_voxel_broadcast = "inverse" in fragment_list[0]
+
+                for fi in range(len(fragment_list)):
+                    fragment_batch_size = 1
+                    s_i, e_i = fi * fragment_batch_size, min(
+                        (fi + 1) * fragment_batch_size, len(fragment_list)
+                    )
+                    input_dict = collate_fn(fragment_list[s_i:e_i])
+                    for key in input_dict.keys():
+                        if isinstance(input_dict[key], torch.Tensor):
+                            input_dict[key] = input_dict[key].cuda(non_blocking=True)
+                    idx_part = input_dict["index"]
+
+                    with torch.no_grad():
+                        output_dict = self.model(input_dict)
+                        logits_by_task = output_dict.get("seg_logits_by_task") or {}
+                        reg_pred_by_task = output_dict.get("reg_pred_by_task") or {}
+
+                        if self.cfg.empty_cache:
+                            torch.cuda.empty_cache()
+
+                        for task_name in semantic_tasks:
+                            if task_name not in logits_by_task:
+                                continue
+                            pred_part = F.softmax(logits_by_task[task_name], dim=-1)
+                            if use_voxel_broadcast:
+                                inv = fragment_list[s_i:e_i][0]["inverse"]
+                                inv = (
+                                    torch.from_numpy(inv).long().cuda()
+                                    if isinstance(inv, np.ndarray)
+                                    else inv.long().cuda()
+                                )
+                                pred_sem[task_name] += pred_part[inv, :]
+                            else:
+                                bs = 0
+                                for be in input_dict["offset"]:
+                                    pred_sem[task_name][idx_part[bs:be], :] += pred_part[
+                                        bs:be
+                                    ]
+                                    bs = be
+
+                        for task_name in regression_tasks:
+                            if task_name not in reg_pred_by_task:
+                                continue
+                            pred_part = reg_pred_by_task[task_name].reshape(-1).float()
+                            if use_voxel_broadcast:
+                                inv = fragment_list[s_i:e_i][0]["inverse"]
+                                inv = (
+                                    torch.from_numpy(inv).long().cuda()
+                                    if isinstance(inv, np.ndarray)
+                                    else inv.long().cuda()
+                                )
+                                # Match semantic path: pred_part has one row per voxelized point;
+                                # inv maps full-scene indices -> voxel rows (same as softmax broadcast).
+                                gathered = pred_part[inv]
+                                reg_sum[task_name] += gathered
+                                reg_cnt[task_name] += torch.ones_like(gathered)
+                            else:
+                                bs = 0
+                                for be in input_dict["offset"]:
+                                    sl = slice(bs, be)
+                                    ip = idx_part[sl]
+                                    reg_sum[task_name][ip] += pred_part[sl]
+                                    reg_cnt[task_name][ip] += 1
+                                    bs = be
+
+                    logger.info(
+                        "Test: {}/{}-{data_name}, Batch: {batch_idx}/{batch_num}".format(
+                            idx + 1,
+                            len(self.test_loader),
+                            data_name=data_name,
+                            batch_idx=fi,
+                            batch_num=len(fragment_list),
+                        )
+                    )
+
+                for task_name in semantic_tasks:
+                    if task_name not in targets_by_task:
+                        continue
+                    pred_raw = pred_sem[task_name].max(1)[1].cpu().numpy()
+                    pred_np, _ = self._apply_inverse_origin_np(
+                        pred_raw,
+                        np.asarray(targets_by_task[task_name]).reshape(-1),
+                        scene_extra,
+                        task_name,
+                    )
+                    pred_cls_np[task_name] = pred_np
+                    np.save(sem_cache_paths[task_name], pred_np)
+
+                for task_name in regression_tasks:
+                    if task_name not in targets_by_task:
+                        continue
+                    pred_raw = (
+                        reg_sum[task_name] / reg_cnt[task_name].clamp(min=1)
+                    ).cpu().numpy()
+                    pred_np, _ = self._apply_inverse_origin_np(
+                        pred_raw,
+                        np.asarray(targets_by_task[task_name], dtype=np.float64).reshape(
+                            -1
+                        ),
+                        scene_extra,
+                        task_name,
+                    )
+                    pred_reg_np[task_name] = pred_np
+                    np.save(reg_cache_paths[task_name], pred_np)
+
+            sem_metrics_scene = {}
+            for task_name in semantic_tasks:
+                if task_name not in targets_by_task:
+                    logger.warning(
+                        "Scene %s: skip semantic task %s (missing ground truth).",
+                        data_name,
+                        task_name,
+                    )
+                    continue
+                if task_name not in pred_cls_np:
+                    continue
+                pred_np = np.asarray(pred_cls_np[task_name]).reshape(-1)
+                tgt_np = self._target_for_metrics(
+                    task_name, targets_by_task, scene_extra
+                )
+                tc = task_configs[task_name]
+                intersection, union, target_hist = intersection_and_union(
+                    pred_np,
+                    tgt_np,
+                    int(tc["num_classes"]),
+                    int(tc["ignore_index"]),
+                )
+                sem_metrics_scene[task_name] = dict(
+                    intersection=intersection,
+                    union=union,
+                    target=target_hist,
+                )
+                mask = union != 0
+                iou_class = intersection / (union + 1e-10)
+                scene_m_iou = np.mean(iou_class[mask]) if mask.any() else 0.0
+                running_iou[task_name].update(scene_m_iou)
+
+            for task_name in regression_tasks:
+                if task_name not in targets_by_task:
+                    logger.warning(
+                        "Scene %s: skip regression task %s (missing ground truth).",
+                        data_name,
+                        task_name,
+                    )
+                    continue
+                if task_name not in pred_reg_np:
+                    continue
+                pred_np = np.asarray(pred_reg_np[task_name], dtype=np.float64).reshape(
+                    -1
+                )
+                tgt_np = np.asarray(
+                    self._target_for_metrics(
+                        task_name, targets_by_task, scene_extra
+                    ),
+                    dtype=np.float64,
+                ).reshape(-1)
+                p_t = torch.from_numpy(pred_np).float()
+                t_t = torch.from_numpy(tgt_np).float()
+                p_m, t_m = self._gather_masked(p_t, t_t)
+                if p_m is not None:
+                    err = (p_m - t_m).abs()
+                    reg_sums_global[task_name]["mae"] += float(err.sum().item())
+                    reg_sums_global[task_name]["mse"] += float(
+                        ((p_m - t_m) ** 2).sum().item()
+                    )
+                    reg_sums_global[task_name]["count"] += float(err.numel())
+
+            record[data_name] = dict(semantic=sem_metrics_scene)
+
+            batch_time.update(time.time() - start)
+            msg_parts = [
+                f"Test: {data_name} [{idx + 1}/{len(self.test_loader)}]-{n_ref} "
+                f"Batch {batch_time.val:.3f} ({batch_time.avg:.3f})"
+            ]
+            for task_name in semantic_tasks:
+                if task_name in sem_metrics_scene:
+                    msg_parts.append(
+                        f"[{task_name}] mIoU {running_iou[task_name].val:.4f} "
+                        f"({running_iou[task_name].avg:.4f})"
+                    )
+            logger.info(" ".join(msg_parts))
+
+        logger.info("Syncing ...")
+        comm.synchronize()
+
+        if comm.get_world_size() > 1 and regression_tasks:
+            flat = []
+            for task_name in regression_tasks:
+                s = reg_sums_global[task_name]
+                flat.extend([s["mae"], s["mse"], s["count"]])
+            buf = torch.tensor(flat, dtype=torch.float64, device="cuda")
+            dist.all_reduce(buf)
+            flat = buf.cpu().tolist()
+            for ti, task_name in enumerate(regression_tasks):
+                base = ti * 3
+                reg_sums_global[task_name]["mae"] = flat[base]
+                reg_sums_global[task_name]["mse"] = flat[base + 1]
+                reg_sums_global[task_name]["count"] = flat[base + 2]
+
+        record_sync = comm.gather(record, dst=0)
+
+        if comm.is_main_process():
+            merged = {}
+            for _ in range(len(record_sync)):
+                r = record_sync.pop()
+                merged.update(r)
+                del r
+
+            per_task_sem = {t: None for t in semantic_tasks}
+            for _, payload in merged.items():
+                for task_name, meters in payload["semantic"].items():
+                    if task_name not in per_task_sem:
+                        continue
+                    if per_task_sem[task_name] is None:
+                        per_task_sem[task_name] = {
+                            "intersection": meters["intersection"].copy(),
+                            "union": meters["union"].copy(),
+                            "target": meters["target"].copy(),
+                        }
+                    else:
+                        per_task_sem[task_name]["intersection"] += meters["intersection"]
+                        per_task_sem[task_name]["union"] += meters["union"]
+                        per_task_sem[task_name]["target"] += meters["target"]
+
+            per_task_metrics = {}
+            for task_name in semantic_tasks:
+                hist = per_task_sem[task_name]
+                if hist is None:
+                    logger.warning(
+                        "No aggregated semantic histograms for task %s.", task_name
+                    )
+                    continue
+                intersection = hist["intersection"]
+                union = hist["union"]
+                target_hist = hist["target"]
+                task_config = task_configs[task_name]
+                iou_class = intersection / (union + 1e-10)
+                acc_class = intersection / (target_hist + 1e-10)
+                m_iou = np.mean(iou_class)
+                m_acc = np.mean(acc_class)
+                all_acc = sum(intersection) / (sum(target_hist) + 1e-10)
+                per_task_metrics[task_name] = dict(
+                    iou_class=iou_class,
+                    acc_class=acc_class,
+                    m_iou=m_iou,
+                    m_acc=m_acc,
+                    all_acc=all_acc,
+                    names=list(task_config["names"]),
+                )
+                logger.info(
+                    "[task={}] Test result: mIoU/mAcc/allAcc {:.4f}/{:.4f}/{:.4f}.".format(
+                        task_name,
+                        m_iou,
+                        m_acc,
+                        all_acc,
+                    )
+                )
+                for class_idx in range(int(task_config["num_classes"])):
+                    class_name = per_task_metrics[task_name]["names"][class_idx]
+                    logger.info(
+                        "[task={}] Class_{}-{} Result: iou/accuracy {:.4f}/{:.4f}".format(
+                            task_name,
+                            class_idx,
+                            class_name,
+                            iou_class[class_idx],
+                            acc_class[class_idx],
+                        )
+                    )
+
+            if getattr(self.cfg, "enable_wandb", False) and wandb.run is not None:
+                wandb_log = {}
+                for task_name, metric in per_task_metrics.items():
+                    wandb_log[f"test/{task_name}/mIoU"] = float(metric["m_iou"])
+                    wandb_log[f"test/{task_name}/mAcc"] = float(metric["m_acc"])
+                    wandb_log[f"test/{task_name}/allAcc"] = float(metric["all_acc"])
+                    if self.write_cls_iou:
+                        task_config = task_configs[task_name]
+                        for class_idx in range(int(task_config["num_classes"])):
+                            if class_idx == task_config["ignore_index"]:
+                                continue
+                            class_name = metric["names"][class_idx]
+                            slug = "".join(
+                                c if (c.isalnum() or c in "._-") else "_"
+                                for c in str(class_name).strip().replace(" ", "_")
+                            )
+                            wandb_log[
+                                f"test/{task_name}/iou/{class_idx}_{slug}"
+                            ] = float(metric["iou_class"][class_idx])
+                if wandb_log:
+                    wandb.log(wandb_log)
+
+            for task_name in regression_tasks:
+                s = reg_sums_global[task_name]
+                cnt = s["count"]
+                if cnt <= 1e-8:
+                    continue
+                mae = s["mae"] / cnt
+                rmse = (s["mse"] / cnt) ** 0.5
+                logger.info(
+                    "[task={}] Test regression: MAE {:.6f} RMSE {:.6f} (n={:.0f}).".format(
+                        task_name,
+                        mae,
+                        rmse,
+                        cnt,
+                    )
+                )
+
+            if getattr(self.cfg, "enable_wandb", False) and wandb.run is not None:
+                reg_wandb = {}
+                for task_name in regression_tasks:
+                    s = reg_sums_global[task_name]
+                    cnt = s["count"]
+                    if cnt <= 1e-8:
+                        continue
+                    mae = s["mae"] / cnt
+                    rmse = (s["mse"] / cnt) ** 0.5
+                    reg_wandb[f"test/reg/{task_name}/mae"] = float(mae)
+                    reg_wandb[f"test/reg/{task_name}/rmse"] = float(rmse)
+                if reg_wandb:
+                    wandb.log(reg_wandb)
+
+            log_test_f1 = getattr(self.cfg, "log_test_f1", False)
+            if log_test_f1:
+                for task_name, metric in per_task_metrics.items():
+                    f1_class, macro_f1 = f1_scores_from_hist(
+                        per_task_sem[task_name]["intersection"],
+                        per_task_sem[task_name]["union"],
+                        per_task_sem[task_name]["target"],
+                    )
+                    logger.info(
+                        "[task={}] Test result: macro-F1 {:.4f}".format(
+                            task_name, macro_f1
+                        )
+                    )
+                    task_config = task_configs[task_name]
+                    for class_idx in range(int(task_config["num_classes"])):
+                        class_name = metric["names"][class_idx]
+                        logger.info(
+                            "[task={}] Class_{}-{} Result: f1 {:.4f}".format(
+                                task_name,
+                                class_idx,
+                                class_name,
+                                f1_class[class_idx],
+                            )
+                        )
+                    if getattr(self.cfg, "enable_wandb", False) and wandb.run is not None:
+                        f1_extra = {f"test/{task_name}/f1_macro": float(macro_f1)}
+                        for i in range(len(f1_class)):
+                            cn = metric["names"][i]
+                            slug = "".join(
+                                c if (c.isalnum() or c in "._-") else "_"
+                                for c in str(cn).strip().replace(" ", "_")
+                            )
+                            f1_extra[f"test/{task_name}/f1_{i}_{slug}"] = float(
+                                f1_class[i]
+                            )
+                        wandb.log(f1_extra)
+
+            logger.info("<<<<<<<<<<<<<<<<< End Evaluation <<<<<<<<<<<<<<<<<")
+
+    @staticmethod
+    def collate_fn(batch):
+        return batch
+
+
+@TESTERS.register_module()
 class DINOSemSegTester(TesterBase):
     def test(self):
         assert self.test_loader.batch_size == 1

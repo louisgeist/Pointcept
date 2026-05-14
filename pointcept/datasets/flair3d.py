@@ -9,10 +9,20 @@ with assets: coord.npy, color.npy, segment.npy, optionally strength.npy, normal.
 import os
 import csv
 from collections.abc import Sequence
+from copy import deepcopy
+
+import numpy as np
 
 from .defaults import DefaultDataset
 from .builder import DATASETS
+from .transform import record_data_pipeline
+from .flair3d_plus_label_task_config import get_missing_target_fill_value
 from pointcept.utils.logger import get_root_logger
+
+FLAIR3D_SPECIFIC_ASSETS = ("forest", "land_use", "natural_habitat", "elevation")
+FLAIR3D_SEMANTIC_TARGETS = ("segment", "forest", "land_use", "natural_habitat")
+FLAIR3D_REGRESSION_TARGETS = ("elevation",)
+FLAIR3D_ALLOWED_TARGETS = FLAIR3D_SEMANTIC_TARGETS + FLAIR3D_REGRESSION_TARGETS
 
 
 def _load_missing_lidarhd_tiles():
@@ -53,35 +63,82 @@ class Flair3DDataset(DefaultDataset):
     :param missing_tiles_manifest: Missing tiles manifest file path
         Lists all the tiles that are missing from the dataset (but that were expected
         to be there). This file is usually produced by the preprocessing script
-        (`missing_ply_preflight.txt"`).
+        ("missing_ply_preflight.txt").
         
-    :param **kwargs: Additional arguments
+    :param target_keys: Target keys. Supports semantic multitask for "segment", "forest",
+        "land_use", and "natural_habitat". "elevation" can be combined with semantic keys.
+        Targets are exposed in the batch under their task name.
+    :param primary_target_key: Primary semantic target. Must be included in target_keys when
+        provided.
+    :param **kwargs: Additional arguments passed to :class:`DefaultDataset`.
     """
 
-    CORRUPTED_TILES = {
-        # LIDARHD .ply found, but corrupted ?
-        ("train", "D086-2020_AU-S1-6_3-5"),
-    }
+    VALID_ASSETS = [*DefaultDataset.VALID_ASSETS, *FLAIR3D_SPECIFIC_ASSETS]
+
+    CORRUPTED_TILES = set()
     
     MISSING_LIDARHD_TILES = _load_missing_lidarhd_tiles()
     
     HARDCODED_EXCLUDED_TILES = CORRUPTED_TILES | MISSING_LIDARHD_TILES
+    FLAIR3D_OPTIONAL_TARGETS = ("land_use", "natural_habitat")
 
     def __init__(
         self,
         csv_manifest=None,
         missing_tiles_manifest=None,
         too_small_tiles_manifest=None,
+        target_keys=("segment",),
+        primary_target_key=None,
         **kwargs,
     ):
         self.csv_manifest = csv_manifest
-        
+        if isinstance(target_keys, str):
+            target_keys = [target_keys]
+        elif not isinstance(target_keys, Sequence):
+            raise TypeError("target_keys must be a string or a sequence of strings.")
+        if len(target_keys) == 0:
+            raise ValueError("target_keys must contain at least one target key.")
+        normalized_target_keys = []
+        for tk in target_keys:
+            if tk not in FLAIR3D_ALLOWED_TARGETS:
+                raise ValueError(
+                    f"Unsupported target key '{tk}'. Expected one of: {FLAIR3D_ALLOWED_TARGETS}."
+                )
+            if tk not in normalized_target_keys:
+                normalized_target_keys.append(tk)
+        self.target_keys = tuple(normalized_target_keys)
+        normalized_optional_target_keys = []
+        for tk in self.FLAIR3D_OPTIONAL_TARGETS:
+            if tk in self.target_keys:
+                normalized_optional_target_keys.append(tk)
+        self.optional_target_keys = tuple(normalized_optional_target_keys)
+        if primary_target_key is None:
+            primary_target_key = self.target_keys[0]
+        if primary_target_key not in self.target_keys:
+            raise ValueError(
+                "primary_target_key must be present in target_keys."
+            )
+        self.primary_target_key = primary_target_key
+        if "elevation" in self.target_keys and len(self.target_keys) > 1:
+            if self.primary_target_key not in FLAIR3D_SEMANTIC_TARGETS:
+                raise ValueError(
+                    "When target_keys mixes elevation with semantic targets, "
+                    "primary_target_key must be one of "
+                    f"{FLAIR3D_SEMANTIC_TARGETS} (got {self.primary_target_key!r})."
+                )
+
         self.missing_tiles_manifest = missing_tiles_manifest
         self._missing_tiles = None
-        
+
         self.too_small_tiles_manifest = too_small_tiles_manifest
         self._too_small_tiles = None
         super().__init__(**kwargs)
+        get_root_logger().info(
+            "Flair3DDataset target_keys=%s, optional_target_keys=%s, primary_target_key=%s",
+            self.target_keys,
+            self.optional_target_keys,
+            self.primary_target_key,
+        )
 
     def _get_missing_tiles(self):
         if self._missing_tiles is not None:
@@ -194,5 +251,122 @@ class Flair3DDataset(DefaultDataset):
         """Return scene id (folder name) for logging and saving."""
         return os.path.basename(self.data_list[idx % len(self.data_list)])
 
+    def _is_optional_target(self, target_key):
+        return target_key in self.optional_target_keys
+
+    def _missing_target_array(self, target_key, n):
+        fill_value = get_missing_target_fill_value(target_key)
+        if target_key in FLAIR3D_SEMANTIC_TARGETS:
+            return np.full(n, int(fill_value), dtype=np.int32)
+        if target_key in FLAIR3D_REGRESSION_TARGETS:
+            return np.full(n, float(fill_value), dtype=np.float32)
+        raise KeyError(f"Unsupported target key: {target_key}")
+
     def get_data(self, idx):
-        return super().get_data(idx)
+        data_dict = super().get_data(idx)
+        n = int(data_dict["coord"].shape[0])
+        scene = self.data_list[idx % len(self.data_list)]
+
+        if self.target_keys == ("elevation",):
+            if "elevation" not in data_dict:
+                if self._is_optional_target("elevation"):
+                    data_dict["elevation"] = self._missing_target_array("elevation", n)
+                    data_dict["segment"] = np.full(n, -1, dtype=np.int32)
+                    return data_dict
+                raise FileNotFoundError(
+                    f"target_keys contains 'elevation' but elevation.npy missing under scene: {scene}"
+                )
+            elev = np.asarray(data_dict.pop("elevation"), dtype=np.float64).reshape(-1)
+            if elev.shape[0] != n:
+                raise ValueError(
+                    f"elevation length {elev.shape[0]} does not match coord rows {n}"
+                )
+            data_dict["elevation"] = elev.astype(np.float32)
+            data_dict["segment"] = np.full(n, -1, dtype=np.int32)
+            return data_dict
+
+        semantic_keys = [tk for tk in self.target_keys if tk != "elevation"]
+        semantic_labels = {}
+        for tk in semantic_keys:
+            if tk == "segment":
+                labels = np.asarray(data_dict["segment"]).reshape(-1)
+            else:
+                if tk not in data_dict:
+                    if self._is_optional_target(tk):
+                        labels = self._missing_target_array(tk, n)
+                    else:
+                        raise FileNotFoundError(
+                            f"target key '{tk}' but {tk}.npy missing under scene: {scene}"
+                        )
+                else:
+                    labels = np.asarray(data_dict[tk]).reshape(-1)
+            if labels.shape[0] != n:
+                raise ValueError(
+                    f"{tk} length {labels.shape[0]} does not match coord rows {n}"
+                )
+            semantic_labels[tk] = labels.astype(np.int32)
+
+        for tk, labels in semantic_labels.items():
+            data_dict[tk] = labels
+
+        if "elevation" in self.target_keys:
+            if "elevation" not in data_dict:
+                if self._is_optional_target("elevation"):
+                    data_dict["elevation"] = self._missing_target_array("elevation", n)
+                else:
+                    raise FileNotFoundError(
+                        f"target_keys contains 'elevation' but elevation.npy missing under scene: {scene}"
+                    )
+            else:
+                elev = np.asarray(data_dict.pop("elevation"), dtype=np.float64).reshape(-1)
+                if elev.shape[0] != n:
+                    raise ValueError(
+                        f"elevation length {elev.shape[0]} does not match coord rows {n}"
+                    )
+                data_dict["elevation"] = elev.astype(np.float32)
+
+        return data_dict
+
+    def prepare_test_data(self, idx):
+        """Full-resolution multitask targets are popped into ``result_dict`` before voxelization.
+
+        DefaultDataset only preserves ``segment`` + optional ``origin_segment`` / ``inverse``,
+        which breaks multitask evaluation on the whole scene.
+        """
+        with record_data_pipeline("dataset.get_data"):
+            data_dict = self.get_data(idx)
+        data_dict = self.transform(data_dict)
+        result_dict = dict(name=data_dict.pop("name"))
+        for key in self.target_keys:
+            if key in data_dict:
+                result_dict[key] = data_dict.pop(key)
+        origin_keys = [
+            k for k in list(data_dict.keys()) if k.startswith("origin_")
+        ]
+        for k in origin_keys:
+            result_dict[k] = data_dict.pop(k)
+        if "inverse" in data_dict:
+            result_dict["inverse"] = data_dict.pop("inverse")
+
+        data_dict_list = []
+        for aug in self.aug_transform:
+            data_dict_list.append(aug(deepcopy(data_dict)))
+
+        fragment_list = []
+        for data in data_dict_list:
+            if self.test_voxelize is not None:
+                data_part_list = self.test_voxelize(data)
+            else:
+                data["index"] = np.arange(data["coord"].shape[0])
+                data_part_list = [data]
+            for data_part in data_part_list:
+                if self.test_crop is not None:
+                    data_part = self.test_crop(data_part)
+                else:
+                    data_part = [data_part]
+                fragment_list += data_part
+
+        for i in range(len(fragment_list)):
+            fragment_list[i] = self.post_transform(fragment_list[i])
+        result_dict["fragment_list"] = fragment_list
+        return result_dict

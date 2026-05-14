@@ -4,6 +4,7 @@ import torch_scatter
 import torch_cluster
 from peft import LoraConfig, get_peft_model
 from collections import OrderedDict
+from collections.abc import Mapping
 from pointcept.utils.logger import get_root_logger
 from pointcept.models.losses import build_criteria
 from pointcept.utils.misc import intersection_and_union_gpu
@@ -222,6 +223,188 @@ class DefaultSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
         return return_dict
 
 
+@MODELS.register_module()
+class MultiTaskSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
+    """Backbone-shared multi-task segmentor (semantic classification + optional regression).
+    
+    "V2" because it is the MultiTask version of the DefaultSegmentorV2.
+
+    Each entry in the task_configs mapping must set "task_type" to "semantic" or "regression".
+
+    - Semantic tasks read targets from input_dict[task_name] and write logits to
+      seg_logits_by_task.
+    - Regression tasks read the float target from input_dict[task_name] and write
+      predictions to reg_pred_by_task.
+
+    The "main_task" name must refer to a semantic task (checkpoint / mIoU convention).
+
+    Outputs:
+    - seg_logits and seg_logits_by_task: semantic tasks only,
+    - reg_pred_by_task: mapping task name -> 1D point-wise predictions for regression tasks,
+    - loss and loss_by_task when the corresponding targets are present in the batch.
+    """
+
+    _TASK_TYPES = frozenset(("semantic", "regression"))
+
+    def __init__(
+        self,
+        task_configs,
+        backbone_out_channels,
+        backbone=None,
+        criteria=None,
+        task_criteria=None,
+        task_weights=None,
+        main_task=None,
+        freeze_backbone=False,
+        feature_mask_values=None,
+    ):
+        super().__init__()
+        if not isinstance(task_configs, Mapping) or len(task_configs) == 0:
+            raise ValueError("task_configs must be a non-empty mapping of task_name -> config.")
+        self.task_configs = {str(k): dict(v) for k, v in task_configs.items()}
+        self.tasks = tuple(self.task_configs.keys())
+        self.main_task = str(main_task or self.tasks[0])
+        if self.main_task not in self.task_configs:
+            raise ValueError("main_task must be one of task_configs keys.")
+        if self._task_type(self.task_configs[self.main_task]) != "semantic":
+            raise ValueError(
+                "main_task must be a semantic task (task_type='semantic'), not regression."
+            )
+
+        self.backbone = build_model(backbone)
+        self.seg_heads = nn.ModuleDict()
+        self.reg_heads = nn.ModuleDict()
+        self.criteria_by_task = {}
+        self.task_weights = {}
+        default_weight = 1.0
+        task_weights = task_weights or {}
+
+        for task_name, task_config in self.task_configs.items():
+            task_type = self._task_type(task_config)
+            task_criteria_cfg = None
+            if isinstance(task_criteria, Mapping) and task_name in task_criteria:
+                task_criteria_cfg = task_criteria[task_name]
+            elif criteria is not None:
+                task_criteria_cfg = criteria
+            self.criteria_by_task[task_name] = build_criteria(task_criteria_cfg)
+            self.task_weights[task_name] = float(task_weights.get(task_name, default_weight))
+
+            if task_type == "semantic":
+                num_classes = int(task_config["num_classes"])
+                if num_classes <= 0:
+                    raise ValueError(f"num_classes must be > 0 for semantic task '{task_name}'.")
+                self.seg_heads[task_name] = nn.Linear(backbone_out_channels, num_classes)
+            else:  # regression
+                self.reg_heads[task_name] = nn.Linear(backbone_out_channels, 1)
+
+        self._init_learned_masked_feat(feature_mask_values=feature_mask_values)
+        self.freeze_backbone = freeze_backbone
+        if self.freeze_backbone:
+            for p in self.backbone.parameters():
+                p.requires_grad = False
+
+    @classmethod
+    def _task_type(cls, task_config):
+        tt = task_config.get("task_type")
+        if tt not in cls._TASK_TYPES:
+            raise ValueError(
+                "Each task_configs entry must set task_type to 'semantic' or 'regression' "
+                f"(got {tt!r})."
+            )
+        return tt
+
+    def _forward_backbone(self, input_dict):
+        point = Point(input_dict)
+        point = self.backbone(point)
+        if isinstance(point, Point):
+            while "pooling_parent" in point.keys():
+                assert "pooling_inverse" in point.keys()
+                parent = point.pop("pooling_parent")
+                inverse = point.pop("pooling_inverse")
+                parent.feat = torch.cat([parent.feat, point.feat[inverse]], dim=-1)
+                point = parent
+            feat = point.feat
+        else:
+            feat = point
+        return feat, point
+
+    def _compute_logits(self, feat):
+        return {task_name: head(feat) for task_name, head in self.seg_heads.items()}
+
+    def _compute_reg_preds(self, feat):
+        return {
+            task_name: head(feat).squeeze(-1)
+            for task_name, head in self.reg_heads.items()
+        }
+
+    def _has_any_target(self, input_dict):
+        for task_name in self.tasks:
+            if task_name in input_dict:
+                return True
+        return False
+
+    def _compute_loss(self, logits_by_task, reg_pred_by_task, input_dict):
+        total_loss = None
+        loss_by_task = {}
+        for task_name in self.tasks:
+            task_config = self.task_configs[task_name]
+            tt = self._task_type(task_config)
+            w = self.task_weights[task_name]
+            if tt == "semantic":
+                if task_name not in logits_by_task:
+                    continue
+                if task_name not in input_dict:
+                    continue
+                logits = logits_by_task[task_name]
+                task_loss = self.criteria_by_task[task_name](logits, input_dict[task_name])
+            else:
+                if task_name not in reg_pred_by_task:
+                    continue
+                if task_name not in input_dict:
+                    continue
+                pred = reg_pred_by_task[task_name].reshape(-1)
+                target = input_dict[task_name].float().reshape(-1)
+                task_loss = self.criteria_by_task[task_name](pred, target)
+            loss_by_task[task_name] = task_loss
+            weighted = task_loss * w
+            total_loss = weighted if total_loss is None else total_loss + weighted
+        if total_loss is None:
+            raise KeyError(
+                "No multitask targets found in input_dict for tasks: "
+                f"{', '.join(self.tasks)}."
+            )
+        return total_loss, loss_by_task
+
+    def forward(self, input_dict, return_point=False):
+        self._fill_masked_feat_with_learned_value(input_dict)
+        feat, point = self._forward_backbone(input_dict)
+        logits_by_task = self._compute_logits(feat)
+        reg_pred_by_task = self._compute_reg_preds(feat)
+        main_logits = logits_by_task[self.main_task]
+        return_dict = {
+            "seg_logits": main_logits,
+            "seg_logits_by_task": logits_by_task,
+            "reg_pred_by_task": reg_pred_by_task,
+        }
+        if return_point:
+            return_dict["point"] = point
+
+        if self.training or self._has_any_target(input_dict):
+            total_loss, loss_by_task = self._compute_loss(
+                logits_by_task, reg_pred_by_task, input_dict
+            )
+            return_dict["loss"] = total_loss
+            return_dict["loss_by_task"] = loss_by_task
+
+        if self.training:
+            with torch.no_grad():
+                return_dict["pred"] = main_logits.argmax(dim=1)
+                return_dict["pred_by_task"] = {
+                    task_name: logits.argmax(dim=1)
+                    for task_name, logits in logits_by_task.items()
+                }
+
+        return return_dict
 @MODELS.register_module()
 class DefaultLORASegmentorV2(nn.Module, LearnedMaskedFeatMixin):
     def __init__(

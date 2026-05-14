@@ -303,14 +303,24 @@ class Trainer(TrainerBase):
             tag, name = Path(self.cfg.save_path).parts[-2:]
             # Allow overriding the W&B run name from config if provided
             run_name = getattr(self.cfg, "wandb_run_name", f"{tag}/{name}")
-            wandb.init(
+            target_keys = getattr(self.cfg, "target_keys", None)
+            if target_keys:
+                if isinstance(target_keys, (list, tuple)):
+                    tags = [str(x) for x in target_keys]
+                else:
+                    tags = [str(target_keys)]
+            else:
+                tags = None
+            init_kw = dict(
                 project=self.cfg.wandb_project,
                 name=run_name,
-                tags=[tag],
                 dir=self.cfg.save_path,
                 settings=wandb.Settings(api_key=self.cfg.wandb_key),
                 config=self.cfg,
             )
+            if tags:
+                init_kw["tags"] = tags
+            wandb.init(**init_kw)
             wandb.log({"model/free_params": self.n_free_parameters})
         return writer
 

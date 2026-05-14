@@ -116,6 +116,8 @@ class ClsEvaluator(HookBase):
 
 @HOOKS.register_module()
 class SemSegEvaluator(HookBase):
+    """Single-task semantic segmentation validation (seg_logits vs segment)."""
+
     def __init__(self, write_cls_iou=False):
         self.write_cls_iou = write_cls_iou
 
@@ -243,6 +245,358 @@ class SemSegEvaluator(HookBase):
     def after_train(self):
         self.trainer.logger.info(
             "Best {}: {:.4f}".format("mIoU", self.trainer.best_metric_value)
+        )
+
+@HOOKS.register_module()
+class MultiTaskEvaluator(HookBase):
+    """Multi-task validation: semantic IoU from seg_logits_by_task; regression from reg_pred_by_task.
+
+    Reads cfg.data.task_configs and cfg.data.main_task. Every task_configs entry must set "task_type"
+    to "semantic" or "regression". Task targets are read from input_dict[task_name] for both
+    semantic and regression tasks, together with reg_pred_by_task[task_name] for regression.
+
+    Checkpoint selection (comm_info) follows mIoU of main_task, which must be a semantic task.
+    Regression metrics (MAE/RMSE) are logged per regression task name.
+
+    The "main task" (checkpoint / mIoU selection) is cfg.data.main_task when multiple tasks are
+    configured; with a single task in task_configs, main_task may be omitted. TensorBoard / W&B
+    semantic metrics use val/<task_name>/... for every semantic task; mIoU_best is logged only
+    for main_task.
+    """
+
+    def __init__(self, write_cls_iou=False):
+        self.write_cls_iou = write_cls_iou
+        self._best_neg_rmse = float("-inf")
+
+    def before_train(self):
+        if self.trainer.writer is not None and self.trainer.cfg.enable_wandb:
+            wandb.define_metric("val/*", step_metric="Epoch")
+            wandb.define_metric("val/reg/*", step_metric="Epoch")
+
+    def after_epoch(self):
+        if self.trainer.cfg.evaluate:
+            self.eval()
+
+    @staticmethod
+    def _cfg_get(obj, key, default=None):
+        if isinstance(obj, dict):
+            return obj.get(key, default)
+        return getattr(obj, key, default)
+
+    def _get_task_configs(self):
+        data_cfg = self.trainer.cfg.data
+        task_configs = self._cfg_get(data_cfg, "task_configs", None)
+        if isinstance(task_configs, dict) and len(task_configs) > 0:
+            return {str(k): dict(v) for k, v in task_configs.items()}
+        raise ValueError(
+            "MultiTaskEvaluator requires cfg.data.task_configs to be a non-empty dict."
+        )
+
+    def _main_task_name(self, task_configs):
+        """Resolve cfg.data.main_task; required when len(task_configs) > 1."""
+        data_cfg = self.trainer.cfg.data
+        main_task = self._cfg_get(data_cfg, "main_task", None)
+        keys = list(task_configs.keys())
+        
+        if main_task is not None :
+            if str(main_task) in keys:
+                return str(main_task)
+            else:
+                raise ValueError(
+                    f"cfg.data.main_task is {main_task!r} but that key is not in task_configs "
+                    f"(keys: {keys})."
+                )
+        else:
+            if len(keys) == 1:
+                return keys[0]
+            else:
+                raise ValueError(
+                    "cfg.data.main_task is not defined (and cannot be inferred as there are multiple tasks)"
+                )
+
+    @staticmethod
+    def _task_origin_target_key(task_name):
+        return f"origin_{task_name}"
+
+    @staticmethod
+    def _gather_masked(pred, target):
+        mask = torch.isfinite(pred) & torch.isfinite(target)
+        if mask.sum() == 0:
+            return None, None
+        return pred[mask], target[mask]
+
+    @staticmethod
+    def _semantic_task_names(task_configs):
+        return [
+            k
+            for k, task_config in task_configs.items()
+            if task_config.get("task_type") == "semantic"
+        ]
+
+    @staticmethod
+    def _regression_task_names(task_configs):
+        return [
+            k
+            for k, task_config in task_configs.items()
+            if task_config.get("task_type") == "regression"
+        ]
+
+    def eval(self):
+        self.trainer.logger.info(">>>>>>>>>>>>>>>> Start Evaluation >>>>>>>>>>>>>>>>")
+        self.trainer.model.eval()
+        task_configs = self._get_task_configs()
+        main_task = self._main_task_name(task_configs)
+        semantic_tasks = self._semantic_task_names(task_configs)
+        regression_tasks = self._regression_task_names(task_configs)
+
+        reg_sums = {t: {"mae": 0.0, "mse": 0.0, "count": 0.0} for t in regression_tasks}
+
+        for i, input_dict in enumerate(self.trainer.val_loader):
+            # --------- Model forward ---------
+            for key in input_dict.keys():
+                if isinstance(input_dict[key], torch.Tensor):
+                    input_dict[key] = input_dict[key].cuda(non_blocking=True)
+            with torch.no_grad():
+                output_dict = self.trainer.model(input_dict)
+            
+            loss = output_dict["loss"]
+            logits_by_task = output_dict.get("seg_logits_by_task", None)
+            if not isinstance(logits_by_task, dict):
+                logits_by_task = {"segment": output_dict["seg_logits"]}
+
+
+            # --------- Evaluate Semantic Tasks ---------
+            for task_name in semantic_tasks:
+                task_config = task_configs[task_name]
+                if task_name not in input_dict or task_name not in logits_by_task:
+                    continue
+                pred = logits_by_task[task_name].max(1)[1]
+                target_tensor = input_dict[task_name]
+                if "inverse" in input_dict.keys():
+                    origin_target_key = self._task_origin_target_key(task_name)
+                    if origin_target_key in input_dict:
+                        pred = pred[input_dict["inverse"]]
+                        target_tensor = input_dict[origin_target_key]
+                intersection, union, target = intersection_and_union_gpu(
+                    pred,
+                    target_tensor,
+                    int(task_config["num_classes"]),
+                    int(task_config["ignore_index"]),
+                )
+                if comm.get_world_size() > 1:
+                    dist.all_reduce(intersection)
+                    dist.all_reduce(union)
+                    dist.all_reduce(target)
+                intersection, union, target = (
+                    intersection.cpu().numpy(),
+                    union.cpu().numpy(),
+                    target.cpu().numpy(),
+                )
+                self.trainer.storage.put_scalar(
+                    f"val_intersection/{task_name}", intersection
+                )
+                self.trainer.storage.put_scalar(f"val_union/{task_name}", union)
+                self.trainer.storage.put_scalar(f"val_target/{task_name}", target)
+            self.trainer.storage.put_scalar("val_loss", loss.item())
+            
+            
+            # --------- Evaluate Regression Tasks ---------
+            reg_pred_by_task = output_dict.get("reg_pred_by_task") or {}
+            for task_name in regression_tasks:
+                pred = reg_pred_by_task.get(task_name)
+                if pred is None:
+                    continue
+                if task_name not in input_dict:
+                    continue
+                pred = pred.reshape(-1).float()
+                target = input_dict[task_name].reshape(-1).float()
+                if "inverse" in input_dict.keys():
+                    origin_key = self._task_origin_target_key(task_name)
+                    if origin_key in input_dict:
+                        pred = pred[input_dict["inverse"]]
+                        target = input_dict[origin_key].reshape(-1).float()
+                p, t = self._gather_masked(pred, target)
+                if p is not None:
+                    err = (p - t).abs()
+                    err2 = (p - t) ** 2
+                    reg_sums[task_name]["mae"] += float(err.sum().item())
+                    reg_sums[task_name]["mse"] += float(err2.sum().item())
+                    reg_sums[task_name]["count"] += float(err.numel())
+
+            info = "Test: [{iter}/{max_iter}] ".format(
+                iter=i + 1, max_iter=len(self.trainer.val_loader)
+            )
+            if "origin_coord" in input_dict.keys():
+                info = "Interp. " + info
+            self.trainer.logger.info(
+                info
+                + "Loss {loss:.4f} ".format(
+                    iter=i + 1, max_iter=len(self.trainer.val_loader), loss=loss.item()
+                )
+            )
+        loss_avg = self.trainer.storage.history("val_loss").avg
+        if comm.get_world_size() > 1 and regression_tasks:
+            flat = []
+            for task_name in regression_tasks:
+                s = reg_sums[task_name]
+                flat.extend([s["mae"], s["mse"], s["count"]])
+            buf = torch.tensor(flat, dtype=torch.float64, device="cuda")
+            dist.all_reduce(buf)
+            flat = buf.cpu().tolist()
+            for ti, task_name in enumerate(regression_tasks):
+                base = ti * 3
+                reg_sums[task_name]["mae"] = flat[base]
+                reg_sums[task_name]["mse"] = flat[base + 1]
+                reg_sums[task_name]["count"] = flat[base + 2]
+
+        per_task_metrics = {}
+        for task_name in semantic_tasks:
+            task_config = task_configs[task_name]
+            intersection = self.trainer.storage.history(
+                f"val_intersection/{task_name}"
+            ).total
+            union = self.trainer.storage.history(f"val_union/{task_name}").total
+            target = self.trainer.storage.history(f"val_target/{task_name}").total
+            iou_class = intersection / (union + 1e-10)
+            acc_class = intersection / (target + 1e-10)
+            m_iou = np.mean(iou_class)
+            m_acc = np.mean(acc_class)
+            all_acc = sum(intersection) / (sum(target) + 1e-10)
+            per_task_metrics[task_name] = dict(
+                iou_class=iou_class,
+                acc_class=acc_class,
+                m_iou=m_iou,
+                m_acc=m_acc,
+                all_acc=all_acc,
+                names=list(task_config["names"]),
+            )
+            self.trainer.logger.info(
+                "[task={}] Val result: mIoU/mAcc/allAcc {:.4f}/{:.4f}/{:.4f}.".format(
+                    task_name, m_iou, m_acc, all_acc
+                )
+            )
+            for class_idx in range(int(task_config["num_classes"])):
+                class_name = per_task_metrics[task_name]["names"][class_idx]
+                self.trainer.logger.info(
+                    "[task={}] Class_{}-{} Result: iou/accuracy {:.4f}/{:.4f}".format(
+                        task_name,
+                        class_idx,
+                        class_name,
+                        iou_class[class_idx],
+                        acc_class[class_idx],
+                    )
+                )
+
+        current_epoch = self.trainer.epoch + 1
+        main_m_iou = per_task_metrics[main_task]["m_iou"]
+        m_iou_best = max(self.trainer.best_metric_value, main_m_iou)
+        if self.trainer.writer is not None:
+            self.trainer.writer.add_scalar("val/loss", loss_avg, current_epoch)
+            wandb_log = None
+            if self.trainer.cfg.enable_wandb:
+                wandb_log = {"Epoch": current_epoch, "val/loss": loss_avg}
+                
+            # General metrics
+            for task_name, metric in per_task_metrics.items():
+                prefix = f"val/{task_name}"
+                self.trainer.writer.add_scalar(
+                    f"{prefix}/mIoU", metric["m_iou"], current_epoch
+                )
+                if task_name == main_task:
+                    self.trainer.writer.add_scalar(
+                        f"{prefix}/mIoU_best", m_iou_best, current_epoch
+                    )
+                self.trainer.writer.add_scalar(
+                    f"{prefix}/mAcc", metric["m_acc"], current_epoch
+                )
+                self.trainer.writer.add_scalar(
+                    f"{prefix}/allAcc", metric["all_acc"], current_epoch
+                )
+                if wandb_log is not None:
+                    wandb_log[f"{prefix}/mIoU"] = float(metric["m_iou"])
+                    if task_name == main_task:
+                        wandb_log[f"{prefix}/mIoU_best"] = float(m_iou_best)
+                    wandb_log[f"{prefix}/mAcc"] = float(metric["m_acc"])
+                    wandb_log[f"{prefix}/allAcc"] = float(metric["all_acc"])
+            if wandb_log is not None:
+                wandb.log(wandb_log, step=wandb.run.step)
+
+            # Per-class metrics
+            if self.write_cls_iou:
+                cls_log = (
+                    {"Epoch": current_epoch}
+                    if self.trainer.cfg.enable_wandb
+                    else None
+                )
+                for task_name, metric in per_task_metrics.items():
+                    task_config = task_configs[task_name]
+                    for class_idx in range(int(task_config["num_classes"])):
+                        if class_idx == task_config["ignore_index"]:
+                            continue
+                        class_name = task_config["names"][class_idx]
+                        slug = "".join(
+                            c if (c.isalnum() or c in "._-") else "_"
+                            for c in str(class_name).strip().replace(" ", "_")
+                        )
+                        tag = f"val/{task_name}/iou/{class_idx}_{slug}"
+                        self.trainer.writer.add_scalar(
+                            tag,
+                            metric["iou_class"][class_idx],
+                            current_epoch,
+                        )
+                        if cls_log is not None:
+                            cls_log[tag] = float(metric["iou_class"][class_idx])
+                if cls_log is not None:
+                    wandb.log(cls_log, step=wandb.run.step)
+
+        reg_wandb = {"Epoch": current_epoch}
+        best_neg_rmse_epoch = float("-inf")
+        writer = self.trainer.writer
+        enable_wandb = self.trainer.cfg.enable_wandb
+        for task_name in regression_tasks:
+            s = reg_sums[task_name]
+            cnt = s["count"]
+            if cnt <= 1e-8:
+                continue
+            mae = s["mae"] / cnt
+            rmse = (s["mse"] / cnt) ** 0.5
+            best_neg_rmse_epoch = max(best_neg_rmse_epoch, -rmse)
+            self.trainer.logger.info(
+                "[task={}] Val regression: MAE {:.6f} RMSE {:.6f} (n={:.0f}).".format(
+                    task_name, mae, rmse, cnt
+                )
+            )
+            if writer is not None:
+                writer.add_scalar(
+                    f"val/reg/{task_name}/mae", mae, current_epoch
+                )
+                writer.add_scalar(
+                    f"val/reg/{task_name}/rmse", rmse, current_epoch
+                )
+            if enable_wandb:
+                reg_wandb[f"val/reg/{task_name}/mae"] = float(mae)
+                reg_wandb[f"val/reg/{task_name}/rmse"] = float(rmse)
+        if best_neg_rmse_epoch > float("-inf"):
+            self._best_neg_rmse = max(self._best_neg_rmse, best_neg_rmse_epoch)
+            if writer is not None:
+                writer.add_scalar(
+                    "val/reg/rmse_best_neg", self._best_neg_rmse, current_epoch
+                )
+            if enable_wandb:
+                reg_wandb["val/reg/rmse_best_neg"] = float(self._best_neg_rmse)
+        if enable_wandb and len(reg_wandb) > 1:
+            wandb.log(reg_wandb, step=wandb.run.step)
+
+        self.trainer.logger.info("<<<<<<<<<<<<<<<<< End Evaluation <<<<<<<<<<<<<<<<<")
+        self.trainer.comm_info["current_metric_value"] = main_m_iou
+        self.trainer.comm_info["current_metric_name"] = f"mIoU/{main_task}"
+
+    def after_train(self):
+        self.trainer.logger.info(
+            "Best {}: {:.4f}".format(
+                self.trainer.comm_info.get("current_metric_name", "mIoU"),
+                self.trainer.best_metric_value,
+            )
         )
 
 

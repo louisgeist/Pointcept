@@ -54,7 +54,8 @@ python pointcept/datasets/preprocessing/flair3d_plus/preprocess_flair3d.py \
     --output_root data/flair3d_plus \
     --label_definition inter_finerall8 \
     --split_manifest_csv data/flair3d_plus/raw/scene_split_manifest.csv \
-    --num_workers 8
+    --num_workers 24 \
+    --force
 
 python pointcept/datasets/preprocessing/flair3d_plus/preprocess_flair3d.py \
     --dataset_root data/flair3d_plus/raw \
@@ -79,7 +80,7 @@ from plyfile import PlyData
 from tqdm import tqdm
 
 try:
-    from pointcept.datasets.preprocessing.flair3d.flair3d_label_remap import (
+    from pointcept.datasets.preprocessing.flair3d_plus.flair3d_label_remap import (
         SUPPORTED_LABEL_REMAPS,
         build_segment,
     )

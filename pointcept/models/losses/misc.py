@@ -99,6 +99,27 @@ class BinaryFocalLoss(nn.Module):
 
 
 @LOSSES.register_module()
+class SmoothL1Loss(nn.Module):
+    """Smooth L1 on finite elements only (ignores NaN/Inf in pred or target)."""
+
+    def __init__(self, beta=1.0, loss_weight=1.0):
+        super().__init__()
+        self.beta = beta
+        self.loss_weight = loss_weight
+
+    def forward(self, pred, target):
+        pred = pred.reshape(-1)
+        target = target.reshape(-1)
+        mask = torch.isfinite(pred) & torch.isfinite(target)
+        if mask.sum() == 0:
+            return pred.sum() * 0.0
+        diff = F.smooth_l1_loss(
+            pred[mask], target[mask], beta=self.beta, reduction="sum"
+        )
+        return diff / mask.sum().clamp(min=1) * self.loss_weight
+
+
+@LOSSES.register_module()
 class FocalLoss(nn.Module):
     def __init__(
         self, gamma=2.0, alpha=0.5, reduction="mean", loss_weight=1.0, ignore_index=-1
