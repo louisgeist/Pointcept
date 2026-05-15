@@ -51,12 +51,13 @@ learned_masked_feat = True
 # -----------------------------------------------------------------------------
 # Multitask targets and per-task specs (same tasks as spunet_multitask)
 # -----------------------------------------------------------------------------
-semantic_target_keys = ("segment", "forest", "land_use", "natural_habitat")
-target_keys = semantic_target_keys + ("elevation",)
+# semantic_target_keys = ("segment", "forest", "land_use", "natural_habitat")
+semantic_target_keys = ("segment",)
+target_keys = semantic_target_keys #+ ("elevation",)
 main_task = "segment"
 
 task_configs = {task_name: get_semantic_config(task_name) for task_name in semantic_target_keys}
-task_configs["elevation"] = get_multitask_regression_task_config_elevation()
+# task_configs["elevation"] = get_multitask_regression_task_config_elevation()
 
 del get_semantic_config, get_multitask_regression_task_config_elevation
 
