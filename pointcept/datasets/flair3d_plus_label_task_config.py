@@ -13,9 +13,9 @@ from typing import Any, Dict, Tuple
 # Semantic targets: one entry per target_key used by Flair3DDataset / configs.
 FLAIR3D_SEMANTIC_TASKS: Dict[str, Dict[str, Any]] = {
     "segment": {
-        "num_classes": 13,
-        "ignore_index": 13,
-        #Inter_finerall8
+        "num_classes": 14,
+        "ignore_index": 14,
+        #Inter_finerall10
         "names": [
             'Building',
             'Greenhouse',
@@ -24,14 +24,13 @@ FLAIR3D_SEMANTIC_TASKS: Dict[str, Dict[str, Any]] = {
             'Herbaceous',
             'Vineyard',
             'Other vegetation',
-            # 'Brushwood',
             'Other infrastructures',
             'Swimming pool',
             'Water',
             'Deciduous',
             'Coniferous',
             'Bridge',
-
+            'Agricultural soil',
             'Void',
         ],
     },

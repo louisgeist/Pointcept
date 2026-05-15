@@ -5,6 +5,11 @@ Parallel extraction (--workers > 1) uses one thread per archive. It helps most o
 fast local SSD/NVMe; on HDD or network storage, raising workers can increase
 seek contention and slow things down—start with 2–4 and measure.
 
+Overwrite behavior:
+- default (without --overwrite): resume-like extraction, only missing paths are
+  extracted (existing files/directories are skipped based on path existence).
+- with --overwrite: force full re-extraction of each archive content.
+
 Example:
 python pointcept/datasets/preprocessing/flair3d_plus/unzip_flair3d.py \
     --source_root data/flair3d_plus/flair3d_plus_067 \ #Clean@Geist
@@ -13,7 +18,7 @@ python pointcept/datasets/preprocessing/flair3d_plus/unzip_flair3d.py \
     
 JZ: #Clean@Geist
 python pointcept/datasets/preprocessing/flair3d_plus/unzip_flair3d.py \
-    --source_root $SCRATCH/FLAIR_HUB \ 
+    --source_root $SCRATCH/FLAIR_HUB \
     --target_root data/flair3d_plus/raw \
     --workers 24
 """

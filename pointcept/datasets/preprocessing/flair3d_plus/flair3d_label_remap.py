@@ -9,6 +9,7 @@ This module centralizes:
 from typing import Dict, Optional
 
 import numpy as np
+from numpy._typing import _VoidCodes
 
 
 COSIA_2_FLAIR3D = np.array(
@@ -16,6 +17,45 @@ COSIA_2_FLAIR3D = np.array(
 )
 LIDARHD_2_FLAIR3D = np.array([1, 1, 1, 2, 0, 3, 0, 0, 3, 3, 3], dtype=np.int32)
 LIDARHD_2_COARSE_B = np.array([1, 1, 2, 2, 0, 3, 0, 0, 3, 3, 3], dtype=np.int32)
+
+# Version C (with water)
+building,soil,veget, water, void = 0, 1, 2, 3, 4
+COSIA_2_FLAIR3D_C = np.array([
+            building, # Building
+            building, # Greenhouse
+            soil, # Swimming pool # Fix 15/05 (for inter_finerall10) : swimming pool as coarse_soil
+            soil, # Impervious surface
+            soil, # Pervious surface
+            soil, # Bare soil
+            water, # Water
+            void, # Snow
+            soil, # Herbaceous vegetation
+            soil, # Agricultural land
+            soil, # Plowed land
+            veget, # Vineyard
+            veget, # Deciduous
+            veget, # Coniferous
+            veget, # Brushwood
+            veget, # Clear cut 
+            veget, # Ligneous 
+            veget, # Mixed
+            void, # Undefined
+        ], dtype=np.int32
+)
+
+LIDARHD_2_COARSE_C = np.array([
+            soil, # Soil
+            soil, # Végétation basse
+            veget, # Végétation moyenne
+            veget, # Végétation haute
+            building, # Bâtiment
+            water, # Eau
+            building, # Pont
+            building, # Sursol pérenne
+            void, # Artefact
+            void, # Points virtuels (modélisation)
+            void,
+        ], dtype=np.int32)
 
 COSIA_FINER_ALL = np.array(
     [0, 1, 8, 2, 3, 3, 8, 8, 4, 3, 3, 5, 6, 6, 7, 8, 8, 8, 8], dtype=np.int32
@@ -63,6 +103,15 @@ COSIA_FINER_ALL9 = np.array(
     [0, 1, 8, 2, 3, 3, 9, 14, 4, 3, 3, 5, 10, 11, 6, 14, 6, 6, 14], dtype=np.int32
 )
 
+# Compared to 8:
+# - clear cut is now in other vegetation
+# -  other soil split into other soil and agricultural soil
+void = 14
+
+COSIA_FINER_ALL10 = np.array(
+    [0, 1, 8, 2, 3, 3, 9, void, 4, 13, 13, 5, 10, 11, 6, 6, 6, 6, void], dtype=np.int32
+)
+
 
 lidarhd_class_dictionary = {
     1: ("#d3d3d3", "Non classé"),
@@ -93,6 +142,8 @@ SIMPLE_LABEL_REMAPS = {
     "coarse_cosia": ("cosia_class", COSIA_2_FLAIR3D),
     "coarse_lidarhd": ("lidarhd_class", LIDARHD_2_FLAIR3D),
     "coarse_lidarhd_b": ("lidarhd_class", LIDARHD_2_COARSE_B),
+    "coarse_cosia_c": ("cosia_class", COSIA_2_FLAIR3D_C),
+    "coarse_lidarhd_c": ("lidarhd_class", LIDARHD_2_COARSE_C),
     "finer_cosia_all": ("cosia_class", COSIA_FINER_ALL),
     "finer_cosia_building": ("cosia_class", COSIA_FINER_BUILDING),
     "finer_cosia_soil": ("cosia_class", COSIA_FINER_SOIL),
@@ -105,6 +156,7 @@ SIMPLE_LABEL_REMAPS = {
     "inter_finerall7": ("cosia_class", COSIA_FINER_ALL7),
     "inter_finerall8": ("cosia_class", COSIA_FINER_ALL8),
     "inter_finerall9": ("cosia_class", COSIA_FINER_ALL9),
+    "inter_finerall10": ("cosia_class", COSIA_FINER_ALL10),
     "finer_lidarhd": ("lidarhd_class", LIDARHD_FINER),
 }
 
@@ -124,6 +176,7 @@ FUSION_LABEL_REMAPS = {
     "inter_finerall7",
     "inter_finerall8",
     "inter_finerall9",
+    "inter_finerall10",
 }
 
 SUPPORTED_LABEL_REMAPS = FUSION_LABEL_REMAPS #sorted(set(SIMPLE_LABEL_REMAPS.keys()) | FUSION_LABEL_REMAPS)
@@ -165,6 +218,8 @@ def _finer_mapping_from_mode(mode: str) -> np.ndarray:
         return COSIA_FINER_ALL8
     if mode == "inter_finerall9":
         return COSIA_FINER_ALL9
+    if mode == "inter_finerall10":
+        return COSIA_FINER_ALL10
     raise ValueError(f"Mode '{mode}' does not define a finer mapping")
 
 
@@ -179,7 +234,7 @@ def _segment_from_fusion(attributes: Dict[str, np.ndarray], mode: str) -> np.nda
     lidarhd[lidarhd > 66] = 1
     lidarhd = map_labels(LIDARHD_ID2TRAINID, lidarhd)
 
-    coarse_cosia = map_labels(COSIA_2_FLAIR3D, cosia)
+    coarse_cosia = map_labels(COSIA_2_FLAIR3D, cosia) # 15/05 : COSIA_2_FLAIR3D updated
     coarse_lidarhd = map_labels(LIDARHD_2_FLAIR3D, lidarhd)
 
     coarse_void = 3
@@ -210,7 +265,12 @@ def _segment_from_fusion(attributes: Dict[str, np.ndarray], mode: str) -> np.nda
         # Recompute agreement with coarse_B variant (your original behavior).
         coarse_lidarhd_b = map_labels(LIDARHD_2_COARSE_B, lidarhd)
         agreement = coarse_cosia == coarse_lidarhd_b
-
+        
+    elif mode == "inter_finerall10":
+        coarse_lidarhd_c = map_labels(LIDARHD_2_COARSE_C, lidarhd)
+        coarse_cosia_c = map_labels(COSIA_2_FLAIR3D_C, cosia)
+        agreement = coarse_cosia_c == coarse_lidarhd_c
+        
     if mode in (
         "inter_finerall4",
         "inter_finerall5",
@@ -218,6 +278,7 @@ def _segment_from_fusion(attributes: Dict[str, np.ndarray], mode: str) -> np.nda
         "inter_finerall7",
         "inter_finerall8",
         "inter_finerall9",
+        "inter_finerall10",
     ):
         # Treat lidarhd void as "agreement" for these modes.
         agreement = agreement | (lidarhd == 10)
@@ -240,7 +301,7 @@ def _segment_from_fusion(attributes: Dict[str, np.ndarray], mode: str) -> np.nda
     elif mode == "inter_finerall7":
         # Other infrastructure override from LIDARHD (class 7).
         seg[lidarhd == 7] = 7
-    elif mode in ("inter_finerall8", "inter_finerall9"):
+    elif mode in ("inter_finerall8", "inter_finerall9", "inter_finerall10"):
         # Sursol perenne (train id 7) and bridge / Pont (train id 6) from LIDARHD.
         seg[lidarhd == 7] = 7 # Override Sursol perenne
         seg[lidarhd == 6] = 12 # Override Briddge

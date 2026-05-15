@@ -52,7 +52,7 @@ Examples:
 python pointcept/datasets/preprocessing/flair3d_plus/preprocess_flair3d.py \
     --dataset_root data/flair3d_plus/raw \
     --output_root data/flair3d_plus \
-    --label_definition inter_finerall8 \
+    --label_definition inter_finerall10 \
     --split_manifest_csv data/flair3d_plus/raw/scene_split_manifest.csv \
     --num_workers 24 \
     --force
@@ -60,8 +60,9 @@ python pointcept/datasets/preprocessing/flair3d_plus/preprocess_flair3d.py \
 python pointcept/datasets/preprocessing/flair3d_plus/preprocess_flair3d.py \
     --dataset_root data/flair3d_plus/raw \
     --output_root data/flair3d_plus \
-    --label_definition inter_finerall8 \
+    --label_definition inter_finerall10 \
     --split_manifest_csv data/flair3d_plus/raw/scene_split_manifest_D067.csv \
+    --num_workers 12 \
     --force
 """
 
