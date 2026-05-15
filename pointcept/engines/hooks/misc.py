@@ -107,6 +107,7 @@ class InformationWriter(HookBase):
             wandb.define_metric("params/*", step_metric="Iter")
             wandb.define_metric("train_batch/*", step_metric="Iter")
             wandb.define_metric("train/*", step_metric="Epoch")
+            wandb.define_metric("train/loss/*", step_metric="Epoch")
 
     def before_step(self):
         self.curr_iter += 1
@@ -131,6 +132,20 @@ class InformationWriter(HookBase):
                     continue
                 self.trainer.storage.put_scalar(key, float(value))
                 scalar_keys.append(key)
+                
+            loss_by_task = model_output_dict.get("loss_by_task")
+            # Skip when only one task: scalar "loss" already summarizes training.
+            if isinstance(loss_by_task, dict) and len(loss_by_task) > 1: # For logging
+                for task_name, v in loss_by_task.items():
+                    if isinstance(v, torch.Tensor):
+                        if v.numel() != 1:
+                            continue
+                        v = v.item()
+                    if not isinstance(v, (int, float)):
+                        continue
+                    subkey = f"loss/{task_name}"
+                    self.trainer.storage.put_scalar(subkey, float(v))
+                    scalar_keys.append(subkey)
             self.model_output_keys = scalar_keys
 
             # Accumulate epoch-level confusion stats for segmentation (GPU rank 0 only).

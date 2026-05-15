@@ -404,6 +404,20 @@ class MultiTaskEvaluator(HookBase):
                     self.trainer.storage.put_scalar(f"val_union/{task_name}", union)
                     self.trainer.storage.put_scalar(f"val_target/{task_name}", target)
                 self.trainer.storage.put_scalar("val_loss", loss.item())
+                loss_by_task = output_dict.get("loss_by_task")
+                # Skip when only one task: scalar "loss" already logged
+                if isinstance(loss_by_task, dict) and len(loss_by_task) > 1:
+                    for task_name, v in loss_by_task.items():
+                        if isinstance(v, torch.Tensor):
+                            if v.numel() != 1:
+                                continue
+                            self.trainer.storage.put_scalar(
+                                f"val_loss/{task_name}", float(v.item())
+                            )
+                        elif isinstance(v, (int, float)):
+                            self.trainer.storage.put_scalar(
+                                f"val_loss/{task_name}", float(v)
+                            )
 
                 # --------- Evaluate Regression Tasks ---------
                 reg_pred_by_task = output_dict.get("reg_pred_by_task") or {}
@@ -493,7 +507,19 @@ class MultiTaskEvaluator(HookBase):
             wandb_log = None
             if self.trainer.cfg.enable_wandb:
                 wandb_log = {"Epoch": current_epoch, "val/loss": loss_avg}
-                
+            val_histories = self.trainer.storage.histories()
+            for task_name in task_configs:
+                vk = f"val_loss/{task_name}"
+                if vk not in val_histories:
+                    continue
+                task_loss_avg = val_histories[vk].avg
+                prefix = f"val/{task_name}"
+                self.trainer.writer.add_scalar(
+                    f"{prefix}/loss", task_loss_avg, current_epoch
+                )
+                if wandb_log is not None:
+                    wandb_log[f"{prefix}/loss"] = float(task_loss_avg)
+
             # General metrics
             for task_name, metric in per_task_metrics.items():
                 prefix = f"val/{task_name}"
