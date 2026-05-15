@@ -14,6 +14,7 @@ from uuid import uuid4
 
 import pointcept.utils.comm as comm
 from pointcept.utils.misc import intersection_and_union_gpu
+from pointcept.utils.progress import EvaluationProgressBar
 
 from .default import HookBase
 from .builder import HOOKS
@@ -351,89 +352,86 @@ class MultiTaskEvaluator(HookBase):
 
         reg_sums = {t: {"mae": 0.0, "mse": 0.0, "count": 0.0} for t in regression_tasks}
 
-        for i, input_dict in enumerate(self.trainer.val_loader):
-            # --------- Model forward ---------
-            for key in input_dict.keys():
-                if isinstance(input_dict[key], torch.Tensor):
-                    input_dict[key] = input_dict[key].cuda(non_blocking=True)
-            with torch.no_grad():
-                output_dict = self.trainer.model(input_dict)
-            
-            loss = output_dict["loss"]
-            logits_by_task = output_dict.get("seg_logits_by_task", None)
-            if not isinstance(logits_by_task, dict):
-                logits_by_task = {"segment": output_dict["seg_logits"]}
+        loader = self.trainer.val_loader
+        n_batches = len(loader)
+        with EvaluationProgressBar(
+            n_batches,
+            desc="Val multitask",
+        ) as prog:
+            for i, input_dict in enumerate(loader):
+                # --------- Model forward ---------
+                for key in input_dict.keys():
+                    if isinstance(input_dict[key], torch.Tensor):
+                        input_dict[key] = input_dict[key].cuda(non_blocking=True)
+                with torch.no_grad():
+                    output_dict = self.trainer.model(input_dict)
 
+                loss = output_dict["loss"]
+                logits_by_task = output_dict.get("seg_logits_by_task", None)
+                if not isinstance(logits_by_task, dict):
+                    logits_by_task = {"segment": output_dict["seg_logits"]}
 
-            # --------- Evaluate Semantic Tasks ---------
-            for task_name in semantic_tasks:
-                task_config = task_configs[task_name]
-                if task_name not in input_dict or task_name not in logits_by_task:
-                    continue
-                pred = logits_by_task[task_name].max(1)[1]
-                target_tensor = input_dict[task_name]
-                if "inverse" in input_dict.keys():
-                    origin_target_key = self._task_origin_target_key(task_name)
-                    if origin_target_key in input_dict:
-                        pred = pred[input_dict["inverse"]]
-                        target_tensor = input_dict[origin_target_key]
-                intersection, union, target = intersection_and_union_gpu(
-                    pred,
-                    target_tensor,
-                    int(task_config["num_classes"]),
-                    int(task_config["ignore_index"]),
-                )
-                if comm.get_world_size() > 1:
-                    dist.all_reduce(intersection)
-                    dist.all_reduce(union)
-                    dist.all_reduce(target)
-                intersection, union, target = (
-                    intersection.cpu().numpy(),
-                    union.cpu().numpy(),
-                    target.cpu().numpy(),
-                )
-                self.trainer.storage.put_scalar(
-                    f"val_intersection/{task_name}", intersection
-                )
-                self.trainer.storage.put_scalar(f"val_union/{task_name}", union)
-                self.trainer.storage.put_scalar(f"val_target/{task_name}", target)
-            self.trainer.storage.put_scalar("val_loss", loss.item())
-            
-            
-            # --------- Evaluate Regression Tasks ---------
-            reg_pred_by_task = output_dict.get("reg_pred_by_task") or {}
-            for task_name in regression_tasks:
-                pred = reg_pred_by_task.get(task_name)
-                if pred is None:
-                    continue
-                if task_name not in input_dict:
-                    continue
-                pred = pred.reshape(-1).float()
-                target = input_dict[task_name].reshape(-1).float()
-                if "inverse" in input_dict.keys():
-                    origin_key = self._task_origin_target_key(task_name)
-                    if origin_key in input_dict:
-                        pred = pred[input_dict["inverse"]]
-                        target = input_dict[origin_key].reshape(-1).float()
-                p, t = self._gather_masked(pred, target)
-                if p is not None:
-                    err = (p - t).abs()
-                    err2 = (p - t) ** 2
-                    reg_sums[task_name]["mae"] += float(err.sum().item())
-                    reg_sums[task_name]["mse"] += float(err2.sum().item())
-                    reg_sums[task_name]["count"] += float(err.numel())
+                # --------- Evaluate Semantic Tasks ---------
+                for task_name in semantic_tasks:
+                    task_config = task_configs[task_name]
+                    if task_name not in input_dict or task_name not in logits_by_task:
+                        continue
+                    pred = logits_by_task[task_name].max(1)[1]
+                    target_tensor = input_dict[task_name]
+                    if "inverse" in input_dict.keys():
+                        origin_target_key = self._task_origin_target_key(task_name)
+                        if origin_target_key in input_dict:
+                            pred = pred[input_dict["inverse"]]
+                            target_tensor = input_dict[origin_target_key]
+                    intersection, union, target = intersection_and_union_gpu(
+                        pred,
+                        target_tensor,
+                        int(task_config["num_classes"]),
+                        int(task_config["ignore_index"]),
+                    )
+                    if comm.get_world_size() > 1:
+                        dist.all_reduce(intersection)
+                        dist.all_reduce(union)
+                        dist.all_reduce(target)
+                    intersection, union, target = (
+                        intersection.cpu().numpy(),
+                        union.cpu().numpy(),
+                        target.cpu().numpy(),
+                    )
+                    self.trainer.storage.put_scalar(
+                        f"val_intersection/{task_name}", intersection
+                    )
+                    self.trainer.storage.put_scalar(f"val_union/{task_name}", union)
+                    self.trainer.storage.put_scalar(f"val_target/{task_name}", target)
+                self.trainer.storage.put_scalar("val_loss", loss.item())
 
-            info = "Test: [{iter}/{max_iter}] ".format(
-                iter=i + 1, max_iter=len(self.trainer.val_loader)
-            )
-            if "origin_coord" in input_dict.keys():
-                info = "Interp. " + info
-            self.trainer.logger.info(
-                info
-                + "Loss {loss:.4f} ".format(
-                    iter=i + 1, max_iter=len(self.trainer.val_loader), loss=loss.item()
-                )
-            )
+                # --------- Evaluate Regression Tasks ---------
+                reg_pred_by_task = output_dict.get("reg_pred_by_task") or {}
+                for task_name in regression_tasks:
+                    pred = reg_pred_by_task.get(task_name)
+                    if pred is None:
+                        continue
+                    if task_name not in input_dict:
+                        continue
+                    pred = pred.reshape(-1).float()
+                    target = input_dict[task_name].reshape(-1).float()
+                    if "inverse" in input_dict.keys():
+                        origin_key = self._task_origin_target_key(task_name)
+                        if origin_key in input_dict:
+                            pred = pred[input_dict["inverse"]]
+                            target = input_dict[origin_key].reshape(-1).float()
+                    p, t = self._gather_masked(pred, target)
+                    if p is not None:
+                        err = (p - t).abs()
+                        err2 = (p - t) ** 2
+                        reg_sums[task_name]["mae"] += float(err.sum().item())
+                        reg_sums[task_name]["mse"] += float(err2.sum().item())
+                        reg_sums[task_name]["count"] += float(err.numel())
+
+                postfix = dict(loss=float(loss.item()))
+                if "origin_coord" in input_dict.keys():
+                    postfix["interp"] = True
+                prog.step(**postfix)
         loss_avg = self.trainer.storage.history("val_loss").avg
         if comm.get_world_size() > 1 and regression_tasks:
             flat = []
