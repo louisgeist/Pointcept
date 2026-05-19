@@ -28,7 +28,7 @@ Semantic class IDs are 0–10 (except 11 for Void).
 Requires: ``pip install laspy lazrs`` or ``mamba install -c conda-forge laspy lazrs-python``
 
 Usage:
-    python pointcept/datasets/preprocessing/h3d/preprocess_h3d.py --chunk-size [1]
+    python pointcept/datasets/preprocessing/h3d/preprocess_h3d.py --chunk-size 100
 """
 
 from __future__ import annotations
@@ -80,9 +80,10 @@ def read_las_laz(filepath: str) -> Dict[str, np.ndarray]:
             np.asarray(las.y, dtype=np.float64),
             np.asarray(las.z, dtype=np.float64),
         )
-    ).astype(np.float32)
+    )
     
     coord = coord - coord.min(axis=0)
+    coord = coord.astype(np.float32)
 
     segment = np.asarray(las.classification, dtype=np.int32)
 
