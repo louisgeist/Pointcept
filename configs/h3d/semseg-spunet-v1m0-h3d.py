@@ -1,84 +1,89 @@
+"""
+SpUNet semantic segmentation on H3D (coord + RGB point features).
+
+This config is intentionally self-contained: it inherits only from
+default_runtime and can be read top-to-bottom without cross-referencing
+other H3D configs.
+"""
+
+# -----------------------------------------------------------------------------
+# Default
+# -----------------------------------------------------------------------------
 _base_ = ["../_base_/default_runtime.py"]
 
+# -----------------------------------------------------------------------------
+# Run-level settings
+# -----------------------------------------------------------------------------
+
+# Logging parameters
 grp_exp = 1
 num_exp = 1
 
-num_classes = 11
-ignore_index = num_classes
-grid_size = 0.1
-point_max = 102400
-
+# Hardware parameters
 num_gpu = 1
-epoch = 100
-eval_epoch = epoch//10
-lr = 2e-2 #LitePT waymo : lr=0.002
-patch_size = 1024
-
-# Specific things I setted
-test_single_fragment = True
-tta = False # no TTA (cf. aug_transform)
-
-# misc custom setting
-batch_size_per_gpu = 24
-batch_size = batch_size_per_gpu * num_gpu
 num_worker = 8 * num_gpu
-mix_prob = 0.8
-empty_cache = False
 enable_amp = False
 
-# dataset settings
-dataset_type = "H3DDataset"
-data_root = "data/h3d"
+# Data parameters
+batch_size = 24 * num_gpu  # total batch size across all gpus
+batch_size_val = batch_size // 2
+batch_size_test = batch_size // 2
 
-wandb_run_name = f"LitePT on {dataset_type[:-7]}: {grp_exp}.{num_exp}) lr={lr}"
+grid_size = 0.1
+point_max = 100000
+mix_prob = 0.8
 
+# Optimization parameters
+lr = 5e-3
+epoch = 200
+eval_epoch = epoch // 10
+
+# Dataset / task
+num_classes = 11
+ignore_index = num_classes
+
+# Features
+feat_keys = ["coord", "color"]
+
+# Test
+test_single_fragment = True
+
+# Wandb parameters
+wandb_run_name = f"H3D SpUNet semseg ({grp_exp}.{num_exp}) lr={lr}"
+wandb_project = "pointcept_h3d"
+
+log_test_f1 = True
+
+# -----------------------------------------------------------------------------
 # Hooks
+# -----------------------------------------------------------------------------
 hooks = [
     dict(type="CheckpointLoader"),
     dict(type="ModelHook"),
     dict(type="IterationTimer", warmup_iter=2),
-    dict(type="InformationWriter", log_interval=1,), #100
+    dict(type="InformationWriter", log_interval=100),
     dict(type="SemSegEvaluator", write_cls_iou=True),
-    dict(type="CheckpointSaver", save_freq=3),
+    dict(type="CheckpointSaver", save_freq=None),
     dict(type="PreciseEvaluator", test_last=False),
 ]
 
-feat_keys = ['color']
+test = dict(type="SemSegTester", verbose=True)
 
+# -----------------------------------------------------------------------------
+# Model
+# -----------------------------------------------------------------------------
+backbone_channels = (32, 64, 128, 256, 256, 128, 96, 96)
 
-# model settings
 model = dict(
     type="DefaultSegmentorV2",
     num_classes=num_classes,
-    backbone_out_channels=72,
+    backbone_out_channels=backbone_channels[-1],
     backbone=dict(
-    type="LitePT-v1",
-        in_channels=3, # RGB
-        order=("z", "z-trans", "hilbert", "hilbert-trans"),
-        stride=(2, 2, 2, 2),
-        enc_depths=(2, 2, 2, 6, 2),
-        enc_channels=(36, 72, 144, 252, 504),
-        enc_num_head=(2, 4, 8, 14, 28),
-        enc_patch_size=(patch_size, patch_size, patch_size, patch_size, patch_size),
-        enc_conv=(True, True, True, False, False),
-        enc_attn=(False, False, False, True, True),
-        enc_rope_freq=(100.0, 100.0, 100.0, 100.0, 100.0),
-        dec_depths=(0, 0, 0, 0),
-        dec_channels=(72, 72, 144, 252),
-        dec_num_head=(4, 4, 8, 14),
-        dec_patch_size=(patch_size, patch_size, patch_size, patch_size),
-        dec_conv=(False, False, False, False),
-        dec_attn=(False, False, False, False),
-        dec_rope_freq=(100.0, 100.0, 100.0, 100.0),
-        mlp_ratio=4,
-        qkv_bias=True,
-        qk_scale=None,
-        attn_drop=0.0,
-        proj_drop=0.0,
-        drop_path=0.3,
-        shuffle_orders=True,
-        pre_norm=True,
-        enc_mode=False,
+        type="SpUNet-v1m1",
+        in_channels=6,  # coord (3) + RGB (3)
+        num_classes=0,
+        channels=backbone_channels,
+        layers=(2, 3, 4, 6, 2, 2, 2, 2),
     ),
     criteria=[
         dict(type="CrossEntropyLoss", loss_weight=1.0, ignore_index=ignore_index),
@@ -86,36 +91,44 @@ model = dict(
     ],
 )
 
-# scheduler settings
+# -----------------------------------------------------------------------------
+# Optimizer / scheduler
+# -----------------------------------------------------------------------------
 optimizer = dict(type="AdamW", lr=lr, weight_decay=0.005)
 scheduler = dict(
     type="OneCycleLR",
-    max_lr=[lr, lr/10],
+    max_lr=lr,
     pct_start=0.05,
     anneal_strategy="cos",
     div_factor=10.0,
-    final_div_factor=1000.0,
+    final_div_factor=10000.0,
 )
-param_dicts = [dict(keyword="block", lr=lr/10)]
+
+# -----------------------------------------------------------------------------
+# Dataset
+# -----------------------------------------------------------------------------
+dataset_type = "H3DDataset"
+data_root = "data/h3d"
+
+class_names = [
+    "Low Vegetation",
+    "Impervious Surface",
+    "Vehicle",
+    "Urban Furniture",
+    "Roof",
+    "Façade",
+    "Shrub",
+    "Tree",
+    "Soil or Gravel",
+    "Vertical Surface",
+    "Chimney",
+    "Void",
+]
 
 data = dict(
     num_classes=num_classes,
     ignore_index=ignore_index,
-    names= [
-        "Low Vegetation",
-        "Impervious Surface",
-        "Vehicle",
-        "Urban Furniture",
-        "Roof",
-        "Façade",
-        "Shrub",
-        "Tree",
-        "Soil or Gravel",
-        "Vertical Surface",
-        "Chimney",
-        
-        "Void",
-    ],
+    names=class_names,
     train=dict(
         type=dataset_type,
         split="train",
@@ -130,7 +143,6 @@ data = dict(
             dict(type="ChromaticAutoContrast", p=0.2, blend_factor=None),
             dict(type="ChromaticTranslation", p=0.95, ratio=0.05),
             dict(type="ChromaticJitter", p=0.95, std=0.05),
-            
             dict(
                 type="GridSample",
                 grid_size=grid_size,
@@ -138,16 +150,14 @@ data = dict(
                 mode="train",
                 return_grid_coord=True,
             ),
-            
             dict(type="SphereCrop", point_max=point_max, mode="random"),
             dict(type="CenterShift", apply_z=False),
             dict(type="NormalizeColor"),
-            
+            dict(type="ShufflePoint"),
             dict(type="ToTensor"),
-            dict(type="Update", keys_dict={"grid_size": grid_size}),
             dict(
                 type="Collect",
-                keys=("coord", "grid_coord", "segment", "grid_size"),
+                keys=("coord", "grid_coord", "segment"),
                 feat_keys=feat_keys,
             ),
         ],
@@ -155,7 +165,7 @@ data = dict(
     ),
     val=dict(
         type=dataset_type,
-        split="test",        
+        split="val",
         data_root=data_root,
         transform=[
             dict(type="CenterShift", apply_z=True),
@@ -208,8 +218,9 @@ data = dict(
                     feat_keys=feat_keys,
                 ),
             ],
-            aug_transform=[[dict(type="RandomRotateTargetAngle", angle=[0], axis="z", center=[0, 0, 0], p=1)]],
+            aug_transform=[
+                [dict(type="RandomRotateTargetAngle", angle=[0], axis="z", center=[0, 0, 0], p=1)]
+            ],
         ),
     ),
 )
-
