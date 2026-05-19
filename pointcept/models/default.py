@@ -710,24 +710,41 @@ class DefaultClassifier(nn.Module, LearnedMaskedFeatMixin):
     def forward(self, input_dict):
         self._fill_masked_feat_with_learned_value(input_dict)
         point = Point(input_dict)
+        offset = input_dict["offset"]
         if self.freeze_backbone:
             with torch.no_grad():
-                point = self.backbone(point)
+                backbone_out = self.backbone(point)
         else:
-            point = self.backbone(point)
+            backbone_out = self.backbone(point)
         # Backbone added after v1.5.0 return Point instead of feat
         # And after v1.5.0 feature aggregation for classification operated in classifier
         # TODO: remove this part after make all backbone return Point only.
-        if isinstance(point, Point):
-            feat = self._pool_scene_feat(point.feat, point.offset)
-        else:
-            if self.pooling != "mean":
+        if isinstance(backbone_out, Point):
+            feat = self._pool_scene_feat(backbone_out.feat, backbone_out.offset)
+        elif isinstance(backbone_out, torch.Tensor):
+            # Output is not pooled
+            if backbone_out.shape[0] == offset[-1]:
+                feat = self._pool_scene_feat(backbone_out, offset)
+                
+            # Output is already mean-pooled
+            elif backbone_out.shape[0] == offset.numel():
+                if self.pooling != "mean":
+                    raise ValueError(
+                        "Backbone returned a pre-pooled tensor (B, C), but "
+                        f"pooling={self.pooling!r} requires per-point features. "
+                        "Use enc_mode=False on the backbone or set pooling='mean'."
+                    )
+                feat = backbone_out
+            else:
                 raise ValueError(
-                    "Backbone returned a pre-pooled tensor (B, C), but "
-                    f"pooling={self.pooling!r} requires per-point features. "
-                    "Use enc_mode=False on the backbone or set pooling='mean'."
+                    "Unexpected backbone output shape "
+                    f"{tuple(backbone_out.shape)} for offset with "
+                    f"{offset.numel()} scenes and {offset[-1].item()} points."
                 )
-            feat = point
+        else:
+            raise TypeError(
+                f"Backbone must return Point or torch.Tensor, got {type(backbone_out)!r}."
+            )
         cls_logits = self.cls_head(feat)
         if self.training:
             loss = self.criteria(cls_logits, input_dict["category"])
