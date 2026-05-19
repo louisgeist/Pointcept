@@ -619,6 +619,40 @@ class DINOEnhancedSegmentor(nn.Module, LearnedMaskedFeatMixin):
         return return_dict
 
 
+_POOLING_MODES = frozenset(("mean", "max", "attention"))
+
+
+class AttentiveScenePool(nn.Module):
+    """Cross-attention pooling: one learnable query aggregates per-point K/V into a scene token."""
+
+    def __init__(self, embed_dim, attn_drop=0.0):
+        super().__init__()
+        self.query = nn.Parameter(torch.empty(1, embed_dim))
+        nn.init.trunc_normal_(self.query, std=0.02)
+        self.key_proj = nn.Linear(embed_dim, embed_dim)
+        self.value_proj = nn.Linear(embed_dim, embed_dim)
+        self.scale = embed_dim**-0.5
+        self.attn_drop = nn.Dropout(attn_drop) if attn_drop > 0.0 else nn.Identity()
+
+    def forward(self, feat, offset):
+        """
+        feat: (N, C) : per-point features
+        offset: (B+1) : offset of the point cloud for each batch
+        """
+        indptr = nn.functional.pad(offset, (1, 0))
+        k = self.key_proj(feat)
+        v = self.value_proj(feat)
+        scores = (k @ self.query.T).squeeze(-1) * self.scale
+        batch = offset2batch(offset)
+        max_scores = torch_scatter.segment_csr(scores, indptr, reduce="max")
+        scores = scores - max_scores[batch]
+        exp_scores = torch.exp(scores)
+        sum_exp = torch_scatter.segment_csr(exp_scores, indptr, reduce="sum")
+        weights = exp_scores / (sum_exp[batch] + 1e-8)
+        weights = self.attn_drop(weights)
+        return torch_scatter.segment_csr(weights.unsqueeze(-1) * v, indptr, reduce="sum")
+
+
 @MODELS.register_module()
 class DefaultClassifier(nn.Module, LearnedMaskedFeatMixin):
     def __init__(
@@ -629,14 +663,26 @@ class DefaultClassifier(nn.Module, LearnedMaskedFeatMixin):
         backbone_embed_dim=256,
         freeze_backbone=False,
         feature_mask_values=None,
+        pooling="mean",
     ):
         super().__init__()
+        pooling = str(pooling)
+        if pooling not in _POOLING_MODES:
+            raise ValueError(
+                f"pooling must be one of {sorted(_POOLING_MODES)}, got {pooling!r}."
+            )
+        self.pooling = pooling
         self.backbone = build_model(backbone)
         self.criteria = build_criteria(criteria)
         self.num_classes = num_classes
         self.backbone_embed_dim = backbone_embed_dim
         self.freeze_backbone = freeze_backbone
         self._init_learned_masked_feat(feature_mask_values=feature_mask_values)
+        self.attn_pool = (
+            AttentiveScenePool(backbone_embed_dim)
+            if pooling == "attention"
+            else None
+        )
         self.cls_head = nn.Sequential(
             nn.Linear(backbone_embed_dim, 256),
             nn.BatchNorm1d(256),
@@ -653,6 +699,14 @@ class DefaultClassifier(nn.Module, LearnedMaskedFeatMixin):
                 p.requires_grad = False
             self.backbone.eval()
 
+    def _pool_scene_feat(self, feat, offset):
+        indptr = nn.functional.pad(offset, (1, 0))
+        if self.pooling == "mean":
+            return torch_scatter.segment_csr(feat, indptr, reduce="mean")
+        if self.pooling == "max":
+            return torch_scatter.segment_csr(feat, indptr, reduce="max")
+        return self.attn_pool(feat, offset)
+
     def forward(self, input_dict):
         self._fill_masked_feat_with_learned_value(input_dict)
         point = Point(input_dict)
@@ -665,13 +719,14 @@ class DefaultClassifier(nn.Module, LearnedMaskedFeatMixin):
         # And after v1.5.0 feature aggregation for classification operated in classifier
         # TODO: remove this part after make all backbone return Point only.
         if isinstance(point, Point):
-            point.feat = torch_scatter.segment_csr(
-                src=point.feat,
-                indptr=nn.functional.pad(point.offset, (1, 0)),
-                reduce="mean",
-            )
-            feat = point.feat
+            feat = self._pool_scene_feat(point.feat, point.offset)
         else:
+            if self.pooling != "mean":
+                raise ValueError(
+                    "Backbone returned a pre-pooled tensor (B, C), but "
+                    f"pooling={self.pooling!r} requires per-point features. "
+                    "Use enc_mode=False on the backbone or set pooling='mean'."
+                )
             feat = point
         cls_logits = self.cls_head(feat)
         if self.training:
