@@ -242,10 +242,15 @@ class KPConvXBase(nn.Module):
 
 
             #  ------ Head ------
-            
+
             # New head
             self.head = nn.Sequential(self.get_unary_block(layer_C[0], layer_C[0]))
-            self.final = nn.Linear(layer_C[0], self.num_logits)
+            # num_classes<=0: feature backbone only (e.g. MultiTaskSegmentorV2 external heads).
+            self.final = (
+                None
+                if self.num_logits <= 0
+                else nn.Linear(layer_C[0], self.num_logits)
+            )
             # Easy KPConv Head
             # self.head = nn.Sequential(nn.Linear(layer_C[0] * 2, layer_C[0]),
             #                           nn.GroupNorm(8, layer_C[0]),
@@ -488,10 +493,8 @@ class KPConvXBase(nn.Module):
         #  ------ Head ------
 
         logits = self.head(feats)
-        if self.task == 'cloud_segmentation':
+        if self.task == "cloud_segmentation" and self.final is not None:
             logits = self.final(logits)
-                
-
 
         return logits
 
