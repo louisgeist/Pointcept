@@ -27,7 +27,7 @@ enable_amp = False
 # Data parameters
 batch_size = 24 * num_gpu  # total batch size across all gpus
 batch_size_val = batch_size // 2
-batch_size_test = batch_size // 2
+# batch_size_test = batch_size // 2
 
 grid_size = 0.1
 point_max = 100000
