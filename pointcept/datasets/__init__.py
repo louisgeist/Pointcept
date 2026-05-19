@@ -29,6 +29,8 @@ from .hk import HKDataset
 from .flair3d import Flair3DDataset
 from .dales import DALESDataset
 from .h3d import H3DDataset
+from .pureforest import PureForestDataset
+
 
 # object
 from .modelnet import ModelNetDataset
