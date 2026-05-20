@@ -22,9 +22,25 @@ from .builder import HOOKS
 
 @HOOKS.register_module()
 class ClsEvaluator(HookBase):
+    _METRICS = ("mIoU", "mAcc", "allAcc")
+
+    def __init__(self, metric="allAcc"):
+        if metric not in self._METRICS:
+            raise ValueError(
+                f"ClsEvaluator metric must be one of {self._METRICS}, got {metric!r}"
+            )
+        self.metric = metric
+
     def after_epoch(self):
         if self.trainer.cfg.evaluate:
             self.eval()
+
+    def _metric_value(self, m_iou, m_acc, all_acc):
+        if self.metric == "mIoU":
+            return m_iou
+        if self.metric == "mAcc":
+            return m_acc
+        return all_acc
 
     def eval(self):
         self.trainer.logger.info(">>>>>>>>>>>>>>>> Start Evaluation >>>>>>>>>>>>>>>>")
@@ -89,11 +105,16 @@ class ClsEvaluator(HookBase):
                 )
             )
         current_epoch = self.trainer.epoch + 1
+        current_metric_value = self._metric_value(m_iou, m_acc, all_acc)
+        metric_best = max(self.trainer.best_metric_value, current_metric_value)
         if self.trainer.writer is not None:
             self.trainer.writer.add_scalar("val/loss", loss_avg, current_epoch)
             self.trainer.writer.add_scalar("val/mIoU", m_iou, current_epoch)
             self.trainer.writer.add_scalar("val/mAcc", m_acc, current_epoch)
             self.trainer.writer.add_scalar("val/allAcc", all_acc, current_epoch)
+            self.trainer.writer.add_scalar(
+                f"val/{self.metric}_best", metric_best, current_epoch
+            )
             if self.trainer.cfg.enable_wandb:
                 wandb.log(
                     {
@@ -102,16 +123,17 @@ class ClsEvaluator(HookBase):
                         "val/mIoU": m_iou,
                         "val/mAcc": m_acc,
                         "val/allAcc": all_acc,
+                        f"val/{self.metric}_best": metric_best,
                     },
                     step=wandb.run.step,
                 )
         self.trainer.logger.info("<<<<<<<<<<<<<<<<< End Evaluation <<<<<<<<<<<<<<<<<")
-        self.trainer.comm_info["current_metric_value"] = all_acc  # save for saver
-        self.trainer.comm_info["current_metric_name"] = "allAcc"  # save for saver
+        self.trainer.comm_info["current_metric_value"] = current_metric_value
+        self.trainer.comm_info["current_metric_name"] = self.metric
 
     def after_train(self):
         self.trainer.logger.info(
-            "Best {}: {:.4f}".format("allAcc", self.trainer.best_metric_value)
+            "Best {}: {:.4f}".format(self.metric, self.trainer.best_metric_value)
         )
 
 
