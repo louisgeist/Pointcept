@@ -31,6 +31,11 @@ class ClsEvaluator(HookBase):
             )
         self.metric = metric
 
+    def before_train(self):
+        self._best_m_iou = -np.inf
+        if self.trainer.writer is not None and self.trainer.cfg.enable_wandb:
+            wandb.define_metric("val/*", step_metric="Epoch")
+
     def after_epoch(self):
         if self.trainer.cfg.evaluate:
             self.eval()
@@ -106,27 +111,35 @@ class ClsEvaluator(HookBase):
             )
         current_epoch = self.trainer.epoch + 1
         current_metric_value = self._metric_value(m_iou, m_acc, all_acc)
-        metric_best = max(self.trainer.best_metric_value, current_metric_value)
+        self._best_m_iou = max(self._best_m_iou, m_iou)
+        if self.metric == "mIoU":
+            metric_best = self._best_m_iou
+        else:
+            metric_best = max(self.trainer.best_metric_value, current_metric_value)
         if self.trainer.writer is not None:
             self.trainer.writer.add_scalar("val/loss", loss_avg, current_epoch)
             self.trainer.writer.add_scalar("val/mIoU", m_iou, current_epoch)
             self.trainer.writer.add_scalar("val/mAcc", m_acc, current_epoch)
             self.trainer.writer.add_scalar("val/allAcc", all_acc, current_epoch)
             self.trainer.writer.add_scalar(
-                f"val/{self.metric}_best", metric_best, current_epoch
+                "val/mIoU_best", self._best_m_iou, current_epoch
             )
-            if self.trainer.cfg.enable_wandb:
-                wandb.log(
-                    {
-                        "Epoch": current_epoch,
-                        "val/loss": loss_avg,
-                        "val/mIoU": m_iou,
-                        "val/mAcc": m_acc,
-                        "val/allAcc": all_acc,
-                        f"val/{self.metric}_best": metric_best,
-                    },
-                    step=wandb.run.step,
+            if self.metric != "mIoU":
+                self.trainer.writer.add_scalar(
+                    f"val/{self.metric}_best", metric_best, current_epoch
                 )
+            if self.trainer.cfg.enable_wandb:
+                log_dict = {
+                    "Epoch": current_epoch,
+                    "val/loss": loss_avg,
+                    "val/mIoU": m_iou,
+                    "val/mAcc": m_acc,
+                    "val/allAcc": all_acc,
+                    "val/mIoU_best": self._best_m_iou,
+                }
+                if self.metric != "mIoU":
+                    log_dict[f"val/{self.metric}_best"] = metric_best
+                wandb.log(log_dict, step=wandb.run.step)
         self.trainer.logger.info("<<<<<<<<<<<<<<<<< End Evaluation <<<<<<<<<<<<<<<<<")
         self.trainer.comm_info["current_metric_value"] = current_metric_value
         self.trainer.comm_info["current_metric_name"] = self.metric
