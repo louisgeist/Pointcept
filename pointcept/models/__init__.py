@@ -14,6 +14,7 @@ from .oacnns import *
 from .kpconvx import *
 from .kpnext import *
 from .litept import *
+from .randla_net import *
 
 # from .swin3d import *
 
