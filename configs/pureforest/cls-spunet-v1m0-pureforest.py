@@ -31,7 +31,6 @@ point_max = 100000
 lr = 5e-3
 epoch = 1
 eval_epoch = 1
-warmup_steps = 2500
 
 # Features
 learned_masked_feat = True
@@ -83,9 +82,12 @@ model = dict(
 # -----------------------------------------------------------------------------
 optimizer = dict(type="AdamW", lr=lr, weight_decay=0.005)
 scheduler = dict(
-    type="LinearLR",
-    start_factor=1 / 10,
-    total_iters=warmup_steps,
+    type="OneCycleLR",
+    max_lr=lr,
+    pct_start=0.05,
+    anneal_strategy="cos",
+    div_factor=10.0,
+    final_div_factor=10000.0,
 )
 
 # -----------------------------------------------------------------------------

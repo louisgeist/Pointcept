@@ -30,8 +30,7 @@ patch_size = 1024
 # Optimization parameters
 lr = 1e-5
 epoch = 100
-eval_epoch = 1
-warmup_steps = 5000
+eval_epoch = epoch // 10
 
 # Features
 feat_keys = ["color"]
@@ -108,9 +107,12 @@ model = dict(
 # -----------------------------------------------------------------------------
 optimizer = dict(type="AdamW", lr=lr, weight_decay=0.05)
 scheduler = dict(
-    type="LinearLR",
-    start_factor=1 / 10,
-    total_iters=warmup_steps,
+    type="OneCycleLR",
+    max_lr=[lr, lr / 10],
+    pct_start=0.05,
+    anneal_strategy="cos",
+    div_factor=10.0,
+    final_div_factor=1000.0,
 )
 param_dicts = [dict(keyword="block", lr=lr / 10)]
 
