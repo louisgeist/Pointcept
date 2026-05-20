@@ -80,7 +80,7 @@ class IterationTimer(HookBase):
 
 @HOOKS.register_module()
 class InformationWriter(HookBase):
-    def __init__(self, log_interval=1, wandb_log_every_step=False):
+    def __init__(self, log_interval=1, wandb_log_every_step=False, write_cls_iou=True):
         """
         Args:
             log_interval: Log to console/file every N steps (default 1).
@@ -88,17 +88,19 @@ class InformationWriter(HookBase):
             wandb_log_every_step: If True, log train_batch/* and params/lr to wandb
                                   every step. If False (default), log only at epoch
                                   level to keep .wandb small.
+            write_cls_iou: If True, log per-class train IoU to TensorBoard/W&B each
+                           epoch (rank-0 minibatches only; same scope as train/mIoU).
         """
         self.curr_iter = 0
         self.model_output_keys = []
         self.log_interval = log_interval
         self.wandb_log_every_step = wandb_log_every_step
-        self._train_intersection = None
-        self._train_union = None
+        self.write_cls_iou = write_cls_iou
+        # task_name -> running (intersection, union) tensors on CUDA
+        self._train_seg_stats = {}
 
     def before_epoch(self):
-        self._train_intersection = None
-        self._train_union = None
+        self._train_seg_stats = {}
 
     def before_train(self):
         self.trainer.comm_info["iter_info"] = ""
@@ -108,6 +110,74 @@ class InformationWriter(HookBase):
             wandb.define_metric("train_batch/*", step_metric="Iter")
             wandb.define_metric("train/*", step_metric="Epoch")
             wandb.define_metric("train/loss/*", step_metric="Epoch")
+
+    @staticmethod
+    def _cfg_get(obj, key, default=None):
+        if isinstance(obj, dict):
+            return obj.get(key, default)
+        return getattr(obj, key, default)
+
+    @staticmethod
+    def _iou_class_slug(class_name):
+        return "".join(
+            c if (c.isalnum() or c in "._-") else "_"
+            for c in str(class_name).strip().replace(" ", "_")
+        )
+
+    def _semantic_task_specs(self, data_cfg):
+        """Returns list of (task_name, task_config) for semantic multitask configs."""
+        tc = self._cfg_get(data_cfg, "task_configs", None)
+        if not isinstance(tc, dict) or len(tc) == 0:
+            return []
+        specs = []
+        for name, cfg in tc.items():
+            if not isinstance(cfg, dict):
+                continue
+            if cfg.get("task_type") != "semantic":
+                continue
+            specs.append((str(name), cfg))
+        return specs
+
+    def _accumulate_seg_batch(self, pred, target, num_classes, ignore_index, task_name):
+        area_intersection, area_union, _ = intersection_and_union_gpu(
+            pred.clone(), target, int(num_classes), ignore_index=int(ignore_index)
+        )
+        stats = self._train_seg_stats.get(task_name)
+        if stats is None:
+            self._train_seg_stats[task_name] = {
+                "intersection": area_intersection.detach(),
+                "union": area_union.detach(),
+            }
+        else:
+            stats["intersection"] += area_intersection.detach()
+            stats["union"] += area_union.detach()
+
+    def _train_per_cls_iou_items(self, data_cfg, tc, use_task_in_tag):
+        """Yields (tb_tag, value) for each logged train class-IoU (epoch-level, rank 0)."""
+        for task_name, stats in self._train_seg_stats.items():
+            intersection = stats["intersection"].cpu().numpy()
+            union = stats["union"].cpu().numpy()
+            iou_class = intersection / (union + 1e-10)
+            task_conf = tc.get(task_name) if isinstance(tc, dict) else None
+            if isinstance(task_conf, dict):
+                num_classes = int(task_conf["num_classes"])
+                ignore_index = int(task_conf["ignore_index"])
+                names = list(task_conf["names"])
+                prefix_tag = (
+                    f"train/{task_name}/iou" if use_task_in_tag else "train/iou"
+                )
+            else:
+                num_classes = int(self._cfg_get(data_cfg, "num_classes"))
+                ignore_index = int(self._cfg_get(data_cfg, "ignore_index", -1))
+                names = list(self._cfg_get(data_cfg, "names"))
+                prefix_tag = "train/iou"
+            for class_idx in range(num_classes):
+                if class_idx == ignore_index:
+                    continue
+                class_name = names[class_idx]
+                slug = self._iou_class_slug(class_name)
+                tag = f"{prefix_tag}/{class_idx}_{slug}"
+                yield tag, float(iou_class[class_idx])
 
     def before_step(self):
         self.curr_iter += 1
@@ -148,43 +218,48 @@ class InformationWriter(HookBase):
                     scalar_keys.append(subkey)
             self.model_output_keys = scalar_keys
 
-            # Accumulate epoch-level confusion stats for segmentation (GPU rank 0 only).
-            if (
-                comm.is_main_process()
-                and "pred" in model_output_dict
-                and "input_dict" in self.trainer.comm_info
-                and "segment" in self.trainer.comm_info["input_dict"]
-            ):
+            # Accumulate epoch-level confusion stats for segmentation (rank 0 only).
+            if comm.is_main_process() and "input_dict" in self.trainer.comm_info:
+                input_dict = self.trainer.comm_info["input_dict"]
+                data_cfg = self.trainer.cfg.data
+                pred_by_task = model_output_dict.get("pred_by_task")
                 with torch.no_grad():
-                    pred = model_output_dict["pred"]
-                    target = self.trainer.comm_info["input_dict"]["segment"]
-                    num_classes = (
-                        self.trainer.cfg.data.num_classes
-                        if hasattr(self.trainer.cfg.data, "num_classes")
-                        else self.trainer.cfg.data.get("num_classes")
-                    )
-                    model = (
-                        self.trainer.model.module
-                        if hasattr(self.trainer.model, "module")
-                        else self.trainer.model
-                    )
-                    if hasattr(model, "get_ignore_index"):
-                        ignore_index = model.get_ignore_index()
-                    else:
-                        ignore_index = (
-                            self.trainer.cfg.data.ignore_index
-                            if hasattr(self.trainer.cfg.data, "ignore_index")
-                            else self.trainer.cfg.data.get("ignore_index", -1)
+                    multitask_specs = self._semantic_task_specs(data_cfg)
+                    if isinstance(pred_by_task, dict) and pred_by_task and multitask_specs:
+                        for task_name, task_conf in multitask_specs:
+                            if task_name not in pred_by_task or task_name not in input_dict:
+                                continue
+                            self._accumulate_seg_batch(
+                                pred_by_task[task_name],
+                                input_dict[task_name],
+                                int(task_conf["num_classes"]),
+                                int(task_conf["ignore_index"]),
+                                task_name,
+                            )
+                    elif (
+                        "pred" in model_output_dict
+                        and "segment" in input_dict
+                    ):
+                        pred = model_output_dict["pred"]
+                        target = input_dict["segment"]
+                        num_classes = int(
+                            self._cfg_get(data_cfg, "num_classes")
                         )
-                    area_intersection, area_union, _ = intersection_and_union_gpu(
-                        pred.clone(), target, int(num_classes), ignore_index=int(ignore_index)
-                    )
-                    if self._train_intersection is None:
-                        self._train_intersection = area_intersection.detach()
-                        self._train_union = area_union.detach()
-                    else:
-                        self._train_intersection += area_intersection.detach()
-                        self._train_union += area_union.detach()
+                        model = (
+                            self.trainer.model.module
+                            if hasattr(self.trainer.model, "module")
+                            else self.trainer.model
+                        )
+                        if hasattr(model, "get_ignore_index"):
+                            ignore_index = model.get_ignore_index()
+                        else:
+                            ignore_index = int(
+                                self._cfg_get(data_cfg, "ignore_index", -1)
+                            )
+                        main_key = self._cfg_get(data_cfg, "main_task", None) or "segment"
+                        self._accumulate_seg_batch(
+                            pred, target, num_classes, ignore_index, main_key
+                        )
 
         for key in self.model_output_keys:
             self.trainer.comm_info["iter_info"] += "{key}: {value:.4f} ".format(
@@ -219,24 +294,32 @@ class InformationWriter(HookBase):
     def after_epoch(self):
         # Epoch-level metrics (rank 0 only): train/loss and train/mIoU are both
         # computed from rank 0's batches; not aggregated across GPUs.
-        epoch_miou = None
-        if self._train_intersection is not None and self._train_union is not None:
-            intersection = self._train_intersection
-            union = self._train_union
+        data_cfg = self.trainer.cfg.data
+        main_task = self._cfg_get(data_cfg, "main_task", None) or "segment"
+        epoch_miou_main = None
+        if main_task in self._train_seg_stats:
+            intersection = self._train_seg_stats[main_task]["intersection"]
+            union = self._train_seg_stats[main_task]["union"]
             valid = union > 0
             if valid.any():
-                epoch_miou = (intersection[valid] / (union[valid] + 1e-10)).mean().item()
+                epoch_miou_main = (
+                    intersection[valid] / (union[valid] + 1e-10)
+                ).mean().item()
             else:
-                epoch_miou = 0.0
+                epoch_miou_main = 0.0
 
         epoch_info = "Train result: "
         for key in self.model_output_keys:
             epoch_info += "{key}: {value:.4f} ".format(
                 key=key, value=self.trainer.storage.history(key).avg
             )
-        if epoch_miou is not None:
-            epoch_info += "mIoU: {:.4f} ".format(epoch_miou)
+        if epoch_miou_main is not None:
+            epoch_info += "mIoU: {:.4f} ".format(epoch_miou_main)
         self.trainer.logger.info(epoch_info)
+
+        tc = self._cfg_get(data_cfg, "task_configs", None)
+        use_task_in_tag = isinstance(tc, dict) and len(tc) > 0
+
         if self.trainer.writer is not None:
             for key in self.model_output_keys:
                 self.trainer.writer.add_scalar(
@@ -244,22 +327,34 @@ class InformationWriter(HookBase):
                     self.trainer.storage.history(key).avg,
                     self.trainer.epoch + 1,
                 )
-            if epoch_miou is not None:
+            if epoch_miou_main is not None:
                 self.trainer.writer.add_scalar(
-                    "train/mIoU", float(epoch_miou), self.trainer.epoch + 1
+                    "train/mIoU", float(epoch_miou_main), self.trainer.epoch + 1
                 )
+
+            epoch_step = self.trainer.epoch + 1
+
+            if self.write_cls_iou:
+                for tag, value in self._train_per_cls_iou_items(
+                    data_cfg, tc, use_task_in_tag
+                ):
+                    self.trainer.writer.add_scalar(tag, value, epoch_step)
 
             if self.trainer.cfg.enable_wandb:
                 lr = self.trainer.optimizer.state_dict()["param_groups"][0]["lr"]
-                epoch_step = self.trainer.epoch + 1
                 wandb_dict = {
                     "Epoch": epoch_step,
                     "params/lr": lr,
                 }
                 for key in self.model_output_keys:
                     wandb_dict[f"train/{key}"] = self.trainer.storage.history(key).avg
-                if epoch_miou is not None:
-                    wandb_dict["train/mIoU"] = float(epoch_miou)
+                if epoch_miou_main is not None:
+                    wandb_dict["train/mIoU"] = float(epoch_miou_main)
+                if self.write_cls_iou:
+                    for tag, value in self._train_per_cls_iou_items(
+                        data_cfg, tc, use_task_in_tag
+                    ):
+                        wandb_dict[tag] = value
                 wandb.log(wandb_dict, step=epoch_step)
 
 
