@@ -392,7 +392,11 @@ class PreciseEvaluator(HookBase):
         self.trainer.logger.info(
             ">>>>>>>>>>>>>>>> Start Precise Evaluation >>>>>>>>>>>>>>>>"
         )
-        torch.cuda.empty_cache()
+        if getattr(self.trainer, "optimizer", None) is not None:
+            del self.trainer.optimizer
+            self.trainer.optimizer = None
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
         cfg = self.trainer.cfg
         test_cfg = dict(cfg=cfg, model=self.trainer.model, **cfg.test)
         tester = TESTERS.build(test_cfg)
