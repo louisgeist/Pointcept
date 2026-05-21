@@ -15,11 +15,11 @@ num_exp = 1
 
 # Hardware parameters
 num_gpu = 1
-num_worker = 8 * num_gpu
+num_worker = 20 * num_gpu
 enable_amp = False
 
 # Data parameters
-batch_size = 20 * num_gpu  # total batch size across all gpus
+batch_size = 128 * num_gpu  # total batch size across all gpus
 batch_size_val = batch_size // 2
 batch_size_test = batch_size // 2
 
@@ -28,9 +28,9 @@ point_max = 5000 # After GridSampling(0.1), most of the scenes have less than 5k
 patch_size = 1024
 
 # Optimization parameters
-lr = 2e-3
-epoch = 1
-eval_epoch = 1
+lr = 1e-3
+epoch = 100
+eval_epoch = epoch // 10
 
 # Features
 feat_keys = ["color"]
@@ -48,7 +48,7 @@ wandb_project = "pointcept_pureforest"
 hooks = [
     dict(type="CheckpointLoader"),
     dict(type="IterationTimer", warmup_iter=2),
-    dict(type="InformationWriter"),
+    dict(type="InformationWriter", log_interval=100),
     dict(type="ClsEvaluator", metric="mIoU"),
     dict(type="CheckpointSaver", save_freq=None),
     dict(type="PreciseEvaluator", test_last=False),
