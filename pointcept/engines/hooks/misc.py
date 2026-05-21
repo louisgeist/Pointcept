@@ -261,6 +261,22 @@ class InformationWriter(HookBase):
                         self._accumulate_seg_batch(
                             pred, target, num_classes, ignore_index, main_key
                         )
+                    elif (
+                        "pred" in model_output_dict
+                        and "category" in input_dict # classification
+                    ):
+                        pred = model_output_dict["pred"]
+                        target = input_dict["category"].view(-1)
+                        num_classes = int(
+                            self._cfg_get(data_cfg, "num_classes")
+                        )
+                        ignore_index = int(
+                            self._cfg_get(data_cfg, "ignore_index", -1)
+                        )
+                        main_key = self._cfg_get(data_cfg, "main_task", None) or "segment"
+                        self._accumulate_seg_batch(
+                            pred, target, num_classes, ignore_index, main_key
+                        )
 
         for key in self.model_output_keys:
             self.trainer.comm_info["iter_info"] += "{key}: {value:.4f} ".format(

@@ -748,7 +748,11 @@ class DefaultClassifier(nn.Module, LearnedMaskedFeatMixin):
         cls_logits = self.cls_head(feat)
         if self.training:
             loss = self.criteria(cls_logits, input_dict["category"])
-            return dict(loss=loss)
+            return_dict = dict(loss=loss)
+            with torch.no_grad():
+                # Expose predictions for epoch-level confusion accumulation in hooks.
+                return_dict["pred"] = cls_logits.argmax(dim=1)
+            return return_dict
         elif "category" in input_dict.keys():
             loss = self.criteria(cls_logits, input_dict["category"])
             return dict(loss=loss, cls_logits=cls_logits)
