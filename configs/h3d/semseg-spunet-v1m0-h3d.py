@@ -25,7 +25,7 @@ num_worker = 8 * num_gpu
 enable_amp = False
 
 # Data parameters
-batch_size = 24 * num_gpu  # total batch size across all gpus
+batch_size = 40 * num_gpu  # total batch size across all gpus
 batch_size_val = batch_size // 2
 # batch_size_test = batch_size // 2
 
