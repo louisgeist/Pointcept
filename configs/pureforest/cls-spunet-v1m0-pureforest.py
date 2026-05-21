@@ -16,7 +16,7 @@ num_exp = 1
 # Hardware parameters
 num_gpu = 1
 num_worker = 8 * num_gpu
-enable_amp = True
+enable_amp = False
 
 # Data parameters
 batch_size = 40 * num_gpu # total batch size across all gpus
