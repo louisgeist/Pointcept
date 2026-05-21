@@ -153,7 +153,7 @@ class InformationWriter(HookBase):
             stats["union"] += area_union.detach()
 
     def _train_per_cls_iou_items(self, data_cfg, tc, use_task_in_tag):
-        """Yields (tb_tag, value) for each logged train class-IoU (epoch-level, rank 0)."""
+        """Yields (tb_tag, wandb_tag, value) for each logged train class-IoU (epoch-level, rank 0)."""
         for task_name, stats in self._train_seg_stats.items():
             intersection = stats["intersection"].cpu().numpy()
             union = stats["union"].cpu().numpy()
@@ -176,8 +176,9 @@ class InformationWriter(HookBase):
                     continue
                 class_name = names[class_idx]
                 slug = self._iou_class_slug(class_name)
-                tag = f"{prefix_tag}/{class_idx}_{slug}"
-                yield tag, float(iou_class[class_idx])
+                tb_tag = f"{prefix_tag}/{slug}"
+                wandb_tag = f"{prefix_tag}_{slug}"
+                yield tb_tag, wandb_tag, float(iou_class[class_idx])
 
     def before_step(self):
         self.curr_iter += 1
@@ -335,10 +336,10 @@ class InformationWriter(HookBase):
             epoch_step = self.trainer.epoch + 1
 
             if self.write_cls_iou:
-                for tag, value in self._train_per_cls_iou_items(
+                for tb_tag, _, value in self._train_per_cls_iou_items(
                     data_cfg, tc, use_task_in_tag
                 ):
-                    self.trainer.writer.add_scalar(tag, value, epoch_step)
+                    self.trainer.writer.add_scalar(tb_tag, value, epoch_step)
 
             if self.trainer.cfg.enable_wandb:
                 lr = self.trainer.optimizer.state_dict()["param_groups"][0]["lr"]
@@ -351,10 +352,10 @@ class InformationWriter(HookBase):
                 if epoch_miou_main is not None:
                     wandb_dict["train/mIoU"] = float(epoch_miou_main)
                 if self.write_cls_iou:
-                    for tag, value in self._train_per_cls_iou_items(
+                    for _, wandb_tag, value in self._train_per_cls_iou_items(
                         data_cfg, tc, use_task_in_tag
                     ):
-                        wandb_dict[tag] = value
+                        wandb_dict[wandb_tag] = value
                 wandb.log(wandb_dict, step=epoch_step)
 
 

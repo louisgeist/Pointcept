@@ -899,7 +899,7 @@ class MultiTaskTester(TesterBase):
                                 for c in str(class_name).strip().replace(" ", "_")
                             )
                             wandb_log[
-                                f"test/{task_name}/iou/{class_idx}_{slug}"
+                                f"test/{task_name}/iou_{slug}"
                             ] = float(metric["iou_class"][class_idx])
                 if wandb_log:
                     wandb.log(wandb_log)

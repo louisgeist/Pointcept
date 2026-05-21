@@ -597,14 +597,15 @@ class MultiTaskEvaluator(HookBase):
                             c if (c.isalnum() or c in "._-") else "_"
                             for c in str(class_name).strip().replace(" ", "_")
                         )
-                        tag = f"val/{task_name}/iou/{class_idx}_{slug}"
+                        tb_tag = f"val/{task_name}/iou/{slug}"
+                        wandb_tag = f"val/{task_name}/iou_{slug}"
                         self.trainer.writer.add_scalar(
-                            tag,
+                            tb_tag,
                             metric["iou_class"][class_idx],
                             current_epoch,
                         )
                         if cls_log is not None:
-                            cls_log[tag] = float(metric["iou_class"][class_idx])
+                            cls_log[wandb_tag] = float(metric["iou_class"][class_idx])
                 if cls_log is not None:
                     wandb.log(cls_log, step=wandb.run.step)
 
