@@ -9,14 +9,14 @@ _base_ = ["../../../../_base_/default_runtime.py"]
 # -----------------------------------------------------------------------------
 
 # Logging parameters
-grp_exp = 2
+grp_exp = 1
 num_exp = 2
 
 
 # Hardware parameters
 num_gpu = 1
-num_worker = 8 * num_gpu
-enable_amp = True
+num_worker = 24 * num_gpu
+enable_amp = False
 
 # Data parameters
 batch_size = 128  # total batch size across all gpus
