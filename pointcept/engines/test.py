@@ -113,6 +113,31 @@ class TesterBase:
         )
         return test_loader
 
+    def begin_test_timing(self):
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        self._test_wall_start = time.perf_counter()
+
+    def end_test_timing_and_log(self, extra_log_dict=None):
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        comm.synchronize()
+        total_s = time.perf_counter() - self._test_wall_start
+        if comm.is_main_process():
+            self.logger.info(
+                "Test wall time (start -> end): %.2fs (%.4fh)",
+                total_s,
+                total_s / 3600.0,
+            )
+            timing = {
+                "test/total_time_s": float(total_s),
+                "test/total_time_h": float(total_s / 3600.0),
+            }
+            if getattr(self.cfg, "enable_wandb", False) and wandb.run is not None:
+                payload = {**(extra_log_dict or {}), **timing}
+                wandb.log(payload)
+        return total_s
+
     def test(self):
         raise NotImplementedError
 
@@ -127,6 +152,7 @@ class SemSegTester(TesterBase):
         assert self.test_loader.batch_size == 1
         logger = get_root_logger()
         logger.info(">>>>>>>>>>>>>>>> Start Evaluation >>>>>>>>>>>>>>>>")
+        self.begin_test_timing()
 
         batch_time = AverageMeter()
         intersection_meter = AverageMeter()
@@ -383,26 +409,25 @@ class SemSegTester(TesterBase):
                         )
                     )
 
-            # Optional logging to Weights & Biases for test metrics
-            if getattr(self.cfg, "enable_wandb", False) and wandb.run is not None:
-                log_dict = {
-                    "test/mIoU": float(mIoU),
-                    "test/mAcc": float(mAcc),
-                    "test/allAcc": float(allAcc),
-                }
+            log_dict = {
+                "test/mIoU": float(mIoU),
+                "test/mAcc": float(mAcc),
+                "test/allAcc": float(allAcc),
+            }
+            for i in range(self.cfg.data.num_classes):
+                cls_name = self.cfg.data.names[i]
+                log_dict[f"test/iou_{cls_name}"] = float(iou_class[i])
+                log_dict[f"test/acc_{cls_name}"] = float(accuracy_class[i])
+            if log_test_f1:
+                log_dict["test/f1_macro"] = float(macro_f1)
                 for i in range(self.cfg.data.num_classes):
                     cls_name = self.cfg.data.names[i]
-                    log_dict[f"test/iou_{cls_name}"] = float(iou_class[i])
-                    log_dict[f"test/acc_{cls_name}"] = float(
-                        accuracy_class[i]
-                    )
-                if log_test_f1:
-                    log_dict["test/f1_macro"] = float(macro_f1)
-                    for i in range(self.cfg.data.num_classes):
-                        cls_name = self.cfg.data.names[i]
-                        log_dict[f"test/f1_{cls_name}"] = float(f1_class[i])
-                wandb.log(log_dict)
+                    log_dict[f"test/f1_{cls_name}"] = float(f1_class[i])
+        else:
+            log_dict = None
 
+        self.end_test_timing_and_log(extra_log_dict=log_dict)
+        if comm.is_main_process():
             logger.info("<<<<<<<<<<<<<<<<< End Evaluation <<<<<<<<<<<<<<<<<")
 
     @staticmethod
@@ -510,6 +535,7 @@ class MultiTaskTester(TesterBase):
         
         logger = get_root_logger()
         logger.info(">>>>>>>>>>>>>>>> Start Multi-task Evaluation >>>>>>>>>>>>>>>>")
+        self.begin_test_timing()
 
         task_configs = self._get_task_configs()
         main_task = self._main_task_name(task_configs)
@@ -882,27 +908,24 @@ class MultiTaskTester(TesterBase):
                         )
                     )
 
-            if getattr(self.cfg, "enable_wandb", False) and wandb.run is not None:
-                wandb_log = {}
-                for task_name, metric in per_task_metrics.items():
-                    wandb_log[f"test/{task_name}/mIoU"] = float(metric["m_iou"])
-                    wandb_log[f"test/{task_name}/mAcc"] = float(metric["m_acc"])
-                    wandb_log[f"test/{task_name}/allAcc"] = float(metric["all_acc"])
-                    if self.write_cls_iou:
-                        task_config = task_configs[task_name]
-                        for class_idx in range(int(task_config["num_classes"])):
-                            if class_idx == task_config["ignore_index"]:
-                                continue
-                            class_name = metric["names"][class_idx]
-                            slug = "".join(
-                                c if (c.isalnum() or c in "._-") else "_"
-                                for c in str(class_name).strip().replace(" ", "_")
-                            )
-                            wandb_log[
-                                f"test/{task_name}/iou_{slug}"
-                            ] = float(metric["iou_class"][class_idx])
-                if wandb_log:
-                    wandb.log(wandb_log)
+            log_dict = {}
+            for task_name, metric in per_task_metrics.items():
+                log_dict[f"test/{task_name}/mIoU"] = float(metric["m_iou"])
+                log_dict[f"test/{task_name}/mAcc"] = float(metric["m_acc"])
+                log_dict[f"test/{task_name}/allAcc"] = float(metric["all_acc"])
+                if self.write_cls_iou:
+                    task_config = task_configs[task_name]
+                    for class_idx in range(int(task_config["num_classes"])):
+                        if class_idx == task_config["ignore_index"]:
+                            continue
+                        class_name = metric["names"][class_idx]
+                        slug = "".join(
+                            c if (c.isalnum() or c in "._-") else "_"
+                            for c in str(class_name).strip().replace(" ", "_")
+                        )
+                        log_dict[f"test/{task_name}/iou_{slug}"] = float(
+                            metric["iou_class"][class_idx]
+                        )
 
             for task_name in regression_tasks:
                 s = reg_sums_global[task_name]
@@ -919,20 +942,8 @@ class MultiTaskTester(TesterBase):
                         cnt,
                     )
                 )
-
-            if getattr(self.cfg, "enable_wandb", False) and wandb.run is not None:
-                reg_wandb = {}
-                for task_name in regression_tasks:
-                    s = reg_sums_global[task_name]
-                    cnt = s["count"]
-                    if cnt <= 1e-8:
-                        continue
-                    mae = s["mae"] / cnt
-                    rmse = (s["mse"] / cnt) ** 0.5
-                    reg_wandb[f"test/reg/{task_name}/mae"] = float(mae)
-                    reg_wandb[f"test/reg/{task_name}/rmse"] = float(rmse)
-                if reg_wandb:
-                    wandb.log(reg_wandb)
+                log_dict[f"test/reg/{task_name}/mae"] = float(mae)
+                log_dict[f"test/reg/{task_name}/rmse"] = float(rmse)
 
             log_test_f1 = getattr(self.cfg, "log_test_f1", False)
             if log_test_f1:
@@ -958,19 +969,21 @@ class MultiTaskTester(TesterBase):
                                 f1_class[class_idx],
                             )
                         )
-                    if getattr(self.cfg, "enable_wandb", False) and wandb.run is not None:
-                        f1_extra = {f"test/{task_name}/f1_macro": float(macro_f1)}
-                        for i in range(len(f1_class)):
-                            cn = metric["names"][i]
-                            slug = "".join(
-                                c if (c.isalnum() or c in "._-") else "_"
-                                for c in str(cn).strip().replace(" ", "_")
-                            )
-                            f1_extra[f"test/{task_name}/f1_{i}_{slug}"] = float(
-                                f1_class[i]
-                            )
-                        wandb.log(f1_extra)
+                    log_dict[f"test/{task_name}/f1_macro"] = float(macro_f1)
+                    for i in range(len(f1_class)):
+                        cn = metric["names"][i]
+                        slug = "".join(
+                            c if (c.isalnum() or c in "._-") else "_"
+                            for c in str(cn).strip().replace(" ", "_")
+                        )
+                        log_dict[f"test/{task_name}/f1_{i}_{slug}"] = float(
+                            f1_class[i]
+                        )
+        else:
+            log_dict = None
 
+        self.end_test_timing_and_log(extra_log_dict=log_dict)
+        if comm.is_main_process():
             logger.info("<<<<<<<<<<<<<<<<< End Evaluation <<<<<<<<<<<<<<<<<")
 
     @staticmethod
@@ -984,6 +997,7 @@ class DINOSemSegTester(TesterBase):
         assert self.test_loader.batch_size == 1
         logger = get_root_logger()
         logger.info(">>>>>>>>>>>>>>>> Start Evaluation >>>>>>>>>>>>>>>>")
+        self.begin_test_timing()
 
         batch_time = AverageMeter()
         intersection_meter = AverageMeter()
@@ -1244,23 +1258,25 @@ class DINOSemSegTester(TesterBase):
                         )
                     )
 
-            if getattr(self.cfg, "enable_wandb", False) and wandb.run is not None:
-                log_dict = {
-                    "test/mIoU": float(mIoU),
-                    "test/mAcc": float(mAcc),
-                    "test/allAcc": float(allAcc),
-                }
+            log_dict = {
+                "test/mIoU": float(mIoU),
+                "test/mAcc": float(mAcc),
+                "test/allAcc": float(allAcc),
+            }
+            for i in range(self.cfg.data.num_classes):
+                cls_name = self.cfg.data.names[i]
+                log_dict[f"test/iou_{cls_name}"] = float(iou_class[i])
+                log_dict[f"test/acc_{cls_name}"] = float(accuracy_class[i])
+            if log_test_f1:
+                log_dict["test/f1_macro"] = float(macro_f1)
                 for i in range(self.cfg.data.num_classes):
                     cls_name = self.cfg.data.names[i]
-                    log_dict[f"test/iou_{cls_name}"] = float(iou_class[i])
-                    log_dict[f"test/acc_{cls_name}"] = float(accuracy_class[i])
-                if log_test_f1:
-                    log_dict["test/f1_macro"] = float(macro_f1)
-                    for i in range(self.cfg.data.num_classes):
-                        cls_name = self.cfg.data.names[i]
-                        log_dict[f"test/f1_{cls_name}"] = float(f1_class[i])
-                wandb.log(log_dict)
+                    log_dict[f"test/f1_{cls_name}"] = float(f1_class[i])
+        else:
+            log_dict = None
 
+        self.end_test_timing_and_log(extra_log_dict=log_dict)
+        if comm.is_main_process():
             logger.info("<<<<<<<<<<<<<<<<< End Evaluation <<<<<<<<<<<<<<<<<")
 
     @staticmethod
@@ -1273,6 +1289,7 @@ class ClsTester(TesterBase):
     def test(self):
         logger = get_root_logger()
         logger.info(">>>>>>>>>>>>>>>> Start Evaluation >>>>>>>>>>>>>>>>")
+        self.begin_test_timing()
         batch_time = AverageMeter()
         intersection_meter = AverageMeter()
         union_meter = AverageMeter()
@@ -1397,26 +1414,26 @@ class ClsTester(TesterBase):
                         )
                     )
 
-            if getattr(self.cfg, "enable_wandb", False) and wandb.run is not None:
-                log_dict = {
-                    "test/mIoU": float(mIoU),
-                    "test/mAcc": float(mAcc),
-                    "test/allAcc": float(allAcc),
-                }
+            log_dict = {
+                "test/mIoU": float(mIoU),
+                "test/mAcc": float(mAcc),
+                "test/allAcc": float(allAcc),
+            }
+            for i in range(self.cfg.data.num_classes):
+                cls_name = self.cfg.data.names[i]
+                log_dict[f"test/iou_{cls_name}"] = float(iou_class[i])
+                log_dict[f"test/acc_{cls_name}"] = float(accuracy_class[i])
+            if log_test_f1:
+                log_dict["test/f1_macro"] = float(macro_f1)
                 for i in range(self.cfg.data.num_classes):
                     cls_name = self.cfg.data.names[i]
-                    log_dict[f"test/iou_{cls_name}"] = float(iou_class[i])
-                    log_dict[f"test/acc_{cls_name}"] = float(
-                        accuracy_class[i]
-                    )
-                if log_test_f1:
-                    log_dict["test/f1_macro"] = float(macro_f1)
-                    for i in range(self.cfg.data.num_classes):
-                        cls_name = self.cfg.data.names[i]
-                        log_dict[f"test/f1_{cls_name}"] = float(f1_class[i])
-                wandb.log(log_dict)
+                    log_dict[f"test/f1_{cls_name}"] = float(f1_class[i])
+        else:
+            log_dict = None
 
-        logger.info("<<<<<<<<<<<<<<<<< End Evaluation <<<<<<<<<<<<<<<<<")
+        self.end_test_timing_and_log(extra_log_dict=log_dict)
+        if comm.is_main_process():
+            logger.info("<<<<<<<<<<<<<<<<< End Evaluation <<<<<<<<<<<<<<<<<")
 
     @staticmethod
     def collate_fn(batch):
@@ -1439,6 +1456,7 @@ class ClsVotingTester(TesterBase):
         self.best_metric = 0
 
     def test(self):
+        self.begin_test_timing()
         for i in range(self.num_repeat):
             logger = get_root_logger()
             logger.info(f">>>>>>>>>>>>>>>> Start Evaluation {i + 1} >>>>>>>>>>>>>>>>")
@@ -1452,6 +1470,7 @@ class ClsVotingTester(TesterBase):
                 for m in self.best_record.keys():
                     info += f"{m}: {self.best_record[m]:.4f} "
                 logger.info(info)
+        self.end_test_timing_and_log()
 
     def test_once(self):
         logger = get_root_logger()
@@ -1545,6 +1564,7 @@ class ShapeNetPartSegTester(TesterBase):
     def test(self):
         logger = get_root_logger()
         logger.info(">>>>>>>>>>>>>>>> Start Evaluation >>>>>>>>>>>>>>>>")
+        self.begin_test_timing()
 
         batch_time = AverageMeter()
 
@@ -1684,7 +1704,9 @@ class ShapeNetPartSegTester(TesterBase):
                         iou_count=int(iou_count[i]),
                     )
                 )
-        logger.info("<<<<<<<<<<<<<<<<< End Evaluation <<<<<<<<<<<<<<<<<")
+        self.end_test_timing_and_log()
+        if comm.is_main_process():
+            logger.info("<<<<<<<<<<<<<<<<< End Evaluation <<<<<<<<<<<<<<<<<")
 
     @staticmethod
     def collate_fn(batch):
@@ -1696,6 +1718,7 @@ class PartNetEPartSegTester(TesterBase):
     def test(self):
         logger = get_root_logger()
         logger.info(">>>>>>>>>>>>>>>> Start Evaluation >>>>>>>>>>>>>>>>")
+        self.begin_test_timing()
 
         batch_time = AverageMeter()
 
@@ -1851,7 +1874,9 @@ class PartNetEPartSegTester(TesterBase):
                         iou_count=int(total_iou_count[i]),
                     )
                 )
-        logger.info("<<<<<<<<<<<<<<<<< End Evaluation <<<<<<<<<<<<<<<<<")
+        self.end_test_timing_and_log()
+        if comm.is_main_process():
+            logger.info("<<<<<<<<<<<<<<<<< End Evaluation <<<<<<<<<<<<<<<<<")
 
     @staticmethod
     def collate_fn(batch):
@@ -1883,6 +1908,7 @@ class InsSegTester(TesterBase):
         assert self.test_loader.batch_size == 1
         logger = get_root_logger()
         logger.info(">>>>>>>>>>>>>>>> Start Evaluation >>>>>>>>>>>>>>>>")
+        self.begin_test_timing()
 
         batch_time = AverageMeter()
 
@@ -1964,6 +1990,8 @@ class InsSegTester(TesterBase):
                         idx=i, name=label_name, AP=ap, AP50=ap_50, AP25=ap_25
                     )
                 )
+        self.end_test_timing_and_log()
+        if comm.is_main_process():
             logger.info("<<<<<<<<<<<<<<<<< End Evaluation <<<<<<<<<<<<<<<<<")
 
     def write_scannetpp_results(
