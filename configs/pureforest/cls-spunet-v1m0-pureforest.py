@@ -24,7 +24,7 @@ batch_size_val = batch_size // 2
 batch_size_test = batch_size // 2
 
 grid_size = 0.1
-point_max = 100000
+point_max = 5000 # After GridSampling(0.1), most of the scenes have less than 5k points
 # mix_prob = 0.8 # Not used for classication
 
 # Optimization parameters
