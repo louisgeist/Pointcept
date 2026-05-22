@@ -1,5 +1,11 @@
 r"""
-Preprocessing script for Flair3D+ (LidarHD) — manifest-driven.
+Flair3D+ v2 — manifest-driven preprocessing from pre-labeled PLY files.
+
+Semantic label fusion (COSIA + LIDARHD agreement, ``--label_definition``,
+``cosia_class`` / ``lidarhd_class`` remapping) is **not** performed here; that
+step is handled upstream. Input PLY files must already contain a per-point
+``semantic`` attribute with final train IDs. This script reads PLY from
+``--ply_root`` and writes Pointcept scene folders.
 
 The split manifest CSV (e.g. ``data/flair3d_plus/raw/scene_split_manifest.csv``)
 is the single source of truth: one row per patch, and only rows with
@@ -7,7 +13,7 @@ is the single source of truth: one row per patch, and only rows with
 
 - coord.npy      (written LAST; acts as the completion marker for resume)
 - color.npy
-- segment.npy
+- segment.npy    (from PLY ``semantic``; IDs clamped to [0, num_classes], void at num_classes)
 - strength.npy   (LiDAR intensity)
 - forest.npy     (FOREST GeoTIFF — always sampled; missing raster reported)
 - natural_habitat.npy   (only when NATURAL_HABITAT=True; raster ids 42/43 swapped to 43=void, 42=routes)
@@ -22,23 +28,27 @@ Required manifest columns (extra columns are ignored):
 
 Conventions (must match scripts/build_csv_manifest.py):
     patch_id = f"{dept_year}_{roi}_{scene_i_j}"
-    PLY path = LIDARHD/{dept_year}_LIDARHD/{roi}/{dept_year}_LIDARHD_{roi}_{scene_i_j}.ply
+    PLY path = {ply_root}/LIDARHD/{dept_year}_LIDARHD/{roi}/
+               {dept_year}_LIDARHD_{roi}_{scene_i_j}.ply
+
+Auxiliary rasters (FOREST, NATURAL_HABITAT, LAND_USE, DEM_ELEV) are read from
+``--dataset_root`` using the same layout as v1.
 
 Reports written under ``--output_root``:
 - ``missing_ply_preflight.txt``: written immediately after the PLY existence
-  check (before any scene is processed). Lists every patch with
-  ``LIDARHD=True`` whose ``.ply`` file is missing on disk.
+  check (before any scene is processed). Lists every manifest row with
+  ``LIDARHD=True`` whose ``.ply`` file is missing under ``--ply_root``.
 - ``missing_scenes.txt``: written at the end of the run. Consolidates missing
   PLY, missing modality rasters, and failed preprocessing tasks.
 
 Resume behaviour:
 By default, scenes whose ``coord.npy`` already exists in the output directory
 are skipped (idempotent re-runs). Use ``--force`` to reprocess everything,
-which is required when ``--label_definition`` or the manifest modality flags
-(NATURAL_HABITAT/LAND_USE/DEM_ELEV) changed since the previous run.
+which is required when manifest modality flags (NATURAL_HABITAT/LAND_USE/DEM_ELEV)
+changed since the previous run, or when upstream PLY labels were refreshed.
 
 Generated directory structure (example):
-data/flair3d/
+data/flair3d_plus/
 └── train/
     └── D004-2021_LIDARHD/           <-- Department/Year Level
         └── AA-S1-32/                <-- Zone/ROI Level
@@ -49,21 +59,20 @@ data/flair3d/
 
 Examples:
 
-python pointcept/datasets/preprocessing/flair3d_plus/preprocess_flair3d.py \
+python pointcept/datasets/preprocessing/flair3d_plus/preprocess_flair3d_v2.py \
+    --ply_root /path/to/enriched_ply_tree \
     --dataset_root data/flair3d_plus/raw \
     --output_root data/flair3d_plus \
-    --label_definition inter_finerall10 \
     --split_manifest_csv data/flair3d_plus/raw/scene_split_manifest.csv \
     --num_workers 24 \
     --force
 
-python pointcept/datasets/preprocessing/flair3d_plus/preprocess_flair3d.py \
+python pointcept/datasets/preprocessing/flair3d_plus/preprocess_flair3d_v2.py \
+    --ply_root /path/to/enriched_ply_tree \
     --dataset_root data/flair3d_plus/raw \
     --output_root data/flair3d_plus \
-    --label_definition inter_finerall10 \
     --split_manifest_csv data/flair3d_plus/raw/scene_split_manifest_D067.csv \
-    --num_workers 12 \
-    --force
+    --num_workers 12
 """
 
 import argparse
@@ -71,7 +80,6 @@ import csv
 import json
 import logging
 import os
-import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
@@ -82,23 +90,12 @@ from tqdm import tqdm
 
 from pointcept.datasets.flair3d_plus_label_task_config import FLAIR3D_SEMANTIC_TASKS
 
+_SEGMENT_NUM_CLASSES = int(FLAIR3D_SEMANTIC_TASKS["segment"]["num_classes"])
 _NH_NUM_CLASSES = int(FLAIR3D_SEMANTIC_TASKS["natural_habitat"]["num_classes"])
 
 _NATURAL_HABITAT_LUT = np.arange(_NH_NUM_CLASSES, dtype=np.int16)
 _NATURAL_HABITAT_LUT[42] = 43
 _NATURAL_HABITAT_LUT[43] = 42
-
-try:
-    from pointcept.datasets.preprocessing.flair3d_plus.flair3d_label_remap import (
-        SUPPORTED_LABEL_REMAPS,
-        build_segment,
-    )
-except ModuleNotFoundError:
-    # Allow running this file directly without setting PYTHONPATH.
-    THIS_DIR = os.path.dirname(os.path.abspath(__file__))
-    if THIS_DIR not in sys.path:
-        sys.path.insert(0, THIS_DIR)
-    from flair3d_label_remap import SUPPORTED_LABEL_REMAPS, build_segment
 
 # Columns that must be present in --split_manifest_csv (others may be present and are ignored).
 REQUIRED_MANIFEST_COLUMNS = frozenset(
@@ -154,6 +151,21 @@ def _parse_csv_float_optional(raw: Optional[str]) -> Optional[float]:
         return float(token)
     except ValueError:
         return None
+
+
+def _segment_from_ply(attributes: Dict[str, np.ndarray], ply_path: str) -> np.ndarray:
+    """Read pre-computed semantic labels from an upstream-enriched PLY.
+
+    Labels outside [0, num_classes] are remapped to num_classes (void / ignore_index).
+    """
+    if "semantic" not in attributes:
+        raise KeyError(f"Missing 'semantic' in {ply_path}")
+    seg = attributes["semantic"].astype(np.int32, copy=False)
+    invalid = (seg < 0) | (seg > _SEGMENT_NUM_CLASSES)
+    if np.any(invalid):
+        seg = seg.copy()
+        seg[invalid] = _SEGMENT_NUM_CLASSES
+    return seg
 
 
 def _remap_natural_habitat(values: np.ndarray) -> np.ndarray:
@@ -309,12 +321,12 @@ def sample_raster_to_points_float(
 
 
 def build_lidar_ply_path(
-    dataset_root: str, dept_year: str, roi: str, scene_i_j: str
+    ply_root: str, dept_year: str, roi: str, scene_i_j: str
 ) -> str:
-    """Expected LiDAR PLY path for one patch (mirrors scripts/build_csv_manifest.py)."""
+    """Expected pre-labeled LiDAR PLY path for one patch (mirrors build_csv_manifest.py)."""
     stem = f"{dept_year}_LIDARHD_{roi}_{scene_i_j}"
     return os.path.join(
-        dataset_root, "LIDARHD", f"{dept_year}_LIDARHD", roi, f"{stem}.ply"
+        ply_root, "LIDARHD", f"{dept_year}_LIDARHD", roi, f"{stem}.ply"
     )
 
 
@@ -518,8 +530,8 @@ def load_manifest_tasks(csv_path: str, splits: List[str]) -> List[PatchTask]:
 
 def _build_scene_from_subtile(
     task: PatchTask,
+    ply_root: str,
     dataset_root: str,
-    label_definition: str,
 ) -> Tuple[Dict[str, np.ndarray], List[Dict[str, str]]]:
     """
     Build a Pointcept scene dict from one PatchTask.
@@ -534,7 +546,7 @@ def _build_scene_from_subtile(
         FileNotFoundError: if the LiDAR PLY itself is missing.
     """
     ply_path = build_lidar_ply_path(
-        dataset_root, task.dept_year, task.roi, task.scene_i_j
+        ply_root, task.dept_year, task.roi, task.scene_i_j
     )
     if not os.path.isfile(ply_path):
         raise FileNotFoundError(f"LiDAR PLY not found: {ply_path}")
@@ -555,10 +567,7 @@ def _build_scene_from_subtile(
     else:
         color = np.zeros((coord.shape[0], 3), dtype=np.uint8)
 
-    segment = build_segment(
-        attributes=attributes,
-        label_definition=label_definition,
-    )
+    segment = _segment_from_ply(attributes, ply_path)
 
     out: Dict[str, np.ndarray] = {
         "coord": coord,
@@ -610,7 +619,7 @@ def _build_scene_from_subtile(
             natural_habitat_values, _ = sample_raster_to_points(
                 raster_path=natural_habitat_raster_path,
                 xy=coord[:, :2],
-                fill_value=42,  # raw raster N/A (42), remapped to void (43)
+                fill_value=42,  # raw raster N/A (42), remapped to void (43) in following function
             )
             natural_habitat_values = _remap_natural_habitat(natural_habitat_values)
             out["natural_habitat"] = natural_habitat_values.astype(np.int16, copy=False)
@@ -734,9 +743,9 @@ def _save_scene_meta(output_scene_dir: str, meta: Dict[str, Any]) -> None:
 
 def _process_subtile_task(
     task: PatchTask,
+    ply_root: str,
     dataset_root: str,
     output_root: str,
-    label_definition: str,
 ) -> Tuple[str, List[Dict[str, str]]]:
     """Worker entry point: build and save one scene from a PatchTask.
 
@@ -745,8 +754,8 @@ def _process_subtile_task(
     """
     scene, missing_modalities = _build_scene_from_subtile(
         task=task,
+        ply_root=ply_root,
         dataset_root=dataset_root,
-        label_definition=label_definition,
     )
     output_scene_dir = os.path.join(output_root, task.split, f"{task.dept_year}_LIDARHD", task.roi, task.patch_id)
     # Order matters: write meta.json first, then the scene arrays. ``_save_scene``
@@ -759,7 +768,7 @@ def _process_subtile_task(
 
 
 def _filter_tasks_for_processing(
-    tasks: List[PatchTask], dataset_root: str, output_root: str, force: bool
+    tasks: List[PatchTask], ply_root: str, output_root: str, force: bool
 ) -> Tuple[List[PatchTask], List[PatchTask], List[Dict[str, str]]]:
     """Pre-flight and resume check in a single pass.
 
@@ -775,7 +784,7 @@ def _filter_tasks_for_processing(
     for task in tasks:
         # 1. Check PLY existence
         ply_path = build_lidar_ply_path(
-            dataset_root, task.dept_year, task.roi, task.scene_i_j
+            ply_root, task.dept_year, task.roi, task.scene_i_j
         )
         if not os.path.isfile(ply_path):
             missing_ply.append(
@@ -803,10 +812,20 @@ def main_process():
     parser = argparse.ArgumentParser()
 
     parser.add_argument(
+        "--ply_root",
+        type=str,
+        required=True,
+        default="/data/geist/Flair3d-build/data/flair3d_label_enhanced",
+        help=(
+            "Root directory of pre-labeled PLY files "
+            "(layout: LIDARHD/<dept_year>_LIDARHD/<roi>/<stem>.ply)"
+        ),
+    )
+    parser.add_argument(
         "--dataset_root",
         type=str,
         default="/data/geist/datasets/sample_flairhub_3d",
-        help="Root directory containing Flair3D/LidarHD tiles",
+        help="Root directory containing auxiliary modality GeoTIFFs (FOREST, etc.)",
     )
     parser.add_argument(
         "--output_root",
@@ -832,13 +851,6 @@ def main_process():
             + ", ".join(sorted(REQUIRED_MANIFEST_COLUMNS))
             + ". See script docstring."
         ),
-    )
-    parser.add_argument(
-        "--label_definition",
-        type=str,
-        required=True,
-        choices=SUPPORTED_LABEL_REMAPS,
-        help="Label definition (simple or fusion) from Flair3D mappings",
     )
     parser.add_argument(
         "--num_workers", default=1, type=int, help="Number of workers for preprocessing"
@@ -892,7 +904,8 @@ def main_process():
 
     splits = args.split if isinstance(args.split, list) else [args.split]
 
-    logger.info("Using label definition '%s'", args.label_definition)
+    logger.info("PLY root: %s", args.ply_root)
+    logger.info("Dataset root (rasters): %s", args.dataset_root)
     logger.info("Splits to process: %s", splits)
     logger.info("Using split manifest CSV: %s", args.split_manifest_csv)
 
@@ -908,7 +921,7 @@ def main_process():
 
     # Pre-flight and resume checks in a single pass
     tasks_to_process, already_done, missing_ply = _filter_tasks_for_processing(
-        tasks, args.dataset_root, args.output_root, args.force
+        tasks, args.ply_root, args.output_root, args.force
     )
 
     if missing_ply:
@@ -940,7 +953,7 @@ def main_process():
                 len(tasks_to_process),
             )
             logger.warning(
-                "Skip is based on coord.npy presence only. If --label_definition or "
+                "Skip is based on coord.npy presence only. If upstream PLY labels or "
                 "manifest modality flags (NATURAL_HABITAT/LAND_USE/DEM_ELEV) changed "
                 "since the previous run, re-run with --force to refresh outputs."
             )
@@ -962,9 +975,9 @@ def main_process():
                 pool.submit(
                     _process_subtile_task,
                     task,
+                    args.ply_root,
                     args.dataset_root,
                     args.output_root,
-                    args.label_definition,
                 ): task
                 for task in tasks_to_process
             }
