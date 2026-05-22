@@ -15,7 +15,7 @@ num_exp = 1
 
 # Hardware parameters
 num_gpu = 1
-num_worker = 20 * num_gpu
+num_worker = 24 * num_gpu
 enable_amp = False
 
 # Data parameters
@@ -41,6 +41,7 @@ wandb_run_name = (
     f"PureForest SpUNet classification {grp_exp}.{num_exp}) lr={lr}"
 )
 wandb_project = "pointcept_pureforest"
+log_test_f1 = True
 
 
 # -----------------------------------------------------------------------------
