@@ -66,10 +66,10 @@ FLAIR3D_SEMANTIC_TASKS: Dict[str, Dict[str, Any]] = {
         ],
     },
     "natural_habitat": {
-        # CarHab-style legend; ids match natural_habitat_classes.txt / raster. N/A (42) is fill for
-        # missing raster samples in preprocessing (see preprocess_flair3d.py fill_value=42).
+        # CarHab raster uses 42=N/A and 43=Autre (routes). Preprocessing remaps to 43=void, 42=routes.
+        # Missing raster samples use fill_value=42 (raw), then remap to ignore_index 43.
         "num_classes": 44,
-        "ignore_index": 42,
+        "ignore_index": 43,
         "names": [
             "Habitat ouvert sur substrat acide et humide du domaine tempéré",
             "Habitat ouvert sur substrat acide et mésique du domaine tempéré",
@@ -113,8 +113,8 @@ FLAIR3D_SEMANTIC_TASKS: Dict[str, Dict[str, Any]] = {
             "Habitat aquatique sur substrat basique",
             "Habitat cultivé",
             "Zone bâtie et autre habitat artificiel",
-            "N/A",
-            "Autre",
+            "Routes & voies verrées",
+            "Void",
         ],
     },
 }
@@ -157,6 +157,18 @@ def get_multitask_regression_task_config_elevation() -> Dict[str, Any]:
     out["task_type"] = "regression"
     return out
 
+def init_task_configs(target_keys: Tuple[str, ...]) -> Dict[str, Any]:
+    """Initialize the task config dictionary for the given target_keys.
+    """
+    out = {}
+    for task_name in target_keys:
+        if task_name in FLAIR3D_SEMANTIC_TASKS:
+            out[task_name] = get_semantic_config(task_name)
+        elif task_name == "elevation":
+            out[task_name] = get_multitask_regression_task_config_elevation()
+        else:
+            raise KeyError(f"Unknown task_name '{task_name}'. Expected one of: {FLAIR3D_SEMANTIC_TASKS.keys()}")
+    return out
 
 def get_missing_target_fill_value(target_key: str) -> Any:
     """Return the fallback value used when a target file is missing.
@@ -170,3 +182,29 @@ def get_missing_target_fill_value(target_key: str) -> Any:
         return float("nan")
     keys = ", ".join(sorted((*FLAIR3D_SEMANTIC_TASKS.keys(), "elevation")))
     raise KeyError(f"Unknown target_key '{target_key}'. Expected one of: {keys}")
+
+def init_task_criteria(task_configs: Dict[str, Any]) -> Dict[str, Any]:
+    """Initialize the task criteria dictionary for the given target_keys.
+    """
+    task_criteria = {}
+    for task_name, task_config in task_configs.items():
+        if task_name in FLAIR3D_SEMANTIC_TASKS:
+            task_criteria[task_name] = [
+                dict(
+                    type="CrossEntropyLoss",
+                    loss_weight=1.0,
+                    ignore_index=task_config["ignore_index"],
+                ),
+                dict(
+                    type="LovaszLoss",
+                    mode="multiclass",
+                    loss_weight=1.0,
+                    ignore_index=task_config["ignore_index"],
+                ),
+            ]
+        elif task_name == "elevation":
+            task_criteria["elevation"] = dict(type="SmoothL1Loss", beta=1.0, loss_weight=1.0),
+        else:
+            raise KeyError(f"Unknown task_name '{task_name}'. Expected one of: {FLAIR3D_SEMANTIC_TASKS.keys()}")
+    
+    return task_criteria
