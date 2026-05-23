@@ -44,7 +44,7 @@ feat_keys = ["coord", "color", "strength"]
 wandb_run_name = (
     f"Flair3D+ SpUNet multitask + elevation {grp_exp}.{num_exp}) lr={lr}"
 )
-wandb_project = "flair3dplus"
+wandb_project = "flair3d_multi"
 
 # -----------------------------------------------------------------------------
 # Multitask configuration : targets configuraiton

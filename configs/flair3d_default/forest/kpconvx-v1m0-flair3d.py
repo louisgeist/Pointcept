@@ -47,7 +47,7 @@ feat_keys = ["coord", "color", "strength"]
 wandb_run_name = (
     f"Flair3D+ KPConvX mono forest {grp_exp}.{num_exp}) lr={lr}"
 )
-wandb_project = "flair3dplus"
+wandb_project = "flair3d_forest"
 
 # -----------------------------------------------------------------------------
 # Mono-task configuration : targets configuraiton

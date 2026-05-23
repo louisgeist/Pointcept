@@ -54,7 +54,7 @@ feat_keys = ["color", "strength"]
 wandb_run_name = (
     f"Flair3D+ LitePT multitask + elevation {grp_exp}.{num_exp}) lr={lr}"
 )
-wandb_project = "flair3dplus"
+wandb_project = "flair3d_multi"
 
 # -----------------------------------------------------------------------------
 # Multitask configuration : targets configuraiton
