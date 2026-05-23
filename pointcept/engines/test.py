@@ -25,6 +25,7 @@ from pointcept.utils.logger import get_root_logger
 from pointcept.utils.registry import Registry
 from pointcept.utils.misc import (
     AverageMeter,
+    accumulate_regression_errors,
     f1_scores_from_hist,
     intersection_and_union,
     intersection_and_union_gpu,
@@ -437,7 +438,7 @@ class SemSegTester(TesterBase):
 
 @TESTERS.register_module()
 class MultiTaskTester(TesterBase):
-    """Fragment-based test for MultiTaskSegmentorV2 (semantic IoU + regression MAE/RMSE).
+    """Fragment-based test for MultiTaskSegmentorV2 (semantic IoU + regression MAE/RMSE/nMAE).
 
     Expects cfg.data.task_configs and cfg.data.main_task (required when multiple tasks).
     Ground-truth tensors for each task must be present at full resolution in the sample dict
@@ -549,7 +550,8 @@ class MultiTaskTester(TesterBase):
         comm.synchronize()
 
         reg_sums_global = {
-            t: {"mae": 0.0, "mse": 0.0, "count": 0.0} for t in regression_tasks
+            t: {"mae": 0.0, "mse": 0.0, "nmae": 0.0, "count": 0.0, "n_nmae": 0.0}
+            for t in regression_tasks
         }
 
         running_iou = {t: AverageMeter() for t in semantic_tasks}
@@ -802,12 +804,18 @@ class MultiTaskTester(TesterBase):
                     t_t = torch.from_numpy(tgt_np).float()
                     p_m, t_m = self._gather_masked(p_t, t_t)
                     if p_m is not None:
-                        err = (p_m - t_m).abs()
-                        reg_sums_global[task_name]["mae"] += float(err.sum().item())
-                        reg_sums_global[task_name]["mse"] += float(
-                            ((p_m - t_m) ** 2).sum().item()
+                        task_config = task_configs[task_name]
+                        nmae_offset = float(task_config.get("nmae_offset", 0.5))
+                        mae_b, mse_b, nmae_b, cnt_b, n_nmae_b = (
+                            accumulate_regression_errors(
+                                p_m, t_m, nmae_offset=nmae_offset
+                            )
                         )
-                        reg_sums_global[task_name]["count"] += float(err.numel())
+                        reg_sums_global[task_name]["mae"] += mae_b
+                        reg_sums_global[task_name]["mse"] += mse_b
+                        reg_sums_global[task_name]["nmae"] += nmae_b
+                        reg_sums_global[task_name]["count"] += cnt_b
+                        reg_sums_global[task_name]["n_nmae"] += n_nmae_b
 
                 record[data_name] = dict(semantic=sem_metrics_scene)
 
@@ -828,15 +836,19 @@ class MultiTaskTester(TesterBase):
             flat = []
             for task_name in regression_tasks:
                 s = reg_sums_global[task_name]
-                flat.extend([s["mae"], s["mse"], s["count"]])
+                flat.extend(
+                    [s["mae"], s["mse"], s["nmae"], s["count"], s["n_nmae"]]
+                )
             buf = torch.tensor(flat, dtype=torch.float64, device="cuda")
             dist.all_reduce(buf)
             flat = buf.cpu().tolist()
-            for ti, task_name in enumerate(regression_tasks):
-                base = ti * 3
+            for task_index, task_name in enumerate(regression_tasks):
+                base = task_index * 5
                 reg_sums_global[task_name]["mae"] = flat[base]
                 reg_sums_global[task_name]["mse"] = flat[base + 1]
-                reg_sums_global[task_name]["count"] = flat[base + 2]
+                reg_sums_global[task_name]["nmae"] = flat[base + 2]
+                reg_sums_global[task_name]["count"] = flat[base + 3]
+                reg_sums_global[task_name]["n_nmae"] = flat[base + 4]
 
         record_sync = comm.gather(record, dst=0)
 
@@ -934,16 +946,28 @@ class MultiTaskTester(TesterBase):
                     continue
                 mae = s["mae"] / cnt
                 rmse = (s["mse"] / cnt) ** 0.5
+                n_nmae = s["n_nmae"]
+                excluded_nmae = cnt - n_nmae
+                nmae = s["nmae"] / n_nmae if n_nmae > 1e-8 else float("nan")
                 logger.info(
-                    "[task={}] Test regression: MAE {:.6f} RMSE {:.6f} (n={:.0f}).".format(
+                    "[task={}] Test regression: MAE {:.6f} RMSE {:.6f} nMAE {:.6f} "
+                    "(n={:.0f}, n_nmae={:.0f}, excluded_nmae={:.0f}).".format(
                         task_name,
                         mae,
                         rmse,
+                        nmae,
                         cnt,
+                        n_nmae,
+                        excluded_nmae,
                     )
                 )
                 log_dict[f"test/reg/{task_name}/mae"] = float(mae)
                 log_dict[f"test/reg/{task_name}/rmse"] = float(rmse)
+                if n_nmae > 1e-8:
+                    log_dict[f"test/reg/{task_name}/nmae"] = float(nmae)
+                log_dict[f"test/reg/{task_name}/nmae_excluded"] = float(
+                    excluded_nmae
+                )
 
             log_test_f1 = getattr(self.cfg, "log_test_f1", False)
             if log_test_f1:

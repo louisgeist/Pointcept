@@ -77,6 +77,7 @@ python pointcept/datasets/preprocessing/flair3d/preprocess_flair3d.py \
 ```bash
 python pointcept/datasets/preprocessing/flair3d/preprocess_flair3d.py \
  --dataset_root /lustre/fsn1/projects/rech/unv/usi32yh/data/flair3d/FLAIR-HUB \
+ --ply_root 
  --output_root $WORK/Pointcept/data/flair3d \
  --split val test train \
  --mode subtile \
@@ -85,14 +86,18 @@ python pointcept/datasets/preprocessing/flair3d/preprocess_flair3d.py \
  --num_workers 12
 ```
 
-python pointcept/datasets/preprocessing/flair3d/preprocess_flair3d.py \
- --dataset_root /lustre/fsn1/projects/rech/unv/usi32yh/data/flair3d/FLAIR-HUB \
- --output_root $WORK/Pointcept/data/flair3d_lab7 \
- --split val test train \
- --mode subtile \
- --label_definition inter_finerall7 \
- --save_strength \
- --num_workers 12
+V2 : 
+python pointcept/datasets/preprocessing/flair3d_plus/preprocess_flair3d_v2.py \
+ --ply_root /lustre/fsn1/projects/rech/unv/usi32yh/data_flair3d_build/flair3d_label_enhanced \
+ --dataset_root /lustre/fswork/projects/rech/unv/usi32yh/Pointcept/data/flair3d_plus/raw \
+ --output_root $WORK/Pointcept/data/flair3d_plus \
+ --split_manifest_csv data/flair3d_plus/raw/scene_split_manifest.csv \
+ --num_workers 24 \
+ --force
+
+
+
+
 #### Train Flair3D
 
 On hecate:
@@ -104,7 +109,9 @@ ou regarder script debug mode
 Or directly with Python (from repo root):
 
 ```bash
-python tools/train.py --config-file configs/flair3d/ptv3_nonormal_subtile.py --num-gpus 1
+export PYTHONPATH="$PWD"
+export LD_LIBRARY_PATH="$CONDA_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+python tools/train.py --config-file configs/pureforest/kpconvx-toy.py --num-gpus 1
 ```
 
 Mini-dataset smoke test (10 epochs, eval every 10, 2 train + 2 val samples).
@@ -114,6 +121,30 @@ With the script (recommended; `EXTRA_OPTIONS` is passed as `--options` to the Py
 ```bash
 export EXTRA_OPTIONS="epoch=10 eval_epoch=10 max_sample_train=2 max_sample_val=2"
 sh scripts/train.sh -g 1 -d flair3d -c ptv3_nonormal_subtile -n ptv3_nonormal_subtile
+```
+
+#### Flair3D+ multi-target (segment, forest, land_use, natural_habitat, elevation)
+
+Class names and ``num_classes`` / ``ignore_index`` per semantic target are defined in
+[`pointcept/datasets/flair3d_plus_label_task_config.py`](pointcept/datasets/flair3d_plus_label_task_config.py).
+
+- **Semantic targets**: set ``target_key`` on ``Flair3DDataset`` (train/val/test) to one of
+  ``segment``, ``forest``, ``land_use``, ``natural_habitat``. The corresponding ``*.npy`` is
+  copied into ``segment`` for the existing GridSample / loss pipeline. Example config:
+  [`configs/flair3d_plus/litept_target_forest.py`](configs/flair3d_plus/litept_target_forest.py).
+- 
+- To confirm ...|**Checkpoint transfer** between tasks: use ``strict=False`` on ``load_state_dict``, or
+  ``CheckpointLoader`` with ``exclude_keys`` for the old head (``seg_head`` / ``reg_head``).
+
+- **W&B**: root config fields ``target_key`` and ``task`` (``semseg`` or ``regression``) are added
+  as run tags when present.
+- **Regression metrics** (multitask val/test): MAE, RMSE, and normalized MAE
+  ``nMAE = |z_true - z_pred| / (z_true + nmae_offset)`` (default ``nmae_offset=0.5`` for elevation),
+  logged to TensorBoard/W&B under ``val/reg/<task>/`` and ``test/reg/<task>/`` including
+  ``nmae_excluded`` (points skipped when ``z_true + nmae_offset <= 0``).
+
+```bash
+python tools/train.py --config-file configs/flair3d_plus/litept_target_forest.py --num-gpus 1
 ```
 
 Train directement une config dans experiment:
@@ -134,17 +165,20 @@ python -m tools.train \
 Preprocessing:
 ```
 python pointcept/datasets/preprocessing/dales/preprocess_dales.py \
-  --dataset_root data/dales/raw \ #DALESObjects
+  --dataset_root data/dales/raw \
   --output_root data/dales \
   --num_workers 8 \
-  --chunking 3
+  --chunking 4
 ```
 
 # Brouillon
 python -m tools.train \
-  --config-file configs/experiment/w90/4/dales_test/ptv3_3.py \
+  --config-file configs/pureforest/cls-litept-v1m0-pureforest.py \
   --num-gpus 1 \
   --num-machines 1 \
   --machine-rank 0 \
   --dist-url auto \
-  --options batch_size=2
+  --options epoch=1 eval_epoch=1 data.train.max_sample=30
+  
+  
+  data.train.max_sample=30
