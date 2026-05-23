@@ -128,6 +128,7 @@ FLAIR3D_ELEVATION: Dict[str, Any] = {
     "dtype": "float32",
     "unit": "meters",
     "use_nan_mask": True,
+    "nmae_offset": 0.5,
 }
 
 
