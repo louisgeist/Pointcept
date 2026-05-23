@@ -205,7 +205,9 @@ def init_task_criteria(task_configs: Dict[str, Any]) -> Dict[str, Any]:
                 ),
             ]
         elif task_name == "elevation":
-            task_criteria["elevation"] = dict(type="SmoothL1Loss", beta=1.0, loss_weight=1.0),
+            task_criteria["elevation"] = [
+                dict(type="SmoothL1Loss", beta=1.0, loss_weight=1.0),
+            ]
         else:
             raise KeyError(f"Unknown task_name '{task_name}'. Expected one of: {FLAIR3D_SEMANTIC_TASKS.keys()}")
     
