@@ -1,0 +1,371 @@
+"""
+KPConvX on Flair3D+ with semantic multitask plus point-wise elevation regression.
+
+Mirrors multi-spunet-v1m0-flair3d multitask wiring but follows the KPConvX data path
+(GridSample return_min_coord, point_max) and kpconvx_base backbone from
+experiment feat-masking configs. Uses num_classes=0 on the backbone so
+MultiTaskSegmentorV2 attaches all task heads (requires kpconvx_base feature mode).
+
+This config is intentionally self-contained: it inherits only from default_runtime.
+"""
+
+# -----------------------------------------------------------------------------
+# Default
+# -----------------------------------------------------------------------------
+_base_ = ["../_base_/default_runtime.py"]
+
+# -----------------------------------------------------------------------------
+# Run-level settings
+# -----------------------------------------------------------------------------
+
+# Logging parameters
+grp_exp = 1
+num_exp = 1
+
+
+# Hardware parameters
+num_gpu = 1
+num_worker = 8 * num_gpu
+enable_amp = True
+
+# Data parameters
+batch_size = 2 * num_gpu  # total batch size across all gpus
+batch_size_val = batch_size // 2
+batch_size_test = batch_size // 2
+
+grid_size = 0.1
+point_max = 40000
+mix_prob = 0.8
+
+# Optimization parameters
+lr = 5e-5
+epoch = 1
+eval_epoch = 1
+warmup_steps = 5000*4
+
+# Features (RGB + XYZ + strength concatenated into feat)
+learned_masked_feat = True
+feat_keys = ["coord", "color", "strength"]
+
+# Wandb parameters
+wandb_run_name = (
+    f"Flair3D+ KPConvX multitask + elevation {grp_exp}.{num_exp}) lr={lr}"
+)
+wandb_project = "flair3dplus"
+
+# -----------------------------------------------------------------------------
+# Multitask configuration : targets configuraiton
+# -----------------------------------------------------------------------------
+from pointcept.datasets.flair3d_plus_label_task_config import (
+    get_multitask_regression_task_config_elevation,
+    get_semantic_config,
+)
+
+semantic_target_keys = ("segment", "forest", "land_use", "natural_habitat")
+target_keys = semantic_target_keys + ("elevation",)
+main_task = "segment"
+
+task_configs = {task_name: get_semantic_config(task_name) for task_name in semantic_target_keys}
+task_configs["elevation"] = get_multitask_regression_task_config_elevation()
+
+# Remove the imported helpers from this module's namespace so they do not leak
+# into the Pointcept config dict. The config loader (pointcept/utils/config.py)
+# treats every non-dunder module attribute as a config entry, and Config.dump
+# pipes the resulting Python text through yapf. Yapf cannot reformat function
+# objects rendered as "<function ... at 0x...>" and raises a SyntaxError.
+del get_semantic_config, get_multitask_regression_task_config_elevation
+
+# main_task drives checkpoint selection / mIoU logging, so its num_classes,
+# ignore_index and names are exposed at the data root for backward-compat hooks.
+num_classes = task_configs[main_task]["num_classes"]
+ignore_index = task_configs[main_task]["ignore_index"]
+names = task_configs[main_task]["names"]
+
+task_criteria = {
+    task_name: [
+        dict(
+            type="CrossEntropyLoss",
+            loss_weight=1.0,
+            ignore_index=task_configs[task_name]["ignore_index"],
+        ),
+        dict(
+            type="LovaszLoss",
+            mode="multiclass",
+            loss_weight=1.0,
+            ignore_index=task_configs[task_name]["ignore_index"],
+        ),
+    ]
+    for task_name in semantic_target_keys
+}
+task_criteria["elevation"] = [
+    dict(type="SmoothL1Loss", beta=1.0, loss_weight=1.0),
+]
+
+task_weights = {task_name: 1.0 for task_name in task_configs.keys()}
+
+# -----------------------------------------------------------------------------
+# Hooks
+# -----------------------------------------------------------------------------
+hooks = [
+    dict(type="CheckpointLoader"),
+    dict(type="ModelHook"),
+    dict(type="IterationTimer", warmup_iter=2),
+    dict(type="InformationWriter", log_interval=100),
+    dict(type="MultiTaskEvaluator", write_cls_iou=True),
+    dict(type="CheckpointSaver", save_freq=None),
+    dict(type="PreciseEvaluator", test_last=False),
+]
+
+test_single_fragment = True
+test = dict(type="MultiTaskTester", verbose=True, write_cls_iou=True)
+
+# -----------------------------------------------------------------------------
+# Model
+# -----------------------------------------------------------------------------
+# Backbone returns per-point features (num_classes=0 skips internal classifier).
+backbone_feat_dim = 64
+
+model = dict(
+    type="MultiTaskSegmentorV2",
+    backbone_out_channels=backbone_feat_dim,
+    backbone=dict(
+        type="kpconvx_base",
+        input_channels=7,
+        num_classes=0,
+        dim=3,
+        task="cloud_segmentation",
+        kp_mode="kpconvx",
+        shell_sizes=(1, 14, 28),
+        kp_radius=2.3,
+        kp_aggregation="nearest",
+        kp_influence="constant",
+        kp_sigma=2.3,
+        share_kp=False,
+        conv_groups=-1,
+        inv_groups=8,
+        inv_act="sigmoid",
+        inv_grp_norm=True,
+        kpx_upcut=False,
+        subsample_size=grid_size,
+        neighbor_limits=(12, 16, 20, 20, 20),
+        layer_blocks=(3, 3, 9, 12, 3),
+        init_channels=64,
+        channel_scaling=1.414,
+        radius_scaling=2.2,
+        decoder_layer=True,
+        grid_pool=True,
+        upsample_n=3,
+        first_inv_layer=1,
+        drop_path_rate=0.3,
+        norm="batch",
+        bn_momentum=0.1,
+        smooth_labels=False, # True only for classification
+        class_w=(),
+    ),
+    feature_mask_values=dict(
+        enable=learned_masked_feat,
+        masked_feat_keys=["color", "strength"],
+    ),
+    task_configs=task_configs,
+    main_task=main_task,
+    task_criteria=task_criteria,
+    task_weights=task_weights,
+)
+
+
+# -----------------------------------------------------------------------------
+# Optimizer / scheduler
+# -----------------------------------------------------------------------------
+optimizer = dict(type="AdamW", lr=lr, weight_decay=0.02)
+scheduler = dict(
+    type="LinearLR",
+    start_factor=1 / 10,
+    total_iters=warmup_steps,
+)
+
+# -----------------------------------------------------------------------------
+# Dataset (KPConvX-style subsampling; multitask keys from Flair3D+)
+# -----------------------------------------------------------------------------
+dataset_type = "Flair3DDataset"
+data_root = "data/flair3d_plus"
+csv_manifest = "data/flair3d_plus/raw/scene_split_manifest.csv"
+missing_tiles_manifest = "data/flair3d_plus/missing_ply_preflight.txt"
+too_small_tiles_manifest = "data/flair3d_plus/too_small_tiles.csv"
+
+train_multitask_keys = (
+    "coord",
+    "segment",
+    "forest",
+    "land_use",
+    "natural_habitat",
+    "elevation",
+)
+val_multitask_keys = (
+    "coord",
+    "segment",
+    "origin_segment",
+    "forest",
+    "origin_forest",
+    "land_use",
+    "origin_land_use",
+    "natural_habitat",
+    "origin_natural_habitat",
+    "elevation",
+    "origin_elevation",
+    "inverse",
+)
+multitask_index_valid_keys = (
+    "coord",
+    "color",
+    "normal",
+    "color_mask",
+    "normal_mask",
+    "superpoint",
+    "strength",
+    "strength_mask",
+    "segment",
+    "instance",
+    "forest",
+    "land_use",
+    "natural_habitat",
+    "elevation",
+)
+
+data = dict(
+    num_classes=num_classes,
+    ignore_index=ignore_index,
+    names=names,
+    task_configs=task_configs,
+    main_task=main_task,
+    train=dict(
+        type=dataset_type,
+        split="train",
+        data_root=data_root,
+        csv_manifest=csv_manifest,
+        missing_tiles_manifest=missing_tiles_manifest,
+        too_small_tiles_manifest=too_small_tiles_manifest,
+        target_keys=list(target_keys),
+        primary_target_key=main_task,
+        transform=[
+            dict(
+                type="Update",
+                keys_dict={"index_valid_keys": list(multitask_index_valid_keys)},
+            ),
+            dict(type="CenterShift", apply_z=True),
+            dict(type="RandomDropout", dropout_ratio=0.2, dropout_application_ratio=0.2),
+            dict(type="RandomRotate", angle=[-1, 1], axis="z", center=[0, 0, 0], p=0.5),
+            dict(type="RandomScale", scale=[0.9, 1.1]),
+            dict(type="RandomFlip", p=0.5),
+            dict(type="RandomJitter", sigma=0.005, clip=0.02),
+            dict(type="ChromaticAutoContrast", p=0.2, blend_factor=None),
+            dict(type="ChromaticTranslation", p=0.95, ratio=0.05),
+            dict(type="ChromaticJitter", p=0.95, std=0.05),
+            dict(
+                type="GridSample",
+                grid_size=grid_size,
+                hash_type="fnv",
+                mode="train",
+                return_min_coord=True,
+            ),
+            dict(type="SphereCrop", point_max=point_max, mode="random"),
+            dict(type="CenterShift", apply_z=False),
+            dict(type="NormalizeColor"),
+            dict(type="RandomDropColor", drop_ratio=1.0, drop_application_ratio=0.2, keep_mask=True),
+            dict(type="RandomDropColor", drop_ratio=0.1, drop_application_ratio=0.5, keep_mask=True),
+            dict(type="RandomDropStrength", drop_ratio=1.0, drop_application_ratio=0.2, keep_mask=True),
+            dict(type="RandomDropStrength", drop_ratio=0.1, drop_application_ratio=0.5, keep_mask=True),
+            dict(type="ShufflePoint"),
+            dict(type="ToTensor"),
+            dict(
+                type="Collect",
+                keys=train_multitask_keys,
+                feat_keys=feat_keys,
+            ),
+        ],
+        test_mode=False,
+    ),
+    val=dict(
+        type=dataset_type,
+        split="val",
+        data_root=data_root,
+        csv_manifest=csv_manifest,
+        missing_tiles_manifest=missing_tiles_manifest,
+        too_small_tiles_manifest=too_small_tiles_manifest,
+        target_keys=list(target_keys),
+        primary_target_key=main_task,
+        transform=[
+            dict(
+                type="Update",
+                keys_dict={"index_valid_keys": list(multitask_index_valid_keys)},
+            ),
+            dict(type="CenterShift", apply_z=True),
+            dict(
+                type="Copy",
+                keys_dict={
+                    "segment": "origin_segment",
+                    "forest": "origin_forest",
+                    "land_use": "origin_land_use",
+                    "natural_habitat": "origin_natural_habitat",
+                    "elevation": "origin_elevation",
+                },
+            ),
+            dict(
+                type="GridSample",
+                grid_size=grid_size,
+                hash_type="fnv",
+                mode="train",
+                return_min_coord=True,
+                return_inverse=True,
+            ),
+            dict(type="CenterShift", apply_z=False),
+            dict(type="NormalizeColor"),
+            dict(type="ToTensor"),
+            dict(
+                type="Collect",
+                keys=val_multitask_keys,
+                feat_keys=feat_keys,
+            ),
+        ],
+        test_mode=False,
+    ),
+    test=dict(
+        type=dataset_type,
+        split="test",
+        data_root=data_root,
+        csv_manifest=csv_manifest,
+        missing_tiles_manifest=missing_tiles_manifest,
+        too_small_tiles_manifest=too_small_tiles_manifest,
+        target_keys=list(target_keys),
+        primary_target_key=main_task,
+        transform=[
+            dict(type="CenterShift", apply_z=True),
+            dict(type="NormalizeColor"),
+        ],
+        test_mode=True,
+        test_cfg=dict(
+            voxelize=dict(
+                type="GridSample",
+                grid_size=grid_size,
+                hash_type="fnv",
+                mode="test",
+                return_grid_coord=True,
+                test_single_fragment=test_single_fragment,
+                return_inverse=True,
+            ),
+            crop=None,
+            post_transform=[
+                dict(type="CenterShift", apply_z=False),
+                dict(type="ToTensor"),
+                dict(
+                    type="Collect",
+                    keys=("coord", "index"),
+                    optional_keys=("inverse",),
+                    feat_keys=feat_keys,
+                ),
+            ],
+            aug_transform=[
+                [dict(type="RandomRotateTargetAngle", angle=[0], axis="z", center=[0, 0, 0], p=1)]
+            ],
+        ),
+    ),
+)
