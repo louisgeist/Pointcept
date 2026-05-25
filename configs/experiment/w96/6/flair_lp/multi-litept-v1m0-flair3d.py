@@ -32,7 +32,7 @@ enable_amp = True
 # Data parameters
 batch_size = 20 * num_gpu  # total batch size across all gpus
 batch_size_val = batch_size // 2
-batch_size_test = batch_size // 2
+batch_size_test = batch_size // 4
 
 grid_size = 0.1
 point_max = 102400
@@ -41,7 +41,7 @@ mix_prob = 0.8
 patch_size = 1024
 
 # Optimization parameters
-lr = 2e-3
+lr = 1e-3
 epoch = 6
 eval_epoch = epoch
 warmup_steps = 500
