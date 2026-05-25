@@ -311,6 +311,8 @@ class InformationWriter(HookBase):
     def after_epoch(self):
         # Epoch-level metrics (rank 0 only): train/loss and train/mIoU are both
         # computed from rank 0's batches; not aggregated across GPUs.
+        # train/mIoU uses subsampled voxel labels (no inverse remap); val/mIoU uses
+        # full-resolution labels after inverse remap (see SemSegEvaluator).
         data_cfg = self.trainer.cfg.data
         main_task = self._cfg_get(data_cfg, "main_task", None) or "segment"
         epoch_miou_main = None

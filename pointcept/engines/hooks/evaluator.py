@@ -23,6 +23,42 @@ from .default import HookBase
 from .builder import HOOKS
 
 
+def remap_pred_with_inverse(pred_voxel, inverse, offset=None):
+    """Map voxel-level predictions back to full-resolution points.
+
+    When multiple scenes are collated for validation, each scene's ``inverse`` indices
+    are local (0 .. num_voxels-1) while ``pred_voxel`` is concatenated scene-by-scene.
+    """
+    if offset is None:
+        return pred_voxel[inverse]
+
+    pred_full = []
+    voxel_start = 0
+    point_start = 0
+    if isinstance(offset, torch.Tensor):
+        offsets = offset.tolist()
+    else:
+        offsets = list(offset)
+    for end in offsets:
+        end = int(end)
+        inv = inverse[point_start:end]
+        n_voxels = int(inv.max()) + 1
+        pred_scene = pred_voxel[voxel_start : voxel_start + n_voxels]
+        pred_full.append(pred_scene[inv])
+        voxel_start += n_voxels
+        point_start = end
+    return torch.cat(pred_full)
+
+
+def mean_iou_from_hist(intersection, union):
+    """Mean IoU over classes with non-zero union (consistent with train/test logging)."""
+    iou_class = intersection / (union + 1e-10)
+    mask = union != 0
+    if mask.any():
+        return float(np.mean(iou_class[mask]))
+    return 0.0
+
+
 @HOOKS.register_module()
 class ClsEvaluator(HookBase):
     _METRICS = ("mIoU", "mAcc", "allAcc")
@@ -183,7 +219,9 @@ class SemSegEvaluator(HookBase):
             segment = input_dict["segment"]
             if "inverse" in input_dict.keys():
                 assert "origin_segment" in input_dict.keys()
-                pred = pred[input_dict["inverse"]]
+                pred = remap_pred_with_inverse(
+                    pred, input_dict["inverse"], input_dict.get("offset")
+                )
                 segment = input_dict["origin_segment"]
             intersection, union, target = intersection_and_union_gpu(
                 pred,
@@ -222,8 +260,9 @@ class SemSegEvaluator(HookBase):
         target = self.trainer.storage.history("val_target").total
         iou_class = intersection / (union + 1e-10)
         acc_class = intersection / (target + 1e-10)
-        m_iou = np.mean(iou_class)
-        m_acc = np.mean(acc_class)
+        m_iou = mean_iou_from_hist(intersection, union)
+        valid = union != 0
+        m_acc = float(np.mean(acc_class[valid])) if valid.any() else 0.0
         all_acc = sum(intersection) / (sum(target) + 1e-10)
         self.trainer.logger.info(
             "Val result: mIoU/mAcc/allAcc {:.4f}/{:.4f}/{:.4f}.".format(
@@ -422,7 +461,11 @@ class MultiTaskEvaluator(HookBase):
                     if "inverse" in input_dict.keys():
                         origin_target_key = self._task_origin_target_key(task_name)
                         if origin_target_key in input_dict:
-                            pred = pred[input_dict["inverse"]]
+                            pred = remap_pred_with_inverse(
+                                pred,
+                                input_dict["inverse"],
+                                input_dict.get("offset"),
+                            )
                             target_tensor = input_dict[origin_target_key]
                     intersection, union, target = intersection_and_union_gpu(
                         pred,
@@ -473,7 +516,11 @@ class MultiTaskEvaluator(HookBase):
                     if "inverse" in input_dict.keys():
                         origin_key = self._task_origin_target_key(task_name)
                         if origin_key in input_dict:
-                            pred = pred[input_dict["inverse"]]
+                            pred = remap_pred_with_inverse(
+                                pred,
+                                input_dict["inverse"],
+                                input_dict.get("offset"),
+                            )
                             target = input_dict[origin_key].reshape(-1).float()
                     p, t = self._gather_masked(pred, target)
                     if p is not None:
@@ -523,8 +570,9 @@ class MultiTaskEvaluator(HookBase):
             target = self.trainer.storage.history(f"val_target/{task_name}").total
             iou_class = intersection / (union + 1e-10)
             acc_class = intersection / (target + 1e-10)
-            m_iou = np.mean(iou_class)
-            m_acc = np.mean(acc_class)
+            m_iou = mean_iou_from_hist(intersection, union)
+            valid = union != 0
+            m_acc = float(np.mean(acc_class[valid])) if valid.any() else 0.0
             all_acc = sum(intersection) / (sum(target) + 1e-10)
             per_task_metrics[task_name] = dict(
                 iou_class=iou_class,
