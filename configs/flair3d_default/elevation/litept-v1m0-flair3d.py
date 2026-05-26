@@ -44,6 +44,7 @@ warmup_steps = 500
 # Features
 learned_masked_feat = True
 feat_keys = ["color", "strength"]
+coord_feat_scale = 0.1
 
 # Wandb parameters
 wandb_run_name = (
@@ -200,6 +201,7 @@ data = dict(
                 type="Collect",
                 keys=train_collect_keys,
                 feat_keys=feat_keys,
+                feat_scales=dict(coord=coord_feat_scale),
             ),
         ],
         test_mode=False,
@@ -239,6 +241,7 @@ data = dict(
                 type="Collect",
                 keys=val_collect_keys,
                 feat_keys=feat_keys,
+                feat_scales=dict(coord=coord_feat_scale),
             ),
         ],
         test_mode=False,
@@ -275,6 +278,7 @@ data = dict(
                     keys=("coord", "grid_coord", "index"),
                     optional_keys=("inverse",),
                     feat_keys=feat_keys,
+                    feat_scales=dict(coord=coord_feat_scale),
                 ),
             ],
             aug_transform=[

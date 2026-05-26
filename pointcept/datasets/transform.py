@@ -77,16 +77,20 @@ def index_operator(data_dict, index, duplicate=False):
 
 @TRANSFORMS.register_module()
 class Collect(object):
-    def __init__(self, keys, offset_keys_dict=None, optional_keys=None, **kwargs):
+    def __init__(
+        self, keys, offset_keys_dict=None, optional_keys=None, feat_scales=None, **kwargs
+    ):
         """
         e.g. Collect(keys=[coord], feat_keys=[coord, color])
         optional_keys: keys to include only if present (e.g. "inverse" for test single-fragment).
+        feat_scales: per-key multipliers applied only when building feat (not to keys).
         """
         if offset_keys_dict is None:
             offset_keys_dict = dict(offset="coord")
         self.keys = keys
         self.offset_keys = offset_keys_dict
         self.optional_keys = optional_keys or ()
+        self.feat_scales = feat_scales or {}
         self.kwargs = kwargs
 
     def __call__(self, data_dict):
@@ -132,6 +136,8 @@ class Collect(object):
             feat_offset = 0
             for key in keys:
                 t = data_dict[key].float()
+                if key in self.feat_scales:
+                    t = t * self.feat_scales[key]
                 if t.dim() == 1:
                     t = t.unsqueeze(1)
                 tensors.append(t)
