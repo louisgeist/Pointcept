@@ -80,7 +80,7 @@ import numpy as np
 from plyfile import PlyData
 from tqdm import tqdm
 
-from pointcept.datasets.flair3d_plus_label_task_config import FLAIR3D_SEMANTIC_TASKS
+from pointcept.datasets.flair3d_config_utils import FLAIR3D_SEMANTIC_TASKS
 
 _NH_NUM_CLASSES = int(FLAIR3D_SEMANTIC_TASKS["natural_habitat"]["num_classes"])
 

@@ -58,21 +58,23 @@ data/flair3d_plus/
             │   └── ...
 
 Examples:
-
+JZ : 
 python pointcept/datasets/preprocessing/flair3d_plus/preprocess_flair3d_v2.py \
-    --ply_root /path/to/enriched_ply_tree \
-    --dataset_root data/flair3d_plus/raw \
+    --ply_root /lustre/fsn1/projects/rech/unv/usi32yh/data_flair3d_build/flair3d_label_enhanced \
+    --dataset_root /lustre/fswork/projects/rech/unv/usi32yh/Pointcept/data/flair3d_plus/raw \
     --output_root data/flair3d_plus \
     --split_manifest_csv data/flair3d_plus/raw/scene_split_manifest.csv \
     --num_workers 24 \
     --force
 
+hecate:
 python pointcept/datasets/preprocessing/flair3d_plus/preprocess_flair3d_v2.py \
-    --ply_root /path/to/enriched_ply_tree \
+    --ply_root /data/geist/Flair3D-build/data/flair3d_label_enhanced \
     --dataset_root data/flair3d_plus/raw \
     --output_root data/flair3d_plus \
     --split_manifest_csv data/flair3d_plus/raw/scene_split_manifest_D067.csv \
     --num_workers 12
+    --force
 """
 
 import argparse
@@ -88,7 +90,7 @@ import numpy as np
 from plyfile import PlyData
 from tqdm import tqdm
 
-from pointcept.datasets.flair3d_plus_label_task_config import FLAIR3D_SEMANTIC_TASKS
+from pointcept.datasets.flair3d_config_utils import FLAIR3D_SEMANTIC_TASKS
 
 _SEGMENT_NUM_CLASSES = int(FLAIR3D_SEMANTIC_TASKS["segment"]["num_classes"])
 _NH_NUM_CLASSES = int(FLAIR3D_SEMANTIC_TASKS["natural_habitat"]["num_classes"])
