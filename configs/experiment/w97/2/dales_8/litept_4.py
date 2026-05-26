@@ -58,7 +58,7 @@ test_single_fragment = True
 wandb_run_name = (
     f"DALES LitePT semseg ({grp_exp}.{num_exp}) "
     f"lr={lr} epoch={epoch} norm_str={normalize_strength} "
-    f"feat={feat_keys}"
+    f"feat={','.join(feat_keys)}"
 )
 wandb_project = "pointcept_dales"
 
