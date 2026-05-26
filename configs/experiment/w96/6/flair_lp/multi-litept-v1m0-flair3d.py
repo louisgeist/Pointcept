@@ -59,7 +59,7 @@ wandb_project = "flair3d_multi"
 # -----------------------------------------------------------------------------
 # Multitask configuration : targets configuraiton
 # -----------------------------------------------------------------------------
-from pointcept.datasets.flair3d_plus_label_task_config import (
+from pointcept.datasets.flair3d_config_utils import (
     get_multitask_regression_task_config_elevation,
     get_semantic_config,
 )

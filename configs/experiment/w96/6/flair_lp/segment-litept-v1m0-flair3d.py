@@ -53,7 +53,7 @@ wandb_project = "flair3d_segment"
 # -----------------------------------------------------------------------------
 # Mono-task configuration : targets configuraiton
 # -----------------------------------------------------------------------------
-from pointcept.datasets.flair3d_plus_label_task_config import (
+from pointcept.datasets.flair3d_config_utils import (
     init_task_configs,
     init_task_criteria,
 )

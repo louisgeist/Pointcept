@@ -13,7 +13,7 @@ _base_ = ["../../../../_base_/default_runtime.py"]
 
 test = dict(type="MultiTaskTester", verbose=True, write_cls_iou=True)
 
-from pointcept.datasets.flair3d_plus_label_task_config import (
+from pointcept.datasets.flair3d_config_utils import (
     get_multitask_regression_task_config_elevation,
     get_semantic_config,
 )

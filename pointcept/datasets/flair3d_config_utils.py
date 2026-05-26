@@ -122,6 +122,29 @@ FLAIR3D_SEMANTIC_TASKS: Dict[str, Dict[str, Any]] = {
 
 FLAIR3D_SEMANTIC_TARGET_KEYS: Tuple[str, ...] = tuple(FLAIR3D_SEMANTIC_TASKS.keys())
 
+# Keys passed to GridSample / index_valid_keys (superset of all Flair3D+ targets).
+FLAIR3D_MULTITASK_INDEX_VALID_KEYS: Tuple[str, ...] = (
+    "coord",
+    "color",
+    "normal",
+    "color_mask",
+    "normal_mask",
+    "superpoint",
+    "strength",
+    "strength_mask",
+    "segment",
+    "instance",
+    "forest",
+    "land_use",
+    "natural_habitat",
+    "elevation",
+)
+
+# Optional Collect prefix keys before target_keys (backbone-specific).
+FLAIR3D_COLLECT_PREFIX_NONE: Tuple[str, ...] = ()
+FLAIR3D_COLLECT_PREFIX_GRID: Tuple[str, ...] = ("grid_coord",)
+FLAIR3D_COLLECT_PREFIX_LITEPT: Tuple[str, ...] = ("grid_coord", "grid_size")
+
 # Point-wise elevation regression (not class indices).
 FLAIR3D_ELEVATION: Dict[str, Any] = {
     "wandb_target_display_name": "elevation",
@@ -158,6 +181,34 @@ def get_multitask_regression_task_config_elevation() -> Dict[str, Any]:
     out = deepcopy(FLAIR3D_ELEVATION)
     out["task_type"] = "regression"
     return out
+
+def _validate_target_keys(target_keys: Tuple[str, ...]) -> None:
+    known = set(FLAIR3D_SEMANTIC_TASKS.keys()) | {"elevation"}
+    for key in target_keys:
+        if key not in known:
+            keys = ", ".join(sorted(known))
+            raise KeyError(f"Unknown target_key '{key}'. Expected one of: {keys}")
+
+
+def init_multitask_collect_keys(
+    target_keys: Tuple[str, ...],
+    *,
+    collect_prefix_keys: Tuple[str, ...] = (),
+) -> Tuple[Tuple[str, ...], Tuple[str, ...], Tuple[str, ...]]:
+    """Build train/val Collect keys and index_valid_keys for Flair3D+ configs.
+
+    train: coord + collect_prefix_keys + target_keys
+    val: coord + collect_prefix_keys + (task, origin_task) per target + inverse
+    """
+    _validate_target_keys(target_keys)
+    base = ("coord",) + collect_prefix_keys
+    train_keys = base + target_keys
+    val_target_keys: Tuple[str, ...] = ()
+    for key in target_keys:
+        val_target_keys += (key, f"origin_{key}")
+    val_keys = base + val_target_keys + ("inverse",)
+    return train_keys, val_keys, FLAIR3D_MULTITASK_INDEX_VALID_KEYS
+
 
 def init_task_configs(target_keys: Tuple[str, ...]) -> Dict[str, Any]:
     """Initialize the task config dictionary for the given target_keys.
