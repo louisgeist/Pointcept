@@ -16,7 +16,7 @@ import numpy as np
 from .defaults import DefaultDataset
 from .builder import DATASETS
 from .transform import record_data_pipeline
-from .flair3d_plus_label_task_config import get_missing_target_fill_value
+from .flair3d_config_utils import get_missing_target_fill_value
 from pointcept.utils.logger import get_root_logger
 
 FLAIR3D_SPECIFIC_ASSETS = ("forest", "land_use", "natural_habitat", "elevation")
@@ -330,9 +330,9 @@ class Flair3DDataset(DefaultDataset):
         return data_dict
 
     def prepare_test_data(self, idx):
-        """Full-resolution multitask targets are popped into ``result_dict`` before voxelization.
+        """Full-resolution multitask targets are popped into `result_dict` before voxelization.
 
-        DefaultDataset only preserves ``segment`` + optional ``origin_segment`` / ``inverse``,
+        DefaultDataset only preserves `segment` + optional `origin_segment` / `inverse`,
         which breaks multitask evaluation on the whole scene.
         """
         with record_data_pipeline("dataset.get_data"):
