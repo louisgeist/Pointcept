@@ -1,8 +1,9 @@
 """
-LitePT-v1 on Flair3D+ (RGB + strength, no XYZ in feat_keys).
+LitePT semantic segmentation on H3D (RGB point features).
 
-Mono-task Flair3D+ config for point-wise elevation regression. Inherits only from
-default_runtime.
+This config is intentionally self-contained: it inherits only from
+default_runtime and can be read top-to-bottom without cross-referencing
+other H3D configs.
 """
 
 # -----------------------------------------------------------------------------
@@ -15,19 +16,18 @@ _base_ = ["../../../../_base_/default_runtime.py"]
 # -----------------------------------------------------------------------------
 
 # Logging parameters
-grp_exp = 1
-num_exp = 1
-
+grp_exp = 2
+num_exp = 5
 
 # Hardware parameters
 num_gpu = 1
 num_worker = 8 * num_gpu
-enable_amp = True
+enable_amp = False
 
 # Data parameters
-batch_size = 20 * num_gpu  # total batch size across all gpus
+batch_size = 24 * num_gpu  # total batch size across all gpus
 batch_size_val = batch_size // 2
-batch_size_test = batch_size // 4
+# batch_size_test = batch_size // 2
 
 grid_size = 0.1
 point_max = 102400
@@ -37,38 +37,25 @@ patch_size = 1024
 
 # Optimization parameters
 lr = 1e-3
-epoch = 6
-eval_epoch = epoch
-warmup_steps = 500
+epoch = 3200
+eval_epoch = epoch // 10
 
-# Features
-learned_masked_feat = True
-feat_keys = ["color", "strength"]
+# Dataset / task
+num_classes = 11
+ignore_index = num_classes
+
+# Features (LitePT encodes XYZ via serialization; RGB only in feat_keys)
+feat_keys = ["color"]
 coord_feat_scale = 0.1
 
+# Test
+test_single_fragment = True
+
 # Wandb parameters
-wandb_run_name = (
-    f"Flair3D+ LitePT mono elevation {grp_exp}.{num_exp}) lr={lr}"
-)
-wandb_project = "flair3d_elevation"
+wandb_run_name = f"H3D LitePT semseg (2.5) lr=0.001 epoch=3200"
+wandb_project = "pointcept_h3d"
 
-# -----------------------------------------------------------------------------
-# Mono-task regression configuration
-# -----------------------------------------------------------------------------
-from pointcept.datasets.flair3d_config_utils import (
-    get_elevation_config,
-    FLAIR3D_COLLECT_PREFIX_LITEPT,
-    init_multitask_collect_keys,
-)
-
-target_key = "elevation"
-target_keys = (target_key,)
-origin_target_key = f"origin_{target_key}"
-
-regression_config = get_elevation_config()
-nmae_offset = regression_config["nmae_offset"]
-
-del get_elevation_config
+log_test_f1 = True
 
 # -----------------------------------------------------------------------------
 # Hooks
@@ -78,25 +65,23 @@ hooks = [
     dict(type="ModelHook"),
     dict(type="IterationTimer", warmup_iter=2),
     dict(type="InformationWriter", log_interval=100),
-    dict(type="RegressionEvaluator"),
+    dict(type="SemSegEvaluator", write_cls_iou=True),
     dict(type="CheckpointSaver", save_freq=None),
     dict(type="PreciseEvaluator", test_last=False),
 ]
 
-test_single_fragment = True
-test = dict(type="RegressionTester", verbose=True)
+test = dict(type="SemSegTester", verbose=True)
 
 # -----------------------------------------------------------------------------
 # Model
 # -----------------------------------------------------------------------------
 model = dict(
-    type="DefaultRegressorV2",
-    target_key=target_key,
+    type="DefaultSegmentorV2",
+    num_classes=num_classes,
     backbone_out_channels=72,
-    criteria=[dict(type="SmoothL1Loss", beta=1.0, loss_weight=1.0)],
     backbone=dict(
         type="LitePT-v1",
-        in_channels=4,  # RGB + strength
+        in_channels=3,  # RGB
         order=("z", "z-trans", "hilbert", "hilbert-trans"),
         stride=(2, 2, 2, 2),
         enc_depths=(2, 2, 2, 6, 2),
@@ -123,10 +108,10 @@ model = dict(
         pre_norm=True,
         enc_mode=False,
     ),
-    feature_mask_values=dict(
-        enable=learned_masked_feat,
-        masked_feat_keys=["color", "strength"],
-    ),
+    criteria=[
+        dict(type="CrossEntropyLoss", loss_weight=1.0, ignore_index=ignore_index),
+        dict(type="LovaszLoss", mode="multiclass", loss_weight=1.0, ignore_index=ignore_index),
+    ],
 )
 
 # -----------------------------------------------------------------------------
@@ -134,44 +119,45 @@ model = dict(
 # -----------------------------------------------------------------------------
 optimizer = dict(type="AdamW", lr=lr, weight_decay=0.005)
 scheduler = dict(
-    type="LinearLR",
-    start_factor=1 / 10,
-    total_iters=warmup_steps,
+    type="OneCycleLR",
+    max_lr=[lr, lr / 10],
+    pct_start=0.05,
+    anneal_strategy="cos",
+    div_factor=10.0,
+    final_div_factor=1000.0,
 )
 param_dicts = [dict(keyword="block", lr=lr / 10)]
 
 # -----------------------------------------------------------------------------
 # Dataset
 # -----------------------------------------------------------------------------
-dataset_type = "Flair3DDataset"
-data_root = "data/flair3d_plus"
-csv_manifest = "data/flair3d_plus/raw/scene_split_manifest.csv"
-missing_tiles_manifest = "data/flair3d_plus/missing_ply_preflight.txt"
-too_small_tiles_manifest = "data/flair3d_plus/too_small_tiles.csv"
+dataset_type = "H3DDataset"
+data_root = "data/h3d"
 
-train_collect_keys, val_collect_keys, index_valid_keys = init_multitask_collect_keys(
-    target_keys, collect_prefix_keys=FLAIR3D_COLLECT_PREFIX_LITEPT
-)
-
-del FLAIR3D_COLLECT_PREFIX_LITEPT, init_multitask_collect_keys
+class_names = [
+    "Low Vegetation",
+    "Impervious Surface",
+    "Vehicle",
+    "Urban Furniture",
+    "Roof",
+    "Façade",
+    "Shrub",
+    "Tree",
+    "Soil or Gravel",
+    "Vertical Surface",
+    "Chimney",
+    "Void",
+]
 
 data = dict(
-    target_key=target_key,
-    nmae_offset=nmae_offset,
+    num_classes=num_classes,
+    ignore_index=ignore_index,
+    names=class_names,
     train=dict(
         type=dataset_type,
         split="train",
         data_root=data_root,
-        csv_manifest=csv_manifest,
-        missing_tiles_manifest=missing_tiles_manifest,
-        too_small_tiles_manifest=too_small_tiles_manifest,
-        target_keys=list(target_keys),
-        primary_target_key=target_key,
         transform=[
-            dict(
-                type="Update",
-                keys_dict={"index_valid_keys": list(index_valid_keys)},
-            ),
             dict(type="CenterShift", apply_z=True),
             dict(type="RandomDropout", dropout_ratio=0.2, dropout_application_ratio=0.2),
             dict(type="RandomRotate", angle=[-1, 1], axis="z", center=[0, 0, 0], p=0.5),
@@ -191,15 +177,11 @@ data = dict(
             dict(type="SphereCrop", point_max=point_max, mode="random"),
             dict(type="CenterShift", apply_z=False),
             dict(type="NormalizeColor"),
-            dict(type="RandomDropColor", drop_ratio=1.0, drop_application_ratio=0.2, keep_mask=True),
-            dict(type="RandomDropColor", drop_ratio=0.1, drop_application_ratio=0.5, keep_mask=True),
-            dict(type="RandomDropStrength", drop_ratio=1.0, drop_application_ratio=0.2, keep_mask=True),
-            dict(type="RandomDropStrength", drop_ratio=0.1, drop_application_ratio=0.5, keep_mask=True),
             dict(type="ToTensor"),
             dict(type="Update", keys_dict={"grid_size": grid_size}),
             dict(
                 type="Collect",
-                keys=train_collect_keys,
+                keys=("coord", "grid_coord", "segment", "grid_size"),
                 feat_keys=feat_keys,
                 feat_scales=dict(coord=coord_feat_scale),
             ),
@@ -210,21 +192,9 @@ data = dict(
         type=dataset_type,
         split="val",
         data_root=data_root,
-        csv_manifest=csv_manifest,
-        missing_tiles_manifest=missing_tiles_manifest,
-        too_small_tiles_manifest=too_small_tiles_manifest,
-        target_keys=list(target_keys),
-        primary_target_key=target_key,
         transform=[
-            dict(
-                type="Update",
-                keys_dict={"index_valid_keys": list(index_valid_keys)},
-            ),
             dict(type="CenterShift", apply_z=True),
-            dict(
-                type="Copy",
-                keys_dict={target_key: origin_target_key},
-            ),
+            dict(type="Copy", keys_dict={"segment": "origin_segment"}),
             dict(
                 type="GridSample",
                 grid_size=grid_size,
@@ -236,10 +206,9 @@ data = dict(
             dict(type="CenterShift", apply_z=False),
             dict(type="NormalizeColor"),
             dict(type="ToTensor"),
-            dict(type="Update", keys_dict={"grid_size": grid_size}),
             dict(
                 type="Collect",
-                keys=val_collect_keys,
+                keys=("coord", "grid_coord", "segment", "origin_segment", "inverse"),
                 feat_keys=feat_keys,
                 feat_scales=dict(coord=coord_feat_scale),
             ),
@@ -250,11 +219,6 @@ data = dict(
         type=dataset_type,
         split="test",
         data_root=data_root,
-        csv_manifest=csv_manifest,
-        missing_tiles_manifest=missing_tiles_manifest,
-        too_small_tiles_manifest=too_small_tiles_manifest,
-        target_keys=list(target_keys),
-        primary_target_key=target_key,
         transform=[
             dict(type="CenterShift", apply_z=True),
             dict(type="NormalizeColor"),

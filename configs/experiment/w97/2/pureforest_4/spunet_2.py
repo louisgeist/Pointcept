@@ -35,6 +35,7 @@ eval_epoch = 10
 # Features
 learned_masked_feat = True
 feat_keys = ["coord", "color",]
+coord_feat_scale = 0.1
 
 # Wandb parameters
 wandb_run_name = (
@@ -132,6 +133,7 @@ _val_test_transform = [
         type="Collect",
         keys=("coord", "grid_coord", "category"),
         feat_keys=["coord", "color"],
+        feat_scales=dict(coord=coord_feat_scale),
         optional_keys=("name",),
     ),
 ]
@@ -171,6 +173,7 @@ data = dict(
                 type="Collect",
                 keys=("coord", "grid_coord", "category"),
                 feat_keys=["coord", "color"],
+                feat_scales=dict(coord=coord_feat_scale),
                 optional_keys=("name",),
             ),
         ],
