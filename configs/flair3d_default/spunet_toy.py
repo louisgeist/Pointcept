@@ -25,6 +25,9 @@ enable_amp = True
 batch_size = 20 * num_gpu  # total batch size across all gpus
 batch_size_val = batch_size // 2
 batch_size_test = batch_size // 2
+train_max_sample = 20
+val_max_sample = 100
+test_max_sample = val_max_sample
 
 grid_size = 0.1
 point_max = 100000
@@ -49,9 +52,11 @@ wandb_project = "flair3d_multi"
 # -----------------------------------------------------------------------------
 # Multitask configuration : targets configuraiton
 # -----------------------------------------------------------------------------
-from pointcept.datasets.flair3d_plus_label_task_config import (
+from pointcept.datasets.flair3d_config_utils import (
     get_multitask_regression_task_config_elevation,
     get_semantic_config,
+    FLAIR3D_COLLECT_PREFIX_GRID,
+    init_multitask_collect_keys,
 )
 
 semantic_target_keys = ("segment", "forest", "land_use", "natural_habitat")
@@ -162,46 +167,13 @@ csv_manifest = "data/flair3d_plus/raw/scene_split_manifest_D067.csv"
 missing_tiles_manifest = "data/flair3d_plus/missing_ply_preflight.txt"
 too_small_tiles_manifest = "data/flair3d_plus/too_small_tiles.csv"
 
-train_multitask_keys = (
-    "coord",
-    "grid_coord",
-    "segment",
-    "forest",
-    "land_use",
-    "natural_habitat",
-    "elevation",
+train_multitask_keys, val_multitask_keys, multitask_index_valid_keys = (
+    init_multitask_collect_keys(
+        target_keys, collect_prefix_keys=FLAIR3D_COLLECT_PREFIX_GRID
+    )
 )
-val_multitask_keys = (
-    "coord",
-    "grid_coord",
-    "segment",
-    "origin_segment",
-    "forest",
-    "origin_forest",
-    "land_use",
-    "origin_land_use",
-    "natural_habitat",
-    "origin_natural_habitat",
-    "elevation",
-    "origin_elevation",
-    "inverse",
-)
-multitask_index_valid_keys = (
-    "coord",
-    "color",
-    "normal",
-    "color_mask",
-    "normal_mask",
-    "superpoint",
-    "strength",
-    "strength_mask",
-    "segment",
-    "instance",
-    "forest",
-    "land_use",
-    "natural_habitat",
-    "elevation",
-)
+
+del FLAIR3D_COLLECT_PREFIX_GRID, init_multitask_collect_keys
 
 data = dict(
     num_classes=num_classes,
@@ -218,6 +190,7 @@ data = dict(
         too_small_tiles_manifest=too_small_tiles_manifest,
         target_keys=list(target_keys),
         primary_target_key=main_task,
+        max_sample=train_max_sample,
         transform=[
             dict(
                 type="Update",
@@ -265,6 +238,7 @@ data = dict(
         too_small_tiles_manifest=too_small_tiles_manifest,
         target_keys=list(target_keys),
         primary_target_key=main_task,
+        max_sample=val_max_sample,
         transform=[
             dict(
                 type="Update",
@@ -309,6 +283,7 @@ data = dict(
         too_small_tiles_manifest=too_small_tiles_manifest,
         target_keys=list(target_keys),
         primary_target_key=main_task,
+        max_sample=test_max_sample,
         transform=[
             dict(type="CenterShift", apply_z=True),
             dict(type="NormalizeColor"),

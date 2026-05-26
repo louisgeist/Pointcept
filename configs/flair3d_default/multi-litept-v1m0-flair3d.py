@@ -41,7 +41,7 @@ mix_prob = 0.8
 patch_size = 1024
 
 # Optimization parameters
-lr = 2e-3
+lr = 1e-3
 epoch = 1
 eval_epoch = 1
 warmup_steps = 500
@@ -59,9 +59,11 @@ wandb_project = "flair3d_multi"
 # -----------------------------------------------------------------------------
 # Multitask configuration : targets configuraiton
 # -----------------------------------------------------------------------------
-from pointcept.datasets.flair3d_plus_label_task_config import (
+from pointcept.datasets.flair3d_config_utils import (
     get_multitask_regression_task_config_elevation,
     get_semantic_config,
+    FLAIR3D_COLLECT_PREFIX_LITEPT,
+    init_multitask_collect_keys,
 )
 
 semantic_target_keys = ("segment", "forest", "land_use", "natural_habitat")
@@ -190,48 +192,13 @@ csv_manifest = "data/flair3d_plus/raw/scene_split_manifest.csv"
 missing_tiles_manifest = "data/flair3d_plus/missing_ply_preflight.txt"
 too_small_tiles_manifest = "data/flair3d_plus/too_small_tiles.csv"
 
-train_multitask_keys = (
-    "coord",
-    "grid_coord",
-    "grid_size",
-    "segment",
-    "forest",
-    "land_use",
-    "natural_habitat",
-    "elevation",
+train_multitask_keys, val_multitask_keys, multitask_index_valid_keys = (
+    init_multitask_collect_keys(
+        target_keys, collect_prefix_keys=FLAIR3D_COLLECT_PREFIX_LITEPT
+    )
 )
-val_multitask_keys = (
-    "coord",
-    "grid_coord",
-    "grid_size",
-    "segment",
-    "origin_segment",
-    "forest",
-    "origin_forest",
-    "land_use",
-    "origin_land_use",
-    "natural_habitat",
-    "origin_natural_habitat",
-    "elevation",
-    "origin_elevation",
-    "inverse",
-)
-multitask_index_valid_keys = (
-    "coord",
-    "color",
-    "normal",
-    "color_mask",
-    "normal_mask",
-    "superpoint",
-    "strength",
-    "strength_mask",
-    "segment",
-    "instance",
-    "forest",
-    "land_use",
-    "natural_habitat",
-    "elevation",
-)
+
+del FLAIR3D_COLLECT_PREFIX_LITEPT, init_multitask_collect_keys
 
 data = dict(
     num_classes=num_classes,

@@ -52,9 +52,11 @@ wandb_project = "flair3d_segment"
 # -----------------------------------------------------------------------------
 # Mono-task configuration : targets configuraiton
 # -----------------------------------------------------------------------------
-from pointcept.datasets.flair3d_plus_label_task_config import (
+from pointcept.datasets.flair3d_config_utils import (
     init_task_configs,
     init_task_criteria,
+    FLAIR3D_COLLECT_PREFIX_GRID,
+    init_multitask_collect_keys,
 )
 
 main_task = "segment"
@@ -139,34 +141,13 @@ csv_manifest = "data/flair3d_plus/raw/scene_split_manifest.csv"
 missing_tiles_manifest = "data/flair3d_plus/missing_ply_preflight.txt"
 too_small_tiles_manifest = "data/flair3d_plus/too_small_tiles.csv"
 
-train_multitask_keys = (
-    "coord",
-    "grid_coord",
-    main_task,
+train_multitask_keys, val_multitask_keys, multitask_index_valid_keys = (
+    init_multitask_collect_keys(
+        target_keys, collect_prefix_keys=FLAIR3D_COLLECT_PREFIX_GRID
+    )
 )
-val_multitask_keys = (
-    "coord",
-    "grid_coord",
-    main_task,
-    origin_main_task,
-    "inverse",
-)
-multitask_index_valid_keys = (
-    "coord",
-    "color",
-    "normal",
-    "color_mask",
-    "normal_mask",
-    "superpoint",
-    "strength",
-    "strength_mask",
-    "segment",
-    "instance",
-    "forest",
-    "land_use",
-    "natural_habitat",
-    "elevation",
-)
+
+del FLAIR3D_COLLECT_PREFIX_GRID, init_multitask_collect_keys
 
 data = dict(
     num_classes=num_classes,

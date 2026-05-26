@@ -38,7 +38,7 @@ point_max = 40000
 mix_prob = 0.8
 
 # Optimization parameters
-lr = 5e-5
+lr = 1e-3
 epoch = 1
 eval_epoch = 1
 warmup_steps = 5000*4
@@ -56,9 +56,10 @@ wandb_project = "flair3d_multi"
 # -----------------------------------------------------------------------------
 # Multitask configuration : targets configuraiton
 # -----------------------------------------------------------------------------
-from pointcept.datasets.flair3d_plus_label_task_config import (
+from pointcept.datasets.flair3d_config_utils import (
     get_multitask_regression_task_config_elevation,
     get_semantic_config,
+    init_multitask_collect_keys,
 )
 
 semantic_target_keys = ("segment", "forest", "land_use", "natural_habitat")
@@ -192,44 +193,11 @@ csv_manifest = "data/flair3d_plus/raw/scene_split_manifest.csv"
 missing_tiles_manifest = "data/flair3d_plus/missing_ply_preflight.txt"
 too_small_tiles_manifest = "data/flair3d_plus/too_small_tiles.csv"
 
-train_multitask_keys = (
-    "coord",
-    "segment",
-    "forest",
-    "land_use",
-    "natural_habitat",
-    "elevation",
+train_multitask_keys, val_multitask_keys, multitask_index_valid_keys = (
+    init_multitask_collect_keys(target_keys)
 )
-val_multitask_keys = (
-    "coord",
-    "segment",
-    "origin_segment",
-    "forest",
-    "origin_forest",
-    "land_use",
-    "origin_land_use",
-    "natural_habitat",
-    "origin_natural_habitat",
-    "elevation",
-    "origin_elevation",
-    "inverse",
-)
-multitask_index_valid_keys = (
-    "coord",
-    "color",
-    "normal",
-    "color_mask",
-    "normal_mask",
-    "superpoint",
-    "strength",
-    "strength_mask",
-    "segment",
-    "instance",
-    "forest",
-    "land_use",
-    "natural_habitat",
-    "elevation",
-)
+
+del init_multitask_collect_keys
 
 data = dict(
     num_classes=num_classes,
