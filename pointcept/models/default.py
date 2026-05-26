@@ -224,6 +224,65 @@ class DefaultSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
 
 
 @MODELS.register_module()
+class DefaultRegressorV2(nn.Module, LearnedMaskedFeatMixin):
+    """Point-wise scalar regression (mirror of DefaultSegmentorV2).
+
+    Reads float targets from input_dict[target_key] and writes predictions to reg_pred.
+    """
+
+    def __init__(
+        self,
+        backbone_out_channels,
+        target_key="elevation",
+        backbone=None,
+        criteria=None,
+        freeze_backbone=False,
+        feature_mask_values=None,
+    ):
+        super().__init__()
+        self.target_key = str(target_key)
+        self.reg_head = nn.Linear(backbone_out_channels, 1)
+        self.backbone = build_model(backbone)
+        self.criteria = build_criteria(criteria)
+        self._init_learned_masked_feat(feature_mask_values=feature_mask_values)
+        self.freeze_backbone = freeze_backbone
+        if self.freeze_backbone:
+            for p in self.backbone.parameters():
+                p.requires_grad = False
+
+    def _forward_backbone(self, input_dict):
+        point = Point(input_dict)
+        point = self.backbone(point)
+        if isinstance(point, Point):
+            while "pooling_parent" in point.keys():
+                assert "pooling_inverse" in point.keys()
+                parent = point.pop("pooling_parent")
+                inverse = point.pop("pooling_inverse")
+                parent.feat = torch.cat([parent.feat, point.feat[inverse]], dim=-1)
+                point = parent
+            feat = point.feat
+        else:
+            feat = point
+        return feat, point
+
+    def forward(self, input_dict, return_point=False):
+        self._fill_masked_feat_with_learned_value(input_dict)
+        feat, point = self._forward_backbone(input_dict)
+        reg_pred = self.reg_head(feat).squeeze(-1)
+        return_dict = dict(reg_pred=reg_pred)
+        if return_point:
+            return_dict["point"] = point
+
+        has_target = self.target_key in input_dict
+        if self.training or has_target:
+            target = input_dict[self.target_key].float().reshape(-1)
+            loss = self.criteria(reg_pred.reshape(-1), target)
+            return_dict["loss"] = loss
+
+        return return_dict
+
+
+@MODELS.register_module()
 class MultiTaskSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
     """Backbone-shared multi-task segmentor (semantic classification + optional regression).
     

@@ -349,6 +349,184 @@ class SemSegEvaluator(HookBase):
             "Best {}: {:.4f}".format("mIoU", self.trainer.best_metric_value)
         )
 
+
+@HOOKS.register_module()
+class RegressionEvaluator(HookBase):
+    """Single-task point-wise regression validation (reg_pred vs cfg.data.target_key)."""
+
+    def __init__(self):
+        self._best_neg_rmse = float("-inf")
+
+    def before_train(self):
+        if self.trainer.writer is not None and self.trainer.cfg.enable_wandb:
+            wandb.define_metric("val/*", step_metric="Epoch")
+            wandb.define_metric("val/reg/*", step_metric="Epoch")
+
+    def after_epoch(self):
+        if self.trainer.cfg.evaluate:
+            self.eval()
+
+    @staticmethod
+    def _cfg_get(obj, key, default=None):
+        if isinstance(obj, dict):
+            return obj.get(key, default)
+        return getattr(obj, key, default)
+
+    def _target_key(self):
+        data_cfg = self.trainer.cfg.data
+        target_key = self._cfg_get(data_cfg, "target_key", None)
+        if target_key is not None:
+            return str(target_key)
+        raise ValueError("RegressionEvaluator requires cfg.data.target_key.")
+
+    def _nmae_offset(self):
+        data_cfg = self.trainer.cfg.data
+        return float(self._cfg_get(data_cfg, "nmae_offset", 0.5))
+
+    @staticmethod
+    def _origin_target_key(target_key):
+        return f"origin_{target_key}"
+
+    @staticmethod
+    def _gather_masked(pred, target):
+        mask = torch.isfinite(pred) & torch.isfinite(target)
+        if mask.sum() == 0:
+            return None, None
+        return pred[mask], target[mask]
+
+    def eval(self):
+        self.trainer.logger.info(">>>>>>>>>>>>>>>> Start Evaluation >>>>>>>>>>>>>>>>")
+        self.trainer.model.eval()
+        target_key = self._target_key()
+        origin_key = self._origin_target_key(target_key)
+        nmae_offset = self._nmae_offset()
+        reg_sums = {"mae": 0.0, "mse": 0.0, "nmae": 0.0, "count": 0.0, "n_nmae": 0.0}
+
+        loader = self.trainer.val_loader
+        n_batches = len(loader)
+        with EvaluationProgressBar(
+            n_batches,
+            desc="Val regression",
+        ) as prog:
+            for i, input_dict in enumerate(loader):
+                for key in input_dict.keys():
+                    if isinstance(input_dict[key], torch.Tensor):
+                        input_dict[key] = input_dict[key].cuda(non_blocking=True)
+                with torch.no_grad():
+                    output_dict = self.trainer.model(input_dict)
+                loss = output_dict["loss"]
+                pred = output_dict["reg_pred"].reshape(-1).float()
+                target = input_dict[target_key].reshape(-1).float()
+                if "inverse" in input_dict.keys():
+                    if origin_key in input_dict:
+                        pred = remap_pred_with_inverse(
+                            pred,
+                            input_dict["inverse"],
+                            input_dict.get("offset"),
+                            input_dict.get("origin_offset"),
+                        )
+                        target = input_dict[origin_key].reshape(-1).float()
+                p, t = self._gather_masked(pred, target)
+                if p is not None:
+                    mae_b, mse_b, nmae_b, cnt_b, n_nmae_b = accumulate_regression_errors(
+                        p, t, nmae_offset=nmae_offset
+                    )
+                    reg_sums["mae"] += mae_b
+                    reg_sums["mse"] += mse_b
+                    reg_sums["nmae"] += nmae_b
+                    reg_sums["count"] += cnt_b
+                    reg_sums["n_nmae"] += n_nmae_b
+                self.trainer.storage.put_scalar("val_loss", loss.item())
+                postfix = dict(loss=float(loss.item()))
+                if "origin_coord" in input_dict.keys():
+                    postfix["interp"] = True
+                prog.step(**postfix)
+
+        loss_avg = self.trainer.storage.history("val_loss").avg
+        if comm.get_world_size() > 1:
+            buf = torch.tensor(
+                [
+                    reg_sums["mae"],
+                    reg_sums["mse"],
+                    reg_sums["nmae"],
+                    reg_sums["count"],
+                    reg_sums["n_nmae"],
+                ],
+                dtype=torch.float64,
+                device="cuda",
+            )
+            dist.all_reduce(buf)
+            flat = buf.cpu().tolist()
+            reg_sums["mae"] = flat[0]
+            reg_sums["mse"] = flat[1]
+            reg_sums["nmae"] = flat[2]
+            reg_sums["count"] = flat[3]
+            reg_sums["n_nmae"] = flat[4]
+
+        current_epoch = self.trainer.epoch + 1
+        cnt = reg_sums["count"]
+        writer = self.trainer.writer
+        enable_wandb = self.trainer.cfg.enable_wandb
+        current_metric_value = float("-inf")
+        reg_wandb = {"Epoch": current_epoch, "val/loss": loss_avg}
+        if cnt > 1e-8:
+            mae = reg_sums["mae"] / cnt
+            rmse = (reg_sums["mse"] / cnt) ** 0.5
+            n_nmae = reg_sums["n_nmae"]
+            excluded_nmae = cnt - n_nmae
+            nmae_excluded_frac = excluded_nmae / cnt if cnt > 1e-8 else float("nan")
+            nmae = reg_sums["nmae"] / n_nmae if n_nmae > 1e-8 else float("nan")
+            current_metric_value = -rmse
+            self.trainer.logger.info(
+                "Val regression: MAE {:.6f} RMSE {:.6f} nMAE {:.6f} "
+                "(n={:.0f}, n_nmae={:.0f}, nmae_excluded={:.4f}).".format(
+                    mae, rmse, nmae, cnt, n_nmae, nmae_excluded_frac
+                )
+            )
+            if writer is not None:
+                writer.add_scalar("val/loss", loss_avg, current_epoch)
+                writer.add_scalar(f"val/reg/{target_key}/mae", mae, current_epoch)
+                writer.add_scalar(f"val/reg/{target_key}/rmse", rmse, current_epoch)
+                if n_nmae > 1e-8:
+                    writer.add_scalar(
+                        f"val/reg/{target_key}/nmae", nmae, current_epoch
+                    )
+                writer.add_scalar(
+                    f"val/reg/{target_key}/nmae_excluded",
+                    nmae_excluded_frac,
+                    current_epoch,
+                )
+            reg_wandb[f"val/reg/{target_key}/mae"] = float(mae)
+            reg_wandb[f"val/reg/{target_key}/rmse"] = float(rmse)
+            if n_nmae > 1e-8:
+                reg_wandb[f"val/reg/{target_key}/nmae"] = float(nmae)
+            reg_wandb[f"val/reg/{target_key}/nmae_excluded"] = float(
+                nmae_excluded_frac
+            )
+
+        if current_metric_value > float("-inf"):
+            self._best_neg_rmse = max(self._best_neg_rmse, current_metric_value)
+            if writer is not None:
+                writer.add_scalar(
+                    "val/reg/rmse_best_neg", self._best_neg_rmse, current_epoch
+                )
+            reg_wandb["val/reg/rmse_best_neg"] = float(self._best_neg_rmse)
+        elif writer is not None:
+            writer.add_scalar("val/loss", loss_avg, current_epoch)
+
+        if enable_wandb and len(reg_wandb) > 1:
+            wandb.log(reg_wandb, step=wandb.run.step)
+
+        self.trainer.logger.info("<<<<<<<<<<<<<<<<< End Evaluation <<<<<<<<<<<<<<<<<")
+        self.trainer.comm_info["current_metric_value"] = current_metric_value
+        self.trainer.comm_info["current_metric_name"] = "neg_RMSE"
+
+    def after_train(self):
+        self.trainer.logger.info(
+            "Best {}: {:.4f}".format("neg_RMSE", self.trainer.best_metric_value)
+        )
+
+
 @HOOKS.register_module()
 class MultiTaskEvaluator(HookBase):
     """Multi-task validation: semantic IoU from seg_logits_by_task; regression from reg_pred_by_task.
@@ -713,12 +891,13 @@ class MultiTaskEvaluator(HookBase):
             rmse = (s["mse"] / cnt) ** 0.5
             n_nmae = s["n_nmae"]
             excluded_nmae = cnt - n_nmae
+            nmae_excluded_frac = excluded_nmae / cnt if cnt > 1e-8 else float("nan")
             nmae = s["nmae"] / n_nmae if n_nmae > 1e-8 else float("nan")
             best_neg_rmse_epoch = max(best_neg_rmse_epoch, -rmse)
             self.trainer.logger.info(
                 "[task={}] Val regression: MAE {:.6f} RMSE {:.6f} nMAE {:.6f} "
-                "(n={:.0f}, n_nmae={:.0f}, excluded_nmae={:.0f}).".format(
-                    task_name, mae, rmse, nmae, cnt, n_nmae, excluded_nmae
+                "(n={:.0f}, n_nmae={:.0f}, nmae_excluded={:.4f}).".format(
+                    task_name, mae, rmse, nmae, cnt, n_nmae, nmae_excluded_frac
                 )
             )
             if writer is not None:
@@ -734,7 +913,7 @@ class MultiTaskEvaluator(HookBase):
                     )
                 writer.add_scalar(
                     f"val/reg/{task_name}/nmae_excluded",
-                    excluded_nmae,
+                    nmae_excluded_frac,
                     current_epoch,
                 )
             if enable_wandb:
@@ -743,7 +922,7 @@ class MultiTaskEvaluator(HookBase):
                 if n_nmae > 1e-8:
                     reg_wandb[f"val/reg/{task_name}/nmae"] = float(nmae)
                 reg_wandb[f"val/reg/{task_name}/nmae_excluded"] = float(
-                    excluded_nmae
+                    nmae_excluded_frac
                 )
         if best_neg_rmse_epoch > float("-inf"):
             self._best_neg_rmse = max(self._best_neg_rmse, best_neg_rmse_epoch)

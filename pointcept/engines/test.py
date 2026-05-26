@@ -437,6 +437,224 @@ class SemSegTester(TesterBase):
 
 
 @TESTERS.register_module()
+class RegressionTester(TesterBase):
+    """Fragment-based test for DefaultRegressorV2 (point-wise MAE/RMSE/nMAE).
+
+    Expects cfg.data.target_key. Ground-truth must be present at full resolution
+    in the sample dict (see Flair3DDataset.prepare_test_data).
+    """
+
+    @staticmethod
+    def _cfg_get(obj, key, default=None):
+        if isinstance(obj, dict):
+            return obj.get(key, default)
+        return getattr(obj, key, default)
+
+    def _target_key(self):
+        target_key = self._cfg_get(self.cfg.data, "target_key", None)
+        if target_key is not None:
+            return str(target_key)
+        raise ValueError("RegressionTester requires cfg.data.target_key.")
+
+    def _nmae_offset(self):
+        return float(self._cfg_get(self.cfg.data, "nmae_offset", 0.5))
+
+    @staticmethod
+    def _origin_target_key(target_key):
+        return f"origin_{target_key}"
+
+    @staticmethod
+    def _gather_masked(pred, target):
+        mask = torch.isfinite(pred) & torch.isfinite(target)
+        if mask.sum() == 0:
+            return None, None
+        return pred[mask], target[mask]
+
+    @staticmethod
+    def _apply_inverse_origin_np(pred_np, scene_extra, target_key):
+        origin_key = RegressionTester._origin_target_key(target_key)
+        if "inverse" not in scene_extra or origin_key not in scene_extra:
+            return pred_np
+        inv = scene_extra["inverse"]
+        if isinstance(inv, torch.Tensor):
+            inv = inv.cpu().numpy()
+        return np.asarray(pred_np).reshape(-1)[inv]
+
+    @staticmethod
+    def _target_for_metrics(target_np, scene_extra, target_key):
+        origin_key = RegressionTester._origin_target_key(target_key)
+        if origin_key in scene_extra:
+            return np.asarray(scene_extra[origin_key]).reshape(-1)
+        return np.asarray(target_np).reshape(-1)
+
+    def test(self):
+        logger = get_root_logger()
+        logger.info(">>>>>>>>>>>>>>>> Start Regression Evaluation >>>>>>>>>>>>>>>>")
+        self.begin_test_timing()
+
+        target_key = self._target_key()
+        nmae_offset = self._nmae_offset()
+        self.model.eval()
+
+        save_path = os.path.join(self.cfg.save_path, "result")
+        make_dirs(save_path)
+        comm.synchronize()
+
+        reg_sums = {"mae": 0.0, "mse": 0.0, "nmae": 0.0, "count": 0.0, "n_nmae": 0.0}
+        n_batches = len(self.test_loader)
+
+        with EvaluationProgressBar(
+            n_batches,
+            desc="Test regression",
+        ) as prog:
+            for idx, data_dict in enumerate(self.test_loader):
+                data_dict = data_dict[0]
+                fragment_list = data_dict.pop("fragment_list")
+                target = data_dict.pop(target_key)
+                data_name = data_dict.pop("name")
+                scene_extra = data_dict
+
+                pred_save_path = os.path.join(
+                    save_path, f"{data_name}_reg_{target_key}.npy"
+                )
+                cached = os.path.isfile(pred_save_path)
+                if cached:
+                    pred_np = np.load(pred_save_path)
+                else:
+                    n_ref = int(np.asarray(target).size)
+                    reg_sum = torch.zeros((n_ref,), device="cuda")
+                    reg_cnt = torch.zeros((n_ref,), device="cuda")
+                    use_voxel_broadcast = "inverse" in fragment_list[0]
+
+                    for i in range(len(fragment_list)):
+                        fragment_batch_size = 1
+                        s_i, e_i = i * fragment_batch_size, min(
+                            (i + 1) * fragment_batch_size, len(fragment_list)
+                        )
+                        input_dict = collate_fn(fragment_list[s_i:e_i])
+                        for key in input_dict.keys():
+                            if isinstance(input_dict[key], torch.Tensor):
+                                input_dict[key] = input_dict[key].cuda(
+                                    non_blocking=True
+                                )
+                        idx_part = input_dict["index"]
+                        with torch.no_grad():
+                            output_dict = self.model(input_dict)
+                            pred_part_all = output_dict["reg_pred"].reshape(-1).float()
+                            if self.cfg.empty_cache:
+                                torch.cuda.empty_cache()
+
+                            bs = 0
+                            for be in input_dict["offset"]:
+                                pred_part = pred_part_all[bs:be]
+                                if use_voxel_broadcast:
+                                    inv = fragment_list[s_i:e_i][0]["inverse"]
+                                    inv = (
+                                        torch.from_numpy(inv).long().cuda()
+                                        if isinstance(inv, np.ndarray)
+                                        else inv.long().cuda()
+                                    )
+                                    gathered = pred_part[inv]
+                                    reg_sum += gathered
+                                    reg_cnt += torch.ones_like(gathered)
+                                else:
+                                    ip = idx_part[bs:be]
+                                    reg_sum[ip] += pred_part
+                                    reg_cnt[ip] += 1
+                                bs = be
+
+                        if self.verbose:
+                            logger.info(
+                                "Test: {}/{}-{data_name}, Batch: {batch_idx}/{batch_num}".format(
+                                    idx + 1,
+                                    len(self.test_loader),
+                                    data_name=data_name,
+                                    batch_idx=i,
+                                    batch_num=len(fragment_list),
+                                )
+                            )
+
+                    pred_np = (reg_sum / reg_cnt.clamp(min=1)).cpu().numpy()
+                    pred_np = self._apply_inverse_origin_np(
+                        pred_np, scene_extra, target_key
+                    )
+                    np.save(pred_save_path, pred_np)
+
+                tgt_np = self._target_for_metrics(target, scene_extra, target_key)
+                p_t = torch.from_numpy(np.asarray(pred_np, dtype=np.float64)).float()
+                t_t = torch.from_numpy(np.asarray(tgt_np, dtype=np.float64)).float()
+                p_m, t_m = self._gather_masked(p_t, t_t)
+                if p_m is not None:
+                    mae_b, mse_b, nmae_b, cnt_b, n_nmae_b = accumulate_regression_errors(
+                        p_m, t_m, nmae_offset=nmae_offset
+                    )
+                    reg_sums["mae"] += mae_b
+                    reg_sums["mse"] += mse_b
+                    reg_sums["nmae"] += nmae_b
+                    reg_sums["count"] += cnt_b
+                    reg_sums["n_nmae"] += n_nmae_b
+
+                prog.step(cached=cached)
+
+        logger.info("Syncing ...")
+        comm.synchronize()
+
+        if comm.get_world_size() > 1:
+            buf = torch.tensor(
+                [
+                    reg_sums["mae"],
+                    reg_sums["mse"],
+                    reg_sums["nmae"],
+                    reg_sums["count"],
+                    reg_sums["n_nmae"],
+                ],
+                dtype=torch.float64,
+                device="cuda",
+            )
+            dist.all_reduce(buf)
+            flat = buf.cpu().tolist()
+            reg_sums["mae"] = flat[0]
+            reg_sums["mse"] = flat[1]
+            reg_sums["nmae"] = flat[2]
+            reg_sums["count"] = flat[3]
+            reg_sums["n_nmae"] = flat[4]
+
+        log_dict = None
+        if comm.is_main_process():
+            cnt = reg_sums["count"]
+            if cnt > 1e-8:
+                mae = reg_sums["mae"] / cnt
+                rmse = (reg_sums["mse"] / cnt) ** 0.5
+                n_nmae = reg_sums["n_nmae"]
+                excluded_nmae = cnt - n_nmae
+                nmae_excluded_frac = excluded_nmae / cnt if cnt > 1e-8 else float("nan")
+                nmae = reg_sums["nmae"] / n_nmae if n_nmae > 1e-8 else float("nan")
+                logger.info(
+                    "Test regression: MAE {:.6f} RMSE {:.6f} nMAE {:.6f} "
+                    "(n={:.0f}, n_nmae={:.0f}, nmae_excluded={:.4f}).".format(
+                        mae, rmse, nmae, cnt, n_nmae, nmae_excluded_frac
+                    )
+                )
+                log_dict = {
+                    f"test/reg/{target_key}/mae": float(mae),
+                    f"test/reg/{target_key}/rmse": float(rmse),
+                    f"test/reg/{target_key}/nmae_excluded": float(
+                        nmae_excluded_frac
+                    ),
+                }
+                if n_nmae > 1e-8:
+                    log_dict[f"test/reg/{target_key}/nmae"] = float(nmae)
+
+        self.end_test_timing_and_log(extra_log_dict=log_dict)
+        if comm.is_main_process():
+            logger.info("<<<<<<<<<<<<<<<<< End Evaluation <<<<<<<<<<<<<<<<<")
+
+    @staticmethod
+    def collate_fn(batch):
+        return batch
+
+
+@TESTERS.register_module()
 class MultiTaskTester(TesterBase):
     """Fragment-based test for MultiTaskSegmentorV2 (semantic IoU + regression MAE/RMSE/nMAE).
 
@@ -948,17 +1166,18 @@ class MultiTaskTester(TesterBase):
                 rmse = (s["mse"] / cnt) ** 0.5
                 n_nmae = s["n_nmae"]
                 excluded_nmae = cnt - n_nmae
+                nmae_excluded_frac = excluded_nmae / cnt if cnt > 1e-8 else float("nan")
                 nmae = s["nmae"] / n_nmae if n_nmae > 1e-8 else float("nan")
                 logger.info(
                     "[task={}] Test regression: MAE {:.6f} RMSE {:.6f} nMAE {:.6f} "
-                    "(n={:.0f}, n_nmae={:.0f}, excluded_nmae={:.0f}).".format(
+                    "(n={:.0f}, n_nmae={:.0f}, nmae_excluded={:.4f}).".format(
                         task_name,
                         mae,
                         rmse,
                         nmae,
                         cnt,
                         n_nmae,
-                        excluded_nmae,
+                        nmae_excluded_frac,
                     )
                 )
                 log_dict[f"test/reg/{task_name}/mae"] = float(mae)
@@ -966,7 +1185,7 @@ class MultiTaskTester(TesterBase):
                 if n_nmae > 1e-8:
                     log_dict[f"test/reg/{task_name}/nmae"] = float(nmae)
                 log_dict[f"test/reg/{task_name}/nmae_excluded"] = float(
-                    excluded_nmae
+                    nmae_excluded_frac
                 )
 
             log_test_f1 = getattr(self.cfg, "log_test_f1", False)
