@@ -60,51 +60,32 @@ wandb_project = "flair3d_multi"
 # Multitask configuration : targets configuraiton
 # -----------------------------------------------------------------------------
 from pointcept.datasets.flair3d_config_utils import (
-    get_multitask_regression_task_config_elevation,
-    get_semantic_config,
+    init_task_configs,
+    init_task_criteria,
+    FLAIR3D_COLLECT_PREFIX_LITEPT,
+    init_multitask_collect_keys,
 )
 
 semantic_target_keys = ("segment", "forest", "land_use", "natural_habitat")
 target_keys = semantic_target_keys + ("elevation",)
 main_task = "segment"
 
-task_configs = {task_name: get_semantic_config(task_name) for task_name in semantic_target_keys}
-task_configs["elevation"] = get_multitask_regression_task_config_elevation()
+task_configs = init_task_configs(target_keys)
+task_criteria = init_task_criteria(task_configs)
+task_weights = {task_name: 1.0 for task_name in task_configs.keys()}
 
 # Remove the imported helpers from this module's namespace so they do not leak
 # into the Pointcept config dict. The config loader (pointcept/utils/config.py)
 # treats every non-dunder module attribute as a config entry, and Config.dump
 # pipes the resulting Python text through yapf. Yapf cannot reformat function
 # objects rendered as "<function ... at 0x...>" and raises a SyntaxError.
-del get_semantic_config, get_multitask_regression_task_config_elevation
+del init_task_configs, init_task_criteria
 
 # main_task drives checkpoint selection / mIoU logging, so its num_classes,
 # ignore_index and names are exposed at the data root for backward-compat hooks.
 num_classes = task_configs[main_task]["num_classes"]
 ignore_index = task_configs[main_task]["ignore_index"]
 names = task_configs[main_task]["names"]
-
-task_criteria = {
-    task_name: [
-        dict(
-            type="CrossEntropyLoss",
-            loss_weight=1.0,
-            ignore_index=task_configs[task_name]["ignore_index"],
-        ),
-        dict(
-            type="LovaszLoss",
-            mode="multiclass",
-            loss_weight=1.0,
-            ignore_index=task_configs[task_name]["ignore_index"],
-        ),
-    ]
-    for task_name in semantic_target_keys
-}
-task_criteria["elevation"] = [
-    dict(type="SmoothL1Loss", beta=1.0, loss_weight=1.0),
-]
-
-task_weights = {task_name: 1.0 for task_name in task_configs.keys()}
 
 # -----------------------------------------------------------------------------
 # Hooks
@@ -190,48 +171,13 @@ csv_manifest = "data/flair3d_plus/raw/scene_split_manifest.csv"
 missing_tiles_manifest = "data/flair3d_plus/missing_ply_preflight.txt"
 too_small_tiles_manifest = "data/flair3d_plus/too_small_tiles.csv"
 
-train_multitask_keys = (
-    "coord",
-    "grid_coord",
-    "grid_size",
-    "segment",
-    "forest",
-    "land_use",
-    "natural_habitat",
-    "elevation",
+train_multitask_keys, val_multitask_keys, multitask_index_valid_keys = (
+    init_multitask_collect_keys(
+        target_keys, collect_prefix_keys=FLAIR3D_COLLECT_PREFIX_LITEPT
+    )
 )
-val_multitask_keys = (
-    "coord",
-    "grid_coord",
-    "grid_size",
-    "segment",
-    "origin_segment",
-    "forest",
-    "origin_forest",
-    "land_use",
-    "origin_land_use",
-    "natural_habitat",
-    "origin_natural_habitat",
-    "elevation",
-    "origin_elevation",
-    "inverse",
-)
-multitask_index_valid_keys = (
-    "coord",
-    "color",
-    "normal",
-    "color_mask",
-    "normal_mask",
-    "superpoint",
-    "strength",
-    "strength_mask",
-    "segment",
-    "instance",
-    "forest",
-    "land_use",
-    "natural_habitat",
-    "elevation",
-)
+
+del FLAIR3D_COLLECT_PREFIX_LITEPT, init_multitask_collect_keys
 
 data = dict(
     num_classes=num_classes,
