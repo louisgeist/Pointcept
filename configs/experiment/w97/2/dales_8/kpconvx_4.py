@@ -20,7 +20,7 @@ grp_exp = 8
 num_exp = 4
 
 # Hardware parameters
-num_gpu = 1
+num_gpu = 2
 num_worker = 8 * num_gpu
 enable_amp = False
 
