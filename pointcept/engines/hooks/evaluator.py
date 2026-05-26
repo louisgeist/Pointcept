@@ -23,31 +23,52 @@ from .default import HookBase
 from .builder import HOOKS
 
 
-def remap_pred_with_inverse(pred_voxel, inverse, offset=None):
+def _offset_to_list(offset):
+    if offset is None:
+        return None
+    if isinstance(offset, torch.Tensor):
+        return offset.tolist()
+    return list(offset)
+
+
+def remap_pred_with_inverse(
+    pred_voxel, inverse, offset=None, origin_offset=None
+):
     """Map voxel-level predictions back to full-resolution points.
 
     When multiple scenes are collated for validation, each scene's ``inverse`` indices
     are local (0 .. num_voxels-1) while ``pred_voxel`` is concatenated scene-by-scene.
+    ``offset`` marks voxel boundaries; ``origin_offset`` marks full-resolution boundaries.
     """
-    if offset is None:
+    if origin_offset is None:
         return pred_voxel[inverse]
+
+    voxel_ends = _offset_to_list(offset)
+    point_ends = _offset_to_list(origin_offset)
+    if voxel_ends is None or point_ends is None:
+        return pred_voxel[inverse]
+    if len(voxel_ends) != len(point_ends):
+        raise ValueError(
+            f"offset and origin_offset must have the same batch length, "
+            f"got {len(voxel_ends)} vs {len(point_ends)}"
+        )
 
     pred_full = []
     voxel_start = 0
     point_start = 0
-    if isinstance(offset, torch.Tensor):
-        offsets = offset.tolist()
-    else:
-        offsets = list(offset)
-    for end in offsets:
-        end = int(end)
-        inv = inverse[point_start:end]
-        n_voxels = int(inv.max()) + 1
-        pred_scene = pred_voxel[voxel_start : voxel_start + n_voxels]
+    for voxel_end, point_end in zip(voxel_ends, point_ends):
+        voxel_end = int(voxel_end)
+        point_end = int(point_end)
+        inv = inverse[point_start:point_end]
+        pred_scene = pred_voxel[voxel_start:voxel_end]
         pred_full.append(pred_scene[inv])
-        voxel_start += n_voxels
-        point_start = end
-    return torch.cat(pred_full)
+        voxel_start = voxel_end
+        point_start = point_end
+    pred_full = torch.cat(pred_full)
+    assert pred_full.shape[0] == inverse.shape[0], (
+        f"remapped pred length {pred_full.shape[0]} != inverse length {inverse.shape[0]}"
+    )
+    return pred_full
 
 
 def mean_iou_from_hist(intersection, union):
@@ -220,7 +241,10 @@ class SemSegEvaluator(HookBase):
             if "inverse" in input_dict.keys():
                 assert "origin_segment" in input_dict.keys()
                 pred = remap_pred_with_inverse(
-                    pred, input_dict["inverse"], input_dict.get("offset")
+                    pred,
+                    input_dict["inverse"],
+                    input_dict.get("offset"),
+                    input_dict.get("origin_offset"),
                 )
                 segment = input_dict["origin_segment"]
             intersection, union, target = intersection_and_union_gpu(
@@ -465,6 +489,7 @@ class MultiTaskEvaluator(HookBase):
                                 pred,
                                 input_dict["inverse"],
                                 input_dict.get("offset"),
+                                input_dict.get("origin_offset"),
                             )
                             target_tensor = input_dict[origin_target_key]
                     intersection, union, target = intersection_and_union_gpu(
@@ -520,6 +545,7 @@ class MultiTaskEvaluator(HookBase):
                                 pred,
                                 input_dict["inverse"],
                                 input_dict.get("offset"),
+                                input_dict.get("origin_offset"),
                             )
                             target = input_dict[origin_key].reshape(-1).float()
                     p, t = self._gather_masked(pred, target)

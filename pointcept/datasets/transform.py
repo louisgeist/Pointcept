@@ -108,6 +108,22 @@ class Collect(object):
                 data[key] = data_dict[key]
         for key, value in self.offset_keys.items():
             data[key] = torch.tensor([data_dict[value].shape[0]])
+        if "origin_offset" not in data:
+            origin_key = None
+            keys_to_scan = list(self.keys) + list(self.optional_keys)
+            for key in keys_to_scan:
+                if isinstance(key, str) and key.startswith("origin_") and key in data_dict:
+                    origin_key = key
+                    break
+            if origin_key is None:
+                for key in data_dict:
+                    if key.startswith("origin_"):
+                        origin_key = key
+                        break
+            if origin_key is not None:
+                data["origin_offset"] = torch.tensor(
+                    [data_dict[origin_key].shape[0]]
+                )
         for name, keys in self.kwargs.items():
             name = name.replace("_keys", "")
             assert isinstance(keys, Sequence)
