@@ -23,6 +23,9 @@ class LearnedMaskedFeatMixin:
             cfg.get("masked_feat_keys", ("color", "normal", "strength"))
         )
 
+        if not self.enable_learned_masked_feat:
+            return
+
         if "color" in self.learned_masked_feat_keys:
             self.color_mask_value = nn.Parameter(torch.zeros(1, 3))
         if "normal" in self.learned_masked_feat_keys:
