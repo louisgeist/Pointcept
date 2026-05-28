@@ -69,37 +69,25 @@ def intersection_and_union_gpu(output, target, k, ignore_index=-1):
     return area_intersection, area_union, area_target
 
 
-def accumulate_regression_errors(
-    pred, target, nmae_offset=0.5, denom_eps=1e-8
-):
-    """Accumulate MAE, MSE, and normalized MAE sums for point-wise regression.
+def accumulate_regression_errors(pred, target):
+    """Accumulate MAE and MSE sums for point-wise regression.
 
-    MAE/MSE use all finite (pred, target) pairs. nMAE uses only points where
-    target + nmae_offset > denom_eps:
-
-        nMAE_i = |pred_i - target_i| / (target_i + nmae_offset)
+    Uses all finite (pred, target) pairs.
 
     Returns:
-        (mae_sum, mse_sum, nmae_sum, count, n_nmae) as Python floats.
-        count is the number of finite pairs; n_nmae is the subset used for nMAE.
+        (mae_sum, mse_sum, count) as Python floats.
+        count is the number of finite pairs.
     """
     mask = torch.isfinite(pred) & torch.isfinite(target)
     if mask.sum() == 0:
-        return 0.0, 0.0, 0.0, 0.0, 0.0
+        return 0.0, 0.0, 0.0
     p = pred[mask]
     t = target[mask]
     err = (p - t).abs()
     mae_sum = float(err.sum().item())
     mse_sum = float((err**2).sum().item())
     count = float(err.numel())
-    nmae_mask = (t + nmae_offset) > denom_eps
-    if nmae_mask.sum() == 0:
-        return mae_sum, mse_sum, 0.0, count, 0.0
-    p_n = p[nmae_mask]
-    t_n = t[nmae_mask]
-    nmae_sum = float((err[nmae_mask] / (t_n + nmae_offset)).sum().item())
-    n_nmae = float(nmae_mask.sum().item())
-    return mae_sum, mse_sum, nmae_sum, count, n_nmae
+    return mae_sum, mse_sum, count
 
 
 def f1_scores_from_hist(intersection, union, target):

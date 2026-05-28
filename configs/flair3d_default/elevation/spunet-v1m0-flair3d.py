@@ -54,7 +54,6 @@ wandb_project = "flair3d_elevation"
 # Mono-task regression configuration
 # -----------------------------------------------------------------------------
 from pointcept.datasets.flair3d_config_utils import (
-    get_elevation_config,
     FLAIR3D_COLLECT_PREFIX_GRID,
     init_multitask_collect_keys,
 )
@@ -62,11 +61,6 @@ from pointcept.datasets.flair3d_config_utils import (
 target_key = "elevation"
 target_keys = (target_key,)
 origin_target_key = f"origin_{target_key}"
-
-regression_config = get_elevation_config()
-nmae_offset = regression_config["nmae_offset"]
-
-del get_elevation_config
 
 # -----------------------------------------------------------------------------
 # Hooks
@@ -134,7 +128,6 @@ del FLAIR3D_COLLECT_PREFIX_GRID, init_multitask_collect_keys
 
 data = dict(
     target_key=target_key,
-    nmae_offset=nmae_offset,
     train=dict(
         type=dataset_type,
         split="train",

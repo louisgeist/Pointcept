@@ -379,10 +379,6 @@ class RegressionEvaluator(HookBase):
             return str(target_key)
         raise ValueError("RegressionEvaluator requires cfg.data.target_key.")
 
-    def _nmae_offset(self):
-        data_cfg = self.trainer.cfg.data
-        return float(self._cfg_get(data_cfg, "nmae_offset", 0.5))
-
     @staticmethod
     def _origin_target_key(target_key):
         return f"origin_{target_key}"
@@ -399,8 +395,7 @@ class RegressionEvaluator(HookBase):
         self.trainer.model.eval()
         target_key = self._target_key()
         origin_key = self._origin_target_key(target_key)
-        nmae_offset = self._nmae_offset()
-        reg_sums = {"mae": 0.0, "mse": 0.0, "nmae": 0.0, "count": 0.0, "n_nmae": 0.0}
+        reg_sums = {"mae": 0.0, "mse": 0.0, "count": 0.0}
 
         loader = self.trainer.val_loader
         n_batches = len(loader)
@@ -428,14 +423,10 @@ class RegressionEvaluator(HookBase):
                         target = input_dict[origin_key].reshape(-1).float()
                 p, t = self._gather_masked(pred, target)
                 if p is not None:
-                    mae_b, mse_b, nmae_b, cnt_b, n_nmae_b = accumulate_regression_errors(
-                        p, t, nmae_offset=nmae_offset
-                    )
+                    mae_b, mse_b, cnt_b = accumulate_regression_errors(p, t)
                     reg_sums["mae"] += mae_b
                     reg_sums["mse"] += mse_b
-                    reg_sums["nmae"] += nmae_b
                     reg_sums["count"] += cnt_b
-                    reg_sums["n_nmae"] += n_nmae_b
                 self.trainer.storage.put_scalar("val_loss", loss.item())
                 postfix = dict(loss=float(loss.item()))
                 if "origin_coord" in input_dict.keys():
@@ -445,13 +436,7 @@ class RegressionEvaluator(HookBase):
         loss_avg = self.trainer.storage.history("val_loss").avg
         if comm.get_world_size() > 1:
             buf = torch.tensor(
-                [
-                    reg_sums["mae"],
-                    reg_sums["mse"],
-                    reg_sums["nmae"],
-                    reg_sums["count"],
-                    reg_sums["n_nmae"],
-                ],
+                [reg_sums["mae"], reg_sums["mse"], reg_sums["count"]],
                 dtype=torch.float64,
                 device="cuda",
             )
@@ -459,9 +444,7 @@ class RegressionEvaluator(HookBase):
             flat = buf.cpu().tolist()
             reg_sums["mae"] = flat[0]
             reg_sums["mse"] = flat[1]
-            reg_sums["nmae"] = flat[2]
-            reg_sums["count"] = flat[3]
-            reg_sums["n_nmae"] = flat[4]
+            reg_sums["count"] = flat[2]
 
         current_epoch = self.trainer.epoch + 1
         cnt = reg_sums["count"]
@@ -472,37 +455,18 @@ class RegressionEvaluator(HookBase):
         if cnt > 1e-8:
             mae = reg_sums["mae"] / cnt
             rmse = (reg_sums["mse"] / cnt) ** 0.5
-            n_nmae = reg_sums["n_nmae"]
-            excluded_nmae = cnt - n_nmae
-            nmae_excluded_frac = excluded_nmae / cnt if cnt > 1e-8 else float("nan")
-            nmae = reg_sums["nmae"] / n_nmae if n_nmae > 1e-8 else float("nan")
             current_metric_value = -rmse
             self.trainer.logger.info(
-                "Val regression: MAE {:.6f} RMSE {:.6f} nMAE {:.6f} "
-                "(n={:.0f}, n_nmae={:.0f}, nmae_excluded={:.4f}).".format(
-                    mae, rmse, nmae, cnt, n_nmae, nmae_excluded_frac
+                "Val regression: MAE {:.6f} RMSE {:.6f} (n={:.0f}).".format(
+                    mae, rmse, cnt
                 )
             )
             if writer is not None:
                 writer.add_scalar("val/loss", loss_avg, current_epoch)
                 writer.add_scalar(f"val/reg/{target_key}/mae", mae, current_epoch)
                 writer.add_scalar(f"val/reg/{target_key}/rmse", rmse, current_epoch)
-                if n_nmae > 1e-8:
-                    writer.add_scalar(
-                        f"val/reg/{target_key}/nmae", nmae, current_epoch
-                    )
-                writer.add_scalar(
-                    f"val/reg/{target_key}/nmae_excluded",
-                    nmae_excluded_frac,
-                    current_epoch,
-                )
             reg_wandb[f"val/reg/{target_key}/mae"] = float(mae)
             reg_wandb[f"val/reg/{target_key}/rmse"] = float(rmse)
-            if n_nmae > 1e-8:
-                reg_wandb[f"val/reg/{target_key}/nmae"] = float(nmae)
-            reg_wandb[f"val/reg/{target_key}/nmae_excluded"] = float(
-                nmae_excluded_frac
-            )
 
         if current_metric_value > float("-inf"):
             self._best_neg_rmse = max(self._best_neg_rmse, current_metric_value)
@@ -536,7 +500,7 @@ class MultiTaskEvaluator(HookBase):
     semantic and regression tasks, together with reg_pred_by_task[task_name] for regression.
 
     Checkpoint selection (comm_info) follows mIoU of main_task, which must be a semantic task.
-    Regression metrics (MAE, RMSE, nMAE) are logged per regression task name.
+    Regression metrics (MAE, RMSE) are logged per regression task name.
 
     The "main task" (checkpoint / mIoU selection) is cfg.data.main_task when multiple tasks are
     configured; with a single task in task_configs, main_task may be omitted. TensorBoard / W&B
@@ -630,8 +594,7 @@ class MultiTaskEvaluator(HookBase):
         regression_tasks = self._regression_task_names(task_configs)
 
         reg_sums = {
-            t: {"mae": 0.0, "mse": 0.0, "nmae": 0.0, "count": 0.0, "n_nmae": 0.0}
-            for t in regression_tasks
+            t: {"mae": 0.0, "mse": 0.0, "count": 0.0} for t in regression_tasks
         }
 
         loader = self.trainer.val_loader
@@ -728,18 +691,10 @@ class MultiTaskEvaluator(HookBase):
                             target = input_dict[origin_key].reshape(-1).float()
                     p, t = self._gather_masked(pred, target)
                     if p is not None:
-                        task_config = task_configs[task_name]
-                        nmae_offset = float(task_config.get("nmae_offset", 0.5))
-                        mae_b, mse_b, nmae_b, cnt_b, n_nmae_b = (
-                            accumulate_regression_errors(
-                                p, t, nmae_offset=nmae_offset
-                            )
-                        )
+                        mae_b, mse_b, cnt_b = accumulate_regression_errors(p, t)
                         reg_sums[task_name]["mae"] += mae_b
                         reg_sums[task_name]["mse"] += mse_b
-                        reg_sums[task_name]["nmae"] += nmae_b
                         reg_sums[task_name]["count"] += cnt_b
-                        reg_sums[task_name]["n_nmae"] += n_nmae_b
 
                 postfix = dict(loss=float(loss.item()))
                 if "origin_coord" in input_dict.keys():
@@ -750,19 +705,15 @@ class MultiTaskEvaluator(HookBase):
             flat = []
             for task_name in regression_tasks:
                 s = reg_sums[task_name]
-                flat.extend(
-                    [s["mae"], s["mse"], s["nmae"], s["count"], s["n_nmae"]]
-                )
+                flat.extend([s["mae"], s["mse"], s["count"]])
             buf = torch.tensor(flat, dtype=torch.float64, device="cuda")
             dist.all_reduce(buf)
             flat = buf.cpu().tolist()
             for task_index, task_name in enumerate(regression_tasks):
-                base = task_index * 5
+                base = task_index * 3
                 reg_sums[task_name]["mae"] = flat[base]
                 reg_sums[task_name]["mse"] = flat[base + 1]
-                reg_sums[task_name]["nmae"] = flat[base + 2]
-                reg_sums[task_name]["count"] = flat[base + 3]
-                reg_sums[task_name]["n_nmae"] = flat[base + 4]
+                reg_sums[task_name]["count"] = flat[base + 2]
 
         per_task_metrics = {}
         for task_name in semantic_tasks:
@@ -889,15 +840,10 @@ class MultiTaskEvaluator(HookBase):
                 continue
             mae = s["mae"] / cnt
             rmse = (s["mse"] / cnt) ** 0.5
-            n_nmae = s["n_nmae"]
-            excluded_nmae = cnt - n_nmae
-            nmae_excluded_frac = excluded_nmae / cnt if cnt > 1e-8 else float("nan")
-            nmae = s["nmae"] / n_nmae if n_nmae > 1e-8 else float("nan")
             best_neg_rmse_epoch = max(best_neg_rmse_epoch, -rmse)
             self.trainer.logger.info(
-                "[task={}] Val regression: MAE {:.6f} RMSE {:.6f} nMAE {:.6f} "
-                "(n={:.0f}, n_nmae={:.0f}, nmae_excluded={:.4f}).".format(
-                    task_name, mae, rmse, nmae, cnt, n_nmae, nmae_excluded_frac
+                "[task={}] Val regression: MAE {:.6f} RMSE {:.6f} (n={:.0f}).".format(
+                    task_name, mae, rmse, cnt
                 )
             )
             if writer is not None:
@@ -907,23 +853,9 @@ class MultiTaskEvaluator(HookBase):
                 writer.add_scalar(
                     f"val/reg/{task_name}/rmse", rmse, current_epoch
                 )
-                if n_nmae > 1e-8:
-                    writer.add_scalar(
-                        f"val/reg/{task_name}/nmae", nmae, current_epoch
-                    )
-                writer.add_scalar(
-                    f"val/reg/{task_name}/nmae_excluded",
-                    nmae_excluded_frac,
-                    current_epoch,
-                )
             if enable_wandb:
                 reg_wandb[f"val/reg/{task_name}/mae"] = float(mae)
                 reg_wandb[f"val/reg/{task_name}/rmse"] = float(rmse)
-                if n_nmae > 1e-8:
-                    reg_wandb[f"val/reg/{task_name}/nmae"] = float(nmae)
-                reg_wandb[f"val/reg/{task_name}/nmae_excluded"] = float(
-                    nmae_excluded_frac
-                )
         if best_neg_rmse_epoch > float("-inf"):
             self._best_neg_rmse = max(self._best_neg_rmse, best_neg_rmse_epoch)
             if writer is not None:
