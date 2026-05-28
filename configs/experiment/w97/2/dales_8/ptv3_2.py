@@ -23,11 +23,10 @@ num_exp = 2
 num_gpu = 4
 num_worker = 8 * num_gpu
 enable_amp = False
+find_unused_parameters = True  # required for PT-v3m1 + DDP (drop_path / sparse paths)
 
 # Data parameters
 batch_size = 4 * num_gpu  # total batch size across all gpus
-batch_size_val = batch_size // 2
-batch_size_test = batch_size // 2
 
 grid_size = 0.1
 point_max = 204800
