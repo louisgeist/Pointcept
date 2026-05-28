@@ -69,7 +69,7 @@ FLAIR3D_SEMANTIC_TASKS: Dict[str, Dict[str, Any]] = {
     "natural_habitat": {
         # CarHab raster uses 42=N/A and 43=Autre (routes). Preprocessing remaps to 43=void, 42=routes.
         # Missing raster samples use fill_value=42 (raw), then remap to ignore_index 43.
-        "num_classes": 44,
+        "num_classes": 43,
         "ignore_index": 43,
         "names": [
             "Habitat ouvert sur substrat acide et humide du domaine tempéré",
@@ -151,7 +151,6 @@ FLAIR3D_ELEVATION: Dict[str, Any] = {
     "dtype": "float32",
     "unit": "meters",
     "use_nan_mask": True,
-    "nmae_offset": 0.5,
 }
 
 
