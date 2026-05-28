@@ -12,7 +12,8 @@ python scripts/count_flair3d_train_label_distribution.py \
 --split train \
 --missing_tiles_manifest data/flair3d_plus/missing_ply_preflight.txt \
 --too_small_tiles_manifest data/flair3d_plus/too_small_tiles.csv \
---num_workers 8
+--num_workers 8 \
+--output_dir stats/flair3d/label_distribution_train
 """
 
 from __future__ import annotations
@@ -20,12 +21,14 @@ from __future__ import annotations
 import argparse
 import csv
 import importlib.util
+import json
 import os
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
-from typing import Dict, Tuple
+from typing import Any, Dict, List, Tuple
 
 import numpy as np
+from tqdm import tqdm
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -276,7 +279,30 @@ def _format_count(n: int) -> str:
     return f"{n / 1e6:.2f} M"
 
 
-def _print_task_distribution(task: str, counts: np.ndarray, scenes_with_file: int, scenes_total: int) -> None:
+@dataclass(frozen=True)
+class DistributionRow:
+    class_id: int | None
+    class_name: str
+    bucket: str
+    count: int
+    percent: float
+
+
+@dataclass(frozen=True)
+class TaskDistribution:
+    task: str
+    scenes_with_file: int
+    scenes_total: int
+    total_points: int
+    rows: Tuple[DistributionRow, ...]
+
+
+def _build_task_distribution(
+    task: str,
+    counts: np.ndarray,
+    scenes_with_file: int,
+    scenes_total: int,
+) -> TaskDistribution:
     cfg = get_semantic_config(task)
     class_names = cfg["names"]
     num_classes = int(cfg["num_classes"])
@@ -287,17 +313,21 @@ def _print_task_distribution(task: str, counts: np.ndarray, scenes_with_file: in
         void_bin = max(void_bin, int(ignore_index))
 
     counted = int(counts.sum())
-    print(f"\n=== {task} ===")
-    print(f"Scenes with on-disk {task}.npy: {scenes_with_file}/{scenes_total}")
-    print(f"Total labeled points (incl. void/ignore buckets): {_format_count(counted)}")
-    print("-" * 72)
-
     denom = max(counted, 1)
+    rows: List[DistributionRow] = []
+
     for i in range(num_classes):
         n = int(counts[i])
-        pct = 100.0 * n / denom
         name = class_names[i] if i < len(class_names) else f"class_{i}"
-        print(f"  {i:2d} {name[:45]:45s}: {_format_count(n):>10} ({pct:5.2f}%)")
+        rows.append(
+            DistributionRow(
+                class_id=i,
+                class_name=name,
+                bucket="class",
+                count=n,
+                percent=100.0 * n / denom,
+            )
+        )
 
     void_count = int(counts[void_bin])
     if void_count > 0:
@@ -306,14 +336,138 @@ def _print_task_distribution(task: str, counts: np.ndarray, scenes_with_file: in
             void_name = class_names[ignore_index]
         elif ignore_index is not None:
             void_name = f"ignore_index={ignore_index}"
-        pct = 100.0 * void_count / denom
-        print(f"  -- {void_name[:45]:45s}: {_format_count(void_count):>10} ({pct:5.2f}%)")
+        rows.append(
+            DistributionRow(
+                class_id=ignore_index,
+                class_name=void_name,
+                bucket="ignore",
+                count=void_count,
+                percent=100.0 * void_count / denom,
+            )
+        )
 
     other = int(counts[void_bin + 1]) if counts.size > void_bin + 1 else 0
     if other > 0:
-        pct = 100.0 * other / denom
-        print(f"  -- out-of-range ids                         : {_format_count(other):>10} ({pct:5.2f}%)")
-    print("-" * 72)
+        rows.append(
+            DistributionRow(
+                class_id=None,
+                class_name="out-of-range",
+                bucket="out_of_range",
+                count=other,
+                percent=100.0 * other / denom,
+            )
+        )
+
+    return TaskDistribution(
+        task=task,
+        scenes_with_file=scenes_with_file,
+        scenes_total=scenes_total,
+        total_points=counted,
+        rows=tuple(rows),
+    )
+
+
+def _total_distribution_row(dist: TaskDistribution) -> DistributionRow:
+    return DistributionRow(
+        class_id=None,
+        class_name="TOTAL",
+        bucket="total",
+        count=dist.total_points,
+        percent=100.0 if dist.total_points > 0 else 0.0,
+    )
+
+
+def _iter_distribution_rows(dist: TaskDistribution):
+    yield from dist.rows
+    yield _total_distribution_row(dist)
+
+
+def _format_distribution_row(row: DistributionRow) -> str:
+    if row.bucket == "class":
+        label = f"{row.class_id:2d} {row.class_name[:45]:45s}"
+    else:
+        label = f"-- {row.class_name[:45]:45s}"
+    return f"  {label}: {_format_count(row.count):>10} ({row.percent:5.2f}%)"
+
+
+def _format_distribution_text(dist: TaskDistribution) -> str:
+    lines = [
+        f"=== {dist.task} ===",
+        f"Scenes with on-disk {dist.task}.npy: {dist.scenes_with_file}/{dist.scenes_total}",
+        "-" * 72,
+    ]
+    lines.extend(_format_distribution_row(row) for row in _iter_distribution_rows(dist))
+    lines.append("-" * 72)
+    return "\n".join(lines)
+
+
+def _print_task_distribution(dist: TaskDistribution) -> None:
+    print(f"\n{_format_distribution_text(dist)}")
+
+
+def _save_task_distribution(dist: TaskDistribution, output_dir: str) -> Tuple[str, str]:
+    os.makedirs(output_dir, exist_ok=True)
+    csv_path = os.path.join(output_dir, f"{dist.task}_label_distribution.csv")
+    txt_path = os.path.join(output_dir, f"{dist.task}_label_distribution.txt")
+
+    with open(csv_path, "w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=["class_id", "class_name", "bucket", "count", "percent"],
+        )
+        writer.writeheader()
+        for row in _iter_distribution_rows(dist):
+            writer.writerow(
+                {
+                    "class_id": "" if row.class_id is None else row.class_id,
+                    "class_name": row.class_name,
+                    "bucket": row.bucket,
+                    "count": row.count,
+                    "percent": f"{row.percent:.6f}",
+                }
+            )
+
+    with open(txt_path, "w", encoding="utf-8") as handle:
+        handle.write(_format_distribution_text(dist))
+        handle.write("\n")
+
+    return csv_path, txt_path
+
+
+def _save_run_summary(
+    output_dir: str,
+    *,
+    meta: Dict[str, Any],
+    distributions: Dict[str, TaskDistribution],
+    errors: List[str],
+) -> str:
+    os.makedirs(output_dir, exist_ok=True)
+    summary_path = os.path.join(output_dir, "summary.json")
+    payload = {
+        **meta,
+        "tasks": {
+            task: {
+                "scenes_with_file": dist.scenes_with_file,
+                "scenes_total": dist.scenes_total,
+                "total_points": dist.total_points,
+                "csv": f"{task}_label_distribution.csv",
+                "txt": f"{task}_label_distribution.txt",
+            }
+            for task, dist in distributions.items()
+        },
+        "error_count": len(errors),
+    }
+    with open(summary_path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2)
+        handle.write("\n")
+
+    if errors:
+        errors_path = os.path.join(output_dir, "errors.txt")
+        with open(errors_path, "w", encoding="utf-8") as handle:
+            handle.write("\n".join(errors))
+            handle.write("\n")
+
+    return summary_path
 
 
 def main() -> None:
@@ -354,7 +508,18 @@ def main() -> None:
         "(default: use ignore fill like Flair3DDataset).",
     )
     parser.add_argument("--num_workers", type=int, default=1)
+    parser.add_argument(
+        "--no_progress",
+        action="store_true",
+        help="Disable tqdm progress bar.",
+    )
     parser.add_argument("--max_scenes", type=int, default=0, help="Debug: limit number of scenes (0=all)")
+    parser.add_argument(
+        "--output_dir",
+        default="stats/flair3d/label_distribution_train",
+        help="Directory to write per-task CSV/txt and summary.json "
+        "(default: data/flair3d_plus/stats/label_distribution_<split>).",
+    )
     args = parser.parse_args()
 
     data_root = resolve_repo_path(args.data_root)
@@ -393,22 +558,32 @@ def main() -> None:
 
     use_fill = not args.skip_missing_optional
     tasks = [(scene, use_fill) for scene in scenes]
-
-    if args.num_workers <= 1:
-        results = (_process_scene(t) for t in tasks)
-    else:
-        with ProcessPoolExecutor(max_workers=args.num_workers) as pool:
-            results = pool.map(_process_scene, tasks, chunksize=8)
+    show_progress = not args.no_progress and len(tasks) > 0
 
     processed = 0
-    for partial, meta, err in results:
-        if err:
-            errors.append(err)
-            continue
-        _merge_counts(total_counts, partial)
-        for task in SEMANTIC_TASKS:
-            scenes_with_file[task] += meta[f"{task}_from_file"]
-        processed += 1
+    if args.num_workers <= 1:
+        iterator = (_process_scene(t) for t in tasks)
+        if show_progress:
+            iterator = tqdm(iterator, total=len(tasks), desc="Scenes", unit="scene")
+        result_iter = iterator
+    else:
+        pool = ProcessPoolExecutor(max_workers=args.num_workers)
+        result_iter = pool.imap(_process_scene, tasks, chunksize=8)
+        if show_progress:
+            result_iter = tqdm(result_iter, total=len(tasks), desc="Scenes", unit="scene")
+
+    try:
+        for partial, meta, err in result_iter:
+            if err:
+                errors.append(err)
+                continue
+            _merge_counts(total_counts, partial)
+            for task in SEMANTIC_TASKS:
+                scenes_with_file[task] += meta[f"{task}_from_file"]
+            processed += 1
+    finally:
+        if args.num_workers > 1:
+            pool.shutdown(wait=True)
 
     print(f"\nProcessed scenes: {processed}/{len(scenes)}")
     if errors:
@@ -418,13 +593,46 @@ def main() -> None:
         if len(errors) > 10:
             print(f"  ... and {len(errors) - 10} more")
 
+    split_tag = "_".join(sorted(target_splits))
+    output_dir = resolve_repo_path(args.output_dir) if args.output_dir else resolve_repo_path(
+        f"data/flair3d_plus/stats/label_distribution_{split_tag}"
+    )
+
+    distributions: Dict[str, TaskDistribution] = {}
+    saved_paths: List[str] = []
     for task in SEMANTIC_TASKS:
-        _print_task_distribution(
+        dist = _build_task_distribution(
             task,
             total_counts[task],
             scenes_with_file[task],
             processed,
         )
+        distributions[task] = dist
+        _print_task_distribution(dist)
+        csv_path, txt_path = _save_task_distribution(dist, output_dir)
+        saved_paths.extend([csv_path, txt_path])
+
+    summary_path = _save_run_summary(
+        output_dir,
+        meta={
+            "data_root": data_root,
+            "csv_manifest": csv_manifest,
+            "splits": sorted(target_splits),
+            "excluded_tiles": len(excluded),
+            "scenes_scanned": len(scenes),
+            "scenes_processed": processed,
+            "use_fill_for_missing": not args.skip_missing_optional,
+        },
+        distributions=distributions,
+        errors=errors,
+    )
+
+    print(f"\nSaved outputs under: {output_dir}")
+    for path in saved_paths:
+        print(f"  - {os.path.basename(path)}")
+    print(f"  - {os.path.basename(summary_path)}")
+    if errors:
+        print(f"  - errors.txt")
 
 
 if __name__ == "__main__":
