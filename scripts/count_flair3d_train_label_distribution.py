@@ -561,18 +561,9 @@ def main() -> None:
     show_progress = not args.no_progress and len(tasks) > 0
 
     processed = 0
-    if args.num_workers <= 1:
-        iterator = (_process_scene(t) for t in tasks)
-        if show_progress:
-            iterator = tqdm(iterator, total=len(tasks), desc="Scenes", unit="scene")
-        result_iter = iterator
-    else:
-        pool = ProcessPoolExecutor(max_workers=args.num_workers)
-        result_iter = pool.imap(_process_scene, tasks, chunksize=8)
-        if show_progress:
-            result_iter = tqdm(result_iter, total=len(tasks), desc="Scenes", unit="scene")
 
-    try:
+    def _consume_results(result_iter):
+        nonlocal processed
         for partial, meta, err in result_iter:
             if err:
                 errors.append(err)
@@ -581,9 +572,18 @@ def main() -> None:
             for task in SEMANTIC_TASKS:
                 scenes_with_file[task] += meta[f"{task}_from_file"]
             processed += 1
-    finally:
-        if args.num_workers > 1:
-            pool.shutdown(wait=True)
+
+    if args.num_workers <= 1:
+        iterator = (_process_scene(t) for t in tasks)
+        if show_progress:
+            iterator = tqdm(iterator, total=len(tasks), desc="Scenes", unit="scene")
+        _consume_results(iterator)
+    else:
+        with ProcessPoolExecutor(max_workers=args.num_workers) as pool:
+            mapped = pool.map(_process_scene, tasks, chunksize=8)
+            if show_progress:
+                mapped = tqdm(mapped, total=len(tasks), desc="Scenes", unit="scene")
+            _consume_results(mapped)
 
     print(f"\nProcessed scenes: {processed}/{len(scenes)}")
     if errors:
