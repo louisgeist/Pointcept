@@ -76,13 +76,21 @@ class Flair3DDataset(DefaultDataset):
     VALID_ASSETS = [*DefaultDataset.VALID_ASSETS, *FLAIR3D_SPECIFIC_ASSETS]
 
     CORRUPTED_TILES = set()
-    
-    MISSING_LIDARHD_TILES = _load_missing_lidarhd_tiles()
-    
-    HARDCODED_EXCLUDED_TILES = CORRUPTED_TILES | MISSING_LIDARHD_TILES
+    _MISSING_LIDARHD_TILES = None
+
     FLAIR3D_OPTIONAL_TARGETS = ("land_use", "natural_habitat", "elevation")
     #TODO@Geist : elevation should be complete, but I noticed some missing part in D049
     # e.g.: UU-S1-15
+
+    @classmethod
+    def _get_missing_lidarhd_tiles(cls):
+        if cls._MISSING_LIDARHD_TILES is None:
+            cls._MISSING_LIDARHD_TILES = _load_missing_lidarhd_tiles()
+        return cls._MISSING_LIDARHD_TILES
+
+    @classmethod
+    def get_hardcoded_excluded_tiles(cls):
+        return cls.CORRUPTED_TILES | cls._get_missing_lidarhd_tiles()
 
     def __init__(
         self,
@@ -216,7 +224,7 @@ class Flair3DDataset(DefaultDataset):
         else:
             raise TypeError
 
-        hardcoded_excluded = self.HARDCODED_EXCLUDED_TILES
+        hardcoded_excluded = self.get_hardcoded_excluded_tiles()
         missing_excluded = self._get_missing_tiles()
         too_small_excluded = self._get_too_small_tiles()
         excluded_tiles = hardcoded_excluded | missing_excluded | too_small_excluded
