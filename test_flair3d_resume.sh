@@ -20,7 +20,9 @@
 #SBATCH --job-name=flair3d-test
 #SBATCH --time=12:00:00
 
-set -euo pipefail
+# Do not use `set -u` here: conda activate.d scripts (e.g. gdal) reference
+# unset variables like GDAL_DATA and fail under nounset.
+set -eo pipefail
 
 REPO_ROOT=/lustre/fswork/projects/rech/unv/usi32yh/Pointcept
 NUM_GPUS=1
