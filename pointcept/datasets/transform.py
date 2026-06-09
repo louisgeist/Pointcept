@@ -78,12 +78,19 @@ def index_operator(data_dict, index, duplicate=False):
 @TRANSFORMS.register_module()
 class Collect(object):
     def __init__(
-        self, keys, offset_keys_dict=None, optional_keys=None, feat_scales=None, **kwargs
+        self,
+        keys,
+        offset_keys_dict=None,
+        optional_keys=None,
+        feat_scales=None,
+        key_scales=None,
+        **kwargs,
     ):
         """
         e.g. Collect(keys=[coord], feat_keys=[coord, color])
         optional_keys: keys to include only if present (e.g. "inverse" for test single-fragment).
         feat_scales: per-key multipliers applied only when building feat (not to keys).
+        key_scales: per-key multipliers applied to entries listed in keys (e.g. elevation).
         """
         if offset_keys_dict is None:
             offset_keys_dict = dict(offset="coord")
@@ -91,6 +98,7 @@ class Collect(object):
         self.offset_keys = offset_keys_dict
         self.optional_keys = optional_keys or ()
         self.feat_scales = feat_scales or {}
+        self.key_scales = key_scales or {}
         self.kwargs = kwargs
 
     def __call__(self, data_dict):
@@ -106,7 +114,10 @@ class Collect(object):
         if isinstance(self.keys, str):
             self.keys = [self.keys]
         for key in self.keys:
-            data[key] = data_dict[key]
+            v = data_dict[key]
+            if key in self.key_scales:
+                v = v.float() * self.key_scales[key]
+            data[key] = v
         for key in self.optional_keys:
             if key in data_dict:
                 data[key] = data_dict[key]
@@ -262,6 +273,24 @@ class CenterShift(object):
             data_dict["coord"] -= shift
         return data_dict
 
+@TRANSFORMS.register_module()
+class Z_MinShift(object):
+    def __call__(self, data_dict):
+        if "coord" in data_dict.keys():
+            z_min = data_dict["coord"][:, 2].min()
+            data_dict["coord"][:, 2] -= z_min
+        return data_dict
+
+@TRANSFORMS.register_module()
+class Z_RandomOffset(object):
+    def __init__(self, std=0.1):
+        self.std = std
+        
+    def __call__(self, data_dict):
+        if "coord" in data_dict.keys():
+            z_offset = np.random.normal(0, self.std)
+            data_dict["coord"][:, 2] += z_offset
+        return data_dict
 
 @TRANSFORMS.register_module()
 class RandomShift(object):

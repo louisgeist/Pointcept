@@ -32,6 +32,10 @@ from pointcept.utils.misc import (
     make_dirs,
 )
 from pointcept.utils.progress import EvaluationProgressBar
+from pointcept.utils.regression import (
+    denorm_regression_prediction,
+    get_regression_target_scale,
+)
 
 try:
     import pointops
@@ -484,7 +488,21 @@ class RegressionTester(TesterBase):
             return np.asarray(scene_extra[origin_key]).reshape(-1)
         return np.asarray(target_np).reshape(-1)
 
+    def _denorm_regression_pred_np(self, pred_np, target_key):
+        target_scales = self._cfg_get(self.cfg.data, "target_scales", {}) or {}
+        scale = get_regression_target_scale(target_scales, target_key)
+        return denorm_regression_prediction(
+            np.asarray(pred_np, dtype=np.float64), scale
+        )
+
     def test(self):
+        if self.test_loader.batch_size > 1:
+            logger = get_root_logger()
+            logger.info(
+                "Batch size > 1 detected. Assuming test_single_fragment=True "
+                "for RegressionTester."
+            )
+
         logger = get_root_logger()
         logger.info(">>>>>>>>>>>>>>>> Start Regression Evaluation >>>>>>>>>>>>>>>>")
         self.begin_test_timing()
@@ -499,84 +517,171 @@ class RegressionTester(TesterBase):
         reg_sums = {"mae": 0.0, "mse": 0.0, "count": 0.0}
         n_batches = len(self.test_loader)
 
-        with EvaluationProgressBar(
-            n_batches,
-            desc="Test regression",
-        ) as prog:
-            for idx, data_dict in enumerate(self.test_loader):
-                data_dict = data_dict[0]
+        def _process_one_regression_batch(batch, loader_idx, prog):
+            if self.test_loader.batch_size > 1:
+                assert all(len(d["fragment_list"]) == 1 for d in batch), (
+                    "Batch size > 1 is only supported with test_single_fragment=True "
+                    "(1 fragment per scene)."
+                )
+
+            batch_data_names = []
+            batch_targets = []
+            batch_scene_extra = []
+            batch_fragment_lists = []
+            batch_pred_paths = []
+            batch_all_cached = []
+
+            for data_dict in batch:
                 fragment_list = data_dict.pop("fragment_list")
                 target = data_dict.pop(target_key)
                 data_name = data_dict.pop("name")
-                scene_extra = data_dict
 
+                batch_data_names.append(data_name)
+                batch_targets.append(target)
+                batch_scene_extra.append(data_dict)
+                batch_fragment_lists.append(fragment_list)
                 pred_save_path = os.path.join(
                     save_path, f"{data_name}_reg_{target_key}.npy"
                 )
-                cached = os.path.isfile(pred_save_path)
-                if cached:
-                    pred_np = np.load(pred_save_path)
-                else:
+                batch_pred_paths.append(pred_save_path)
+                batch_all_cached.append(os.path.isfile(pred_save_path))
+
+            if all(batch_all_cached):
+                batch_pred_np = [np.load(p) for p in batch_pred_paths]
+            elif self.test_loader.batch_size > 1:
+                fragments = [fl[0] for fl in batch_fragment_lists]
+                use_voxel_broadcast = "inverse" in fragments[0]
+
+                batch_reg_sum = []
+                batch_reg_cnt = []
+                for target in batch_targets:
                     n_ref = int(np.asarray(target).size)
-                    reg_sum = torch.zeros((n_ref,), device="cuda")
-                    reg_cnt = torch.zeros((n_ref,), device="cuda")
-                    use_voxel_broadcast = "inverse" in fragment_list[0]
+                    batch_reg_sum.append(torch.zeros((n_ref,), device="cuda"))
+                    batch_reg_cnt.append(torch.zeros((n_ref,), device="cuda"))
 
-                    for i in range(len(fragment_list)):
-                        fragment_batch_size = 1
-                        s_i, e_i = i * fragment_batch_size, min(
-                            (i + 1) * fragment_batch_size, len(fragment_list)
-                        )
-                        input_dict = collate_fn(fragment_list[s_i:e_i])
-                        for key in input_dict.keys():
-                            if isinstance(input_dict[key], torch.Tensor):
-                                input_dict[key] = input_dict[key].cuda(
-                                    non_blocking=True
-                                )
-                        idx_part = input_dict["index"]
-                        with torch.no_grad():
-                            output_dict = self.model(input_dict)
-                            pred_part_all = output_dict["reg_pred"].reshape(-1).float()
-                            if self.cfg.empty_cache:
-                                torch.cuda.empty_cache()
+                input_dict = collate_fn(fragments)
+                for key in input_dict.keys():
+                    if isinstance(input_dict[key], torch.Tensor):
+                        input_dict[key] = input_dict[key].cuda(non_blocking=True)
+                idx_part = input_dict["index"]
 
-                            bs = 0
-                            for be in input_dict["offset"]:
-                                pred_part = pred_part_all[bs:be]
-                                if use_voxel_broadcast:
-                                    inv = fragment_list[s_i:e_i][0]["inverse"]
-                                    inv = (
-                                        torch.from_numpy(inv).long().cuda()
-                                        if isinstance(inv, np.ndarray)
-                                        else inv.long().cuda()
-                                    )
-                                    gathered = pred_part[inv]
-                                    reg_sum += gathered
-                                    reg_cnt += torch.ones_like(gathered)
-                                else:
-                                    ip = idx_part[bs:be]
-                                    reg_sum[ip] += pred_part
-                                    reg_cnt[ip] += 1
-                                bs = be
+                with torch.no_grad():
+                    output_dict = self.model(input_dict)
+                    pred_part_all = output_dict["reg_pred"].reshape(-1).float()
+                    if self.cfg.empty_cache:
+                        torch.cuda.empty_cache()
 
-                        if self.verbose:
-                            logger.info(
-                                "Test: {}/{}-{data_name}, Batch: {batch_idx}/{batch_num}".format(
-                                    idx + 1,
-                                    len(self.test_loader),
-                                    data_name=data_name,
-                                    batch_idx=i,
-                                    batch_num=len(fragment_list),
-                                )
+                    bs = 0
+                    for b_idx, be in enumerate(input_dict["offset"]):
+                        pred_part = pred_part_all[bs:be]
+                        if use_voxel_broadcast:
+                            inv = fragments[b_idx]["inverse"]
+                            inv = (
+                                torch.from_numpy(inv).long().cuda()
+                                if isinstance(inv, np.ndarray)
+                                else inv.long().cuda()
                             )
+                            gathered = pred_part[inv]
+                            batch_reg_sum[b_idx] += gathered
+                            batch_reg_cnt[b_idx] += torch.ones_like(gathered)
+                        else:
+                            ip = idx_part[bs:be]
+                            batch_reg_sum[b_idx][ip] += pred_part
+                            batch_reg_cnt[b_idx][ip] += 1
+                        bs = be
 
-                    pred_np = (reg_sum / reg_cnt.clamp(min=1)).cpu().numpy()
+                batch_pred_np = []
+                for b_idx in range(len(batch)):
+                    pred_np = (
+                        batch_reg_sum[b_idx] / batch_reg_cnt[b_idx].clamp(min=1)
+                    ).cpu().numpy()
                     pred_np = self._apply_inverse_origin_np(
-                        pred_np, scene_extra, target_key
+                        pred_np, batch_scene_extra[b_idx], target_key
                     )
-                    np.save(pred_save_path, pred_np)
+                    pred_np = self._denorm_regression_pred_np(pred_np, target_key)
+                    np.save(batch_pred_paths[b_idx], pred_np)
+                    batch_pred_np.append(pred_np)
+            else:
+                batch_pred_np = []
+                for b_idx in range(len(batch)):
+                    data_name = batch_data_names[b_idx]
+                    target = batch_targets[b_idx]
+                    scene_extra = batch_scene_extra[b_idx]
+                    fragment_list = batch_fragment_lists[b_idx]
+                    pred_save_path = batch_pred_paths[b_idx]
 
-                tgt_np = self._target_for_metrics(target, scene_extra, target_key)
+                    if batch_all_cached[b_idx]:
+                        pred_np = np.load(pred_save_path)
+                    else:
+                        n_ref = int(np.asarray(target).size)
+                        reg_sum = torch.zeros((n_ref,), device="cuda")
+                        reg_cnt = torch.zeros((n_ref,), device="cuda")
+                        use_voxel_broadcast = "inverse" in fragment_list[0]
+
+                        for i in range(len(fragment_list)):
+                            fragment_batch_size = 1
+                            s_i, e_i = i * fragment_batch_size, min(
+                                (i + 1) * fragment_batch_size, len(fragment_list)
+                            )
+                            input_dict = collate_fn(fragment_list[s_i:e_i])
+                            for key in input_dict.keys():
+                                if isinstance(input_dict[key], torch.Tensor):
+                                    input_dict[key] = input_dict[key].cuda(
+                                        non_blocking=True
+                                    )
+                            idx_part = input_dict["index"]
+                            with torch.no_grad():
+                                output_dict = self.model(input_dict)
+                                pred_part_all = output_dict["reg_pred"].reshape(
+                                    -1
+                                ).float()
+                                if self.cfg.empty_cache:
+                                    torch.cuda.empty_cache()
+
+                                bs = 0
+                                for be in input_dict["offset"]:
+                                    pred_part = pred_part_all[bs:be]
+                                    if use_voxel_broadcast:
+                                        inv = fragment_list[s_i:e_i][0]["inverse"]
+                                        inv = (
+                                            torch.from_numpy(inv).long().cuda()
+                                            if isinstance(inv, np.ndarray)
+                                            else inv.long().cuda()
+                                        )
+                                        gathered = pred_part[inv]
+                                        reg_sum += gathered
+                                        reg_cnt += torch.ones_like(gathered)
+                                    else:
+                                        ip = idx_part[bs:be]
+                                        reg_sum[ip] += pred_part
+                                        reg_cnt[ip] += 1
+                                    bs = be
+
+                            if self.verbose:
+                                logger.info(
+                                    "Test: {}/{}-{data_name}, Batch: {batch_idx}/{batch_num}".format(
+                                        loader_idx + 1,
+                                        len(self.test_loader),
+                                        data_name=data_name,
+                                        batch_idx=i,
+                                        batch_num=len(fragment_list),
+                                    )
+                                )
+
+                        pred_np = (reg_sum / reg_cnt.clamp(min=1)).cpu().numpy()
+                        pred_np = self._apply_inverse_origin_np(
+                            pred_np, scene_extra, target_key
+                        )
+                        pred_np = self._denorm_regression_pred_np(pred_np, target_key)
+                        np.save(pred_save_path, pred_np)
+
+                    batch_pred_np.append(pred_np)
+
+            for b_idx in range(len(batch)):
+                pred_np = batch_pred_np[b_idx]
+                tgt_np = self._target_for_metrics(
+                    batch_targets[b_idx], batch_scene_extra[b_idx], target_key
+                )
                 p_t = torch.from_numpy(np.asarray(pred_np, dtype=np.float64)).float()
                 t_t = torch.from_numpy(np.asarray(tgt_np, dtype=np.float64)).float()
                 p_m, t_m = self._gather_masked(p_t, t_t)
@@ -586,7 +691,14 @@ class RegressionTester(TesterBase):
                     reg_sums["mse"] += mse_b
                     reg_sums["count"] += cnt_b
 
-                prog.step(cached=cached)
+                prog.step(cached=batch_all_cached[b_idx])
+
+        with EvaluationProgressBar(
+            n_batches,
+            desc="Test regression",
+        ) as prog:
+            for loader_idx, batch in enumerate(self.test_loader):
+                _process_one_regression_batch(batch, loader_idx, prog)
 
         logger.info("Syncing ...")
         comm.synchronize()
@@ -720,6 +832,13 @@ class MultiTaskTester(TesterBase):
         if origin_key in scene_extra:
             return np.asarray(scene_extra[origin_key]).reshape(-1)
         return np.asarray(targets_by_task[task_name]).reshape(-1)
+
+    def _denorm_regression_pred_np(self, pred_np, task_name):
+        target_scales = self._cfg_get(self.cfg.data, "target_scales", {}) or {}
+        scale = get_regression_target_scale(target_scales, task_name)
+        return denorm_regression_prediction(
+            np.asarray(pred_np, dtype=np.float64), scale
+        )
 
     def test(self):
         if self.test_loader.batch_size > 1:
@@ -926,6 +1045,7 @@ class MultiTaskTester(TesterBase):
                             batch_scene_extra[b_idx],
                             task_name,
                         )
+                        pred_np = self._denorm_regression_pred_np(pred_np, task_name)
                         pred_reg_np[task_name] = pred_np
                         np.save(batch_reg_cache_paths[b_idx][task_name], pred_np)
                         
