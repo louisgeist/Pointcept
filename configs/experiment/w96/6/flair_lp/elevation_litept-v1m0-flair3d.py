@@ -58,11 +58,18 @@ wandb_project = "flair3d_elevation"
 from pointcept.datasets.flair3d_config_utils import (
     FLAIR3D_COLLECT_PREFIX_LITEPT,
     init_multitask_collect_keys,
+    ELEVATION_TARGET_SCALE,
+    ELEVATION_SMOOTH_L1_BETA,
+    get_regression_target_scales,
 )
 
 target_key = "elevation"
 target_keys = (target_key,)
 origin_target_key = f"origin_{target_key}"
+
+elevation_target_scale = ELEVATION_TARGET_SCALE
+elevation_key_scales = dict(elevation=elevation_target_scale)
+target_scales = get_regression_target_scales(target_keys)
 
 # -----------------------------------------------------------------------------
 # Hooks
@@ -87,7 +94,7 @@ model = dict(
     type="DefaultRegressorV2",
     target_key=target_key,
     backbone_out_channels=72,
-    criteria=[dict(type="SmoothL1Loss", beta=1.0, loss_weight=1.0)],
+    criteria=[dict(type="SmoothL1Loss", beta=ELEVATION_SMOOTH_L1_BETA, loss_weight=1.0)],
     backbone=dict(
         type="LitePT-v1",
         in_channels=4,  # RGB + strength
@@ -147,9 +154,10 @@ train_collect_keys, val_collect_keys, index_valid_keys = init_multitask_collect_
     target_keys, collect_prefix_keys=FLAIR3D_COLLECT_PREFIX_LITEPT
 )
 
-del FLAIR3D_COLLECT_PREFIX_LITEPT, init_multitask_collect_keys
+del FLAIR3D_COLLECT_PREFIX_LITEPT, init_multitask_collect_keys, get_regression_target_scales
 
 data = dict(
+    target_scales=target_scales,
     target_key=target_key,
     train=dict(
         type=dataset_type,
@@ -195,6 +203,7 @@ data = dict(
                 keys=train_collect_keys,
                 feat_keys=feat_keys,
                 feat_scales=dict(coord=coord_feat_scale),
+                key_scales=elevation_key_scales,
             ),
         ],
         test_mode=False,
@@ -235,6 +244,7 @@ data = dict(
                 keys=val_collect_keys,
                 feat_keys=feat_keys,
                 feat_scales=dict(coord=coord_feat_scale),
+                key_scales=elevation_key_scales,
             ),
         ],
         test_mode=False,

@@ -14,6 +14,7 @@ _base_ = ["../../../../_base_/default_runtime.py"]
 test = dict(type="MultiTaskTester", verbose=True, write_cls_iou=True)
 
 from pointcept.datasets.flair3d_config_utils import (
+    ELEVATION_TARGET_SCALE,
     get_multitask_regression_task_config_elevation,
     get_semantic_config,
 )
@@ -54,6 +55,10 @@ learned_masked_feat = True
 # semantic_target_keys = ("segment", "forest", "land_use", "natural_habitat")
 semantic_target_keys = ("segment",)
 target_keys = semantic_target_keys #+ ("elevation",)
+
+elevation_target_scale = ELEVATION_TARGET_SCALE
+elevation_key_scales = dict(elevation=elevation_target_scale)
+target_scales = dict(elevation=elevation_target_scale)
 main_task = "segment"
 
 task_configs = {task_name: get_semantic_config(task_name) for task_name in semantic_target_keys}
@@ -82,7 +87,7 @@ task_criteria = {
     for task_name in semantic_target_keys
 }
 task_criteria["elevation"] = [
-    dict(type="SmoothL1Loss", beta=1.0, loss_weight=1.0),
+    dict(type="SmoothL1Loss", beta=1e-2, loss_weight=1.0),
 ]
 
 task_weights = {task_name: 1.0 for task_name in task_configs.keys()}
@@ -217,6 +222,7 @@ data = dict(
     num_classes=num_classes,
     ignore_index=ignore_index,
     names=names,
+    target_scales=target_scales,
     task_configs=task_configs,
     main_task=main_task,
     train=dict(
@@ -263,6 +269,7 @@ data = dict(
                 type="Collect",
                 keys=train_multitask_keys,
                 feat_keys=feat_keys,
+                key_scales=elevation_key_scales,
             ),
         ],
         test_mode=False,
@@ -308,6 +315,7 @@ data = dict(
                 type="Collect",
                 keys=val_multitask_keys,
                 feat_keys=feat_keys,
+                key_scales=elevation_key_scales,
             ),
         ],
         test_mode=False,

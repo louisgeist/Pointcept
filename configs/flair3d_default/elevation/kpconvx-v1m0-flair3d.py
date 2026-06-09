@@ -42,7 +42,7 @@ warmup_steps = 20000
 # Features
 learned_masked_feat = True
 feat_keys = ["coord", "color", "strength"]
-coord_feat_scale = 0.1
+coord_feat_scale = 0.01
 
 # Wandb parameters
 wandb_run_name = (
@@ -53,11 +53,20 @@ wandb_project = "flair3d_elevation"
 # -----------------------------------------------------------------------------
 # Mono-task regression configuration
 # -----------------------------------------------------------------------------
-from pointcept.datasets.flair3d_config_utils import init_multitask_collect_keys
+from pointcept.datasets.flair3d_config_utils import (
+    ELEVATION_TARGET_SCALE,
+    ELEVATION_SMOOTH_L1_BETA,
+    get_regression_target_scales,
+    init_multitask_collect_keys,
+)
 
 target_key = "elevation"
 target_keys = (target_key,)
 origin_target_key = f"origin_{target_key}"
+
+elevation_target_scale = ELEVATION_TARGET_SCALE
+elevation_key_scales = dict(elevation=elevation_target_scale)
+target_scales = get_regression_target_scales(target_keys)
 
 # -----------------------------------------------------------------------------
 # Hooks
@@ -84,7 +93,7 @@ model = dict(
     type="DefaultRegressorV2",
     target_key=target_key,
     backbone_out_channels=backbone_feat_dim,
-    criteria=[dict(type="SmoothL1Loss", beta=1.0, loss_weight=1.0)],
+    criteria=[dict(type="SmoothL1Loss", beta=ELEVATION_SMOOTH_L1_BETA, loss_weight=1.0)],
     backbone=dict(
         type="kpconvx_base",
         input_channels=7,
@@ -151,6 +160,7 @@ train_collect_keys, val_collect_keys, index_valid_keys = init_multitask_collect_
 del init_multitask_collect_keys
 
 data = dict(
+    target_scales=target_scales,
     target_key=target_key,
     train=dict(
         type=dataset_type,
@@ -167,6 +177,8 @@ data = dict(
                 keys_dict={"index_valid_keys": list(index_valid_keys)},
             ),
             dict(type="CenterShift", apply_z=True),
+            dict(type="Z_MinShift"),
+            dict(type="Z_RandomOffset"),
             dict(type="RandomDropout", dropout_ratio=0.2, dropout_application_ratio=0.2),
             dict(type="RandomRotate", angle=[-1, 1], axis="z", center=[0, 0, 0], p=0.5),
             dict(type="RandomScale", scale=[0.9, 1.1]),
@@ -196,6 +208,7 @@ data = dict(
                 keys=train_collect_keys,
                 feat_keys=feat_keys,
                 feat_scales=dict(coord=coord_feat_scale),
+                key_scales=elevation_key_scales,
             ),
         ],
         test_mode=False,
@@ -215,6 +228,7 @@ data = dict(
                 keys_dict={"index_valid_keys": list(index_valid_keys)},
             ),
             dict(type="CenterShift", apply_z=True),
+            dict(type="Z_MinShift"),
             dict(
                 type="Copy",
                 keys_dict={target_key: origin_target_key},
@@ -235,6 +249,7 @@ data = dict(
                 keys=val_collect_keys,
                 feat_keys=feat_keys,
                 feat_scales=dict(coord=coord_feat_scale),
+                key_scales=elevation_key_scales,
             ),
         ],
         test_mode=False,
@@ -250,6 +265,7 @@ data = dict(
         primary_target_key=target_key,
         transform=[
             dict(type="CenterShift", apply_z=True),
+            dict(type="Z_MinShift"),
             dict(type="NormalizeColor"),
         ],
         test_mode=True,

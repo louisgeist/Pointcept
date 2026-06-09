@@ -61,14 +61,20 @@ wandb_project = "flair3d_multi"
 # Multitask configuration : targets configuraiton
 # -----------------------------------------------------------------------------
 from pointcept.datasets.flair3d_config_utils import (
+    ELEVATION_TARGET_SCALE,
     init_task_configs,
     init_task_criteria,
     FLAIR3D_COLLECT_PREFIX_LITEPT,
     init_multitask_collect_keys,
+    get_regression_target_scales,
 )
 
 semantic_target_keys = ("segment", "forest", "land_use", "natural_habitat")
 target_keys = semantic_target_keys + ("elevation",)
+
+elevation_target_scale = ELEVATION_TARGET_SCALE
+elevation_key_scales = dict(elevation=elevation_target_scale)
+target_scales = get_regression_target_scales(target_keys)
 main_task = "segment"
 
 task_configs = init_task_configs(target_keys)
@@ -80,7 +86,7 @@ task_weights = {task_name: 1.0 for task_name in task_configs.keys()}
 # treats every non-dunder module attribute as a config entry, and Config.dump
 # pipes the resulting Python text through yapf. Yapf cannot reformat function
 # objects rendered as "<function ... at 0x...>" and raises a SyntaxError.
-del init_task_configs, init_task_criteria
+del init_task_configs, init_task_criteria, get_regression_target_scales
 
 # main_task drives checkpoint selection / mIoU logging, so its num_classes,
 # ignore_index and names are exposed at the data root for backward-compat hooks.
@@ -178,12 +184,13 @@ train_multitask_keys, val_multitask_keys, multitask_index_valid_keys = (
     )
 )
 
-del FLAIR3D_COLLECT_PREFIX_LITEPT, init_multitask_collect_keys
+del FLAIR3D_COLLECT_PREFIX_LITEPT, init_multitask_collect_keys, get_regression_target_scales
 
 data = dict(
     num_classes=num_classes,
     ignore_index=ignore_index,
     names=names,
+    target_scales=target_scales,
     task_configs=task_configs,
     main_task=main_task,
     train=dict(
@@ -231,6 +238,7 @@ data = dict(
                 keys=train_multitask_keys,
                 feat_keys=feat_keys,
                 feat_scales=dict(coord=coord_feat_scale),
+                key_scales=elevation_key_scales,
             ),
         ],
         test_mode=False,
@@ -277,6 +285,7 @@ data = dict(
                 keys=val_multitask_keys,
                 feat_keys=feat_keys,
                 feat_scales=dict(coord=coord_feat_scale),
+                key_scales=elevation_key_scales,
             ),
         ],
         test_mode=False,
