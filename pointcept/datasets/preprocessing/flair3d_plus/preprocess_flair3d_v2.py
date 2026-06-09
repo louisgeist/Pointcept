@@ -1,25 +1,26 @@
 r"""
 Flair3D+ v2 — manifest-driven preprocessing from pre-labeled PLY files.
 
-Semantic label fusion (COSIA + LIDARHD agreement, ``--label_definition``,
-``cosia_class`` / ``lidarhd_class`` remapping) is **not** performed here; that
-step is handled upstream. Input PLY files must already contain a per-point
-``semantic`` attribute with final train IDs. This script reads PLY from
-``--ply_root`` and writes Pointcept scene folders.
+Semantic segment labels are read from upstream-enriched PLY ``semantic`` attributes.
+All semantic targets (segment, forest, land_use, natural_habitat) are remapped via
+named definitions in ``flair3d_label_remap.py`` (CLI: ``--segment_definition``,
+``--forest_definition``, ``--land_use_definition``, ``--natural_habitat_definition``).
+This script reads PLY from ``--ply_root`` and writes Pointcept scene folders.
 
 The split manifest CSV (e.g. ``data/flair3d_plus/raw/scene_split_manifest.csv``)
 is the single source of truth: one row per patch, and only rows with
 ``LIDARHD=True`` produce a Pointcept scene folder containing:
 
+- coord_translation.npy  (float64 XYZ offset subtracted from raw PLY coords; written before coord.npy)
 - coord.npy      (written LAST; acts as the completion marker for resume)
 - color.npy
-- segment.npy    (from PLY ``semantic``; IDs clamped to [0, num_classes], void at num_classes)
+- segment.npy    (from PLY ``semantic``; remapped via ``--segment_definition``)
 - strength.npy   (LiDAR intensity)
-- forest.npy     (FOREST GeoTIFF — always sampled; missing raster reported)
-- natural_habitat.npy   (only when NATURAL_HABITAT=True; raster ids 42/43 swapped to 43=void, 42=routes)
-- land_use.npy          (only when LAND_USE=True in the manifest)
+- forest.npy     (FOREST GeoTIFF — always sampled; remapped via ``--forest_definition``)
+- natural_habitat.npy   (only when NATURAL_HABITAT=True; ``--natural_habitat_definition``)
+- land_use.npy          (only when LAND_USE=True; ``--land_use_definition``)
 - elevation.npy         (only when DEM_ELEV=True in the manifest)
-- meta.json      (date_gap_days)
+- meta.json      (date_gap_days, label_definitions)
 
 Required manifest columns (extra columns are ignored):
     split, dept_year, roi, scene_i_j, patch_id,
@@ -29,7 +30,7 @@ Required manifest columns (extra columns are ignored):
 Conventions (must match scripts/build_csv_manifest.py):
     patch_id = f"{dept_year}_{roi}_{scene_i_j}"
     PLY path = {ply_root}/LIDARHD/{dept_year}_LIDARHD/{roi}/
-               {dept_year}_LIDARHD_{roi}_{scene_i_j}.ply
+               {dept_year}_LIDARHD_{roi}_{scene_i_j}.plydata/flair3d_plus/raw/scene_split_manifest_D075.csv
 
 Auxiliary rasters (FOREST, NATURAL_HABITAT, LAND_USE, DEM_ELEV) are read from
 ``--dataset_root`` using the same layout as v1.
@@ -45,7 +46,8 @@ Resume behaviour:
 By default, scenes whose ``coord.npy`` already exists in the output directory
 are skipped (idempotent re-runs). Use ``--force`` to reprocess everything,
 which is required when manifest modality flags (NATURAL_HABITAT/LAND_USE/DEM_ELEV)
-changed since the previous run, or when upstream PLY labels were refreshed.
+changed since the previous run, when label definitions changed, or when upstream
+PLY labels were refreshed.
 
 Generated directory structure (example):
 data/flair3d_plus/
@@ -53,6 +55,7 @@ data/flair3d_plus/
     └── D004-2021_LIDARHD/           <-- Department/Year Level
         └── AA-S1-32/                <-- Zone/ROI Level
             ├── D004-2021_AA-S1-32_1-1/   <-- Patch Level
+            │   ├── coord_translation.npy
             │   ├── coord.npy
             │   ├── color.npy
             │   └── ...
@@ -82,6 +85,7 @@ import csv
 import json
 import logging
 import os
+import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
@@ -90,14 +94,17 @@ import numpy as np
 from plyfile import PlyData
 from tqdm import tqdm
 
-from pointcept.datasets.flair3d_config_utils import FLAIR3D_SEMANTIC_TASKS
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+if _THIS_DIR not in sys.path:
+    sys.path.insert(0, _THIS_DIR)
 
-_SEGMENT_NUM_CLASSES = int(FLAIR3D_SEMANTIC_TASKS["segment"]["num_classes"])
-_NH_NUM_CLASSES = int(FLAIR3D_SEMANTIC_TASKS["natural_habitat"]["num_classes"])
-
-_NATURAL_HABITAT_LUT = np.arange(_NH_NUM_CLASSES, dtype=np.int16)
-_NATURAL_HABITAT_LUT[42] = 43
-_NATURAL_HABITAT_LUT[43] = 42
+from flair3d_label_remap import (  # noqa: E402
+    DEFAULT_LABEL_DEFINITION_NAMES,
+    PreprocessLabelDefinitions,
+    apply_remap,
+    build_preprocess_label_definitions,
+    supported_definitions,
+)
 
 # Columns that must be present in --split_manifest_csv (others may be present and are ignored).
 REQUIRED_MANIFEST_COLUMNS = frozenset(
@@ -155,24 +162,16 @@ def _parse_csv_float_optional(raw: Optional[str]) -> Optional[float]:
         return None
 
 
-def _segment_from_ply(attributes: Dict[str, np.ndarray], ply_path: str) -> np.ndarray:
-    """Read pre-computed semantic labels from an upstream-enriched PLY.
-
-    Labels outside [0, num_classes] are remapped to num_classes (void / ignore_index).
-    """
+def _segment_from_ply(
+    attributes: Dict[str, np.ndarray],
+    ply_path: str,
+    definition,
+) -> np.ndarray:
+    """Read upstream PLY semantic labels and apply the segment label definition."""
     if "semantic" not in attributes:
         raise KeyError(f"Missing 'semantic' in {ply_path}")
-    seg = attributes["semantic"].astype(np.int32, copy=False)
-    invalid = (seg < 0) | (seg > _SEGMENT_NUM_CLASSES)
-    if np.any(invalid):
-        seg = seg.copy()
-        seg[invalid] = _SEGMENT_NUM_CLASSES
-    return seg
-
-
-def _remap_natural_habitat(values: np.ndarray) -> np.ndarray:
-    """Swap raster ids 42 (N/A) and 43 (Autre) to train ids 43 (void) and 42 (routes)."""
-    return _NATURAL_HABITAT_LUT[values.astype(np.intp, copy=False)]
+    raw = attributes["semantic"]
+    return apply_remap(raw, definition)
 
 
 def read_ply_binary(filepath: str) -> Dict[str, np.ndarray]:
@@ -534,6 +533,7 @@ def _build_scene_from_subtile(
     task: PatchTask,
     ply_root: str,
     dataset_root: str,
+    label_definitions: PreprocessLabelDefinitions,
 ) -> Tuple[Dict[str, np.ndarray], List[Dict[str, str]]]:
     """
     Build a Pointcept scene dict from one PatchTask.
@@ -569,7 +569,9 @@ def _build_scene_from_subtile(
     else:
         color = np.zeros((coord.shape[0], 3), dtype=np.uint8)
 
-    segment = _segment_from_ply(attributes, ply_path)
+    segment = _segment_from_ply(
+        attributes, ply_path, label_definitions.segment
+    )
 
     out: Dict[str, np.ndarray] = {
         "coord": coord,
@@ -593,12 +595,15 @@ def _build_scene_from_subtile(
         lidar_patch_stem=lidar_patch_stem,
     )
     if os.path.isfile(forest_raster_path):
+        forest_def = label_definitions.forest
         forest_values, _ = sample_raster_to_points(
             raster_path=forest_raster_path,
             xy=coord[:, :2],
-            fill_value=2,  # Void idx
+            fill_value=forest_def.missing_fill_raw_id,
         )
-        out["forest"] = forest_values.astype(np.int16, copy=False)
+        out["forest"] = apply_remap(forest_values, forest_def).astype(
+            np.int16, copy=False
+        )
     else:
         missing_modalities.append(
             {
@@ -618,13 +623,15 @@ def _build_scene_from_subtile(
             lidar_patch_stem=lidar_patch_stem,
         )
         if os.path.isfile(natural_habitat_raster_path):
+            nh_def = label_definitions.natural_habitat
             natural_habitat_values, _ = sample_raster_to_points(
                 raster_path=natural_habitat_raster_path,
                 xy=coord[:, :2],
-                fill_value=42,  # raw raster N/A (42), remapped to void (43) in following function
+                fill_value=nh_def.missing_fill_raw_id,
             )
-            natural_habitat_values = _remap_natural_habitat(natural_habitat_values)
-            out["natural_habitat"] = natural_habitat_values.astype(np.int16, copy=False)
+            out["natural_habitat"] = apply_remap(
+                natural_habitat_values, nh_def
+            ).astype(np.int16, copy=False)
         else:
             missing_modalities.append(
                 {
@@ -644,12 +651,15 @@ def _build_scene_from_subtile(
             lidar_patch_stem=lidar_patch_stem,
         )
         if os.path.isfile(land_use_raster_path):
+            lu_def = label_definitions.land_use
             land_use_values, _ = sample_raster_to_points(
                 raster_path=land_use_raster_path,
                 xy=coord[:, :2],
-                fill_value=19,  # "Usage inconnu" index from land_use_classes.txt
+                fill_value=lu_def.missing_fill_raw_id,
             )
-            out["land_use"] = land_use_values.astype(np.int16, copy=False)
+            out["land_use"] = apply_remap(land_use_values, lu_def).astype(
+                np.int16, copy=False
+            )
         else:
             missing_modalities.append(
                 {
@@ -729,11 +739,20 @@ def _save_scene(
     _save_or_clean("land_use.npy", "land_use", np.int16, enabled=task.has_land_use)
     _save_or_clean("elevation.npy", "elevation", np.float32, enabled=task.has_dem_elev)
 
-    # Write coord.npy LAST: it is the completion marker used to skip already
-    # processed scenes on a re-run.
-    coord = scene["coord"].astype(np.float32, copy=False)
-    if coord.shape[0] > 0:
-        coord = coord - coord[0]
+    # Write coord_translation.npy then coord.npy LAST (coord.npy is the completion
+    # marker used to skip already processed scenes on a re-run).
+    # Reconstruct raw PLY coords: coord.astype(np.float64) + coord_translation
+    coord_f64 = scene["coord"].astype(np.float64, copy=False)
+    if coord_f64.shape[0] > 0:
+        translation = coord_f64[0].copy()
+        coord = (coord_f64 - translation).astype(np.float32)
+    else:
+        translation = np.zeros(3, dtype=np.float64)
+        coord = coord_f64.astype(np.float32)
+    np.save(
+        os.path.join(output_scene_dir, "coord_translation.npy"),
+        translation.astype(np.float64, copy=False),
+    )
     np.save(os.path.join(output_scene_dir, "coord.npy"), coord)
 
 
@@ -748,6 +767,7 @@ def _process_subtile_task(
     ply_root: str,
     dataset_root: str,
     output_root: str,
+    label_definitions: PreprocessLabelDefinitions,
 ) -> Tuple[str, List[Dict[str, str]]]:
     """Worker entry point: build and save one scene from a PatchTask.
 
@@ -758,13 +778,20 @@ def _process_subtile_task(
         task=task,
         ply_root=ply_root,
         dataset_root=dataset_root,
+        label_definitions=label_definitions,
     )
     output_scene_dir = os.path.join(output_root, task.split, f"{task.dept_year}_LIDARHD", task.roi, task.patch_id)
     # Order matters: write meta.json first, then the scene arrays. ``_save_scene``
     # writes ``coord.npy`` last, so its on-disk presence reliably indicates that
     # both the metadata and every other array have been fully persisted.
     os.makedirs(output_scene_dir, exist_ok=True)
-    _save_scene_meta(output_scene_dir, {"date_gap_days": task.date_gap_days})
+    _save_scene_meta(
+        output_scene_dir,
+        {
+            "date_gap_days": task.date_gap_days,
+            "label_definitions": label_definitions.to_meta_dict(),
+        },
+    )
     _save_scene(output_scene_dir, scene, task)
     return task.patch_id, missing_modalities
 
@@ -892,6 +919,17 @@ def main_process():
             "By default the script resumes by skipping already-processed scenes."
         ),
     )
+    for task_key in ("segment", "forest", "land_use", "natural_habitat"):
+        parser.add_argument(
+            f"--{task_key}_definition",
+            type=str,
+            default=DEFAULT_LABEL_DEFINITION_NAMES[task_key],
+            choices=supported_definitions(task_key),
+            help=(
+                f"Label definition for task '{task_key}' "
+                f"(see flair3d_label_remap.LABEL_DEFINITIONS)."
+            ),
+        )
     args = parser.parse_args()
 
     os.makedirs(args.output_root, exist_ok=True)
@@ -910,6 +948,14 @@ def main_process():
     logger.info("Dataset root (rasters): %s", args.dataset_root)
     logger.info("Splits to process: %s", splits)
     logger.info("Using split manifest CSV: %s", args.split_manifest_csv)
+
+    label_definitions = build_preprocess_label_definitions(
+        segment=args.segment_definition,
+        forest=args.forest_definition,
+        land_use=args.land_use_definition,
+        natural_habitat=args.natural_habitat_definition,
+    )
+    logger.info("Label definitions: %s", label_definitions.to_meta_dict())
 
     tasks = load_manifest_tasks(args.split_manifest_csv, splits)
     logger.info("Loaded %d tasks (LIDARHD=True) from manifest.", len(tasks))
@@ -955,9 +1001,10 @@ def main_process():
                 len(tasks_to_process),
             )
             logger.warning(
-                "Skip is based on coord.npy presence only. If upstream PLY labels or "
-                "manifest modality flags (NATURAL_HABITAT/LAND_USE/DEM_ELEV) changed "
-                "since the previous run, re-run with --force to refresh outputs."
+                "Skip is based on coord.npy presence only. If upstream PLY labels, "
+                "label definitions, or manifest modality flags "
+                "(NATURAL_HABITAT/LAND_USE/DEM_ELEV) changed since the previous run, "
+                "re-run with --force to refresh outputs."
             )
         else:
             logger.info(
@@ -980,6 +1027,7 @@ def main_process():
                     args.ply_root,
                     args.dataset_root,
                     args.output_root,
+                    label_definitions,
                 ): task
                 for task in tasks_to_process
             }

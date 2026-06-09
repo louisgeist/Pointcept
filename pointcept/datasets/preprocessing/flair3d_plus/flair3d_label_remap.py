@@ -1,326 +1,589 @@
 """
-Flair3D label remapping utilities.
+Flair3D+ unified label definitions and LUT remapping. (LUT: look-up table)
 
-This module centralizes:
-- direct (single-source) remaps from one raw label field,
-- fusion remaps that combine COSIA + LIDARHD agreement logic.
+Single registry for all semantic tasks (segment, forest, land_use, natural_habitat).
+Used by preprocess_flair3d_v2 and flair3d_config_utils (training metadata).
+
+Source-agnostic: remapping applies the same whether labels come from a PLY field
+or a sampled GeoTIFF raster.
 """
 
-from typing import Dict, Optional
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Dict, Mapping, Sequence, Tuple
 
 import numpy as np
-from numpy._typing import _VoidCodes
 
-
-COSIA_2_FLAIR3D = np.array(
-    [0, 0, 3, 1, 1, 1, 3, 3, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3], dtype=np.int32
-)
-LIDARHD_2_FLAIR3D = np.array([1, 1, 1, 2, 0, 3, 0, 0, 3, 3, 3], dtype=np.int32)
-LIDARHD_2_COARSE_B = np.array([1, 1, 2, 2, 0, 3, 0, 0, 3, 3, 3], dtype=np.int32)
-
-# Version C (with water)
-building,soil,veget, water, void = 0, 1, 2, 3, 4
-COSIA_2_FLAIR3D_C = np.array([
-            building, # Building
-            building, # Greenhouse
-            soil, # Swimming pool # Fix 15/05 (for inter_finerall10) : swimming pool as coarse_soil
-            soil, # Impervious surface
-            soil, # Pervious surface
-            soil, # Bare soil
-            water, # Water
-            void, # Snow
-            soil, # Herbaceous vegetation
-            soil, # Agricultural land
-            soil, # Plowed land
-            veget, # Vineyard
-            veget, # Deciduous
-            veget, # Coniferous
-            veget, # Brushwood
-            veget, # Clear cut 
-            veget, # Ligneous 
-            veget, # Mixed
-            void, # Undefined
-        ], dtype=np.int32
+SEMANTIC_TASK_KEYS: Tuple[str, ...] = (
+    "segment",
+    "forest",
+    "land_use",
+    "natural_habitat",
 )
 
-LIDARHD_2_COARSE_C = np.array([
-            soil, # Soil
-            soil, # Végétation basse
-            veget, # Végétation moyenne
-            veget, # Végétation haute
-            building, # Bâtiment
-            water, # Eau
-            building, # Pont
-            building, # Sursol pérenne
-            void, # Artefact
-            void, # Points virtuels (modélisation)
-            void,
-        ], dtype=np.int32)
+# ---------------------------------------------------------------------------
+# Class names (default / fine-grained taxonomies)
+# ---------------------------------------------------------------------------
 
-COSIA_FINER_ALL = np.array(
-    [0, 1, 8, 2, 3, 3, 8, 8, 4, 3, 3, 5, 6, 6, 7, 8, 8, 8, 8], dtype=np.int32
-)
-COSIA_FINER_BUILDING = np.array(
-    [0, 3, 4, 1, 1, 1, 4, 4, 1, 1, 1, 2, 2, 2, 2, 4, 4, 4, 4], dtype=np.int32
-)
-COSIA_FINER_SOIL = np.array(
-    [0, 0, 5, 3, 1, 1, 5, 5, 4, 1, 1, 2, 2, 2, 2, 5, 5, 5, 5], dtype=np.int32
-)
-COSIA_FINER_VEGETATION = np.array(
-    [0, 0, 5, 1, 1, 1, 5, 5, 1, 1, 1, 3, 2, 2, 4, 5, 5, 5, 5], dtype=np.int32
-)
-COSIA_FINER_VEGETATION_BETA = np.array(
-    [0, 0, 4, 1, 1, 1, 4, 4, 1, 1, 1, 3, 2, 2, 2, 4, 4, 4, 4], dtype=np.int32
-)
-LIDARHD_FINER = np.array([0, 0, 1, 2, 3, 6, 4, 5, 6, 6, 6], dtype=np.int32)
-COSIA_FINER_ALL2 = np.array(
-    [0, 1, 7, 2, 3, 3, 7, 7, 4, 3, 3, 5, 6, 6, 6, 7, 7, 7, 7], dtype=np.int32
-)
-COSIA_FINER_ALL3 = np.array(
-    [0, 1, 8, 2, 3, 3, 8, 8, 4, 3, 3, 5, 6, 6, 8, 8, 8, 8, 8], dtype=np.int32
-)
-COSIA_FINER_ALL5 = np.array(
-    [0, 1, 9, 2, 3, 3, 9, 9, 4, 3, 3, 5, 6, 6, 7, 9, 9, 9, 9], dtype=np.int32
-)
-# Finer all6: building=0, greenhouse=1, impervious_surface=2, other_soil=3, herbaceous=4,
-# vineyard=5, tree=6, sursol_perenne=7, void=8. Brushwood merged into tree (no separate class).
-COSIA_FINER_ALL6 = np.array(
-    [0, 1, 8, 2, 3, 3, 8, 8, 4, 3, 3, 5, 6, 6, 6, 8, 8, 8, 8], dtype=np.int32
-)
-# Finer all7: building=0, greenhouse=1, impervious_surface=2, other_soil=3, herbaceous=4,
-# vineyard=5, tree=6, sursol_perenne=7 (forced from LIDARHD), agricultural_soil=8, void=9.
-COSIA_FINER_ALL7 = np.array(
-    [0, 1, 9, 2, 3, 3, 9, 9, 4, 8, 8, 5, 6, 6, 6, 9, 9, 9, 9], dtype=np.int32
-)
-# Finer all8 (based on all6): building=0, greenhouse=1, impervious_surface=2, other_soil=3,
-# herbaceous=4, vineyard=5, tree=6, sursol_perenne=7 (LIDARHD), swimming_pool=8, water=9,
-# deciduous=10, coniferous=11, bridge=12 (LIDARHD), void=13.
-COSIA_FINER_ALL8 = np.array(
-    [0, 1, 8, 2, 3, 3, 9, 13, 4, 3, 3, 5, 10, 11, 6, 13, 6, 6, 13], dtype=np.int32
-)
-# Finer all9: same COSIA remap as all8; void=14; forest_ground=13 reserved (no COSIA sink in table).
-COSIA_FINER_ALL9 = np.array(
-    [0, 1, 8, 2, 3, 3, 9, 14, 4, 3, 3, 5, 10, 11, 6, 14, 6, 6, 14], dtype=np.int32
+_SEGMENT_NAMES: Tuple[str, ...] = (
+    "Building",
+    "Greenhouse",
+    "Impervious surface",
+    "Other soil",
+    "Herbaceous",
+    "Vineyard",
+    "Other vegetation",
+    "Other infrastructures",
+    "Swimming pool",
+    "Water",
+    "Deciduous",
+    "Coniferous",
+    "Bridge",
+    "Agricultural soil",
+    "Soil under vegetation",
+    "Void",
 )
 
-# Compared to 8:
-# - clear cut is now in other vegetation
-# -  other soil split into other soil and agricultural soil
-void = 14
+_FOREST_NAMES: Tuple[str, ...] = ("Not Forest", "Forest", "Void")
 
-COSIA_FINER_ALL10 = np.array(
-    [0, 1, 8, 2, 3, 3, 9, void, 4, 13, 13, 5, 10, 11, 6, 6, 6, 6, void], dtype=np.int32
+_LAND_USE_NAMES: Tuple[str, ...] = (
+    "Agriculture",
+    "Sylviculture",
+    "Activites extraction",
+    "Peche et aquaculture",
+    "Autres productions primaires",
+    "Production secondaire",
+    "Production secondaire tertiaire residentiel",
+    "Production tertiaire",
+    "Reseaux routiers",
+    "Reseaux ferres",
+    "Reseaux aeriens",
+    "Reseaux fluvial maritime",
+    "Autres reseaux transport",
+    "Services logistiques stockage",
+    "Reseaux utilite publique",
+    "Usage residentiel",
+    "Zones en transition",
+    "Zones abandonnees",
+    "Sans usage",
+    "Usage inconnu",
+)
+
+_NATURAL_HABITAT_NAMES: Tuple[str, ...] = (
+    "Habitat ouvert sur substrat acide et humide du domaine tempéré",
+    "Habitat ouvert sur substrat acide et mésique du domaine tempéré",
+    "Habitat ouvert sur substrat acide et sec du domaine tempéré",
+    "Habitat ouvert sur substrat basique et humide du domaine tempéré",
+    "Habitat ouvert sur substrat basique et mésique du domaine tempéré",
+    "Habitat ouvert sur substrat basique et sec du domaine tempéré",
+    "Habitat forestier sur substrat acide et humide du domaine tempéré",
+    "Habitat forestier sur substrat acide et mésique du domaine tempéré",
+    "Habitat forestier sur substrat acide et sec du domaine tempéré",
+    "Habitat forestier sur substrat basique et humide du domaine tempéré",
+    "Habitat forestier sur substrat basique et mésique du domaine tempéré",
+    "Habitat forestier sur substrat basique et sec du domaine tempéré",
+    "Habitat ouvert sur substrat acide et humide du domaine méditerranéen",
+    "Habitat ouvert sur substrat acide et mésique du domaine méditerranéen",
+    "Habitat ouvert sur substrat acide et sec du domaine méditerranéen",
+    "Habitat ouvert sur substrat basique et humide du domaine méditerranéen",
+    "Habitat ouvert sur substrat basique et mésique du domaine méditerranéen",
+    "Habitat ouvert sur substrat basique et sec du domaine méditerranéen",
+    "Habitat forestier sur substrat acide et humide du domaine méditerranéen",
+    "Habitat forestier sur substrat acide et mésique du domaine méditerranéen",
+    "Habitat forestier sur substrat acide et sec du domaine méditerranéen",
+    "Habitat forestier sur substrat basique et humide du domaine méditerranéen",
+    "Habitat forestier sur substrat basique et mésique du domaine méditerranéen",
+    "Habitat forestier sur substrat basique et sec du domaine méditerranéen",
+    "Habitat ouvert sur substrat acide et humide du domaine alpin",
+    "Habitat ouvert sur substrat acide et mésique du domaine alpin",
+    "Habitat ouvert sur substrat acide et sec du domaine alpin",
+    "Habitat ouvert sur substrat basique et humide du domaine alpin",
+    "Habitat ouvert sur substrat basique et mésique du domaine alpin",
+    "Habitat ouvert sur substrat basique et sec du domaine alpin",
+    "Habitat forestier sur substrat acide et humide du domaine alpin",
+    "Habitat forestier sur substrat acide et mésique du domaine alpin",
+    "Habitat forestier sur substrat acide et sec du domaine alpin",
+    "Habitat forestier sur substrat basique et humide du domaine alpin",
+    "Habitat forestier sur substrat basique et mésique du domaine alpin",
+    "Habitat forestier sur substrat basique et sec du domaine alpin",
+    "Habitat minéral sur substrat acide",
+    "Habitat minéral sur substrat basique",
+    "Habitat aquatique sur substrat acide",
+    "Habitat aquatique sur substrat basique",
+    "Habitat cultivé",
+    "Zone bâtie et autre habitat artificiel",
+    "Routes & voies verrées",
+    "Void",
+)
+
+_LAND_USE_COARSE_NAMES: Tuple[str, ...] = (
+    "Production primaire",
+    "Production secondaire et tertiaire",
+    "Reseaux de transport",
+    "Services et utilite publique",
+    "Usage residentiel",
+    "Zones en transition ou abandonnees",
+    "Sans usage",
+    "Usage inconnu",
+)
+
+# Raw ids 0-19 match land_use_classes.txt keys 1-20 (0-indexed).
+# filtered: missing / mixed classes -> void (train id 10).
+_LAND_USE_FILTERED_NAMES: Tuple[str, ...] = (
+    "Agriculture",
+    "Sylviculture",
+    "Extraction activities",
+    "Secondary production",
+    "Tertiary production",
+    "Road networks",
+    "Rail networks",
+    "Air networks",
+    "Residential use",
+    "No land use",
+    "Void",
+)
+
+_LAND_USE_FILTERED_LUT = np.array(
+    [
+        0,   # 0  Agriculture
+        1,   # 1  Sylviculture
+        2,   # 2  Extraction activities
+        10,  # 3  Fishing and aquaculture -> void
+        10,  # 4  Other primary production -> void
+        3,   # 5  Secondary production
+        10,  # 6  Secondary, tertiary and residential (mixed) -> void
+        4,   # 7  Tertiary production
+        5,   # 8  Road networks
+        6,   # 9  Rail networks
+        7,   # 10 Air networks
+        10,  # 11 Inland and maritime transport networks -> void
+        10,  # 12 Other transport networks -> void
+        10,  # 13 Logistics and storage services -> void
+        10,  # 14 Utility networks -> void
+        8,   # 15 Residential use
+        10,  # 16 Transition zones -> void
+        10,  # 17 Abandoned zones -> void
+        9,   # 18 No land use
+        10,  # 19 Unknown use -> void
+    ],
+    dtype=np.int32,
+)
+
+_NATURAL_HABITAT_BY_DOMAIN_NAMES: Tuple[str, ...] = (
+    "Domaine tempéré",
+    "Domaine méditerranéen",
+    "Domaine alpin",
+    "Habitat minéral",
+    "Habitat aquatique",
+    "Habitat cultivé",
+    "Zone bâtie et autre habitat artificiel",
+    "Routes & voies verrées",
+    "Void",
+)
+
+_NATURAL_HABITAT_BY_HABITAT_TYPE_NAMES: Tuple[str, ...] = (
+    "Habitat ouvert",
+    "Habitat forestier",
+    "Habitat minéral",
+    "Habitat aquatique",
+    "Habitat cultivé",
+    "Zone bâtie et autre habitat artificiel",
+    "Routes & voies verrées",
+    "Void",
+)
+
+_NATURAL_HABITAT_BY_HABITAT_X_DOMAIN_NAMES: Tuple[str, ...] = (
+    "Open habitat in temperate domain",
+    "Forest habitat in temperate domain",
+    "Open habitat in mediterranean domain",
+    "Forest habitat in mediterranean domain",
+    "Open habitat in alpine domain",
+    "Forest habitat in alpine domain",
+    "Mineral habitat",
+    "Aquatic habitat",
+    "Cultivated habitat",
+    "Built and other artificial habitat",
+    "Roads & paved tracks",
+    "Void",
+)
+
+# CarHab raw id -> train id. Raw 42=N/A -> void (11); raw 43=routes -> 10.
+_NATURAL_HABITAT_BY_HABITAT_X_DOMAIN_LUT = np.array(
+    [
+        0, 0, 0, 0, 0, 0,  # 0-5   open / temperate
+        1, 1, 1, 1, 1, 1,  # 6-11  forest / temperate
+        2, 2, 2, 2, 2, 2,  # 12-17 open / mediterranean
+        3, 3, 3, 3, 3, 3,  # 18-23 forest / mediterranean
+        4, 4, 4, 4, 4, 4,  # 24-29 open / alpine
+        5, 5, 5, 5, 5, 5,  # 30-35 forest / alpine
+        6, 6, 7, 7, 8, 9,  # 36-41 mineral, aquatic, cultivated, built
+        11, 10,  # 42=N/A -> void, 43=routes
+    ],
+    dtype=np.int32,
 )
 
 
-lidarhd_class_dictionary = {
-    1: ("#d3d3d3", "Non classé"),
-    2: ("#a0522d", "Sol"),
-    3: ("#b3b94d", "Végétation basse"),
-    4: ("#4e9a4e", "Végétation moyenne"),
-    5: ("#1f4e1f", "Végétation haute"),
-    6: ("#ff0000", "Bâtiment"),
-    9: ("#1e90ff", "Eau"),
-    17: ("#ffff00", "Pont"),
-    64: ("#ff8c00", "Sursol pérenne"),
-    65: ("#8b00ff", "Artefact"),
-    66: ("#000000", "Points virtuels (modélisation)")
-}
+@dataclass(frozen=True)
+class LabelDefinition:
+  """Named label remap: raw source ids -> consecutive train ids via LUT."""
 
-LIDARHD_NUM_CLASSES = 10
-TRAINID = 0
-LIDARHD_ID2TRAINID = np.ones(max(lidarhd_class_dictionary.keys())+1, dtype=np.int32)*LIDARHD_NUM_CLASSES
-for k,v in lidarhd_class_dictionary.items():
-    if v[1] == 'Non classé':
-        # LIDARHD_ID2TRAINID[k] = LIDARHD_NUM_CLASSES (void class)
-        pass
-    else:
-        LIDARHD_ID2TRAINID[k] = TRAINID
-        TRAINID += 1
+  name: str
+  task_key: str
+  num_raw_classes: int
+  lut: np.ndarray
+  names: Tuple[str, ...]
+  ignore_index: int
+  missing_fill_raw_id: int
+  source_field: str = ""
 
-SIMPLE_LABEL_REMAPS = {
-    "coarse_cosia": ("cosia_class", COSIA_2_FLAIR3D),
-    "coarse_lidarhd": ("lidarhd_class", LIDARHD_2_FLAIR3D),
-    "coarse_lidarhd_b": ("lidarhd_class", LIDARHD_2_COARSE_B),
-    "coarse_cosia_c": ("cosia_class", COSIA_2_FLAIR3D_C),
-    "coarse_lidarhd_c": ("lidarhd_class", LIDARHD_2_COARSE_C),
-    "finer_cosia_all": ("cosia_class", COSIA_FINER_ALL),
-    "finer_cosia_building": ("cosia_class", COSIA_FINER_BUILDING),
-    "finer_cosia_soil": ("cosia_class", COSIA_FINER_SOIL),
-    "finer_cosia_vegetation": ("cosia_class", COSIA_FINER_VEGETATION),
-    "finer_cosia_vegetation_beta": ("cosia_class", COSIA_FINER_VEGETATION_BETA),
-    "inter_finerall2": ("cosia_class", COSIA_FINER_ALL2),
-    "inter_finerall3": ("cosia_class", COSIA_FINER_ALL3),
-    "inter_finerall5": ("cosia_class", COSIA_FINER_ALL5),
-    "inter_finerall6": ("cosia_class", COSIA_FINER_ALL6),
-    "inter_finerall7": ("cosia_class", COSIA_FINER_ALL7),
-    "inter_finerall8": ("cosia_class", COSIA_FINER_ALL8),
-    "inter_finerall9": ("cosia_class", COSIA_FINER_ALL9),
-    "inter_finerall10": ("cosia_class", COSIA_FINER_ALL10),
-    "finer_lidarhd": ("lidarhd_class", LIDARHD_FINER),
-}
-
-FUSION_LABEL_REMAPS = {
-    "coarse_intersection",
-    "rule1",
-    "inter_finerall",
-    "inter_finerbuilding",
-    "inter_finersoil",
-    "inter_finervegetation",
-    "inter_finervegetation_beta",
-    "inter_finerall2",
-    "inter_finerall3",
-    "inter_finerall4",
-    "inter_finerall5",
-    "inter_finerall6",
-    "inter_finerall7",
-    "inter_finerall8",
-    "inter_finerall9",
-    "inter_finerall10",
-}
-
-SUPPORTED_LABEL_REMAPS = FUSION_LABEL_REMAPS #sorted(set(SIMPLE_LABEL_REMAPS.keys()) | FUSION_LABEL_REMAPS)
+  def __post_init__(self) -> None:
+    if self.lut.shape != (self.num_raw_classes,):
+      raise ValueError(
+        f"LUT shape {self.lut.shape} != ({self.num_raw_classes},) "
+        f"for {self.task_key}/{self.name}"
+      )
+    if len(self.names) == 0:
+      raise ValueError(f"names must be non-empty for {self.task_key}/{self.name}")
 
 
-def map_labels(mapping: np.ndarray, labels: np.ndarray) -> np.ndarray:
-    """Remap labels via lookup."""
-    return mapping[labels.astype(np.intp)]
+@dataclass(frozen=True)
+class PreprocessLabelDefinitions:
+  """Bundle of label definitions passed to preprocessing workers."""
+
+  segment: LabelDefinition
+  forest: LabelDefinition
+  land_use: LabelDefinition
+  natural_habitat: LabelDefinition
+
+  def to_meta_dict(self) -> Dict[str, str]:
+    return {
+      "segment": self.segment.name,
+      "forest": self.forest.name,
+      "land_use": self.land_use.name,
+      "natural_habitat": self.natural_habitat.name,
+    }
 
 
-def _require_field(attributes: Dict[str, np.ndarray], field: str) -> np.ndarray:
-    if field not in attributes:
-        raise KeyError(f"Required field '{field}' not found in PLY attributes")
-    return attributes[field].astype(np.int32)
-
-
-def _finer_mapping_from_mode(mode: str) -> np.ndarray:
-    if mode == "inter_finerall":
-        return COSIA_FINER_ALL
-    if mode == "inter_finerbuilding":
-        return COSIA_FINER_BUILDING
-    if mode == "inter_finersoil":
-        return COSIA_FINER_SOIL
-    if mode == "inter_finervegetation":
-        return COSIA_FINER_VEGETATION
-    if mode == "inter_finervegetation_beta":
-        return COSIA_FINER_VEGETATION_BETA
-    if mode == "inter_finerall2":
-        return COSIA_FINER_ALL2
-    if mode in ("inter_finerall3", "inter_finerall4"):
-        return COSIA_FINER_ALL3
-    if mode == "inter_finerall5":
-        return COSIA_FINER_ALL5
-    if mode == "inter_finerall6":
-        return COSIA_FINER_ALL6
-    if mode == "inter_finerall7":
-        return COSIA_FINER_ALL7
-    if mode == "inter_finerall8":
-        return COSIA_FINER_ALL8
-    if mode == "inter_finerall9":
-        return COSIA_FINER_ALL9
-    if mode == "inter_finerall10":
-        return COSIA_FINER_ALL10
-    raise ValueError(f"Mode '{mode}' does not define a finer mapping")
-
-
-def _segment_from_fusion(attributes: Dict[str, np.ndarray], mode: str) -> np.ndarray:
-    cosia = _require_field(attributes, "cosia_class")
-    lidarhd = _require_field(attributes, "lidarhd_class")
-    
-    
-    # LidarHD to consecutive labels (reproducing `Flair3DToConsecutiveLabels` in SPT)
-    # Defensive fix from your previous transform: clamp unexpected lidar ids.
-    lidarhd = lidarhd.copy()
-    lidarhd[lidarhd > 66] = 1
-    lidarhd = map_labels(LIDARHD_ID2TRAINID, lidarhd)
-
-    coarse_cosia = map_labels(COSIA_2_FLAIR3D, cosia) # 15/05 : COSIA_2_FLAIR3D updated
-    coarse_lidarhd = map_labels(LIDARHD_2_FLAIR3D, lidarhd)
-
-    coarse_void = 3
-    agreement = coarse_cosia == coarse_lidarhd
-
-    if mode == "coarse_intersection":
-        seg = np.full(cosia.shape, coarse_void, dtype=np.int32)
-        seg[agreement] = coarse_cosia[agreement]
-        return seg
-
-    if mode == "rule1":
-        seg = coarse_cosia.copy()
-        mask = (coarse_cosia == 1) & (coarse_lidarhd != 1) & (coarse_lidarhd != coarse_void)
-        seg[mask] = coarse_lidarhd[mask]
-        return seg
-
-    # Finer-intersection family.
-    finer_map = _finer_mapping_from_mode(mode)
-    finer_void = int(finer_map.max())
-
-    if mode in (
-        "inter_finerall5",
-        "inter_finerall6",
-        "inter_finerall7",
-        "inter_finerall8",
-        "inter_finerall9",
-    ):
-        # Recompute agreement with coarse_B variant (your original behavior).
-        coarse_lidarhd_b = map_labels(LIDARHD_2_COARSE_B, lidarhd)
-        agreement = coarse_cosia == coarse_lidarhd_b
-        
-    elif mode == "inter_finerall10":
-        coarse_lidarhd_c = map_labels(LIDARHD_2_COARSE_C, lidarhd)
-        coarse_cosia_c = map_labels(COSIA_2_FLAIR3D_C, cosia)
-        agreement = coarse_cosia_c == coarse_lidarhd_c
-        
-    if mode in (
-        "inter_finerall4",
-        "inter_finerall5",
-        "inter_finerall6",
-        "inter_finerall7",
-        "inter_finerall8",
-        "inter_finerall9",
-        "inter_finerall10",
-    ):
-        # Treat lidarhd void as "agreement" for these modes.
-        agreement = agreement | (lidarhd == 10)
-
-    seg = np.full(cosia.shape, finer_void, dtype=np.int32) # initialize with void label
-    cosia_finer = map_labels(finer_map, cosia)
-    seg[agreement] = cosia_finer[agreement]
-
-    if mode in ("inter_finerall3", "inter_finerall4"):
-        # Vineyard override from COSIA.
-        seg[cosia == 11] = 5
-        # Sursol perenne override from LIDARHD.
-        seg[lidarhd == 7] = 7
-    elif mode == "inter_finerall5":
-        # Sursol perenne override from LIDARHD (different class id).
-        seg[lidarhd == 7] = 8
-    elif mode == "inter_finerall6":
-        # Sursol perenne override from LIDARHD (class 7).
-        seg[lidarhd == 7] = 7
-    elif mode == "inter_finerall7":
-        # Other infrastructure override from LIDARHD (class 7).
-        seg[lidarhd == 7] = 7
-    elif mode in ("inter_finerall8", "inter_finerall9", "inter_finerall10"):
-        # Sursol perenne (train id 7) and bridge / Pont (train id 6) from LIDARHD.
-        seg[lidarhd == 7] = 7 # Override Sursol perenne
-        seg[lidarhd == 6] = 12 # Override Briddge
-
-    return seg
-
-
-def build_segment(
-    attributes: Dict[str, np.ndarray],
-    label_definition: str,
+def build_lut_from_groups(
+    num_raw: int,
+    groups: Mapping[int, Sequence[int]],
+    *,
+    default_train_id: int,
 ) -> np.ndarray:
-    """
-    Build the final segment vector from raw PLY attributes.
-    """
-    # Fusion takes precedence: it builds the real labels from COSIA+LIDARHD agreement.
-    # Simple remaps are fallback for single-source consecutive values only.
-    if label_definition in FUSION_LABEL_REMAPS:
-        return _segment_from_fusion(attributes, label_definition)
-    supported = ", ".join(SUPPORTED_LABEL_REMAPS)
-    raise ValueError(
-        f"Unknown label_definition '{label_definition}'. Supported: {supported}"
+  """Build a LUT mapping raw ids to train ids via explicit groups."""
+  lut = np.full(num_raw, default_train_id, dtype=np.int32)
+  for train_id, raw_ids in groups.items():
+    for raw_id in raw_ids:
+      if raw_id < 0 or raw_id >= num_raw:
+        raise ValueError(
+          f"raw_id {raw_id} out of range [0, {num_raw}) for train_id {train_id}"
+        )
+      lut[raw_id] = int(train_id)
+  return lut
+
+
+def _build_segment_lut(num_raw: int = 256, void_train_id: int = 15) -> np.ndarray:
+  """Identity for 0..15; overflow and invalid raw ids map to void."""
+  lut = np.full(num_raw, void_train_id, dtype=np.int32)
+  lut[: void_train_id + 1] = np.arange(void_train_id + 1, dtype=np.int32)
+  return lut
+
+
+def _build_natural_habitat_default_lut() -> np.ndarray:
+  """CarHab raw 42=N/A -> train void (43); raw 43=Autre/routes -> train 42."""
+  lut = np.arange(44, dtype=np.int32)
+  lut[42] = 43
+  lut[43] = 42
+  return lut
+
+
+def _make_definition(
+    task_key: str,
+    name: str,
+    *,
+    num_raw_classes: int,
+    lut: np.ndarray,
+    names: Tuple[str, ...],
+    ignore_index: int,
+    missing_fill_raw_id: int,
+    source_field: str = "",
+) -> LabelDefinition:
+  return LabelDefinition(
+    name=name,
+    task_key=task_key,
+    num_raw_classes=num_raw_classes,
+    lut=lut.astype(np.int32, copy=False),
+    names=names,
+    ignore_index=ignore_index,
+    missing_fill_raw_id=missing_fill_raw_id,
+    source_field=source_field,
+  )
+
+
+def _register_segment_definitions() -> Dict[str, LabelDefinition]:
+  segment_lut = _build_segment_lut()
+  segment_void = 15
+  base = _make_definition(
+    "segment",
+    "default",
+    num_raw_classes=segment_lut.shape[0],
+    lut=segment_lut,
+    names=_SEGMENT_NAMES,
+    ignore_index=segment_void,
+    missing_fill_raw_id=segment_void,
+    source_field="semantic",
+  )
+  # Upstream PLY may already use inter_finerall10 train ids; same LUT/metadata.
+  inter_finerall10 = _make_definition(
+    "segment",
+    "inter_finerall10",
+    num_raw_classes=segment_lut.shape[0],
+    lut=segment_lut.copy(),
+    names=_SEGMENT_NAMES,
+    ignore_index=segment_void,
+    missing_fill_raw_id=segment_void,
+    source_field="semantic",
+  )
+  return {"default": base, "inter_finerall10": inter_finerall10}
+
+
+def _register_forest_definitions() -> Dict[str, LabelDefinition]:
+  lut = np.arange(3, dtype=np.int32)
+  return {
+    "default": _make_definition(
+      "forest",
+      "default",
+      num_raw_classes=3,
+      lut=lut,
+      names=_FOREST_NAMES,
+      ignore_index=2,
+      missing_fill_raw_id=2,
+      source_field="FOREST",
+    ),
+  }
+
+
+def _register_land_use_definitions() -> Dict[str, LabelDefinition]:
+  identity = np.arange(20, dtype=np.int32)
+  coarse_lut = build_lut_from_groups(
+    20,
+    {
+      0: [0, 1, 2, 3, 4],
+      1: [5, 6, 7],
+      2: [8, 9, 10, 11, 12],
+      3: [13, 14],
+      4: [15],
+      5: [16, 17],
+      6: [18],
+      7: [19],
+    },
+    default_train_id=7,
+  )
+  return {
+    "default": _make_definition(
+      "land_use",
+      "default",
+      num_raw_classes=20,
+      lut=identity,
+      names=_LAND_USE_NAMES,
+      ignore_index=-1,
+      missing_fill_raw_id=19,
+      source_field="LAND_USE",
+    ),
+    "coarse": _make_definition(
+      "land_use",
+      "coarse",
+      num_raw_classes=20,
+      lut=coarse_lut,
+      names=_LAND_USE_COARSE_NAMES,
+      ignore_index=-1,
+      missing_fill_raw_id=19,
+      source_field="LAND_USE",
+    ),
+    "filtered": _make_definition(
+      "land_use",
+      "filtered",
+      num_raw_classes=20,
+      lut=_LAND_USE_FILTERED_LUT,
+      names=_LAND_USE_FILTERED_NAMES,
+      ignore_index=10,
+      missing_fill_raw_id=19,
+      source_field="LAND_USE",
+    ),
+  }
+
+
+def _register_natural_habitat_definitions() -> Dict[str, LabelDefinition]:
+  default_lut = _build_natural_habitat_default_lut()
+  by_domain_lut = build_lut_from_groups(
+    44,
+    {
+      0: list(range(0, 12)),
+      1: list(range(12, 24)),
+      2: list(range(24, 36)),
+      3: [36, 37],
+      4: [38, 39],
+      5: [40],
+      6: [41],
+      7: [43],  # raw Autre / routes
+      8: [42],  # raw N/A -> void
+    },
+    default_train_id=8,
+  )
+  open_ids = (
+    list(range(0, 6))
+    + list(range(12, 18))
+    + list(range(24, 30))
+  )
+  forest_ids = (
+    list(range(6, 12))
+    + list(range(18, 24))
+    + list(range(30, 36))
+  )
+  by_habitat_type_lut = build_lut_from_groups(
+    44,
+    {
+      0: open_ids,
+      1: forest_ids,
+      2: [36, 37],
+      3: [38, 39],
+      4: [40],
+      5: [41],
+      6: [43],
+      7: [42],
+    },
+    default_train_id=7,
+  )
+  return {
+    "default": _make_definition(
+      "natural_habitat",
+      "default",
+      num_raw_classes=44,
+      lut=default_lut,
+      names=_NATURAL_HABITAT_NAMES,
+      ignore_index=43,
+      missing_fill_raw_id=42,
+      source_field="NATURAL_HABITAT",
+    ),
+    "by_domain": _make_definition(
+      "natural_habitat",
+      "by_domain",
+      num_raw_classes=44,
+      lut=by_domain_lut,
+      names=_NATURAL_HABITAT_BY_DOMAIN_NAMES,
+      ignore_index=8,
+      missing_fill_raw_id=42,
+      source_field="NATURAL_HABITAT",
+    ),
+    "by_habitat_type": _make_definition(
+      "natural_habitat",
+      "by_habitat_type",
+      num_raw_classes=44,
+      lut=by_habitat_type_lut,
+      names=_NATURAL_HABITAT_BY_HABITAT_TYPE_NAMES,
+      ignore_index=7,
+      missing_fill_raw_id=42,
+      source_field="NATURAL_HABITAT",
+    ),
+    "by_habitat_x_domain": _make_definition(
+      "natural_habitat",
+      "by_habitat_x_domain",
+      num_raw_classes=44,
+      lut=_NATURAL_HABITAT_BY_HABITAT_X_DOMAIN_LUT,
+      names=_NATURAL_HABITAT_BY_HABITAT_X_DOMAIN_NAMES,
+      ignore_index=11,
+      missing_fill_raw_id=42,
+      source_field="NATURAL_HABITAT",
+    ),
+  }
+
+
+LABEL_DEFINITIONS: Dict[str, Dict[str, LabelDefinition]] = {
+  "segment": _register_segment_definitions(),
+  "forest": _register_forest_definitions(),
+  "land_use": _register_land_use_definitions(),
+  "natural_habitat": _register_natural_habitat_definitions(),
+}
+
+# Default definition per task (preprocess v2 CLI + training when not overridden).
+DEFAULT_LABEL_DEFINITION_NAMES: Dict[str, str] = {
+  "segment": "default",
+  "forest": "default",
+  "land_use": "filtered",
+  "natural_habitat": "by_habitat_x_domain",
+}
+
+
+def get_default_definition_name(task_key: str) -> str:
+  if task_key not in DEFAULT_LABEL_DEFINITION_NAMES:
+    keys = ", ".join(sorted(DEFAULT_LABEL_DEFINITION_NAMES.keys()))
+    raise KeyError(f"Unknown task_key '{task_key}'. Expected one of: {keys}")
+  return DEFAULT_LABEL_DEFINITION_NAMES[task_key]
+
+
+def supported_definitions(task_key: str) -> Tuple[str, ...]:
+  if task_key not in LABEL_DEFINITIONS:
+    keys = ", ".join(sorted(LABEL_DEFINITIONS.keys()))
+    raise KeyError(f"Unknown task_key '{task_key}'. Expected one of: {keys}")
+  return tuple(sorted(LABEL_DEFINITIONS[task_key].keys()))
+
+
+def get_definition(task_key: str, name: str) -> LabelDefinition:
+  if task_key not in LABEL_DEFINITIONS:
+    keys = ", ".join(sorted(LABEL_DEFINITIONS.keys()))
+    raise KeyError(f"Unknown task_key '{task_key}'. Expected one of: {keys}")
+  task_defs = LABEL_DEFINITIONS[task_key]
+  if name not in task_defs:
+    supported = ", ".join(sorted(task_defs.keys()))
+    raise KeyError(
+      f"Unknown definition '{name}' for task '{task_key}'. Supported: {supported}"
     )
+  return task_defs[name]
+
+
+def build_preprocess_label_definitions(
+    segment: str = DEFAULT_LABEL_DEFINITION_NAMES["segment"],
+    forest: str = DEFAULT_LABEL_DEFINITION_NAMES["forest"],
+    land_use: str = DEFAULT_LABEL_DEFINITION_NAMES["land_use"],
+    natural_habitat: str = DEFAULT_LABEL_DEFINITION_NAMES["natural_habitat"],
+) -> PreprocessLabelDefinitions:
+  return PreprocessLabelDefinitions(
+    segment=get_definition("segment", segment),
+    forest=get_definition("forest", forest),
+    land_use=get_definition("land_use", land_use),
+    natural_habitat=get_definition("natural_habitat", natural_habitat),
+  )
+
+
+def apply_remap(values: np.ndarray, definition: LabelDefinition) -> np.ndarray:
+  """Remap raw label ids to train ids via LUT; out-of-range -> missing_fill mapping."""
+  idx = values.astype(np.int64, copy=False)
+  lut = definition.lut
+  fallback = int(lut[definition.missing_fill_raw_id])
+  result = np.full(idx.shape, fallback, dtype=np.int32)
+  valid = (idx >= 0) & (idx < lut.shape[0])
+  if np.any(valid):
+    result[valid] = lut[idx[valid]]
+  return result
+
+
+def definition_to_task_config(definition: LabelDefinition) -> Dict[str, object]:
+  """Convert a LabelDefinition to a Flair3D semantic task config dict."""
+  if definition.ignore_index >= 0:
+    num_classes = definition.ignore_index
+  else:
+    num_classes = len(definition.names)
+  return {
+    "num_classes": num_classes,
+    "ignore_index": definition.ignore_index,
+    "names": list(definition.names),
+    "num_raw_classes": definition.num_raw_classes,
+    "definition": definition.name,
+    "task_type": "semantic",
+  }
+
+
+def default_task_config(task_key: str) -> Dict[str, object]:
+  """Task config for the default definition of a semantic task."""
+  return definition_to_task_config(get_definition(task_key, "default"))
