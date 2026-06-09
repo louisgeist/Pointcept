@@ -184,7 +184,7 @@ train_multitask_keys, val_multitask_keys, multitask_index_valid_keys = (
     )
 )
 
-del FLAIR3D_COLLECT_PREFIX_LITEPT, init_multitask_collect_keys, get_regression_target_scales
+del FLAIR3D_COLLECT_PREFIX_LITEPT, init_multitask_collect_keys
 
 data = dict(
     num_classes=num_classes,

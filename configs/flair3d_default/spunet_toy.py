@@ -75,7 +75,7 @@ task_criteria = init_task_criteria(task_configs)
 task_weights = {task_name: 1.0 for task_name in task_configs.keys()}
 
 # Remove the imported helpers from this module's namespace so they do not leak
-# into the Pointcept config dict. The config loader (pointcept/utils/config.py)
+# into the Pointcept config dict. The config loader (pointce^t/utils/config.py)
 # treats every non-dunder module attribute as a config entry, and Config.dump
 # pipes the resulting Python text through yapf. Yapf cannot reformat function
 # objects rendered as "<function ... at 0x...>" and raises a SyntaxError.
@@ -159,7 +159,7 @@ train_multitask_keys, val_multitask_keys, multitask_index_valid_keys = (
     )
 )
 
-del FLAIR3D_COLLECT_PREFIX_GRID, init_multitask_collect_keys, get_regression_target_scales
+del FLAIR3D_COLLECT_PREFIX_GRID, init_multitask_collect_keys
 
 data = dict(
     num_classes=num_classes,
