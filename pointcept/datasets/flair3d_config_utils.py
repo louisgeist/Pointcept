@@ -2,20 +2,23 @@
 Flair3D+ multi-target label configs (semantic class names / counts and elevation regression).
 
 Edit FLAIR3D_SEMANTIC_TASKS if your on-disk label ids differ from these defaults.
-For each semantic task, names[i] is the display name for integer class id i (0 .. num_classes - 1).
+For each semantic task, names[i] is the display name for processed label id i.
+num_classes is the number of classes the model trains on (logit dimension); ignore_index labels
+are excluded from the loss. num_raw_classes (when present) is the number of distinct ids in
+source rasters before preprocessing remap (max raw id + 1).
 """
 
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 # Semantic targets: one entry per target_key used by Flair3DDataset / configs.
 FLAIR3D_SEMANTIC_TASKS: Dict[str, Dict[str, Any]] = {
     "segment": {
         "num_classes": 15,
         "ignore_index": 15,
-        # V12
+        # V14
         "names": [
             'Building',
             'Greenhouse',
@@ -38,7 +41,7 @@ FLAIR3D_SEMANTIC_TASKS: Dict[str, Dict[str, Any]] = {
     "forest": {
         "num_classes": 2,
         "ignore_index": 2,
-        "names": ["Not Forest", "Forest"],
+        "names": ["Not Forest", "Forest", "Void"],
     },
     "land_use": {
         "num_classes": 20,
@@ -70,6 +73,7 @@ FLAIR3D_SEMANTIC_TASKS: Dict[str, Dict[str, Any]] = {
         # CarHab raster uses 42=N/A and 43=Autre (routes). Preprocessing remaps to 43=void, 42=routes.
         # Missing raster samples use fill_value=42 (raw), then remap to ignore_index 43.
         "num_classes": 43,
+        "num_raw_classes": 44,
         "ignore_index": 43,
         "names": [
             "Habitat ouvert sur substrat acide et humide du domaine tempéré",
@@ -146,29 +150,68 @@ FLAIR3D_COLLECT_PREFIX_GRID: Tuple[str, ...] = ("grid_coord",)
 FLAIR3D_COLLECT_PREFIX_LITEPT: Tuple[str, ...] = ("grid_coord", "grid_size")
 
 # Point-wise elevation regression (not class indices).
+ELEVATION_TARGET_SCALE = 0.01
+ELEVATION_SMOOTH_L1_BETA = 1e-2
+
 FLAIR3D_ELEVATION: Dict[str, Any] = {
     "wandb_target_display_name": "elevation",
     "dtype": "float32",
     "unit": "meters",
     "use_nan_mask": True,
+    "target_scale": ELEVATION_TARGET_SCALE,
 }
 
 
-def get_semantic_config(target_key: str) -> Dict[str, Any]:
+def get_semantic_num_raw_classes(
+    target_key: str,
+    definition: Optional[str] = None,
+) -> int:
+    """Return the number of distinct label ids in source data (max raw id + 1).
+
+    Falls back to num_classes when num_raw_classes is not defined (no raster remap).
+    When ``definition`` is set, reads from ``flair3d_label_remap`` for that task.
+    """
+    cfg = get_semantic_config(target_key, definition=definition)
+    return int(cfg.get("num_raw_classes", cfg["num_classes"]))
+
+
+def get_semantic_config(
+    target_key: str,
+    definition: Optional[str] = None,
+) -> Dict[str, Any]:
     """Return a deep copy of the semantic config for the given target_key.
+
+    When ``definition`` is omitted, uses ``DEFAULT_LABEL_DEFINITION_NAMES`` from
+    ``flair3d_label_remap`` (land_use=filtered, natural_habitat=by_habitat_x_domain, …).
 
     Adds task_type set to "semantic" for use with MultiTaskSegmentorV2.
     """
     if target_key not in FLAIR3D_SEMANTIC_TASKS:
         keys = ", ".join(sorted(FLAIR3D_SEMANTIC_TASKS.keys()))
         raise KeyError(f"Unknown semantic target_key '{target_key}'. Expected one of: {keys}")
-    out = deepcopy(FLAIR3D_SEMANTIC_TASKS[target_key])
-    out["task_type"] = "semantic"
-    return out
+
+    from pointcept.datasets.preprocessing.flair3d_plus.flair3d_label_remap import (
+        definition_to_task_config,
+        get_default_definition_name,
+        get_definition,
+    )
+
+    defn_name = definition if definition is not None else get_default_definition_name(
+        target_key
+    )
+    return deepcopy(definition_to_task_config(get_definition(target_key, defn_name)))
 
 
 def get_elevation_config() -> Dict[str, Any]:
     return deepcopy(FLAIR3D_ELEVATION)
+
+
+def get_regression_target_scales(target_keys: Tuple[str, ...]) -> Dict[str, float]:
+    """Return per-target scale factors for regression keys in target_keys."""
+    scales: Dict[str, float] = {}
+    if "elevation" in target_keys:
+        scales["elevation"] = ELEVATION_TARGET_SCALE
+    return scales
 
 
 def get_multitask_regression_task_config_elevation() -> Dict[str, Any]:
@@ -209,13 +252,23 @@ def init_multitask_collect_keys(
     return train_keys, val_keys, FLAIR3D_MULTITASK_INDEX_VALID_KEYS
 
 
-def init_task_configs(target_keys: Tuple[str, ...]) -> Dict[str, Any]:
+def init_task_configs(
+    target_keys: Tuple[str, ...],
+    definitions: Optional[Dict[str, str]] = None,
+) -> Dict[str, Any]:
     """Initialize the task config dictionary for the given target_keys.
+
+    ``definitions`` maps task names to label definition names in ``flair3d_label_remap``
+    (must match preprocessing v2 ``--{task}_definition`` flags).
     """
+    definitions = definitions or {}
     out = {}
     for task_name in target_keys:
         if task_name in FLAIR3D_SEMANTIC_TASKS:
-            out[task_name] = get_semantic_config(task_name)
+            out[task_name] = get_semantic_config(
+                task_name,
+                definition=definitions.get(task_name),
+            )
         elif task_name == "elevation":
             out[task_name] = get_multitask_regression_task_config_elevation()
         else:
@@ -229,7 +282,7 @@ def get_missing_target_fill_value(target_key: str) -> Any:
     - Elevation regression falls back to NaN so masked losses ignore it.
     """
     if target_key in FLAIR3D_SEMANTIC_TASKS:
-        return int(FLAIR3D_SEMANTIC_TASKS[target_key]["ignore_index"])
+        return int(get_semantic_config(target_key)["ignore_index"])
     if target_key == "elevation":
         return float("nan")
     keys = ", ".join(sorted((*FLAIR3D_SEMANTIC_TASKS.keys(), "elevation")))
@@ -256,7 +309,11 @@ def init_task_criteria(task_configs: Dict[str, Any]) -> Dict[str, Any]:
             ]
         elif task_name == "elevation":
             task_criteria["elevation"] = [
-                dict(type="SmoothL1Loss", beta=1.0, loss_weight=1.0),
+                dict(
+                    type="SmoothL1Loss",
+                    beta=ELEVATION_SMOOTH_L1_BETA,
+                    loss_weight=1.0,
+                ),
             ]
         else:
             raise KeyError(f"Unknown task_name '{task_name}'. Expected one of: {FLAIR3D_SEMANTIC_TASKS.keys()}")
