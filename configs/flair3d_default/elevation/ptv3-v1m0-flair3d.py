@@ -1,5 +1,5 @@
 """
-PT-v3m1 on Flair3D+ (RGB + strength; grid_coord serialization).
+PT-v3m1 on Flair3D+ (coord + RGB + strength in feat_keys; grid_coord serialization).
 
 Mono-task Flair3D+ config for point-wise elevation regression. Inherits only from
 default_runtime.
@@ -43,7 +43,7 @@ warmup_steps = 5000
 
 # Features
 learned_masked_feat = True
-feat_keys = ["color", "strength"]
+feat_keys = ["coord", "color", "strength"]
 coord_feat_scale = 0.01
 
 # Wandb parameters
@@ -97,7 +97,7 @@ model = dict(
     criteria=[dict(type="SmoothL1Loss", beta=ELEVATION_SMOOTH_L1_BETA, loss_weight=1.0)],
     backbone=dict(
         type="PT-v3m1",
-        in_channels=4,  # RGB + strength
+        in_channels=7,  # coord (3) + color (3) + strength (1)
         order=["z", "z-trans", "hilbert", "hilbert-trans"],
         stride=(2, 2, 2, 2),
         enc_depths=(2, 2, 2, 6, 2),

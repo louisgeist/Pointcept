@@ -1,5 +1,5 @@
 """
-PT-v3m1 semantic segmentation on DALES (strength-only LiDAR features).
+PT-v3m1 semantic segmentation on DALES (coord + strength LiDAR features).
 
 This config is intentionally self-contained: it inherits only from
 default_runtime and can be read top-to-bottom without cross-referencing
@@ -43,7 +43,7 @@ num_classes = 8
 ignore_index = 8
 
 # Features
-feat_keys = ["strength"]
+feat_keys = ["coord", "strength"]
 coord_feat_scale = 0.1
 strength_feat_scale = 1/60000
 
@@ -78,7 +78,7 @@ model = dict(
     backbone_out_channels=64,
     backbone=dict(
         type="PT-v3m1",
-        in_channels=1,  # strength only (XYZ encoded via serialization)
+        in_channels=4,  # coord (3) + strength (1)
         order=["z", "z-trans", "hilbert", "hilbert-trans"],
         stride=(2, 2, 2, 2),
         enc_depths=(2, 2, 2, 6, 2),

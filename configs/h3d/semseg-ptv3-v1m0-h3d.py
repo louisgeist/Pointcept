@@ -44,8 +44,8 @@ eval_epoch = epoch // 10
 num_classes = 11
 ignore_index = num_classes
 
-# Features (PT-v3m1 encodes XYZ via serialization; RGB only in feat_keys)
-feat_keys = ["color"]
+# Features
+feat_keys = ["coord", "color"]
 coord_feat_scale = 0.1
 
 # Test
@@ -81,7 +81,7 @@ model = dict(
     backbone_out_channels=64,
     backbone=dict(
         type="PT-v3m1",
-        in_channels=3,  # RGB
+        in_channels=6,  # coord (3) + color (3)
         order=["z", "z-trans", "hilbert", "hilbert-trans"],
         stride=(2, 2, 2, 2),
         enc_depths=(2, 2, 2, 6, 2),

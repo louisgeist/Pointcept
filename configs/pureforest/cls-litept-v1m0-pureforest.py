@@ -33,7 +33,7 @@ epoch = 100
 eval_epoch = epoch // 10
 
 # Features
-feat_keys = ["color"]
+feat_keys = ["coord", "color"]
 coord_feat_scale = 0.1
 
 # Wandb parameters
@@ -69,7 +69,7 @@ model = dict(
     backbone_embed_dim=72,
     backbone=dict(
         type="LitePT-v1",
-        in_channels=3,
+        in_channels=6,  # coord (3) + color (3)
         order=("z", "z-trans", "hilbert", "hilbert-trans"),
         stride=(2, 2, 2, 2),
         enc_depths=(2, 2, 2, 6, 2),
