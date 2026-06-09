@@ -44,7 +44,7 @@ ignore_index = 8
 
 # Features
 feat_keys = ["coord", "strength"]
-coord_feat_scale = 0.1
+coord_feat_scale = 0.01
 strength_feat_scale = 1/60000
 
 # Test

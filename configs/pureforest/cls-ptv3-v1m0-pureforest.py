@@ -34,7 +34,7 @@ eval_epoch = epoch // 10
 
 # Features
 feat_keys = ["coord", "color"]
-coord_feat_scale = 0.1
+coord_feat_scale = 0.01
 
 # Wandb parameters
 wandb_run_name = (

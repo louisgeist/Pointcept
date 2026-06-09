@@ -44,7 +44,7 @@ ignore_index = num_classes
 
 # Features
 feat_keys = ["coord", "color"]
-coord_feat_scale = 0.1
+coord_feat_scale = 0.01
 
 # Test
 test_single_fragment = True
