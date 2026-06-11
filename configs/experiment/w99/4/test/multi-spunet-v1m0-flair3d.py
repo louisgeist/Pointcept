@@ -43,7 +43,7 @@ lr = 1e-3
 epoch = 1000
 eval_epoch = epoch
 warmup_steps = 2500
-max_samples = batch_size * 10
+max_sample = batch_size * 10
 
 # Features
 learned_masked_feat = True
@@ -190,7 +190,7 @@ data = dict(
         too_small_tiles_manifest=too_small_tiles_manifest,
         target_keys=list(target_keys),
         primary_target_key=main_task,
-        max_samples=max_samples,
+        max_sample=max_sample,
         transform=[
             dict(
                 type="Update",
@@ -242,7 +242,7 @@ data = dict(
         too_small_tiles_manifest=too_small_tiles_manifest,
         target_keys=list(target_keys),
         primary_target_key=main_task,
-        max_samples=max_samples,
+        max_sample=max_sample,
         transform=[
             dict(
                 type="Update",
@@ -290,7 +290,7 @@ data = dict(
         too_small_tiles_manifest=too_small_tiles_manifest,
         target_keys=list(target_keys),
         primary_target_key=main_task,
-        max_samples=max_samples,
+        max_sample=max_sample,
         transform=[
             dict(type="CenterShift", apply_z=True),
             dict(type="Z_MinShift"),
