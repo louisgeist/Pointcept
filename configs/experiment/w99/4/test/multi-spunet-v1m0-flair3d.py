@@ -40,7 +40,7 @@ mix_prob = 0.8
 
 # Optimization parameters
 lr = 1e-3
-epoch = 1000
+epoch = 4
 eval_epoch = epoch
 warmup_steps = 2500
 max_sample = batch_size * 10
