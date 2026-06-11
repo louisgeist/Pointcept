@@ -89,8 +89,11 @@ CONFIG_DIR=configs/${DATASET}/${CONFIG}.py
 
 echo " =========> CREATE EXP DIR <========="
 case "$EXP_DIR" in /*) echo "Experiment dir: $EXP_DIR" ;; *) echo "Experiment dir: $ROOT_DIR/$EXP_DIR" ;; esac
-if [ "${RESUME}" = true ] && [ -d "$EXP_DIR" ]
-then
+if [ -n "${JOB_DIR}" ] && [ -f "${MODEL_DIR}/model_last.pth" ]; then
+  RESUME=true
+  CONFIG_DIR=${EXP_DIR}/config.py
+  WEIGHT=${MODEL_DIR}/model_last.pth
+elif [ "${RESUME}" = true ] && [ -d "$EXP_DIR" ]; then
   CONFIG_DIR=${EXP_DIR}/config.py
   WEIGHT=$MODEL_DIR/model_last.pth
 else

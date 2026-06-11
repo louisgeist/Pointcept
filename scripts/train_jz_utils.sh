@@ -90,6 +90,10 @@ if [ -z "${JOB_DIR}" ]; then
   echo "Error: JOB_DIR is not set. Run this script via your jz_utils sbatch wrapper, which exports JOB_DIR." >&2
   exit 1
 fi
+
+# jz_utils srun blocks forward only a whitelist of env vars; always set this here.
+export POINTCEPT_SLURM_REQUEUE=1
+
 EXP_DIR=${JOB_DIR}
 MODEL_DIR=${EXP_DIR}/model
 CODE_DIR=${EXP_DIR}/code
@@ -98,8 +102,11 @@ CONFIG_DIR=configs/experiment/${CONFIG}
 
 echo " =========> CREATE EXP DIR <========="
 case "$EXP_DIR" in /*) echo "Experiment dir: $EXP_DIR" ;; *) echo "Experiment dir: $ROOT_DIR/$EXP_DIR" ;; esac
-if [ "${RESUME}" = true ] && [ -d "$EXP_DIR" ]
-then
+if [ -n "${JOB_DIR}" ] && [ -f "${MODEL_DIR}/model_last.pth" ]; then
+  RESUME=true
+  CONFIG_DIR=${EXP_DIR}/config.py
+  WEIGHT=${MODEL_DIR}/model_last.pth
+elif [ "${RESUME}" = true ] && [ -d "$EXP_DIR" ]; then
   CONFIG_DIR=${EXP_DIR}/config.py
   WEIGHT=$MODEL_DIR/model_last.pth
 else
@@ -118,6 +125,15 @@ echo "Running code in: $CODE_DIR"
 
 
 echo " =========> RUN TASK <========="
+if [ -n "${SLURM_JOB_ID:-}" ]; then
+  _pointcept_slurm_requeue_on_usr1() {
+    echo "[train_jz_utils.sh] Slurm timeout SIGUSR1 received, requeuing job ${SLURM_JOB_ID}" >&2
+    scontrol requeue "${SLURM_JOB_ID}" 2>/dev/null || true
+    exit 1
+  }
+  trap '_pointcept_slurm_requeue_on_usr1' USR1
+  echo "Slurm timeout requeue shell trap installed for job ${SLURM_JOB_ID}" >&2
+fi
 ulimit -n 65536
 # Extra options for Python (e.g. eval_epoch=1 epoch=34 for smoke test)
 OPTS="save_path=$EXP_DIR"
