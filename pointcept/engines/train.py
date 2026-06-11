@@ -311,6 +311,12 @@ class Trainer(TrainerBase):
                     tags = [str(target_keys)]
             else:
                 tags = None
+            wandb_run_id_path = os.path.join(self.cfg.save_path, "wandb_run_id.txt")
+            run_id = None
+            if os.path.isfile(wandb_run_id_path):
+                with open(wandb_run_id_path, "r") as f:
+                    run_id = f.read().strip() or None
+
             init_kw = dict(
                 project=self.cfg.wandb_project,
                 name=run_name,
@@ -320,7 +326,13 @@ class Trainer(TrainerBase):
             )
             if tags:
                 init_kw["tags"] = tags
+            if run_id:
+                init_kw["id"] = run_id
+                init_kw["resume"] = "allow"
+                self.logger.info("Resuming W&B run: %s", run_id)
             wandb.init(**init_kw)
+            with open(wandb_run_id_path, "w") as f:
+                f.write(wandb.run.id)
             wandb.log({"model/free_params": self.n_free_parameters})
         return writer
 
