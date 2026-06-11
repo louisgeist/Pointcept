@@ -21,8 +21,9 @@ job_id = os.environ.get("SLURM_JOB_ID")
 if not job_id:
     sys.exit(1)
 
+# %L = time left before walltime (scontrol has no such field/format option)
 result = subprocess.run(
-    ["scontrol", "show", "job", job_id, "--format=%l"],
+    ["squeue", "-h", "-j", job_id, "-o", "%L"],
     capture_output=True,
     text=True,
     timeout=15,
@@ -53,8 +54,13 @@ print(total)
 PY
 }
 
+FIRST_READ=1
 while true; do
   if left=$(_parse_time_left 2>/dev/null); then
+    if [ "$FIRST_READ" = "1" ]; then
+      echo "[slurm_requeue_watchdog] polling job ${SLURM_JOB_ID}: ${left}s left (margin=${MARGIN}s, poll=${POLL}s)" >&2
+      FIRST_READ=0
+    fi
     if [ "$left" -le "$MARGIN" ]; then
       echo "[slurm_requeue_watchdog] ${left}s left (margin=${MARGIN}s), requeuing ${SLURM_JOB_ID}" >&2
       scontrol requeue "${SLURM_JOB_ID}" 2>/dev/null || true

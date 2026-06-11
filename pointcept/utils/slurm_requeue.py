@@ -5,7 +5,7 @@ Activated when POINTCEPT_SLURM_REQUEUE=1 and SLURM_JOB_ID are set.
 
 Uses two mechanisms (either is enough):
 1. SIGUSR1 from `#SBATCH --signal=USR1@XX` or `B:USR1@XX` (fast path)
-2. Background poll of `scontrol` time left (works with jz_utils + srun nesting)
+2. Background poll of `squeue` time left (works with jz_utils + srun nesting)
 """
 
 import logging
@@ -66,8 +66,9 @@ def get_slurm_time_left_seconds(job_id=None):
     if not job_id:
         return None
     try:
+        # %L = time left before walltime (scontrol has no such field/format option)
         result = subprocess.run(
-            ["scontrol", "show", "job", str(job_id), "--format=%l"],
+            ["squeue", "-h", "-j", str(job_id), "-o", "%L"],
             capture_output=True,
             text=True,
             timeout=15,
@@ -77,7 +78,8 @@ def get_slurm_time_left_seconds(job_id=None):
         return None
     if result.returncode != 0:
         return None
-    return parse_slurm_duration_to_seconds(result.stdout)
+    first_line = result.stdout.strip().splitlines()[0] if result.stdout.strip() else ""
+    return parse_slurm_duration_to_seconds(first_line)
 
 
 def _finish_wandb_if_active():
@@ -126,8 +128,12 @@ def _poll_slurm_time_left():
         f"(margin={margin}s, poll={poll}s)"
     )
 
+    first_read = True
     while True:
         left = get_slurm_time_left_seconds(job_id)
+        if left is not None and first_read:
+            _log_requeue(f"Slurm requeue poll: {left}s left before walltime")
+            first_read = False
         if left is not None and left <= margin:
             _trigger_slurm_requeue(f"time_left={left}s <= margin={margin}s")
         threading.Event().wait(poll)
