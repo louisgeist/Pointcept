@@ -374,7 +374,11 @@ class InformationWriter(HookBase):
                         data_cfg, tc, use_task_in_tag
                     ):
                         wandb_dict[wandb_tag] = value
-                wandb.log(wandb_dict, step=epoch_step)
+                # Do not pass an explicit `step`: after a Slurm requeue the W&B
+                # run is resumed and its internal step is already past the epoch
+                # number, so `step=epoch_step` would be silently dropped.
+                # Charts use the "Epoch" field as x-axis via define_metric.
+                wandb.log(wandb_dict)
 
 
 @HOOKS.register_module()
