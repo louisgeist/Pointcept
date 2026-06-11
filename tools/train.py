@@ -23,8 +23,6 @@ def main_worker(cfg):
 
 
 def main():
-    install_slurm_timeout_requeue_handler()
-
     args = default_argument_parser().parse_args()
     cfg = default_config_parser(args.config_file, args.options)
 

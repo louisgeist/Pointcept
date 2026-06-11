@@ -1,8 +1,11 @@
 """
-Slurm timeout requeue handler for Jean Zay and similar clusters.
+Slurm timeout requeue for Jean Zay and similar clusters.
 
 Activated when POINTCEPT_SLURM_REQUEUE=1 and SLURM_JOB_ID are set.
-Requires #SBATCH --signal=USR1@XX in the submission script.
+
+Uses two mechanisms (either is enough):
+1. SIGUSR1 from `#SBATCH --signal=USR1@XX` or `B:USR1@XX` (fast path)
+2. Background poll of `scontrol` time left (works with jz_utils + srun nesting)
 """
 
 import logging
@@ -10,15 +13,71 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 
 from pointcept.utils.comm import is_main_process
 
 _HANDLER_INSTALLED = False
+_REQUEUE_TRIGGERED = False
+_REQUEUE_LOCK = threading.Lock()
+
+_DEFAULT_MARGIN_SEC = 120
+_DEFAULT_POLL_SEC = 30
 
 
 def _log_requeue(msg):
     logging.getLogger(__name__).warning(msg)
     print(msg, file=sys.stderr, flush=True)
+
+
+def parse_slurm_duration_to_seconds(value):
+    """Parse Slurm duration strings (e.g. 2-03:00:00, 1:30:00, 59:30) to seconds."""
+    if not value:
+        return None
+    text = value.strip().split()[0]
+    if not text or text in {"N/A", "NOT_SET", "UNLIMITED", "INVALID"}:
+        return None
+
+    days = 0
+    if "-" in text:
+        days_part, text = text.split("-", 1)
+        try:
+            days = int(days_part)
+        except ValueError:
+            return None
+
+    parts = text.split(":")
+    try:
+        if len(parts) == 3:
+            hours, minutes, seconds = (int(parts[0]), int(parts[1]), int(parts[2]))
+        elif len(parts) == 2:
+            hours, minutes, seconds = 0, int(parts[0]), int(parts[1])
+        else:
+            return None
+    except ValueError:
+        return None
+
+    return ((days * 24 + hours) * 60 + minutes) * 60 + seconds
+
+
+def get_slurm_time_left_seconds(job_id=None):
+    """Return remaining walltime in seconds for a Slurm job, or None if unknown."""
+    job_id = job_id or os.environ.get("SLURM_JOB_ID")
+    if not job_id:
+        return None
+    try:
+        result = subprocess.run(
+            ["scontrol", "show", "job", str(job_id), "--format=%l"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    return parse_slurm_duration_to_seconds(result.stdout)
 
 
 def _finish_wandb_if_active():
@@ -31,8 +90,14 @@ def _finish_wandb_if_active():
         pass
 
 
-def _sigusr1_handler(signum, frame):
-    _log_requeue(f"Slurm timeout signal received (signum={signum})")
+def _trigger_slurm_requeue(reason):
+    global _REQUEUE_TRIGGERED
+    with _REQUEUE_LOCK:
+        if _REQUEUE_TRIGGERED:
+            return
+        _REQUEUE_TRIGGERED = True
+
+    _log_requeue(f"Slurm requeue triggered ({reason})")
 
     if is_main_process():
         job_id = os.environ.get("SLURM_JOB_ID")
@@ -41,18 +106,35 @@ def _sigusr1_handler(signum, frame):
         else:
             _finish_wandb_if_active()
             _log_requeue(f"Requeuing Slurm job {job_id}")
-            subprocess.run(
-                ["scontrol", "requeue", job_id],
-                check=False,
-            )
+            subprocess.run(["scontrol", "requeue", job_id], check=False)
     else:
-        _log_requeue("Non-main process exiting after Slurm timeout signal.")
+        _log_requeue("Non-main process exiting after Slurm requeue request.")
 
     os._exit(1)
 
 
+def _sigusr1_handler(signum, frame):
+    _trigger_slurm_requeue(f"SIGUSR1 signum={signum}")
+
+
+def _poll_slurm_time_left():
+    margin = int(os.environ.get("POINTCEPT_SLURM_REQUEUE_MARGIN_SEC", _DEFAULT_MARGIN_SEC))
+    poll = int(os.environ.get("POINTCEPT_SLURM_REQUEUE_POLL_SEC", _DEFAULT_POLL_SEC))
+    job_id = os.environ.get("SLURM_JOB_ID")
+    _log_requeue(
+        f"Slurm requeue poll watcher started for job {job_id} "
+        f"(margin={margin}s, poll={poll}s)"
+    )
+
+    while True:
+        left = get_slurm_time_left_seconds(job_id)
+        if left is not None and left <= margin:
+            _trigger_slurm_requeue(f"time_left={left}s <= margin={margin}s")
+        threading.Event().wait(poll)
+
+
 def install_slurm_timeout_requeue_handler(logger=None):
-    """Install SIGUSR1 handler for Slurm walltime pre-timeout requeue."""
+    """Install SIGUSR1 handler and optional time-left poll watcher."""
     global _HANDLER_INSTALLED
     if _HANDLER_INSTALLED:
         return
@@ -70,3 +152,7 @@ def install_slurm_timeout_requeue_handler(logger=None):
 
     signal.signal(signal.SIGUSR1, _sigusr1_handler)
     _HANDLER_INSTALLED = True
+
+    if is_main_process():
+        thread = threading.Thread(target=_poll_slurm_time_left, daemon=True)
+        thread.start()

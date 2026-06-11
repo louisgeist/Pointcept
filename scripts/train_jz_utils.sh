@@ -1,8 +1,11 @@
 #!/bin/sh
 
 # Copied from train.sh, adapted to work with repo `jz_utils` for cluster job submission.
+# Auto-requeue: shell watchdog (below) + Python poll in slurm_requeue.py.
+# Optional in jz_utils sbatch: #SBATCH --signal=B:USR1@120 and source slurm_requeue_trap.sh
 
 cd $(dirname $(dirname "$0")) || exit
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 ROOT_DIR=$(pwd)
 PYTHON=python
 
@@ -125,14 +128,21 @@ echo "Running code in: $CODE_DIR"
 
 
 echo " =========> RUN TASK <========="
+WATCHDOG_PID=""
 if [ -n "${SLURM_JOB_ID:-}" ]; then
+  sh "${SCRIPT_DIR}/slurm_requeue_watchdog.sh" &
+  WATCHDOG_PID=$!
+  echo "Slurm requeue watchdog started (pid=${WATCHDOG_PID}) for job ${SLURM_JOB_ID}" >&2
+
   _pointcept_slurm_requeue_on_usr1() {
     echo "[train_jz_utils.sh] Slurm timeout SIGUSR1 received, requeuing job ${SLURM_JOB_ID}" >&2
     scontrol requeue "${SLURM_JOB_ID}" 2>/dev/null || true
+    if [ -n "${WATCHDOG_PID}" ]; then
+      kill "${WATCHDOG_PID}" 2>/dev/null || true
+    fi
     exit 1
   }
   trap '_pointcept_slurm_requeue_on_usr1' USR1
-  echo "Slurm timeout requeue shell trap installed for job ${SLURM_JOB_ID}" >&2
 fi
 ulimit -n 65536
 # Extra options for Python (e.g. eval_epoch=1 epoch=34 for smoke test)
@@ -159,3 +169,8 @@ else
     --dist-url ${DIST_URL} \
     --options save_path="$EXP_DIR" resume="$RESUME" weight="$WEIGHT"
 fi
+TRAIN_EXIT=$?
+if [ -n "${WATCHDOG_PID}" ]; then
+  kill "${WATCHDOG_PID}" 2>/dev/null || true
+fi
+exit $TRAIN_EXIT
