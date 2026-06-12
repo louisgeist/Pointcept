@@ -50,7 +50,7 @@ coord_feat_scale = 0.01
 
 # Wandb parameters
 wandb_run_name = (
-    f"Flair3D+ SpUNet multitask + elevation {grp_exp}.{num_exp}) lr={lr}"
+    f"A100 - Flair3D+ SpUNet multitask + elevation {grp_exp}.{num_exp}) lr={lr}"
 )
 wandb_project = "flair3d_multi"
 
