@@ -31,8 +31,8 @@ enable_amp = True
 
 # Data parameters
 batch_size = 40 * num_gpu  # total batch size across all gpus
-batch_size_val = 5 * num_gpu
-batch_size_test = 5 * num_gpu
+batch_size_val = batch_size // 8
+batch_size_test = batch_size // 8
 
 grid_size = 0.1
 point_max = 100000
@@ -40,9 +40,8 @@ mix_prob = 0.8
 
 # Optimization parameters
 lr = 1e-3
-epoch = 6
-eval_epoch = epoch
-warmup_steps = 2500
+total_iters = 10_000
+warmup_iters = 2500
 
 # Features
 learned_masked_feat = True
@@ -51,7 +50,7 @@ coord_feat_scale = 0.01
 
 # Wandb parameters
 wandb_run_name = (
-    f"Flair3D+ SpUNet multitask + elevation {grp_exp}.{num_exp}) lr={lr}"
+    f"H100 - Flair3D+ SpUNet multitask + elevation {grp_exp}.{num_exp}) lr={lr}"
 )
 wandb_project = "flair3d_multi"
 
@@ -75,14 +74,7 @@ elevation_key_scales = dict(elevation=elevation_target_scale)
 target_scales = get_regression_target_scales(target_keys)
 main_task = "segment"
 
-# Must match preprocess_flair3d_v2 --{task}_definition flags (defaults in flair3d_label_remap.py).
-label_definitions = dict(
-    segment="default",
-    forest="default",
-    land_use="filtered",
-    natural_habitat="by_habitat_x_domain",
-)
-task_configs = init_task_configs(target_keys, definitions=label_definitions)
+task_configs = init_task_configs(target_keys)
 task_criteria = init_task_criteria(task_configs)
 task_weights = {task_name: 1.0 for task_name in task_configs.keys()}
 
@@ -153,7 +145,7 @@ optimizer = dict(type="AdamW", lr=lr, weight_decay=0.005)
 scheduler = dict(
     type="LinearLR",
     start_factor=1 / 10,
-    total_iters=warmup_steps,
+    total_iters=warmup_iters,
 )
 
 # -----------------------------------------------------------------------------
