@@ -10,8 +10,20 @@ batch_size = 16  # total batch size in all gpu
 gradient_accumulation_steps = 1  # total steps to accumulate gradients for
 batch_size_val = None  # auto adapt to bs 1 for each gpu
 batch_size_test = None  # auto adapt to bs 1 for each gpu
-epoch = 100  # total epoch, data loop = epoch // eval_epoch
-eval_epoch = 100  # sche total eval & checkpoint epoch
+
+# -----------------------------------------------------------------------------
+# Training schedule — two mutually exclusive modes (see README_geist.md)
+# -----------------------------------------------------------------------------
+
+# Classic mode (leave total_iters = None): each trainer epoch loops over the dataset.
+epoch = 100  # total dataset passes over the full run
+eval_epoch = 100  # number of validation epochs
+
+# Iter-limited mode (set total_iters): each trainer epoch = iter_per_epoch random batch steps.
+total_iters = None  # total optimizer steps; enables iter-limited mode when set
+iter_per_epoch = None  # iteration steps per epoch (default 1000 when total_iters is set)
+eval_every = None  # validate every N epochs (default 5 when total_iters is set)
+
 clip_grad = None  # disable with None, enable with a float
 
 sync_bn = False

@@ -101,7 +101,7 @@ class ClsEvaluator(HookBase):
             wandb.define_metric("val/*", step_metric="Epoch")
 
     def after_epoch(self):
-        if self.trainer.cfg.evaluate:
+        if self.should_evaluate():
             self.eval()
 
     def _metric_value(self, m_iou, m_acc, all_acc):
@@ -226,7 +226,7 @@ class SemSegEvaluator(HookBase):
             wandb.define_metric("val/*", step_metric="Epoch")
 
     def after_epoch(self):
-        if self.trainer.cfg.evaluate:
+        if self.should_evaluate():
             self.eval()
 
     def eval(self):
@@ -367,7 +367,7 @@ class RegressionEvaluator(HookBase):
             wandb.define_metric("val/reg/*", step_metric="Epoch")
 
     def after_epoch(self):
-        if self.trainer.cfg.evaluate:
+        if self.should_evaluate():
             self.eval()
 
     @staticmethod
@@ -525,7 +525,7 @@ class MultiTaskEvaluator(HookBase):
             wandb.define_metric("val/reg/*", step_metric="Epoch")
 
     def after_epoch(self):
-        if self.trainer.cfg.evaluate:
+        if self.should_evaluate():
             self.eval()
 
     @staticmethod
@@ -912,7 +912,7 @@ class InsSegEvaluator(HookBase):
         ]
 
     def after_epoch(self):
-        if self.trainer.cfg.evaluate:
+        if self.should_evaluate():
             self.eval()
 
     def associate_instances(self, pred, segment, instance):
@@ -1303,7 +1303,7 @@ class ShapeNetPartSegEvaluator(HookBase):
             wandb.define_metric("val/*", step_metric="Epoch")
 
     def after_epoch(self):
-        if self.trainer.cfg.evaluate:
+        if self.should_evaluate():
             self.eval()
 
     def eval(self):
@@ -1446,7 +1446,7 @@ class PartNetEPartSegEvaluator(HookBase):
             wandb.define_metric("val/*", step_metric="Epoch")
 
     def after_epoch(self):
-        if self.trainer.cfg.evaluate:
+        if self.should_evaluate():
             self.eval()
 
     def eval(self):

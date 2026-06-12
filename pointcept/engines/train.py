@@ -34,13 +34,35 @@ from pointcept.utils.optimizer import build_optimizer
 from pointcept.utils.scheduler import build_scheduler
 from pointcept.utils.events import EventStorage, ExceptionWriter
 from pointcept.utils.registry import Registry
-from pointcept.datasets.dataloader import DistributedImbalancedSampler
+from pointcept.datasets.dataloader import (
+    DistributedImbalancedSampler,
+    IterLimitedDistributedSampler,
+    IterLimitedSampler,
+)
 
 TRAINERS = Registry("trainers")
 AMP_DTYPE = dict(
     float16=torch.float16,
     bfloat16=torch.bfloat16,
 )
+
+
+def _log_iter_limited_training_mode(cfg, logger):
+    if getattr(cfg, "total_iters", None) is None:
+        return
+    message = (
+        "Iter-limited training enabled: total_iters=%d optimizer steps, "
+        "iter_per_epoch=%d, num_epochs=%d, eval_every=%d, loop=1. "
+        "Validation runs every eval_every epochs. "
+        "Classic params epoch/eval_epoch are unused."
+    )
+    logger.info(
+        message,
+        cfg.total_iters,
+        cfg.iter_per_epoch,
+        cfg.num_epochs,
+        cfg.eval_every,
+    )
 
 
 class TrainerBase:
@@ -157,7 +179,11 @@ class Trainer(TrainerBase):
         super(Trainer, self).__init__()
         self.epoch = 0
         self.start_epoch = 0
-        self.max_epoch = cfg.eval_epoch
+        self.max_epoch = (
+            cfg.num_epochs
+            if getattr(cfg, "total_iters", None) is not None
+            else cfg.eval_epoch
+        )
         self.best_metric_value = -torch.inf
         self.logger = get_root_logger(
             log_file=os.path.join(cfg.save_path, "train.log"),
@@ -167,6 +193,7 @@ class Trainer(TrainerBase):
         self.cfg = cfg
         self.logger.info(f"Save path: {cfg.save_path}")
         self.logger.info(f"Config:\n{cfg.pretty_text}")
+        _log_iter_limited_training_mode(cfg, self.logger)
         self.logger.info("=> Building model ...")
         self.model = self.build_model()
         self.logger.info("=> Building writer ...")
@@ -190,8 +217,9 @@ class Trainer(TrainerBase):
             self.logger.info(">>>>>>>>>>>>>>>> Start Training >>>>>>>>>>>>>>>>")
             for self.epoch in range(self.start_epoch, self.max_epoch):
                 # => before epoch
-                if comm.get_world_size() > 1:
-                    self.train_loader.sampler.set_epoch(self.epoch)
+                sampler = getattr(self.train_loader, "sampler", None)
+                if sampler is not None and hasattr(sampler, "set_epoch"):
+                    sampler.set_epoch(self.epoch)
                 self.model.train()
                 self.data_iterator = enumerate(self.train_loader)
                 self.before_epoch()
@@ -338,8 +366,29 @@ class Trainer(TrainerBase):
 
     def build_train_loader(self):
         train_data = build_dataset(self.cfg.data.train)
+        iter_per_epoch = getattr(self.cfg, "iter_per_epoch", None)
+        seed = self.cfg.seed if self.cfg.seed is not None else 0
 
-        if comm.get_world_size() > 1:
+        if iter_per_epoch is not None:
+            if comm.get_world_size() > 1:
+                train_sampler = IterLimitedDistributedSampler(
+                    train_data,
+                    iter_per_epoch=iter_per_epoch,
+                    batch_size_per_gpu=self.cfg.batch_size_per_gpu,
+                    num_replicas=comm.get_world_size(),
+                    rank=comm.get_rank(),
+                    shuffle=True,
+                    seed=seed,
+                )
+            else:
+                train_sampler = IterLimitedSampler(
+                    train_data,
+                    iter_per_epoch=iter_per_epoch,
+                    batch_size=self.cfg.batch_size_per_gpu,
+                    shuffle=True,
+                    seed=seed,
+                )
+        elif comm.get_world_size() > 1:
             train_sampler = torch.utils.data.distributed.DistributedSampler(train_data)
         else:
             train_sampler = None
@@ -355,6 +404,10 @@ class Trainer(TrainerBase):
             else None
         )
 
+        drop_last = len(train_data) > self.cfg.batch_size
+        if iter_per_epoch is not None:
+            drop_last = True
+
         train_loader = torch.utils.data.DataLoader(
             train_data,
             batch_size=self.cfg.batch_size_per_gpu,
@@ -364,7 +417,7 @@ class Trainer(TrainerBase):
             collate_fn=partial(point_collate_fn, mix_prob=self.cfg.mix_prob),
             pin_memory=True,
             worker_init_fn=init_fn,
-            drop_last=len(train_data) > self.cfg.batch_size,
+            drop_last=drop_last,
             persistent_workers=True,
         )
         return train_loader
@@ -394,11 +447,16 @@ class Trainer(TrainerBase):
     def build_scheduler(self):
         assert hasattr(self, "optimizer")
         assert hasattr(self, "train_loader")
-        self.cfg.scheduler.total_steps = (
-            len(self.train_loader)
-            * self.cfg.eval_epoch
-            // self.cfg.gradient_accumulation_steps
-        )
+        if getattr(self.cfg, "total_iters", None) is not None:
+            self.cfg.scheduler.total_steps = (
+                self.cfg.total_iters // self.cfg.gradient_accumulation_steps
+            )
+        else:
+            self.cfg.scheduler.total_steps = (
+                len(self.train_loader)
+                * self.cfg.eval_epoch
+                // self.cfg.gradient_accumulation_steps
+            )
         return build_scheduler(self.cfg.scheduler, self.optimizer)
 
     def build_scaler(self):
@@ -413,6 +471,14 @@ class Trainer(TrainerBase):
 
 @TRAINERS.register_module("PartialSampledTrainer")
 class PartialSampledTrainer(Trainer):
+    def __init__(self, cfg):
+        if getattr(cfg, "total_iters", None) is not None:
+            raise ValueError(
+                "total_iters is not supported with PartialSampledTrainer; "
+                "use DefaultTrainer instead."
+            )
+        super().__init__(cfg)
+
     def build_train_loader(self):
         train_data = build_dataset(self.cfg.data.train)
         sampled_dataset_index = self.cfg.data.sampled_dataset_index
@@ -456,6 +522,14 @@ class PartialSampledTrainer(Trainer):
 
 @TRAINERS.register_module("MultiDatasetTrainer")
 class MultiDatasetTrainer(Trainer):
+    def __init__(self, cfg):
+        if getattr(cfg, "total_iters", None) is not None:
+            raise ValueError(
+                "total_iters is not supported with MultiDatasetTrainer; "
+                "use DefaultTrainer instead."
+            )
+        super().__init__(cfg)
+
     def build_train_loader(self):
         from pointcept.datasets import MultiDatasetDataloader
 

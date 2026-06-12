@@ -16,7 +16,7 @@ from torch.nn.parallel import DistributedDataParallel
 
 import pointcept.utils.comm as comm
 from pointcept.utils.env import get_random_seed, set_seed
-from pointcept.utils.config import Config, DictAction
+from pointcept.utils.config import Config, ConfigDict, DictAction
 
 
 def create_ddp_model(model, *, fp16_compression=False, **kwargs):
@@ -106,6 +106,24 @@ def default_argument_parser(epilog=None):
 
 
 def default_config_parser(file_path, options):
+    """Load a config file and resolve training-schedule parameters.
+
+    Classic mode :
+        - Definition: 1 epoch means 1 full pass over the dataset
+        - Activated by setting ``total_iters`` to ``None``
+        - ``loop = epoch // eval_epoch`` on ``data.train``
+        - ``eval_every`` defaults to 1 (validate every trainer epoch)
+
+    Iter-limited mode:
+        - Definition: 1 epoch means ``iter_per_epoch`` random batch steps
+        - ``total_iters`` is the total optimizer-step budget
+        - ``num_epochs = total_iters // iter_per_epoch`` (requires exact division)
+        - ``loop`` is forced to 1; ``epoch`` / ``eval_epoch`` are unused (classic-only)
+        - ``eval_every`` defaults to 5 (validate every N epochs, plus the last epoch)
+        - Scheduler ``total_steps = total_iters``
+
+    See README_geist.md § Training schedule for examples.
+    """
     # config name protocol: dataset_name/model_name-exp_name
     if os.path.isfile(file_path):
         cfg = Config.fromfile(file_path)
@@ -119,7 +137,45 @@ def default_config_parser(file_path, options):
     if cfg.seed is None:
         cfg.seed = get_random_seed()
 
-    cfg.data.train.loop = cfg.epoch // cfg.eval_epoch
+    if "data" not in cfg:
+        cfg.data = ConfigDict()
+    elif not isinstance(cfg.data, ConfigDict):
+        cfg.data = ConfigDict(cfg.data)
+    if "train" not in cfg.data:
+        cfg.data.train = ConfigDict()
+    elif not isinstance(cfg.data.train, ConfigDict):
+        cfg.data.train = ConfigDict(cfg.data.train)
+
+    total_iters = getattr(cfg, "total_iters", None)
+    if total_iters is not None: # iter-limited mode
+        if total_iters <= 0:
+            raise ValueError("total_iters must be > 0")
+        
+        # eval_every (number of train epochs between validations)
+        if getattr(cfg, "eval_every", None) is None:
+            cfg.eval_every = 5
+        if cfg.eval_every <= 0:
+            raise ValueError("eval_every must be > 0 when total_iters is set")
+        
+        # iter_per_epoch
+        if getattr(cfg, "iter_per_epoch", None) is None:
+            cfg.iter_per_epoch = 1000
+        if cfg.iter_per_epoch <= 0:
+            raise ValueError("iter_per_epoch must be > 0 when total_iters is set")
+        if total_iters % cfg.iter_per_epoch != 0:
+            raise ValueError(
+                f"total_iters ({total_iters}) must be divisible by iter_per_epoch "
+                f"({cfg.iter_per_epoch})"
+            )
+        cfg.num_epochs = total_iters // cfg.iter_per_epoch
+
+        cfg.data.train.loop = 1
+    else: # classic mode
+        # Deactivate iter-limited mode parameters
+        cfg.iter_per_epoch = None
+        cfg.eval_every = None
+        cfg.num_epochs = None
+        cfg.data.train.loop = cfg.epoch // cfg.eval_epoch
 
     os.makedirs(os.path.join(cfg.save_path, "model"), exist_ok=True)
     if not cfg.resume:
@@ -142,8 +198,9 @@ def default_setup(cfg):
     cfg.batch_size_test_per_gpu = (
         cfg.batch_size_test // world_size if cfg.batch_size_test is not None else 1
     )
-    # update data loop
-    assert cfg.epoch % cfg.eval_epoch == 0
+    # classic mode only: epoch must divide eval_epoch for loop resolution
+    if getattr(cfg, "total_iters", None) is None:
+        assert cfg.epoch % cfg.eval_epoch == 0
     # settle random seed
     rank = comm.get_rank()
     seed = None if cfg.seed is None else cfg.seed + rank * cfg.num_worker_per_gpu

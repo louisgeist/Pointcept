@@ -35,6 +35,23 @@ class HookBase:
     def after_train(self):
         pass
 
+    def should_evaluate(self):
+        cfg = self.trainer.cfg
+        if not cfg.evaluate:
+            return False
+
+        # Classic mode 
+        # For backward compatibility, eval_every to 1,
+        # so that it is eval_epoch that determines the validation frequency.
+        if getattr(cfg, "eval_every", None) is None:
+            return True
+        
+        # Iter-limited mode: evaluate every N epochs
+        eval_every = getattr(cfg, "eval_every", 1)
+        epoch = self.trainer.epoch + 1
+        max_epoch = self.trainer.max_epoch
+        return epoch % eval_every == 0 or epoch >= max_epoch
+
 
 @HOOKS.register_module()
 class ModelHook(HookBase):

@@ -9,8 +9,6 @@ pip install torch-spline-conv -f https://data.pyg.org/whl/torch-2.5.0+cu118.html
 pip install torch-geometric -f https://data.pyg.org/whl/torch-2.5.0+cu118.html
 ```
 
-Remarque: dans ce repo, y\'a que une manière de faire le preprocessing -> ou alors il faut changer manuellement le nom du folder où on save les tiles.
-
 ### S3DIS check
 #### PP
 Le fichier à fix manuellement: 
@@ -41,52 +39,16 @@ train S3DIS without the normal features:
 sh scripts/train.sh -g 1 -d s3dis -c ptv3_nonormal -n ptv3_nonormal
 ```
 
-### Flair3D
-- Preprocessing in debug mode (sample data, 1 worker):
-```bash
-sh scripts/preprocess_flair3d_debug.sh
-# or with custom paths:
-DATASET_ROOT=/path/to/data OUTPUT_ROOT=/path/to/out sh scripts/preprocess_flair3d_debug.sh
-```
+### Flair3D+
 
-- Preprocessing of all splits on hecate:
-```bash
-python pointcept/datasets/preprocessing/flair3d/preprocess_flair3d.py \
- --dataset_root /data/geist/datasets/sample_flairhub_3d \
- --output_root /data/geist/Pointcept/data/flair3d \
- --split val test train \
- --mode subtile \
- --label_definition inter_finerall6
- --save_strength
- --num_workers 24
-```
+#### Preprocessing
 
-- with other label definition
-```bash
-python pointcept/datasets/preprocessing/flair3d/preprocess_flair3d.py \
- --dataset_root /data/geist/datasets/sample_flairhub_3d \
- --output_root /data/geist/Pointcept/data/flair3d_lab7 \
- --split val test train \
- --mode subtile \
- --label_definition inter_finerall7
- --save_strength
- --num_workers 10
-```
+Label remaps are defined in ``pointcept/datasets/preprocessing/flair3d_plus/flair3d_label_remap.py``.
+Use ``--{task}_definition`` flags to override defaults (land_use=filtered,
+natural_habitat=by_habitat_x_domain, segment/forest=default). Re-run with ``--force`` when
+definitions change.
 
-- PP on JZ:
 ```bash
-python pointcept/datasets/preprocessing/flair3d/preprocess_flair3d.py \
- --dataset_root /lustre/fsn1/projects/rech/unv/usi32yh/data/flair3d/FLAIR-HUB \
- --ply_root 
- --output_root $WORK/Pointcept/data/flair3d \
- --split val test train \
- --mode subtile \
- --label_definition inter_finerall6 \
- --save_strength \
- --num_workers 12
-```
-
-V2 : 
 python pointcept/datasets/preprocessing/flair3d_plus/preprocess_flair3d_v2.py \
  --ply_root /lustre/fsn1/projects/rech/unv/usi32yh/data_flair3d_build/flair3d_label_enhanced \
  --dataset_root /lustre/fswork/projects/rech/unv/usi32yh/Pointcept/data/flair3d_plus/raw \
@@ -94,8 +56,21 @@ python pointcept/datasets/preprocessing/flair3d_plus/preprocess_flair3d_v2.py \
  --split_manifest_csv data/flair3d_plus/raw/scene_split_manifest.csv \
  --num_workers 24 \
  --force
+```
 
+On hecate:
 
+```bash
+python pointcept/datasets/preprocessing/flair3d_plus/preprocess_flair3d_v2.py \
+ --ply_root /data/geist/Flair3D-build/data/flair3d_label_enhanced \
+ --dataset_root /data/geist/Pointcept/data/flair3d_plus/raw \
+ --output_root data/flair3d_plus \
+ --split_manifest_csv data/flair3d_plus/raw/scene_split_manifest_D075.csv \
+ --num_workers 24 \
+ --force
+```
+
+Training configs must use the same definition names via ``init_task_configs(..., definitions={...})``.
 
 
 #### Train Flair3D
@@ -116,6 +91,60 @@ python tools/train.py --config-file configs/pureforest/kpconvx-toy.py --num-gpus
 
 Mini-dataset smoke test (10 epochs, eval every 10, 2 train + 2 val samples).
 
+### Training schedule (`epoch` vs `total_iters`)
+
+Two mutually exclusive modes are resolved in
+[`pointcept/engines/defaults.py`](pointcept/engines/defaults.py) (`default_config_parser`).
+
+#### Classic mode (`total_iters = None`)
+
+| Parameter | Role |
+|-----------|------|
+| `epoch` | Total dataset passes over the full run |
+| `eval_epoch` | Number of trainer epochs (each ends with validation if `evaluate=True`) |
+| `loop` | Derived: `epoch // eval_epoch` — dataset repeats per trainer epoch (`data.train.loop`) |
+
+Scheduler steps: `len(train_loader) * eval_epoch`.
+
+#### Iter-limited mode (`total_iters` set)
+
+Use this on large datasets: each trainer epoch runs a fixed number of random batch
+steps instead of a full dataset pass.
+
+| Parameter | Role |
+|-----------|------|
+| `total_iters` | Total optimizer steps (scheduler budget) |
+| `iter_per_epoch` | Batch steps per epoch (default **1000**); uses `IterLimitedSampler` |
+| `num_epochs` | Derived: `total_iters // iter_per_epoch` (`max_epoch` in the trainer) |
+| `eval_every` | Run validation every N epochs (default **5**); also on the last epoch |
+| `loop` | Forced to **1** |
+
+`IterLimitedSampler` draws without replacement when the per-epoch index budget fits in the
+dataset (`iter_per_epoch × batch_size` per GPU, or `× world_size` globally in DDP);
+otherwise it falls back to sampling with replacement.
+
+`total_iters` must be divisible by `iter_per_epoch`. `epoch` and `eval_epoch` are **classic-mode only**.
+
+Example (100k steps, 1000 steps/epoch → 100 epochs, validate every 5 epochs → 20 validations):
+
+```python
+total_iters = 100_000
+iter_per_epoch = 1000
+eval_every = 5
+warmup_steps = 2500
+```
+
+CLI override:
+
+```bash
+python tools/train.py --config-file configs/flair3d_default/spunet_toy.py \
+  --options total_iters=1000000 eval_every=5 iter_per_epoch=1000
+```
+
+Smoke test: `python tools/test_iter_limited_sampler.py`
+
+**Not supported** with `PartialSampledTrainer` or `MultiDatasetTrainer` (use `DefaultTrainer`).
+
 With the script (recommended; `EXTRA_OPTIONS` is passed as `--options` to the Python command):
 
 ```bash
@@ -123,10 +152,36 @@ export EXTRA_OPTIONS="epoch=10 eval_epoch=10 max_sample_train=2 max_sample_val=2
 sh scripts/train.sh -g 1 -d flair3d -c ptv3_nonormal_subtile -n ptv3_nonormal_subtile
 ```
 
+#### Flair3D+ mono-task (one semantic target per run)
+
+Configs under [`configs/flair3d_default/`](configs/flair3d_default/) — one folder per target, four backbones each (LitePT, SpUNet, PTv3, KPConvX). All mono runs use ``lr=1e-3`` and ``scene_split_manifest.csv``.
+
+```text
+configs/flair3d_default/
+├── segment/       # litept|spunet|ptv3|kpconvx-v1m0-flair3d.py (self-contained each)
+├── forest/
+├── land_use/
+└── natural_habitat/
+```
+
+Each file inherits only ``default_runtime``; task wiring uses ``init_task_configs`` / ``init_task_criteria``. Regenerate with ``python tools/gen_flair3d_mono_configs.py`` if needed.
+
+Example:
+
+```bash
+python tools/train.py --config-file configs/flair3d_default/land_use/litept-v1m0-flair3d.py --num-gpus 1
+```
+
+```bash
+python tools/train.py --config-file configs/experiment/w96/6/flair_lp/segment-litept-v1m0-flair3d.py --num-gpus 1
+```
+
+Multi-target training (all semantic tasks + elevation) remains in ``multi-*-v1m0-flair3d.py`` at the root of ``flair3d_default/``.
+
 #### Flair3D+ multi-target (segment, forest, land_use, natural_habitat, elevation)
 
 Class names and ``num_classes`` / ``ignore_index`` per semantic target are defined in
-[`pointcept/datasets/flair3d_plus_label_task_config.py`](pointcept/datasets/flair3d_plus_label_task_config.py).
+[`pointcept/datasets/flair3d_config_utils.py`](pointcept/datasets/flair3d_config_utils.py).
 
 - **Semantic targets**: set ``target_key`` on ``Flair3DDataset`` (train/val/test) to one of
   ``segment``, ``forest``, ``land_use``, ``natural_habitat``. The corresponding ``*.npy`` is
@@ -138,10 +193,8 @@ Class names and ``num_classes`` / ``ignore_index`` per semantic target are defin
 
 - **W&B**: root config fields ``target_key`` and ``task`` (``semseg`` or ``regression``) are added
   as run tags when present.
-- **Regression metrics** (multitask val/test): MAE, RMSE, and normalized MAE
-  ``nMAE = |z_true - z_pred| / (z_true + nmae_offset)`` (default ``nmae_offset=0.5`` for elevation),
-  logged to TensorBoard/W&B under ``val/reg/<task>/`` and ``test/reg/<task>/`` including
-  ``nmae_excluded`` (points skipped when ``z_true + nmae_offset <= 0``).
+- **Regression metrics** (multitask val/test): MAE and RMSE, logged to TensorBoard/W&B
+  under ``val/reg/<task>/`` and ``test/reg/<task>/``.
 
 ```bash
 python tools/train.py --config-file configs/flair3d_plus/litept_target_forest.py --num-gpus 1
@@ -173,12 +226,21 @@ python pointcept/datasets/preprocessing/dales/preprocess_dales.py \
 
 # Brouillon
 python -m tools.train \
-  --config-file configs/pureforest/cls-litept-v1m0-pureforest.py \
+  --config-file configs/experiment/w90/5/dales2/ptv3_2b.py\
   --num-gpus 1 \
   --num-machines 1 \
   --machine-rank 0 \
   --dist-url auto \
-  --options epoch=1 eval_epoch=1 data.train.max_sample=30
+  --options epoch=1 eval_epoch=1 data.train.max_sample=30 data.test.max_sample=30 data.val.max_sample=30
   
   
   data.train.max_sample=30
+
+
+  python -m tools.train \
+  --config-file configs/experiment/w90/5/dales2/ptv3_2b.py\
+  --num-gpus 2 \
+  --num-machines 1 \
+  --machine-rank 0 \
+  --dist-url auto \
+  --options epoch=1 eval_epoch=1 data.train.max_sample=300 data.test.max_sample=30 data.val.max_sample=30
