@@ -106,6 +106,16 @@ def _trigger_slurm_requeue(reason):
         if job_id is None:
             _log_requeue("SLURM_JOB_ID is not set; cannot requeue.")
         else:
+            try:
+                from pointcept.utils.runtime_state import flush_runtime_segment_from_env
+
+                flushed = flush_runtime_segment_from_env()
+                if flushed is not None:
+                    _log_requeue(
+                        f"Flushed cumulative runtime before requeue: {flushed:.2f}s"
+                    )
+            except Exception:
+                pass
             _finish_wandb_if_active()
             _log_requeue(f"Requeuing Slurm job {job_id}")
             subprocess.run(["scontrol", "requeue", job_id], check=False)

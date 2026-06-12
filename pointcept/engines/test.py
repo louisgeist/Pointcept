@@ -135,8 +135,8 @@ class TesterBase:
                 total_s / 3600.0,
             )
             timing = {
-                "test/total_time_s": float(total_s),
-                "test/total_time_h": float(total_s / 3600.0),
+                "test/s": float(total_s),
+                "test/h": float(total_s / 3600.0),
             }
             if getattr(self.cfg, "enable_wandb", False) and wandb.run is not None:
                 payload = {**(extra_log_dict or {}), **timing}

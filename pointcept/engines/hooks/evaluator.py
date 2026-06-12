@@ -21,6 +21,10 @@ from pointcept.utils.regression import (
     denorm_regression_prediction,
     get_regression_target_scale,
 )
+from pointcept.utils.epoch_timing import (
+    begin_epoch_wall_timing,
+    finalize_epoch_wall_timing,
+)
 from pointcept.utils.progress import EvaluationProgressBar
 
 from .default import HookBase
@@ -84,6 +88,21 @@ def mean_iou_from_hist(intersection, union):
     return 0.0
 
 
+def begin_val_epoch_timing():
+    return begin_epoch_wall_timing()
+
+
+def finalize_val_epoch_timing(trainer, start_time, current_epoch, wandb_dict=None):
+    return finalize_epoch_wall_timing(
+        trainer,
+        start_time,
+        current_epoch,
+        "val",
+        wandb_dict=wandb_dict,
+        log_console=True,
+    )
+
+
 @HOOKS.register_module()
 class ClsEvaluator(HookBase):
     _METRICS = ("mIoU", "mAcc", "allAcc")
@@ -112,6 +131,7 @@ class ClsEvaluator(HookBase):
         return all_acc
 
     def eval(self):
+        val_start = begin_val_epoch_timing()
         self.trainer.logger.info(">>>>>>>>>>>>>>>> Start Evaluation >>>>>>>>>>>>>>>>")
         self.trainer.model.eval()
         for i, input_dict in enumerate(self.trainer.val_loader):
@@ -192,18 +212,23 @@ class ClsEvaluator(HookBase):
                 self.trainer.writer.add_scalar(
                     f"val/{self.metric}_best", metric_best, current_epoch
                 )
-            if self.trainer.cfg.enable_wandb:
-                log_dict = {
-                    "Epoch": current_epoch,
-                    "val/loss": loss_avg,
-                    "val/mIoU": m_iou,
-                    "val/mAcc": m_acc,
-                    "val/allAcc": all_acc,
-                    "val/mIoU_best": self._best_m_iou,
-                }
-                if self.metric != "mIoU":
-                    log_dict[f"val/{self.metric}_best"] = metric_best
-                wandb.log(log_dict, step=wandb.run.step)
+        wandb_log = None
+        if self.trainer.cfg.enable_wandb:
+            wandb_log = {
+                "Epoch": current_epoch,
+                "val/loss": loss_avg,
+                "val/mIoU": m_iou,
+                "val/mAcc": m_acc,
+                "val/allAcc": all_acc,
+                "val/mIoU_best": self._best_m_iou,
+            }
+            if self.metric != "mIoU":
+                wandb_log[f"val/{self.metric}_best"] = metric_best
+        finalize_val_epoch_timing(
+            self.trainer, val_start, current_epoch, wandb_dict=wandb_log
+        )
+        if wandb_log is not None:
+            wandb.log(wandb_log)
         self.trainer.logger.info("<<<<<<<<<<<<<<<<< End Evaluation <<<<<<<<<<<<<<<<<")
         self.trainer.comm_info["current_metric_value"] = current_metric_value
         self.trainer.comm_info["current_metric_name"] = self.metric
@@ -230,6 +255,7 @@ class SemSegEvaluator(HookBase):
             self.eval()
 
     def eval(self):
+        val_start = begin_val_epoch_timing()
         self.trainer.logger.info(">>>>>>>>>>>>>>>> Start Evaluation >>>>>>>>>>>>>>>>")
         self.trainer.model.eval()
         for i, input_dict in enumerate(self.trainer.val_loader):
@@ -314,18 +340,21 @@ class SemSegEvaluator(HookBase):
             self.trainer.writer.add_scalar("val/mIoU_best", m_iou_best, current_epoch)
             self.trainer.writer.add_scalar("val/mAcc", m_acc, current_epoch)
             self.trainer.writer.add_scalar("val/allAcc", all_acc, current_epoch)
+            wandb_log = None
             if self.trainer.cfg.enable_wandb:
-                wandb.log(
-                    {
-                        "Epoch": current_epoch,
-                        "val/loss": loss_avg,
-                        "val/mIoU": m_iou,
-                        "val/mIoU_best": m_iou_best,
-                        "val/mAcc": m_acc,
-                        "val/allAcc": all_acc,
-                    },
-                    step=wandb.run.step,
-                )
+                wandb_log = {
+                    "Epoch": current_epoch,
+                    "val/loss": loss_avg,
+                    "val/mIoU": m_iou,
+                    "val/mIoU_best": m_iou_best,
+                    "val/mAcc": m_acc,
+                    "val/allAcc": all_acc,
+                }
+            finalize_val_epoch_timing(
+                self.trainer, val_start, current_epoch, wandb_dict=wandb_log
+            )
+            if wandb_log is not None:
+                wandb.log(wandb_log)
             if self.write_cls_iou:
                 for i in range(self.trainer.cfg.data.num_classes):
                     self.trainer.writer.add_scalar(
@@ -344,6 +373,8 @@ class SemSegEvaluator(HookBase):
                             },
                             step=wandb.run.step,
                         )
+        else:
+            finalize_val_epoch_timing(self.trainer, val_start, current_epoch)
         self.trainer.logger.info("<<<<<<<<<<<<<<<<< End Evaluation <<<<<<<<<<<<<<<<<")
         self.trainer.comm_info["current_metric_value"] = m_iou  # save for saver
         self.trainer.comm_info["current_metric_name"] = "mIoU"  # save for saver
@@ -395,6 +426,7 @@ class RegressionEvaluator(HookBase):
         return pred[mask], target[mask]
 
     def eval(self):
+        val_start = begin_val_epoch_timing()
         self.trainer.logger.info(">>>>>>>>>>>>>>>> Start Evaluation >>>>>>>>>>>>>>>>")
         self.trainer.model.eval()
         target_key = self._target_key()
@@ -485,8 +517,12 @@ class RegressionEvaluator(HookBase):
         elif writer is not None:
             writer.add_scalar("val/loss", loss_avg, current_epoch)
 
-        if enable_wandb and len(reg_wandb) > 1:
-            wandb.log(reg_wandb, step=wandb.run.step)
+        wandb_log = reg_wandb if enable_wandb and len(reg_wandb) > 1 else None
+        finalize_val_epoch_timing(
+            self.trainer, val_start, current_epoch, wandb_dict=wandb_log
+        )
+        if wandb_log is not None:
+            wandb.log(wandb_log)
 
         self.trainer.logger.info("<<<<<<<<<<<<<<<<< End Evaluation <<<<<<<<<<<<<<<<<")
         self.trainer.comm_info["current_metric_value"] = current_metric_value
@@ -593,6 +629,7 @@ class MultiTaskEvaluator(HookBase):
         ]
 
     def eval(self):
+        val_start = begin_val_epoch_timing()
         self.trainer.logger.info(">>>>>>>>>>>>>>>> Start Evaluation >>>>>>>>>>>>>>>>")
         self.trainer.model.eval()
         task_configs = self._get_task_configs()
@@ -809,8 +846,11 @@ class MultiTaskEvaluator(HookBase):
                         wandb_log[f"{prefix}/mIoU_best"] = float(m_iou_best)
                     wandb_log[f"{prefix}/mAcc"] = float(metric["m_acc"])
                     wandb_log[f"{prefix}/allAcc"] = float(metric["all_acc"])
+            finalize_val_epoch_timing(
+                self.trainer, val_start, current_epoch, wandb_dict=wandb_log
+            )
             if wandb_log is not None:
-                wandb.log(wandb_log, step=wandb.run.step)
+                wandb.log(wandb_log)
 
             # Per-class metrics
             if self.write_cls_iou:
@@ -877,7 +917,10 @@ class MultiTaskEvaluator(HookBase):
             if enable_wandb:
                 reg_wandb["val/reg/rmse_best_neg"] = float(self._best_neg_rmse)
         if enable_wandb and len(reg_wandb) > 1:
-            wandb.log(reg_wandb, step=wandb.run.step)
+            wandb.log(reg_wandb)
+
+        if self.trainer.writer is None:
+            finalize_val_epoch_timing(self.trainer, val_start, current_epoch)
 
         self.trainer.logger.info("<<<<<<<<<<<<<<<<< End Evaluation <<<<<<<<<<<<<<<<<")
         self.trainer.comm_info["current_metric_value"] = main_m_iou
@@ -1195,6 +1238,7 @@ class InsSegEvaluator(HookBase):
         return ap_scores
 
     def eval(self):
+        val_start = begin_val_epoch_timing()
         self.trainer.logger.info(">>>>>>>>>>>>>>>> Start Evaluation >>>>>>>>>>>>>>>>")
         self.trainer.model.eval()
         scenes = {}
@@ -1270,27 +1314,34 @@ class InsSegEvaluator(HookBase):
                     )
                 )
             current_epoch = self.trainer.epoch + 1
+            wandb_log = None
             if self.trainer.writer is not None:
                 self.trainer.writer.add_scalar("val/loss", loss_avg, current_epoch)
                 self.trainer.writer.add_scalar("val/mAP", all_ap, current_epoch)
                 self.trainer.writer.add_scalar("val/AP50", all_ap_50, current_epoch)
                 self.trainer.writer.add_scalar("val/AP25", all_ap_25, current_epoch)
                 if self.trainer.cfg.enable_wandb:
-                    wandb.log(
-                        {
-                            "Epoch": current_epoch,
-                            "val/loss": loss_avg,
-                            "val/mAP": all_ap,
-                            "val/AP50": all_ap_50,
-                            "val/AP25": all_ap_25,
-                        },
-                        step=wandb.run.step,
-                    )
+                    wandb_log = {
+                        "Epoch": current_epoch,
+                        "val/loss": loss_avg,
+                        "val/mAP": all_ap,
+                        "val/AP50": all_ap_50,
+                        "val/AP25": all_ap_25,
+                    }
+            finalize_val_epoch_timing(
+                self.trainer, val_start, current_epoch, wandb_dict=wandb_log
+            )
+            if wandb_log is not None:
+                wandb.log(wandb_log)
             self.trainer.logger.info(
                 "<<<<<<<<<<<<<<<<< End Evaluation <<<<<<<<<<<<<<<<<"
             )
             self.trainer.comm_info["current_metric_value"] = all_ap_50  # save for saver
             self.trainer.comm_info["current_metric_name"] = "AP50"  # save for saver
+        else:
+            finalize_val_epoch_timing(
+                self.trainer, val_start, self.trainer.epoch + 1
+            )
 
 
 @HOOKS.register_module()
@@ -1307,6 +1358,7 @@ class ShapeNetPartSegEvaluator(HookBase):
             self.eval()
 
     def eval(self):
+        val_start = begin_val_epoch_timing()
         self.trainer.logger.info(
             ">>>>>>>>>>>>>>>> Start Part Segmentation Evaluation >>>>>>>>>>>>>>>>"
         )
@@ -1396,15 +1448,18 @@ class ShapeNetPartSegEvaluator(HookBase):
         if self.trainer.writer is not None:
             self.trainer.writer.add_scalar("val/ins_mIoU", ins_mIoU, current_epoch)
             self.trainer.writer.add_scalar("val/cat_mIoU", cat_mIoU, current_epoch)
+            wandb_log = None
             if self.trainer.cfg.enable_wandb:
-                wandb.log(
-                    {
-                        "Epoch": current_epoch,
-                        "val/ins_mIoU": ins_mIoU,
-                        "val/cat_mIoU": cat_mIoU,
-                    },
-                    step=wandb.run.step,
-                )
+                wandb_log = {
+                    "Epoch": current_epoch,
+                    "val/ins_mIoU": ins_mIoU,
+                    "val/cat_mIoU": cat_mIoU,
+                }
+            finalize_val_epoch_timing(
+                self.trainer, val_start, current_epoch, wandb_dict=wandb_log
+            )
+            if wandb_log is not None:
+                wandb.log(wandb_log)
 
             if self.write_cls_iou:
                 for i in range(num_categories):
@@ -1415,6 +1470,8 @@ class ShapeNetPartSegEvaluator(HookBase):
                             iou_per_cat[i],
                             current_epoch,
                         )
+        else:
+            finalize_val_epoch_timing(self.trainer, val_start, current_epoch)
 
         self.trainer.logger.info("<<<<<<<<<<<<<<<<< End Evaluation <<<<<<<<<<<<<<<<<")
 
@@ -1450,6 +1507,7 @@ class PartNetEPartSegEvaluator(HookBase):
             self.eval()
 
     def eval(self):
+        val_start = begin_val_epoch_timing()
         self.trainer.logger.info(
             ">>>>>>>>>>>>>>>> Start Part Segmentation Evaluation >>>>>>>>>>>>>>>>"
         )
@@ -1534,14 +1592,17 @@ class PartNetEPartSegEvaluator(HookBase):
         current_epoch = self.trainer.epoch + 1
         if self.trainer.writer is not None:
             self.trainer.writer.add_scalar("val/part_mIoU", part_mIoU, current_epoch)
+            wandb_log = None
             if self.trainer.cfg.enable_wandb:
-                wandb.log(
-                    {
-                        "Epoch": current_epoch,
-                        "val/part_mIoU": part_mIoU,
-                    },
-                    step=wandb.run.step,
-                )
+                wandb_log = {
+                    "Epoch": current_epoch,
+                    "val/part_mIoU": part_mIoU,
+                }
+            finalize_val_epoch_timing(
+                self.trainer, val_start, current_epoch, wandb_dict=wandb_log
+            )
+            if wandb_log is not None:
+                wandb.log(wandb_log)
 
             if self.write_part_iou:
                 for i in range(self.num_parts):
@@ -1553,6 +1614,8 @@ class PartNetEPartSegEvaluator(HookBase):
                             current_epoch,
                         )
                 # (Similar logging block can be added for WandB if needed)
+        else:
+            finalize_val_epoch_timing(self.trainer, val_start, current_epoch)
 
         self.trainer.logger.info("<<<<<<<<<<<<<<<<< End Evaluation <<<<<<<<<<<<<<<<<")
 

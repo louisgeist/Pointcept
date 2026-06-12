@@ -20,6 +20,10 @@ if sys.version_info >= (3, 10):
     from collections.abc import Sequence
 else:
     from collections import Sequence
+from pointcept.utils.epoch_timing import (
+    begin_epoch_wall_timing,
+    finalize_epoch_wall_timing,
+)
 from pointcept.utils.timer import Timer
 from pointcept.utils.comm import is_main_process, synchronize
 from pointcept.utils.cache import shared_dict
@@ -101,6 +105,7 @@ class InformationWriter(HookBase):
 
     def before_epoch(self):
         self._train_seg_stats = {}
+        self._train_epoch_start = begin_epoch_wall_timing()
 
     def before_train(self):
         self.trainer.comm_info["iter_info"] = ""
@@ -338,6 +343,8 @@ class InformationWriter(HookBase):
 
         tc = self._cfg_get(data_cfg, "task_configs", None)
         use_task_in_tag = isinstance(tc, dict) and len(tc) > 0
+        epoch_step = self.trainer.epoch + 1
+        wandb_dict = None
 
         if self.trainer.writer is not None:
             for key in self.model_output_keys:
@@ -350,8 +357,6 @@ class InformationWriter(HookBase):
                 self.trainer.writer.add_scalar(
                     "train/mIoU", float(epoch_miou_main), self.trainer.epoch + 1
                 )
-
-            epoch_step = self.trainer.epoch + 1
 
             if self.write_cls_iou:
                 for tb_tag, _, value in self._train_per_cls_iou_items(
@@ -374,11 +379,20 @@ class InformationWriter(HookBase):
                         data_cfg, tc, use_task_in_tag
                     ):
                         wandb_dict[wandb_tag] = value
-                # Do not pass an explicit `step`: after a Slurm requeue the W&B
-                # run is resumed and its internal step is already past the epoch
-                # number, so `step=epoch_step` would be silently dropped.
-                # Charts use the "Epoch" field as x-axis via define_metric.
-                wandb.log(wandb_dict)
+
+        finalize_epoch_wall_timing(
+            self.trainer,
+            self._train_epoch_start,
+            epoch_step,
+            "train",
+            wandb_dict=wandb_dict,
+        )
+        if wandb_dict is not None:
+            # Do not pass an explicit `step`: after a Slurm requeue the W&B
+            # run is resumed and its internal step is already past the epoch
+            # number, so `step=epoch_step` would be silently dropped.
+            # Charts use the "Epoch" field as x-axis via define_metric.
+            wandb.log(wandb_dict)
 
 
 @HOOKS.register_module()
@@ -440,6 +454,9 @@ class CheckpointSaver(HookBase):
                         f"epoch_{self.trainer.epoch + 1}.pth",
                     ),
                 )
+            from pointcept.utils.runtime_state import flush_runtime_segment
+
+            flush_runtime_segment(self.trainer.cfg.save_path)
 
 
 @HOOKS.register_module()

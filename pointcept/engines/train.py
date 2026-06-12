@@ -149,6 +149,18 @@ class TrainerBase:
         if (
             comm.is_main_process()
             and getattr(self, "cfg", None) is not None
+        ):
+            from pointcept.utils.runtime_state import (
+                get_total_runtime_s,
+                runtime_state_path,
+            )
+
+            state_path = runtime_state_path(self.cfg.save_path)
+            if os.path.isfile(state_path):
+                total_runtime_seconds = get_total_runtime_s(self.cfg.save_path)
+        if (
+            comm.is_main_process()
+            and getattr(self, "cfg", None) is not None
             and self.cfg.enable_wandb
             and wandb.run is not None
         ):
@@ -160,7 +172,7 @@ class TrainerBase:
             )
         if hasattr(self, "logger"):
             self.logger.info(
-                "Total end-to-end runtime (model init -> test end): "
+                "Total end-to-end runtime (all segments, model init -> test end): "
                 f"{total_runtime_seconds:.2f}s ({total_runtime_seconds / 3600.0:.4f}h)"
             )
         if comm.is_main_process() and hasattr(self, "model"):
@@ -209,6 +221,13 @@ class Trainer(TrainerBase):
         self.logger.info("=> Building hooks ...")
         self.register_hooks(self.cfg.hooks)
         self._gradient_accumulation_counter = 0
+
+    def before_train(self):
+        if comm.is_main_process():
+            from pointcept.utils.runtime_state import init_runtime_segment
+
+            init_runtime_segment(self.cfg.save_path)
+        super().before_train()
 
     def train(self):
         with EventStorage() as self.storage, ExceptionWriter():
