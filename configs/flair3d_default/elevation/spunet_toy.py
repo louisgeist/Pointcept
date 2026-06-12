@@ -37,9 +37,8 @@ mix_prob = 0.8
 
 # Optimization parameters
 lr = 5e-3
-epoch = 1
-eval_epoch = 1
-warmup_steps = 2500
+total_iters = 10_000
+warmup_iters = 2500
 
 # Features
 learned_masked_feat = True
@@ -117,7 +116,7 @@ optimizer = dict(type="AdamW", lr=lr, weight_decay=0.005)
 scheduler = dict(
     type="LinearLR",
     start_factor=1 / 10,
-    total_iters=warmup_steps,
+    total_iters=warmup_iters,
 )
 
 # -----------------------------------------------------------------------------

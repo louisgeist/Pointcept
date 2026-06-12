@@ -42,9 +42,8 @@ patch_size = 1024
 
 # Optimization parameters
 lr = 1e-3
-epoch = 1
-eval_epoch = 1
-warmup_steps = 500
+total_iters = 10_000
+warmup_iters = 500
 
 # Features
 learned_masked_feat = True
@@ -165,7 +164,7 @@ optimizer = dict(type="AdamW", lr=lr, weight_decay=0.005)
 scheduler = dict(
     type="LinearLR",
     start_factor=1 / 10,
-    total_iters=warmup_steps,
+    total_iters=warmup_iters,
 )
 param_dicts = [dict(keyword="block", lr=lr / 10)]
 
