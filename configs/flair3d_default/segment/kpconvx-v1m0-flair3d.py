@@ -36,7 +36,7 @@ mix_prob = 0.8
 # Optimization parameters
 lr = 1e-3
 total_iters = 10_000
-warmup_iters = 20000
+warmup_iters = 5_000 #5000*4
 
 # Features
 learned_masked_feat = True

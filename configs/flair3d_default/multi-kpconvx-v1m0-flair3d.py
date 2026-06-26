@@ -40,7 +40,7 @@ mix_prob = 0.8
 # Optimization parameters
 lr = 1e-3
 total_iters = 10_000
-warmup_iters = 5000*4
+warmup_iters = 5_000 #5000*4
 
 # Features (RGB + XYZ + strength concatenated into feat)
 learned_masked_feat = True

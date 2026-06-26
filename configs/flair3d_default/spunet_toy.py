@@ -23,8 +23,8 @@ enable_amp = True
 
 # Data parameters
 batch_size = 20 * num_gpu  # total batch size across all gpus
-batch_size_val = batch_size // 2
-batch_size_test = batch_size // 2
+batch_size_val = batch_size // 4
+batch_size_test = batch_size // 4
 train_max_sample = 20
 val_max_sample = 100
 test_max_sample = val_max_sample
@@ -35,7 +35,8 @@ mix_prob = 0.8
 
 # Optimization parameters
 lr = 5e-3
-total_iters = 10_000
+total_iters = 15
+iter_per_epoch = 5
 warmup_iters = 2500
 
 # Features
