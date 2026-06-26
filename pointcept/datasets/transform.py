@@ -6,6 +6,7 @@ Please cite our work if the code is helpful to you.
 """
 
 import os
+import sys
 from contextlib import nullcontext
 
 import copy
@@ -197,6 +198,71 @@ class Update(object):
     def __call__(self, data_dict):
         for key, value in self.keys_dict.items():
             data_dict[key] = value
+        return data_dict
+
+
+@TRANSFORMS.register_module()
+class Flair3DLabelRemap(object):
+    """Remap Flair3D+ semantic targets from on-disk storage defs to training defs."""
+
+    @staticmethod
+    def _load_label_remap_module():
+        import importlib.util
+
+        module_name = "flair3d_label_remap"
+        if module_name in sys.modules:
+            return sys.modules[module_name]
+        path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "preprocessing",
+            "flair3d_plus",
+            "flair3d_label_remap.py",
+        )
+        spec = importlib.util.spec_from_file_location(module_name, path)
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[module_name] = mod
+        spec.loader.exec_module(mod)
+        return mod
+
+    def __init__(self, remaps, storage_definitions=None):
+        if not remaps:
+            raise ValueError("remaps must be a non-empty dict of task_key -> definition name")
+        label_remap = self._load_label_remap_module()
+        build_stored_to_train_lut = label_remap.build_stored_to_train_lut
+        get_default_definition_name = label_remap.get_default_definition_name
+        get_definition = label_remap.get_definition
+
+        storage_definitions = storage_definitions or {}
+        self.remap_keys = tuple(remaps.keys())
+        self.luts = {}
+        self.fallbacks = {}
+        for task_key, target_name in remaps.items():
+            target_def = get_definition(task_key, target_name)
+            storage_name = storage_definitions.get(
+                task_key, get_default_definition_name(task_key)
+            )
+            if storage_name == target_name:
+                continue
+            storage_def = get_definition(task_key, storage_name)
+            self.luts[task_key] = build_stored_to_train_lut(storage_def, target_def)
+            self.fallbacks[task_key] = int(
+                target_def.lut[target_def.missing_fill_raw_id]
+            )
+
+    def __call__(self, data_dict):
+        for key, lut in self.luts.items():
+            if key not in data_dict:
+                continue
+            labels = data_dict[key]
+            if isinstance(labels, torch.Tensor):
+                labels = labels.numpy()
+            idx = labels.astype(np.int64, copy=False)
+            fallback = self.fallbacks[key]
+            remapped = np.full(idx.shape, fallback, dtype=np.int32)
+            valid = (idx >= 0) & (idx < lut.shape[0])
+            if np.any(valid):
+                remapped[valid] = lut[idx[valid]]
+            data_dict[key] = remapped
         return data_dict
 
 

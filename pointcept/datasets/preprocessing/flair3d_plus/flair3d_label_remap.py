@@ -208,6 +208,37 @@ _NATURAL_HABITAT_BY_HABITAT_X_DOMAIN_NAMES: Tuple[str, ...] = (
     "Void",
 )
 
+_NATURAL_HABITAT_BY_MOISTURE_NAMES: Tuple[str, ...] = (
+    "Humide",
+    "Mesique",
+    "Sec",
+    "Mineral",
+    "Aquatic",
+    "Cultivated",
+    "Built",
+    "Road",
+    "Void",
+)
+
+_NATURAL_HABITAT_BY_MOISTURE_V2_NAMES: Tuple[str, ...] = (
+    "Humide",
+    "Mesique",
+    "Sec",
+    "Mineral",
+    "Aquatic",
+    "Anthropogenic habitat",
+    "Void",
+)
+
+_NATURAL_HABITAT_BY_MOISTURE_V3_NAMES: Tuple[str, ...] = (
+    "Humide",
+    "Mesique",
+    "Sec",
+    "Mineral",
+    "Aquatic",
+    "Void",
+)
+
 # CarHab raw id -> train id. Raw 42=N/A -> void (11); raw 43=routes -> 10.
 _NATURAL_HABITAT_BY_HABITAT_X_DOMAIN_LUT = np.array(
     [
@@ -295,6 +326,54 @@ def _build_natural_habitat_default_lut() -> np.ndarray:
   lut = np.arange(44, dtype=np.int32)
   lut[42] = 43
   lut[43] = 42
+  return lut
+
+
+def _build_natural_habitat_by_moisture_lut() -> np.ndarray:
+  """CarHab raw ids 0-35 -> moisture (id % 3); special classes kept separate."""
+  lut = np.full(44, 8, dtype=np.int32)
+  for raw_id in range(36):
+    lut[raw_id] = raw_id % 3
+  lut[36] = 3
+  lut[37] = 3
+  lut[38] = 4
+  lut[39] = 4
+  lut[40] = 5
+  lut[41] = 6
+  lut[42] = 8
+  lut[43] = 7
+  return lut
+
+
+def _build_natural_habitat_by_moisture_v2_lut() -> np.ndarray:
+  """Like by_moisture but Cultivated, Built and Road -> Anthropogenic habitat."""
+  lut = np.full(44, 6, dtype=np.int32)
+  for raw_id in range(36):
+    lut[raw_id] = raw_id % 3
+  lut[36] = 3
+  lut[37] = 3
+  lut[38] = 4
+  lut[39] = 4
+  lut[40] = 5
+  lut[41] = 5
+  lut[42] = 6
+  lut[43] = 5
+  return lut
+
+
+def _build_natural_habitat_by_moisture_v3_lut() -> np.ndarray:
+  """Like by_moisture but Cultivated, Built and Road -> void."""
+  lut = np.full(44, 5, dtype=np.int32)
+  for raw_id in range(36):
+    lut[raw_id] = raw_id % 3
+  lut[36] = 3
+  lut[37] = 3
+  lut[38] = 4
+  lut[39] = 4
+  lut[40] = 5
+  lut[41] = 5
+  lut[42] = 5
+  lut[43] = 5
   return lut
 
 
@@ -496,6 +575,36 @@ def _register_natural_habitat_definitions() -> Dict[str, LabelDefinition]:
       missing_fill_raw_id=42,
       source_field="NATURAL_HABITAT",
     ),
+    "by_moisture": _make_definition(
+      "natural_habitat",
+      "by_moisture",
+      num_raw_classes=44,
+      lut=_build_natural_habitat_by_moisture_lut(),
+      names=_NATURAL_HABITAT_BY_MOISTURE_NAMES,
+      ignore_index=8,
+      missing_fill_raw_id=42,
+      source_field="NATURAL_HABITAT",
+    ),
+    "by_moisture_v2": _make_definition(
+      "natural_habitat",
+      "by_moisture_v2",
+      num_raw_classes=44,
+      lut=_build_natural_habitat_by_moisture_v2_lut(),
+      names=_NATURAL_HABITAT_BY_MOISTURE_V2_NAMES,
+      ignore_index=6,
+      missing_fill_raw_id=42,
+      source_field="NATURAL_HABITAT",
+    ),
+    "by_moisture_v3": _make_definition(
+      "natural_habitat",
+      "by_moisture_v3",
+      num_raw_classes=44,
+      lut=_build_natural_habitat_by_moisture_v3_lut(),
+      names=_NATURAL_HABITAT_BY_MOISTURE_V3_NAMES,
+      ignore_index=5,
+      missing_fill_raw_id=42,
+      source_field="NATURAL_HABITAT",
+    ),
   }
 
 
@@ -566,6 +675,30 @@ def apply_remap(values: np.ndarray, definition: LabelDefinition) -> np.ndarray:
   if np.any(valid):
     result[valid] = lut[idx[valid]]
   return result
+
+
+def build_stored_to_train_lut(
+    storage: LabelDefinition,
+    target: LabelDefinition,
+) -> np.ndarray:
+  """Map on-disk label ids (after storage definition) to target train ids.
+  
+  Only for the gap :
+  - Road : saved as 42, raw as 43
+  - Void : saved as 43, raw as 42
+  """
+  if storage.num_raw_classes != target.num_raw_classes:
+    raise ValueError(
+      f"storage and target must share num_raw_classes "
+      f"(got {storage.num_raw_classes} vs {target.num_raw_classes})"
+    )
+  num_raw = storage.num_raw_classes
+  fallback = int(target.lut[target.missing_fill_raw_id])
+  stored_lut = np.full(num_raw, fallback, dtype=np.int32)
+  for raw_id in range(num_raw):
+    stored_id = int(storage.lut[raw_id])
+    stored_lut[stored_id] = int(target.lut[raw_id])
+  return stored_lut
 
 
 def definition_to_task_config(definition: LabelDefinition) -> Dict[str, object]:
