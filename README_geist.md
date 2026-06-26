@@ -62,7 +62,7 @@ python pointcept/datasets/preprocessing/flair3d_plus/preprocess_flair3d_v2.py \
  --output_root $WORK/Pointcept/data/flair3d_plus \
  --split_manifest_csv data/flair3d_plus/raw/scene_split_manifest.csv \
  --natural_habitat_definition default \
- --num_workers 24 \
+ --num_workers 32 \
  --force
 ```
 
@@ -83,9 +83,9 @@ Training configs must match on-disk definitions for tasks without on-the-fly rem
 ``label_definitions`` + ``Flair3DLabelRemap`` when remapping at load time (see
 ``configs/experiment/w101/5/nathab_moisture/litept-v1m0-flair3d_1.py`` and ``_2`` / ``_3`` for v2/v3).
 
-**Tile climatic domain audit (`by_climatic_domain`):** maps CarHab ids 0–35 to Temperate /
+**Tile climatic domain fractions (`by_climatic_domain`):** maps CarHab ids 0–35 to Temperate /
 Mediterranean / Alpine; ids 36–43 (mineral, aquatic, cultivated, built, N/A, roads) → void.
-Run on Jean-Zay to check whether tiles are strictly pure (single domain among eligible points):
+Exports per-tile counts and fractions over all points for downstream analysis:
 
 ```bash
 python scripts/analyze_flair3d_tile_climatic_domain.py \
@@ -98,7 +98,7 @@ python scripts/analyze_flair3d_tile_climatic_domain.py \
   --output_dir stats/flair3d/tile_climatic_domain
 ```
 
-Outputs: ``summary.json``, ``tiles.csv``, ``mixed_tiles.csv`` under ``--output_dir``.
+Output: ``tile_domain_fractions.csv`` under ``--output_dir``.
 Requires NH preprocessed with ``--natural_habitat_definition default``.
 
 

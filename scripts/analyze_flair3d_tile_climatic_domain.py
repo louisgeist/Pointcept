@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """
-Audit Flair3D+ tiles for climatic-domain purity (Temperate / Mediterranean / Alpine).
+Export per-tile climatic-domain fractions for Flair3D+ (Temperate / Mediterranean / Alpine / Void).
 
 Expects on-disk natural_habitat.npy from preprocessing with --natural_habitat_definition
 default (stored ids 0-43). Maps points via by_climatic_domain (ids 36-43 -> void).
 
-Strict tile rule: a tile gets a domain label only when all eligible points (ids 0-35
-after remap -> train ids 0-2) belong to a single domain.
+Writes one CSV row per tile with raw counts and fractions over all points (frac_* sum to 1).
 
 Example (Jean-Zay):
 python scripts/analyze_flair3d_tile_climatic_domain.py \
@@ -24,12 +23,11 @@ from __future__ import annotations
 import argparse
 import csv
 import importlib.util
-import json
 import os
 import sys
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import asdict, dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 import numpy as np
 from tqdm import tqdm
@@ -37,9 +35,6 @@ from tqdm import tqdm
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 VOID_TRAIN_ID = 3
-SPECIAL_STORED_MIN = 36
-SPECIAL_STORED_MAX = 41
-MAX_STORED_ID = 43
 
 _STORED_TO_DOMAIN_LUT: Optional[np.ndarray] = None
 
@@ -89,21 +84,15 @@ class SceneRecord:
 class TileResult:
     split: str
     patch_id: str
-    status: str
-    tile_domain: int
     n_points: int
-    n_eligible: int
+    n_temperate: int
+    n_mediterranean: int
+    n_alpine: int
     n_void: int
-    n_special_stored: int
-    pct_temperate: float
-    pct_mediterranean: float
-    pct_alpine: float
-    pct_void: float
-    pct_special: float
-    domains_present: str
-    majority_domain: int
-    max_stored_id: int
-    suspicious_stored_ids: bool
+    frac_temperate: float
+    frac_mediterranean: float
+    frac_alpine: float
+    frac_void: float
     error: str = ""
 
 
@@ -218,100 +207,52 @@ def _remap_stored_labels(stored: np.ndarray, lut: np.ndarray) -> np.ndarray:
     return remapped
 
 
-def analyze_tile(scene: SceneRecord, lut: np.ndarray) -> TileResult:
-    nh_path = os.path.join(scene.scene_path, "natural_habitat.npy")
-    base = dict(
-        split=scene.split,
-        patch_id=scene.patch_id,
-        status="missing_nh",
-        tile_domain=-1,
-        n_points=0,
-        n_eligible=0,
-        n_void=0,
-        n_special_stored=0,
-        pct_temperate=0.0,
-        pct_mediterranean=0.0,
-        pct_alpine=0.0,
-        pct_void=0.0,
-        pct_special=0.0,
-        domains_present="",
-        majority_domain=-1,
-        max_stored_id=-1,
-        suspicious_stored_ids=False,
-    )
-    if not os.path.isfile(nh_path):
-        return TileResult(**base)
-
-    stored = np.load(nh_path).reshape(-1)
-    n_points = int(stored.shape[0])
-    max_stored = int(stored.max()) if n_points else -1
-    min_stored = int(stored.min()) if n_points else -1
-    suspicious = max_stored > MAX_STORED_ID or min_stored < 0
-
-    n_special_stored = int(
-        np.count_nonzero(
-            (stored >= SPECIAL_STORED_MIN) & (stored <= SPECIAL_STORED_MAX)
-        )
-    )
-    mapped = _remap_stored_labels(stored, lut)
-    void_mask = mapped == VOID_TRAIN_ID
-    n_void = int(void_mask.sum())
-    eligible = mapped[~void_mask]
-    n_eligible = int(eligible.shape[0])
-
-    pct_void = (100.0 * n_void / n_points) if n_points else 0.0
-    pct_special = (100.0 * n_special_stored / n_points) if n_points else 0.0
-
-    if n_eligible == 0:
-        return TileResult(
-            **base,
-            status="no_eligible",
-            n_points=n_points,
-            n_void=n_void,
-            n_special_stored=n_special_stored,
-            pct_void=pct_void,
-            pct_special=pct_special,
-            max_stored_id=max_stored,
-            suspicious_stored_ids=suspicious,
-        )
-
-    unique, counts = np.unique(eligible, return_counts=True)
-    order = np.argsort(unique)
-    unique = unique[order]
-    counts = counts[order]
-    domains_present = ",".join(str(int(v)) for v in unique)
-    majority_idx = int(np.argmax(counts))
-    majority_domain = int(unique[majority_idx])
-
-    pct_temp = 100.0 * int(np.count_nonzero(eligible == 0)) / n_eligible
-    pct_med = 100.0 * int(np.count_nonzero(eligible == 1)) / n_eligible
-    pct_alp = 100.0 * int(np.count_nonzero(eligible == 2)) / n_eligible
-
-    if len(unique) == 1:
-        status = "pure"
-        tile_domain = int(unique[0])
-    else:
-        status = "mixed"
-        tile_domain = -1
-
+def _empty_tile_result(scene: SceneRecord, error: str = "") -> TileResult:
     return TileResult(
         split=scene.split,
         patch_id=scene.patch_id,
-        status=status,
-        tile_domain=tile_domain,
+        n_points=0,
+        n_temperate=0,
+        n_mediterranean=0,
+        n_alpine=0,
+        n_void=0,
+        frac_temperate=0.0,
+        frac_mediterranean=0.0,
+        frac_alpine=0.0,
+        frac_void=0.0,
+        error=error,
+    )
+
+
+def analyze_tile(scene: SceneRecord, lut: np.ndarray) -> TileResult:
+    nh_path = os.path.join(scene.scene_path, "natural_habitat.npy")
+    if not os.path.isfile(nh_path):
+        return _empty_tile_result(scene, error="missing_nh")
+
+    stored = np.load(nh_path).reshape(-1)
+    n_points = int(stored.shape[0])
+    if n_points == 0:
+        return _empty_tile_result(scene)
+
+    mapped = _remap_stored_labels(stored, lut)
+    n_temperate = int(np.count_nonzero(mapped == 0))
+    n_mediterranean = int(np.count_nonzero(mapped == 1))
+    n_alpine = int(np.count_nonzero(mapped == 2))
+    n_void = int(np.count_nonzero(mapped == VOID_TRAIN_ID))
+
+    inv = 1.0 / n_points
+    return TileResult(
+        split=scene.split,
+        patch_id=scene.patch_id,
         n_points=n_points,
-        n_eligible=n_eligible,
+        n_temperate=n_temperate,
+        n_mediterranean=n_mediterranean,
+        n_alpine=n_alpine,
         n_void=n_void,
-        n_special_stored=n_special_stored,
-        pct_temperate=pct_temp,
-        pct_mediterranean=pct_med,
-        pct_alpine=pct_alp,
-        pct_void=pct_void,
-        pct_special=pct_special,
-        domains_present=domains_present,
-        majority_domain=majority_domain,
-        max_stored_id=max_stored,
-        suspicious_stored_ids=suspicious,
+        frac_temperate=n_temperate * inv,
+        frac_mediterranean=n_mediterranean * inv,
+        frac_alpine=n_alpine * inv,
+        frac_void=n_void * inv,
     )
 
 
@@ -320,47 +261,22 @@ def _process_scene(args: Tuple[SceneRecord, np.ndarray]) -> TileResult:
     try:
         return analyze_tile(scene, lut)
     except Exception as exc:
-        return TileResult(
-            split=scene.split,
-            patch_id=scene.patch_id,
-            status="error",
-            tile_domain=-1,
-            n_points=0,
-            n_eligible=0,
-            n_void=0,
-            n_special_stored=0,
-            pct_temperate=0.0,
-            pct_mediterranean=0.0,
-            pct_alpine=0.0,
-            pct_void=0.0,
-            pct_special=0.0,
-            domains_present="",
-            majority_domain=-1,
-            max_stored_id=-1,
-            suspicious_stored_ids=False,
-            error=str(exc),
-        )
+        return _empty_tile_result(scene, error=str(exc))
 
 
-def _write_tiles_csv(path: str, rows: List[TileResult]) -> None:
+def _write_fractions_csv(path: str, rows: List[TileResult]) -> None:
     fieldnames = [
         "split",
         "patch_id",
-        "status",
-        "tile_domain",
         "n_points",
-        "n_eligible",
+        "n_temperate",
+        "n_mediterranean",
+        "n_alpine",
         "n_void",
-        "n_special_stored",
-        "pct_temperate",
-        "pct_mediterranean",
-        "pct_alpine",
-        "pct_void",
-        "pct_special",
-        "domains_present",
-        "majority_domain",
-        "max_stored_id",
-        "suspicious_stored_ids",
+        "frac_temperate",
+        "frac_mediterranean",
+        "frac_alpine",
+        "frac_void",
         "error",
     ]
     with open(path, "w", encoding="utf-8", newline="") as handle:
@@ -368,66 +284,6 @@ def _write_tiles_csv(path: str, rows: List[TileResult]) -> None:
         writer.writeheader()
         for row in rows:
             writer.writerow(asdict(row))
-
-
-def _build_summary(
-    rows: List[TileResult],
-    meta: Dict[str, Any],
-) -> Dict[str, Any]:
-    status_counts: Dict[str, int] = {}
-    status_by_split: Dict[str, Dict[str, int]] = {}
-    domain_counts_pure: Dict[str, int] = {"0": 0, "1": 0, "2": 0}
-    suspicious_count = 0
-
-    for row in rows:
-        status_counts[row.status] = status_counts.get(row.status, 0) + 1
-        split_bucket = status_by_split.setdefault(row.split, {})
-        split_bucket[row.status] = split_bucket.get(row.status, 0) + 1
-        if row.status == "pure":
-            domain_counts_pure[str(row.tile_domain)] += 1
-        if row.suspicious_stored_ids:
-            suspicious_count += 1
-
-    total = len(rows)
-    pure = status_counts.get("pure", 0)
-    mixed = status_counts.get("mixed", 0)
-    no_eligible = status_counts.get("no_eligible", 0)
-    missing_nh = status_counts.get("missing_nh", 0)
-    errors = status_counts.get("error", 0)
-
-    return {
-        "meta": meta,
-        "total_tiles": total,
-        "status_counts": status_counts,
-        "status_by_split": status_by_split,
-        "pure_domain_counts": domain_counts_pure,
-        "pct_pure": round(100.0 * pure / total, 2) if total else 0.0,
-        "pct_mixed": round(100.0 * mixed / total, 2) if total else 0.0,
-        "pct_no_eligible": round(100.0 * no_eligible / total, 2) if total else 0.0,
-        "pct_missing_nh": round(100.0 * missing_nh / total, 2) if total else 0.0,
-        "pct_error": round(100.0 * errors / total, 2) if total else 0.0,
-        "suspicious_stored_ids_tiles": suspicious_count,
-    }
-
-
-def _print_summary(summary: Dict[str, Any]) -> None:
-    print("\n=== Tile climatic domain audit ===")
-    print(f"Total tiles: {summary['total_tiles']}")
-    print(f"Pure: {summary['status_counts'].get('pure', 0)} ({summary['pct_pure']}%)")
-    print(f"Mixed: {summary['status_counts'].get('mixed', 0)} ({summary['pct_mixed']}%)")
-    print(f"No eligible: {summary['status_counts'].get('no_eligible', 0)} ({summary['pct_no_eligible']}%)")
-    print(f"Missing NH: {summary['status_counts'].get('missing_nh', 0)} ({summary['pct_missing_nh']}%)")
-    if summary["status_counts"].get("error", 0):
-        print(f"Errors: {summary['status_counts']['error']} ({summary['pct_error']}%)")
-    print(f"Pure domain counts (0=Temp, 1=Med, 2=Alp): {summary['pure_domain_counts']}")
-    if summary["suspicious_stored_ids_tiles"]:
-        print(
-            f"Warning: {summary['suspicious_stored_ids_tiles']} tiles have stored ids "
-            f"outside [0, {MAX_STORED_ID}] (check NH preprocessing definition)."
-        )
-    print("\nBy split:")
-    for split, counts in sorted(summary["status_by_split"].items()):
-        print(f"  {split}: {counts}")
 
 
 def main() -> None:
@@ -511,35 +367,9 @@ def main() -> None:
                 mapped = tqdm(mapped, total=len(tasks), desc="Tiles", unit="tile")
             results = list(mapped)
 
-    tiles_csv = os.path.join(output_dir, "tiles.csv")
-    mixed_csv = os.path.join(output_dir, "mixed_tiles.csv")
-    summary_json = os.path.join(output_dir, "summary.json")
-
-    _write_tiles_csv(tiles_csv, results)
-    mixed_rows = [row for row in results if row.status == "mixed"]
-    _write_tiles_csv(mixed_csv, mixed_rows)
-
-    summary = _build_summary(
-        results,
-        meta={
-            "data_root": data_root,
-            "csv_manifest": csv_manifest,
-            "splits": sorted(target_splits),
-            "excluded_tiles": len(excluded),
-            "tiles_scanned": len(scenes),
-            "storage_definition": "default",
-            "target_definition": "by_climatic_domain",
-            "strict_pure_rule": True,
-        },
-    )
-    with open(summary_json, "w", encoding="utf-8") as handle:
-        json.dump(summary, handle, indent=2)
-        handle.write("\n")
-
-    _print_summary(summary)
-    print(f"\nWrote {tiles_csv}")
-    print(f"Wrote {mixed_csv} ({len(mixed_rows)} mixed tiles)")
-    print(f"Wrote {summary_json}")
+    output_csv = os.path.join(output_dir, "tile_domain_fractions.csv")
+    _write_fractions_csv(output_csv, results)
+    print(f"Wrote {output_csv} ({len(results)} tiles)")
 
 
 if __name__ == "__main__":
