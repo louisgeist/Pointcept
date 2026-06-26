@@ -40,10 +40,9 @@ mix_prob = 0.8
 
 # Optimization parameters
 lr = 1e-3
-epoch = 10
-eval_epoch = epoch
+total_iters = 100_000_000
+eval_every = 5
 warmup_steps = 2500
-max_sample = batch_size * 10
 
 # Features
 learned_masked_feat = True
@@ -190,7 +189,6 @@ data = dict(
         too_small_tiles_manifest=too_small_tiles_manifest,
         target_keys=list(target_keys),
         primary_target_key=main_task,
-        max_sample=max_sample,
         transform=[
             dict(
                 type="Update",
@@ -242,7 +240,6 @@ data = dict(
         too_small_tiles_manifest=too_small_tiles_manifest,
         target_keys=list(target_keys),
         primary_target_key=main_task,
-        max_sample=max_sample,
         transform=[
             dict(
                 type="Update",
@@ -290,7 +287,6 @@ data = dict(
         too_small_tiles_manifest=too_small_tiles_manifest,
         target_keys=list(target_keys),
         primary_target_key=main_task,
-        max_sample=max_sample,
         transform=[
             dict(type="CenterShift", apply_z=True),
             dict(type="Z_MinShift"),
