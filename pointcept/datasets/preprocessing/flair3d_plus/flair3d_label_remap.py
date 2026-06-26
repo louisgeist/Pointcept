@@ -239,6 +239,13 @@ _NATURAL_HABITAT_BY_MOISTURE_V3_NAMES: Tuple[str, ...] = (
     "Void",
 )
 
+_NATURAL_HABITAT_BY_CLIMATIC_DOMAIN_NAMES: Tuple[str, ...] = (
+    "Temperate",
+    "Mediterranean",
+    "Alpine",
+    "Void",
+)
+
 # CarHab raw id -> train id. Raw 42=N/A -> void (11); raw 43=routes -> 10.
 _NATURAL_HABITAT_BY_HABITAT_X_DOMAIN_LUT = np.array(
     [
@@ -374,6 +381,15 @@ def _build_natural_habitat_by_moisture_v3_lut() -> np.ndarray:
   lut[41] = 5
   lut[42] = 5
   lut[43] = 5
+  return lut
+
+
+def _build_natural_habitat_by_climatic_domain_lut() -> np.ndarray:
+  """CarHab raw ids 0-35 -> climatic domain; 36-43 -> void."""
+  lut = np.full(44, 3, dtype=np.int32)
+  lut[0:12] = 0
+  lut[12:24] = 1
+  lut[24:36] = 2
   return lut
 
 
@@ -602,6 +618,16 @@ def _register_natural_habitat_definitions() -> Dict[str, LabelDefinition]:
       lut=_build_natural_habitat_by_moisture_v3_lut(),
       names=_NATURAL_HABITAT_BY_MOISTURE_V3_NAMES,
       ignore_index=5,
+      missing_fill_raw_id=42,
+      source_field="NATURAL_HABITAT",
+    ),
+    "by_climatic_domain": _make_definition(
+      "natural_habitat",
+      "by_climatic_domain",
+      num_raw_classes=44,
+      lut=_build_natural_habitat_by_climatic_domain_lut(),
+      names=_NATURAL_HABITAT_BY_CLIMATIC_DOMAIN_NAMES,
+      ignore_index=3,
       missing_fill_raw_id=42,
       source_field="NATURAL_HABITAT",
     ),
