@@ -628,6 +628,14 @@ class MultiTaskEvaluator(HookBase):
             if task_config.get("task_type") == "regression"
         ]
 
+    @staticmethod
+    def _classification_task_names(task_configs):
+        return [
+            k
+            for k, task_config in task_configs.items()
+            if task_config.get("task_type") == "classification"
+        ]
+
     def eval(self):
         val_start = begin_val_epoch_timing()
         self.trainer.logger.info(">>>>>>>>>>>>>>>> Start Evaluation >>>>>>>>>>>>>>>>")
@@ -636,6 +644,7 @@ class MultiTaskEvaluator(HookBase):
         main_task = self._main_task_name(task_configs)
         semantic_tasks = self._semantic_task_names(task_configs)
         regression_tasks = self._regression_task_names(task_configs)
+        classification_tasks = self._classification_task_names(task_configs)
 
         reg_sums = {
             t: {"mae": 0.0, "mse": 0.0, "count": 0.0} for t in regression_tasks
@@ -698,6 +707,35 @@ class MultiTaskEvaluator(HookBase):
                     )
                     self.trainer.storage.put_scalar(f"val_union/{task_name}", union)
                     self.trainer.storage.put_scalar(f"val_target/{task_name}", target)
+
+                cls_logits_by_task = output_dict.get("cls_logits_by_task") or {}
+                for task_name in classification_tasks:
+                    task_config = task_configs[task_name]
+                    if task_name not in input_dict or task_name not in cls_logits_by_task:
+                        continue
+                    pred = cls_logits_by_task[task_name].max(1)[1]
+                    target_tensor = input_dict[task_name].reshape(-1).long()
+                    intersection, union, target = intersection_and_union_gpu(
+                        pred,
+                        target_tensor,
+                        int(task_config["num_classes"]),
+                        int(task_config["ignore_index"]),
+                    )
+                    if comm.get_world_size() > 1:
+                        dist.all_reduce(intersection)
+                        dist.all_reduce(union)
+                        dist.all_reduce(target)
+                    intersection, union, target = (
+                        intersection.cpu().numpy(),
+                        union.cpu().numpy(),
+                        target.cpu().numpy(),
+                    )
+                    self.trainer.storage.put_scalar(
+                        f"val_intersection/{task_name}", intersection
+                    )
+                    self.trainer.storage.put_scalar(f"val_union/{task_name}", union)
+                    self.trainer.storage.put_scalar(f"val_target/{task_name}", target)
+
                 self.trainer.storage.put_scalar("val_loss", loss.item())
                 loss_by_task = output_dict.get("loss_by_task")
                 # Skip when only one task: scalar "loss" already logged
@@ -765,7 +803,8 @@ class MultiTaskEvaluator(HookBase):
                 reg_sums[task_name]["count"] = flat[base + 2]
 
         per_task_metrics = {}
-        for task_name in semantic_tasks:
+        metric_task_names = semantic_tasks + classification_tasks
+        for task_name in metric_task_names:
             task_config = task_configs[task_name]
             intersection = self.trainer.storage.history(
                 f"val_intersection/{task_name}"

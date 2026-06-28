@@ -205,6 +205,25 @@ def regroup_batch(batch, N, original_offsets, data_keys):
     return new_batch, new_offsets, new_batch_imgs, new_batch_img_num
 
 
+def _merge_scene_level_labels(labels):
+    """Merge per-scene labels when point_collate_fn pair-mixes offset.
+
+    Pair-mix keeps boundaries at offset[1], offset[3], ... and offset[-1], so each
+    merged group uses the first scene label of the pair (last scene alone if odd).
+    """
+    labels = labels.reshape(-1)
+    n = int(labels.shape[0])
+    if n <= 1:
+        return labels
+    if n % 2 == 0:
+        return labels[0::2]
+    return torch.cat([labels[0:-1:2], labels[-1:]])
+
+
+# Scene-level classification targets (one label per point cloud before mix).
+_SCENE_LABEL_KEYS = ("climatic_domain", "category")
+
+
 def point_collate_fn(batch, mix_prob=0):
     assert isinstance(
         batch[0], Mapping
@@ -237,6 +256,12 @@ def point_collate_fn(batch, mix_prob=0):
                 [batch[offset_asset][1:-1:2], batch[offset_asset][-1].unsqueeze(0)],
                 dim=0,
             )
+
+        for scene_label_key in _SCENE_LABEL_KEYS:
+            if scene_label_key in batch:
+                batch[scene_label_key] = _merge_scene_level_labels(
+                    batch[scene_label_key]
+                )
 
         # Recompute grid_coord after mixing, because each scene's grid_coord was
         # independently shifted before mixing and is no longer consistent with

@@ -41,7 +41,7 @@ class CrossEntropyLoss(nn.Module):
         # Return 0 in the graph so loss.requires_grad stays True; gradient is 0.
         if (target != self.ignore_index).any():
             return self.loss(pred, target) * self.loss_weight
-        return (pred * 0).sum()
+        return pred.new_zeros(())
 
 
 @LOSSES.register_module()

@@ -14,6 +14,14 @@ from .builder import MODELS, build_model
 
 logger = get_root_logger()
 
+_POOLING_MODES = frozenset(("mean", "max", "attention"))
+
+
+def _safe_segment_csr_mean(feat, indptr):
+    """Per-scene mean pool in float32 (AMP-safe); empty segments -> 0."""
+    pooled = torch_scatter.segment_csr(feat.float(), indptr, reduce="mean")
+    return torch.nan_to_num(pooled, nan=0.0, posinf=0.0, neginf=0.0)
+
 
 class LearnedMaskedFeatMixin:
     def _init_learned_masked_feat(self, feature_mask_values=None):
@@ -291,22 +299,26 @@ class MultiTaskSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
     
     "V2" because it is the MultiTask version of the DefaultSegmentorV2.
 
-    Each entry in the task_configs mapping must set "task_type" to "semantic" or "regression".
+    Each entry in the task_configs mapping must set "task_type" to "semantic",
+    "regression", or "classification".
 
     - Semantic tasks read targets from input_dict[task_name] and write logits to
       seg_logits_by_task.
     - Regression tasks read the float target from input_dict[task_name] and write
       predictions to reg_pred_by_task.
+    - Classification tasks pool per-scene features and write logits to
+      cls_logits_by_task.
 
     The "main_task" name must refer to a semantic task (checkpoint / mIoU convention).
 
     Outputs:
     - seg_logits and seg_logits_by_task: semantic tasks only,
     - reg_pred_by_task: mapping task name -> 1D point-wise predictions for regression tasks,
+    - cls_logits_by_task: scene-level classification logits,
     - loss and loss_by_task when the corresponding targets are present in the batch.
     """
 
-    _TASK_TYPES = frozenset(("semantic", "regression"))
+    _TASK_TYPES = frozenset(("semantic", "regression", "classification"))
 
     def __init__(
         self,
@@ -330,12 +342,16 @@ class MultiTaskSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
             raise ValueError("main_task must be one of task_configs keys.")
         if self._task_type(self.task_configs[self.main_task]) != "semantic":
             raise ValueError(
-                "main_task must be a semantic task (task_type='semantic'), not regression."
+                "main_task must be a semantic task (task_type='semantic'), "
+                "not regression or classification."
             )
 
         self.backbone = build_model(backbone)
         self.seg_heads = nn.ModuleDict()
         self.reg_heads = nn.ModuleDict()
+        self.cls_heads = nn.ModuleDict()
+        self.cls_attn_pools = nn.ModuleDict()
+        self.cls_pooling = {}
         self.criteria_by_task = {}
         self.task_weights = {}
         default_weight = 1.0
@@ -356,8 +372,24 @@ class MultiTaskSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
                 if num_classes <= 0:
                     raise ValueError(f"num_classes must be > 0 for semantic task '{task_name}'.")
                 self.seg_heads[task_name] = nn.Linear(backbone_out_channels, num_classes)
-            else:  # regression
+            elif task_type == "regression":
                 self.reg_heads[task_name] = nn.Linear(backbone_out_channels, 1)
+            else:
+                num_classes = int(task_config["num_classes"])
+                if num_classes <= 0:
+                    raise ValueError(
+                        f"num_classes must be > 0 for classification task '{task_name}'."
+                    )
+                pooling = str(task_config.get("pooling", "mean"))
+                if pooling not in _POOLING_MODES:
+                    raise ValueError(
+                        f"classification pooling for '{task_name}' must be one of "
+                        f"{sorted(_POOLING_MODES)}, got {pooling!r}."
+                    )
+                self.cls_pooling[task_name] = pooling
+                if pooling == "attention":
+                    self.cls_attn_pools[task_name] = AttentiveScenePool(backbone_out_channels)
+                self.cls_heads[task_name] = nn.Linear(backbone_out_channels, num_classes)
 
         self._init_learned_masked_feat(feature_mask_values=feature_mask_values)
         self.freeze_backbone = freeze_backbone
@@ -370,10 +402,20 @@ class MultiTaskSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
         tt = task_config.get("task_type")
         if tt not in cls._TASK_TYPES:
             raise ValueError(
-                "Each task_configs entry must set task_type to 'semantic' or 'regression' "
+                "Each task_configs entry must set task_type to 'semantic', "
+                "'regression', or 'classification' "
                 f"(got {tt!r})."
             )
         return tt
+
+    def _pool_scene_feat(self, feat, offset, task_name):
+        pooling = self.cls_pooling[task_name]
+        indptr = nn.functional.pad(offset, (1, 0))
+        if pooling == "mean":
+            return _safe_segment_csr_mean(feat, indptr)
+        if pooling == "max":
+            return torch_scatter.segment_csr(feat, indptr, reduce="max")
+        return self.cls_attn_pools[task_name](feat, offset)
 
     def _forward_backbone(self, input_dict):
         point = Point(input_dict)
@@ -399,13 +441,19 @@ class MultiTaskSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
             for task_name, head in self.reg_heads.items()
         }
 
+    def _compute_cls_logits(self, feat, offset):
+        return {
+            task_name: head(self._pool_scene_feat(feat, offset, task_name))
+            for task_name, head in self.cls_heads.items()
+        }
+
     def _has_any_target(self, input_dict):
         for task_name in self.tasks:
             if task_name in input_dict:
                 return True
         return False
 
-    def _compute_loss(self, logits_by_task, reg_pred_by_task, input_dict):
+    def _compute_loss(self, logits_by_task, reg_pred_by_task, cls_logits_by_task, input_dict):
         total_loss = None
         loss_by_task = {}
         for task_name in self.tasks:
@@ -419,6 +467,26 @@ class MultiTaskSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
                     continue
                 logits = logits_by_task[task_name]
                 task_loss = self.criteria_by_task[task_name](logits, input_dict[task_name])
+            elif tt == "classification":
+                if task_name not in cls_logits_by_task:
+                    continue
+                if task_name not in input_dict:
+                    continue
+                logits = cls_logits_by_task[task_name]
+                target = input_dict[task_name].reshape(-1).long()
+                ignore_index = int(task_config["ignore_index"])
+                if logits.shape[0] != target.shape[0]:
+                    raise ValueError(
+                        f"Classification logits/target length mismatch for "
+                        f"'{task_name}': {logits.shape[0]} vs {target.shape[0]}"
+                    )
+                valid = target != ignore_index
+                if not valid.any():
+                    task_loss = logits.new_zeros(())
+                else:
+                    task_loss = self.criteria_by_task[task_name](
+                        logits[valid].float(), target[valid]
+                    )
             else:
                 if task_name not in reg_pred_by_task:
                     continue
@@ -442,18 +510,21 @@ class MultiTaskSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
         feat, point = self._forward_backbone(input_dict)
         logits_by_task = self._compute_logits(feat)
         reg_pred_by_task = self._compute_reg_preds(feat)
+        offset = input_dict["offset"]
+        cls_logits_by_task = self._compute_cls_logits(feat, offset)
         main_logits = logits_by_task[self.main_task]
         return_dict = {
             "seg_logits": main_logits,
             "seg_logits_by_task": logits_by_task,
             "reg_pred_by_task": reg_pred_by_task,
+            "cls_logits_by_task": cls_logits_by_task,
         }
         if return_point:
             return_dict["point"] = point
 
         if self.training or self._has_any_target(input_dict):
             total_loss, loss_by_task = self._compute_loss(
-                logits_by_task, reg_pred_by_task, input_dict
+                logits_by_task, reg_pred_by_task, cls_logits_by_task, input_dict
             )
             return_dict["loss"] = total_loss
             return_dict["loss_by_task"] = loss_by_task
@@ -464,6 +535,10 @@ class MultiTaskSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
                 return_dict["pred_by_task"] = {
                     task_name: logits.argmax(dim=1)
                     for task_name, logits in logits_by_task.items()
+                }
+                return_dict["pred_cls_by_task"] = {
+                    task_name: logits.argmax(dim=1)
+                    for task_name, logits in cls_logits_by_task.items()
                 }
 
         return return_dict
@@ -681,9 +756,6 @@ class DINOEnhancedSegmentor(nn.Module, LearnedMaskedFeatMixin):
         return return_dict
 
 
-_POOLING_MODES = frozenset(("mean", "max", "attention"))
-
-
 class AttentiveScenePool(nn.Module):
     """Cross-attention pooling: one learnable query aggregates per-point K/V into a scene token."""
 
@@ -745,17 +817,7 @@ class DefaultClassifier(nn.Module, LearnedMaskedFeatMixin):
             if pooling == "attention"
             else None
         )
-        self.cls_head = nn.Sequential(
-            nn.Linear(backbone_embed_dim, 256),
-            nn.BatchNorm1d(256),
-            nn.ReLU(inplace=True),
-            nn.Dropout(p=0.5),
-            nn.Linear(256, 128),
-            nn.BatchNorm1d(128),
-            nn.ReLU(inplace=True),
-            nn.Dropout(p=0.5),
-            nn.Linear(128, num_classes),
-        )
+        self.cls_head = nn.Linear(backbone_embed_dim, num_classes)
         if self.freeze_backbone:
             for p in self.backbone.parameters():
                 p.requires_grad = False
@@ -764,7 +826,7 @@ class DefaultClassifier(nn.Module, LearnedMaskedFeatMixin):
     def _pool_scene_feat(self, feat, offset):
         indptr = nn.functional.pad(offset, (1, 0))
         if self.pooling == "mean":
-            return torch_scatter.segment_csr(feat, indptr, reduce="mean")
+            return _safe_segment_csr_mean(feat, indptr)
         if self.pooling == "max":
             return torch_scatter.segment_csr(feat, indptr, reduce="max")
         return self.attn_pool(feat, offset)
@@ -809,14 +871,14 @@ class DefaultClassifier(nn.Module, LearnedMaskedFeatMixin):
             )
         cls_logits = self.cls_head(feat)
         if self.training:
-            loss = self.criteria(cls_logits, input_dict["category"])
+            loss = self.criteria(cls_logits.float(), input_dict["category"])
             return_dict = dict(loss=loss)
             with torch.no_grad():
                 # Expose predictions for epoch-level confusion accumulation in hooks.
                 return_dict["pred"] = cls_logits.argmax(dim=1)
             return return_dict
         elif "category" in input_dict.keys():
-            loss = self.criteria(cls_logits, input_dict["category"])
+            loss = self.criteria(cls_logits.float(), input_dict["category"])
             return dict(loss=loss, cls_logits=cls_logits)
         else:
             return dict(cls_logits=cls_logits)

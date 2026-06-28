@@ -814,6 +814,14 @@ class MultiTaskTester(TesterBase):
         ]
 
     @staticmethod
+    def _classification_task_names(task_configs):
+        return [
+            k
+            for k, task_config in task_configs.items()
+            if task_config.get("task_type") == "classification"
+        ]
+
+    @staticmethod
     def _apply_inverse_origin_np(pred_np, target_np, scene_extra, task_name):
         origin_key = MultiTaskTester._task_origin_target_key(task_name)
         if "inverse" not in scene_extra or origin_key not in scene_extra:
@@ -853,6 +861,7 @@ class MultiTaskTester(TesterBase):
         main_task = self._main_task_name(task_configs)
         semantic_tasks = self._semantic_task_names(task_configs)
         regression_tasks = self._regression_task_names(task_configs)
+        classification_tasks = self._classification_task_names(task_configs)
 
         self.model.eval()
 
@@ -865,6 +874,7 @@ class MultiTaskTester(TesterBase):
         }
 
         running_iou = {t: AverageMeter() for t in semantic_tasks}
+        running_cls_acc = {t: AverageMeter() for t in classification_tasks}
 
         record = {}
         n_batches = len(self.test_loader)
@@ -884,6 +894,8 @@ class MultiTaskTester(TesterBase):
             batch_sem_cache_paths = []
             batch_reg_cache_paths = []
             batch_all_cached = []
+            batch_cls_logits_sum = []
+            batch_cls_logits_cnt = []
             
             for b_idx, data_dict in enumerate(batch):
                 data_name = data_dict.pop("name")
@@ -936,11 +948,20 @@ class MultiTaskTester(TesterBase):
                 batch_reg_cnt.append({
                     t: torch.zeros((n_ref,), device="cuda") for t in regression_tasks
                 })
+                batch_cls_logits_sum.append({
+                    t: torch.zeros(
+                        int(task_configs[t]["num_classes"]),
+                        device="cuda",
+                    )
+                    for t in classification_tasks
+                })
+                batch_cls_logits_cnt.append({t: 0 for t in classification_tasks})
 
             # Check if we need to run the model at all
             if all(batch_all_cached):
                 batch_pred_cls_np = []
                 batch_pred_reg_np = []
+                batch_pred_scene_cls_np = []
                 for b_idx in range(len(batch)):
                     pred_cls_np = {}
                     pred_reg_np = {}
@@ -950,6 +971,7 @@ class MultiTaskTester(TesterBase):
                         pred_reg_np[t] = np.load(batch_reg_cache_paths[b_idx][t])
                     batch_pred_cls_np.append(pred_cls_np)
                     batch_pred_reg_np.append(pred_reg_np)
+                    batch_pred_scene_cls_np.append({})
             else:
                 # Extract the single fragment from each scene
                 fragments = [d.pop("fragment_list")[0] for d in batch]
@@ -965,9 +987,18 @@ class MultiTaskTester(TesterBase):
                     output_dict = self.model(input_dict)
                     logits_by_task = output_dict.get("seg_logits_by_task") or {}
                     reg_pred_by_task = output_dict.get("reg_pred_by_task") or {}
+                    cls_logits_by_task = output_dict.get("cls_logits_by_task") or {}
 
                     if self.cfg.empty_cache:
                         torch.cuda.empty_cache()
+
+                    for task_name in classification_tasks:
+                        if task_name not in cls_logits_by_task:
+                            continue
+                        logits = cls_logits_by_task[task_name]
+                        for b_idx in range(logits.shape[0]):
+                            batch_cls_logits_sum[b_idx][task_name] += logits[b_idx]
+                            batch_cls_logits_cnt[b_idx][task_name] += 1
 
                     for task_name in semantic_tasks:
                         if task_name not in logits_by_task:
@@ -1016,6 +1047,7 @@ class MultiTaskTester(TesterBase):
 
                 batch_pred_cls_np = []
                 batch_pred_reg_np = []
+                batch_pred_scene_cls_np = []
                 for b_idx in range(len(batch)):
                     pred_cls_np = {}
                     pred_reg_np = {}
@@ -1051,7 +1083,18 @@ class MultiTaskTester(TesterBase):
                         
                     batch_pred_cls_np.append(pred_cls_np)
                     batch_pred_reg_np.append(pred_reg_np)
-
+                    scene_cls_np = {}
+                    for task_name in classification_tasks:
+                        if task_name not in batch_targets[b_idx]:
+                            continue
+                        cnt = batch_cls_logits_cnt[b_idx][task_name]
+                        if cnt > 0:
+                            avg_logits = (
+                                batch_cls_logits_sum[b_idx][task_name] / float(cnt)
+                            )
+                            scene_cls_np[task_name] = int(avg_logits.argmax().item())
+                    batch_pred_scene_cls_np.append(scene_cls_np)
+                        
             # Compute metrics for each scene in the batch
             for b_idx in range(len(batch)):
                 data_name = batch_data_names[b_idx]
@@ -1091,6 +1134,26 @@ class MultiTaskTester(TesterBase):
                     iou_class = intersection / (union + 1e-10)
                     scene_m_iou = np.mean(iou_class[mask]) if mask.any() else 0.0
                     running_iou[task_name].update(scene_m_iou)
+
+                pred_scene_cls_np = batch_pred_scene_cls_np[b_idx]
+                for task_name in classification_tasks:
+                    if task_name not in targets_by_task:
+                        continue
+                    if task_name not in pred_scene_cls_np:
+                        continue
+                    pred_np = np.asarray([pred_scene_cls_np[task_name]], dtype=np.int64)
+                    tgt_np = np.asarray(targets_by_task[task_name]).reshape(-1)
+                    tc = task_configs[task_name]
+                    intersection, union, target_hist = intersection_and_union(
+                        pred_np,
+                        tgt_np,
+                        int(tc["num_classes"]),
+                        int(tc["ignore_index"]),
+                    )
+                    mask = union != 0
+                    iou_class = intersection / (union + 1e-10)
+                    scene_m_iou = np.mean(iou_class[mask]) if mask.any() else 0.0
+                    running_cls_acc[task_name].update(scene_m_iou)
 
                 for task_name in regression_tasks:
                     if task_name not in targets_by_task:
