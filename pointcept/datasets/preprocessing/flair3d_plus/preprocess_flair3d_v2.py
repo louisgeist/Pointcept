@@ -20,6 +20,7 @@ is the single source of truth: one row per patch, and only rows with
 - natural_habitat.npy   (only when NATURAL_HABITAT=True; ``--natural_habitat_definition``)
 - land_use.npy          (only when LAND_USE=True; ``--land_use_definition``)
 - elevation.npy         (only when DEM_ELEV=True in the manifest)
+- climatic_domain.npy   (by default when ``--natural_habitat_definition default``)
 - meta.json      (date_gap_days, label_definitions)
 
 Required manifest columns (extra columns are ignored):
@@ -98,6 +99,9 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 if _THIS_DIR not in sys.path:
     sys.path.insert(0, _THIS_DIR)
 
+from climatic_domain_tile_labels import (  # noqa: E402
+    run_climatic_domain_label_pass,
+)
 from flair3d_label_remap import (  # noqa: E402
     DEFAULT_LABEL_DEFINITION_NAMES,
     PreprocessLabelDefinitions,
@@ -919,6 +923,17 @@ def main_process():
             "By default the script resumes by skipping already-processed scenes."
         ),
     )
+    parser.add_argument(
+        "--write_climatic_domain_category",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "After preprocessing, assign per-subtile climatic_domain.npy labels "
+            "by aggregating natural_habitat at 1 km² tile level (pure domain only). "
+            "Requires natural_habitat rasters and --natural_habitat_definition default. "
+            "Skipped with a warning when natural_habitat is not stored as default."
+        ),
+    )
     for task_key in ("segment", "forest", "land_use", "natural_habitat"):
         parser.add_argument(
             f"--{task_key}_definition",
@@ -1092,6 +1107,26 @@ def main_process():
         len(missing_modalities),
         len(failed_tasks),
     )
+
+    if args.write_climatic_domain_category:
+        if args.natural_habitat_definition != "default":
+            logger.warning(
+                "Skipping climatic domain label pass: requires "
+                "--natural_habitat_definition default (stored ids 0-43), got '%s'. "
+                "Use --no-write-climatic-domain-category to silence this warning.",
+                args.natural_habitat_definition,
+            )
+        else:
+            if not any(t.has_natural_habitat for t in tasks):
+                logger.warning(
+                    "No manifest rows have NATURAL_HABITAT=True; climatic domain labels "
+                    "will be -1 for all subtiles with coord.npy."
+                )
+            logger.info(
+                "Running climatic domain label pass on %d manifest task(s)...", len(tasks)
+            )
+            run_climatic_domain_label_pass(args.output_root, tasks, logger=logger)
+
     logger.info("Detailed logs saved to: %s", log_file_path)
 
 
