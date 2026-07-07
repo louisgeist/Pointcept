@@ -18,6 +18,7 @@ from .builder import DATASETS
 from .transform import record_data_pipeline
 from .flair3d_config_utils import (
     FLAIR3D_CLASSIFICATION_TARGET_KEYS,
+    FLAIR3D_MULTILABEL_CLASSIFICATION_TARGET_KEYS,
     get_missing_target_fill_value,
 )
 from pointcept.utils.logger import get_root_logger
@@ -28,12 +29,17 @@ FLAIR3D_SPECIFIC_ASSETS = (
     "natural_habitat",
     "elevation",
     "climatic_domain",
+    "natural_habitat_multilabel",
 )
 FLAIR3D_SEMANTIC_TARGETS = ("segment", "forest", "land_use", "natural_habitat")
 FLAIR3D_CLASSIFICATION_TARGETS = FLAIR3D_CLASSIFICATION_TARGET_KEYS
+FLAIR3D_MULTILABEL_CLASSIFICATION_TARGETS = FLAIR3D_MULTILABEL_CLASSIFICATION_TARGET_KEYS
 FLAIR3D_REGRESSION_TARGETS = ("elevation",)
 FLAIR3D_ALLOWED_TARGETS = (
-    FLAIR3D_SEMANTIC_TARGETS + FLAIR3D_CLASSIFICATION_TARGETS + FLAIR3D_REGRESSION_TARGETS
+    FLAIR3D_SEMANTIC_TARGETS
+    + FLAIR3D_CLASSIFICATION_TARGETS
+    + FLAIR3D_MULTILABEL_CLASSIFICATION_TARGETS
+    + FLAIR3D_REGRESSION_TARGETS
 )
 
 
@@ -90,7 +96,13 @@ class Flair3DDataset(DefaultDataset):
     CORRUPTED_TILES = set()
     _MISSING_LIDARHD_TILES = None
 
-    FLAIR3D_OPTIONAL_TARGETS = ("land_use", "natural_habitat", "elevation", "climatic_domain")
+    FLAIR3D_OPTIONAL_TARGETS = (
+        "land_use",
+        "natural_habitat",
+        "elevation",
+        "climatic_domain",
+        "natural_habitat_multilabel",
+    )
     #TODO@Geist : elevation should be complete, but I noticed some missing part in D049
     # e.g.: UU-S1-15
 
@@ -286,6 +298,8 @@ class Flair3DDataset(DefaultDataset):
         fill_value = get_missing_target_fill_value(target_key)
         if target_key in FLAIR3D_CLASSIFICATION_TARGETS:
             return np.array([int(fill_value)], dtype=np.int64)
+        if target_key in FLAIR3D_MULTILABEL_CLASSIFICATION_TARGETS:
+            return np.asarray(fill_value, dtype=np.float32).reshape(1, -1)
         if target_key in FLAIR3D_SEMANTIC_TARGETS:
             return np.full(n, int(fill_value), dtype=np.int32)
         if target_key in FLAIR3D_REGRESSION_TARGETS:
@@ -295,6 +309,26 @@ class Flair3DDataset(DefaultDataset):
     def _load_classification_label(self, data_dict, target_key, scene):
         if target_key in data_dict:
             return np.array([int(np.asarray(data_dict[target_key]).reshape(-1)[0])], dtype=np.int64)
+        if self._is_optional_target(target_key):
+            return self._missing_target_array(target_key, 0)
+        raise FileNotFoundError(
+            f"target key '{target_key}' but {target_key}.npy missing under scene: {scene}"
+        )
+
+    def _load_multilabel_classification_label(self, data_dict, target_key, scene):
+        from pointcept.datasets.flair3d_config_utils import (
+            get_multilabel_classification_config,
+        )
+
+        expected = int(get_multilabel_classification_config(target_key)["num_classes"])
+        if target_key in data_dict:
+            vector = np.asarray(data_dict[target_key], dtype=np.float32).reshape(-1)
+            if vector.shape[0] != expected:
+                raise ValueError(
+                    f"{target_key} length {vector.shape[0]} != expected {expected} "
+                    f"under scene: {scene}"
+                )
+            return vector.astype(np.float32).reshape(1, -1)
         if self._is_optional_target(target_key):
             return self._missing_target_array(target_key, 0)
         raise FileNotFoundError(
@@ -327,10 +361,17 @@ class Flair3DDataset(DefaultDataset):
         pointwise_keys = [
             tk
             for tk in self.target_keys
-            if tk not in FLAIR3D_CLASSIFICATION_TARGETS and tk != "elevation"
+            if tk not in FLAIR3D_CLASSIFICATION_TARGETS
+            and tk not in FLAIR3D_MULTILABEL_CLASSIFICATION_TARGETS
+            and tk != "elevation"
         ]
         classification_keys = [
             tk for tk in self.target_keys if tk in FLAIR3D_CLASSIFICATION_TARGETS
+        ]
+        multilabel_classification_keys = [
+            tk
+            for tk in self.target_keys
+            if tk in FLAIR3D_MULTILABEL_CLASSIFICATION_TARGETS
         ]
         semantic_labels = {}
         for tk in pointwise_keys:
@@ -357,6 +398,11 @@ class Flair3DDataset(DefaultDataset):
 
         for tk in classification_keys:
             data_dict[tk] = self._load_classification_label(data_dict, tk, scene)
+
+        for tk in multilabel_classification_keys:
+            data_dict[tk] = self._load_multilabel_classification_label(
+                data_dict, tk, scene
+            )
 
         if "elevation" in self.target_keys:
             if "elevation" not in data_dict:

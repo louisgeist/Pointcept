@@ -26,6 +26,13 @@ from pointcept.utils.epoch_timing import (
     finalize_epoch_wall_timing,
 )
 from pointcept.utils.progress import EvaluationProgressBar
+from pointcept.utils.multilabel_metrics import (
+    MultilabelStats,
+    accumulate_multilabel_stats,
+    compute_multilabel_metrics,
+    multilabel_stats_from_tensors,
+    multilabel_stats_to_tensors,
+)
 
 from .default import HookBase
 from .builder import HOOKS
@@ -636,6 +643,104 @@ class MultiTaskEvaluator(HookBase):
             if task_config.get("task_type") == "classification"
         ]
 
+    @staticmethod
+    def _multilabel_classification_task_names(task_configs):
+        return [
+            k
+            for k, task_config in task_configs.items()
+            if task_config.get("task_type") == "multilabel_classification"
+        ]
+
+    @staticmethod
+    def _sync_multilabel_stats(stats: MultilabelStats):
+        if comm.get_world_size() <= 1:
+            return stats
+        tp, fp, fn, hamming, subset = multilabel_stats_to_tensors(stats)
+        flat = np.concatenate(
+            [tp.reshape(-1), fp.reshape(-1), fn.reshape(-1), hamming, subset]
+        )
+        buf = torch.tensor(flat, dtype=torch.float64, device="cuda")
+        dist.all_reduce(buf)
+        flat = buf.cpu().numpy()
+        c = tp.size
+        tp = flat[0:c]
+        fp = flat[c : 2 * c]
+        fn = flat[2 * c : 3 * c]
+        hamming = flat[3 * c : 3 * c + 2]
+        subset = flat[3 * c + 2 : 3 * c + 4]
+        return multilabel_stats_from_tensors(tp, fp, fn, hamming, subset)
+
+    def _log_multilabel_task_metrics(
+        self,
+        task_name,
+        metrics,
+        current_epoch,
+        wandb_log,
+    ):
+        prefix = f"val/{task_name}"
+        self.trainer.logger.info(
+            "[task={}] Val multilabel: macro_f1/micro_f1/subset_acc/hamming_acc "
+            "{:.4f}/{:.4f}/{:.4f}/{:.4f}.".format(
+                task_name,
+                metrics["macro_f1"],
+                metrics["micro_f1"],
+                metrics["subset_accuracy"],
+                metrics["hamming_accuracy"],
+            )
+        )
+        if self.trainer.writer is not None:
+            self.trainer.writer.add_scalar(
+                f"{prefix}/macro_f1", metrics["macro_f1"], current_epoch
+            )
+            self.trainer.writer.add_scalar(
+                f"{prefix}/micro_f1", metrics["micro_f1"], current_epoch
+            )
+            self.trainer.writer.add_scalar(
+                f"{prefix}/subset_acc", metrics["subset_accuracy"], current_epoch
+            )
+            self.trainer.writer.add_scalar(
+                f"{prefix}/hamming_acc", metrics["hamming_accuracy"], current_epoch
+            )
+        if wandb_log is not None:
+            wandb_log[f"{prefix}/macro_f1"] = float(metrics["macro_f1"])
+            wandb_log[f"{prefix}/micro_f1"] = float(metrics["micro_f1"])
+            wandb_log[f"{prefix}/subset_acc"] = float(metrics["subset_accuracy"])
+            wandb_log[f"{prefix}/hamming_acc"] = float(metrics["hamming_accuracy"])
+        for label_name, label_metrics in metrics["per_label"].items():
+            slug = "".join(
+                c if (c.isalnum() or c in "._-") else "_"
+                for c in str(label_name).strip().replace(" ", "_")
+            )
+            self.trainer.logger.info(
+                "[task={}] Label {}: precision/recall/f1 {:.4f}/{:.4f}/{:.4f}".format(
+                    task_name,
+                    label_name,
+                    label_metrics["precision"],
+                    label_metrics["recall"],
+                    label_metrics["f1"],
+                )
+            )
+            if self.trainer.writer is not None:
+                self.trainer.writer.add_scalar(
+                    f"{prefix}/{slug}/f1", label_metrics["f1"], current_epoch
+                )
+                self.trainer.writer.add_scalar(
+                    f"{prefix}/{slug}/precision",
+                    label_metrics["precision"],
+                    current_epoch,
+                )
+                self.trainer.writer.add_scalar(
+                    f"{prefix}/{slug}/recall",
+                    label_metrics["recall"],
+                    current_epoch,
+                )
+            if wandb_log is not None:
+                wandb_log[f"{prefix}/{slug}/f1"] = float(label_metrics["f1"])
+                wandb_log[f"{prefix}/{slug}/precision"] = float(
+                    label_metrics["precision"]
+                )
+                wandb_log[f"{prefix}/{slug}/recall"] = float(label_metrics["recall"])
+
     def eval(self):
         val_start = begin_val_epoch_timing()
         self.trainer.logger.info(">>>>>>>>>>>>>>>> Start Evaluation >>>>>>>>>>>>>>>>")
@@ -645,11 +750,13 @@ class MultiTaskEvaluator(HookBase):
         semantic_tasks = self._semantic_task_names(task_configs)
         regression_tasks = self._regression_task_names(task_configs)
         classification_tasks = self._classification_task_names(task_configs)
+        multilabel_tasks = self._multilabel_classification_task_names(task_configs)
 
         reg_sums = {
             t: {"mae": 0.0, "mse": 0.0, "count": 0.0} for t in regression_tasks
         }
         target_scales = self._cfg_get(self.trainer.cfg.data, "target_scales", {}) or {}
+        multilabel_stats = {t: MultilabelStats() for t in multilabel_tasks}
 
         loader = self.trainer.val_loader
         n_batches = len(loader)
@@ -735,6 +842,21 @@ class MultiTaskEvaluator(HookBase):
                     )
                     self.trainer.storage.put_scalar(f"val_union/{task_name}", union)
                     self.trainer.storage.put_scalar(f"val_target/{task_name}", target)
+
+                for task_name in multilabel_tasks:
+                    task_config = task_configs[task_name]
+                    if task_name not in input_dict or task_name not in cls_logits_by_task:
+                        continue
+                    threshold = float(task_config.get("threshold", 0.5))
+                    logits = cls_logits_by_task[task_name]
+                    pred = (torch.sigmoid(logits) >= threshold).cpu().numpy()
+                    target_tensor = input_dict[task_name].float()
+                    if target_tensor.ndim == 1:
+                        target_tensor = target_tensor.unsqueeze(0)
+                    target = target_tensor.cpu().numpy()
+                    accumulate_multilabel_stats(
+                        pred, target, multilabel_stats[task_name]
+                    )
 
                 self.trainer.storage.put_scalar("val_loss", loss.item())
                 loss_by_task = output_dict.get("loss_by_task")
@@ -842,6 +964,13 @@ class MultiTaskEvaluator(HookBase):
                     )
                 )
 
+        multilabel_metrics_by_task = {}
+        for task_name in multilabel_tasks:
+            stats = self._sync_multilabel_stats(multilabel_stats[task_name])
+            multilabel_metrics_by_task[task_name] = compute_multilabel_metrics(
+                stats, task_configs[task_name]["names"]
+            )
+
         current_epoch = self.trainer.epoch + 1
         main_m_iou = per_task_metrics[main_task]["m_iou"]
         m_iou_best = max(self.trainer.best_metric_value, main_m_iou)
@@ -890,6 +1019,30 @@ class MultiTaskEvaluator(HookBase):
             )
             if wandb_log is not None:
                 wandb.log(wandb_log)
+
+            for task_name, metrics in multilabel_metrics_by_task.items():
+                self._log_multilabel_task_metrics(
+                    task_name, metrics, current_epoch, wandb_log=None
+                )
+            if self.trainer.cfg.enable_wandb and multilabel_metrics_by_task:
+                ml_wandb = {"Epoch": current_epoch}
+                for task_name, metrics in multilabel_metrics_by_task.items():
+                    prefix = f"val/{task_name}"
+                    ml_wandb[f"{prefix}/macro_f1"] = float(metrics["macro_f1"])
+                    ml_wandb[f"{prefix}/micro_f1"] = float(metrics["micro_f1"])
+                    ml_wandb[f"{prefix}/subset_acc"] = float(
+                        metrics["subset_accuracy"]
+                    )
+                    ml_wandb[f"{prefix}/hamming_acc"] = float(
+                        metrics["hamming_accuracy"]
+                    )
+                    for label_name, label_metrics in metrics["per_label"].items():
+                        slug = "".join(
+                            c if (c.isalnum() or c in "._-") else "_"
+                            for c in str(label_name).strip().replace(" ", "_")
+                        )
+                        ml_wandb[f"{prefix}/{slug}/f1"] = float(label_metrics["f1"])
+                wandb.log(ml_wandb, step=wandb.run.step)
 
             # Per-class metrics
             if self.write_cls_iou:

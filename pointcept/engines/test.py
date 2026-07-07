@@ -36,6 +36,13 @@ from pointcept.utils.regression import (
     denorm_regression_prediction,
     get_regression_target_scale,
 )
+from pointcept.utils.multilabel_metrics import (
+    MultilabelStats,
+    accumulate_multilabel_stats,
+    compute_multilabel_metrics,
+    multilabel_stats_from_tensors,
+    multilabel_stats_to_tensors,
+)
 
 try:
     import pointops
@@ -822,6 +829,33 @@ class MultiTaskTester(TesterBase):
         ]
 
     @staticmethod
+    def _multilabel_classification_task_names(task_configs):
+        return [
+            k
+            for k, task_config in task_configs.items()
+            if task_config.get("task_type") == "multilabel_classification"
+        ]
+
+    @staticmethod
+    def _sync_multilabel_stats(stats: MultilabelStats):
+        if comm.get_world_size() <= 1:
+            return stats
+        tp, fp, fn, hamming, subset = multilabel_stats_to_tensors(stats)
+        flat = np.concatenate(
+            [tp.reshape(-1), fp.reshape(-1), fn.reshape(-1), hamming, subset]
+        )
+        buf = torch.tensor(flat, dtype=torch.float64, device="cuda")
+        dist.all_reduce(buf)
+        flat = buf.cpu().numpy()
+        c = tp.size
+        tp = flat[0:c]
+        fp = flat[c : 2 * c]
+        fn = flat[2 * c : 3 * c]
+        hamming = flat[3 * c : 3 * c + 2]
+        subset = flat[3 * c + 2 : 3 * c + 4]
+        return multilabel_stats_from_tensors(tp, fp, fn, hamming, subset)
+
+    @staticmethod
     def _apply_inverse_origin_np(pred_np, target_np, scene_extra, task_name):
         origin_key = MultiTaskTester._task_origin_target_key(task_name)
         if "inverse" not in scene_extra or origin_key not in scene_extra:
@@ -862,6 +896,8 @@ class MultiTaskTester(TesterBase):
         semantic_tasks = self._semantic_task_names(task_configs)
         regression_tasks = self._regression_task_names(task_configs)
         classification_tasks = self._classification_task_names(task_configs)
+        multilabel_tasks = self._multilabel_classification_task_names(task_configs)
+        scene_level_cls_tasks = classification_tasks + multilabel_tasks
 
         self.model.eval()
 
@@ -872,6 +908,7 @@ class MultiTaskTester(TesterBase):
         reg_sums_global = {
             t: {"mae": 0.0, "mse": 0.0, "count": 0.0} for t in regression_tasks
         }
+        multilabel_stats_global = {t: MultilabelStats() for t in multilabel_tasks}
 
         running_iou = {t: AverageMeter() for t in semantic_tasks}
         running_cls_acc = {t: AverageMeter() for t in classification_tasks}
@@ -953,12 +990,13 @@ class MultiTaskTester(TesterBase):
                         int(task_configs[t]["num_classes"]),
                         device="cuda",
                     )
-                    for t in classification_tasks
+                    for t in scene_level_cls_tasks
                 })
-                batch_cls_logits_cnt.append({t: 0 for t in classification_tasks})
+                batch_cls_logits_cnt.append({t: 0 for t in scene_level_cls_tasks})
 
             # Check if we need to run the model at all
-            if all(batch_all_cached):
+            # Scene-level cls/multilabel preds are not cached; always run the model when needed.
+            if all(batch_all_cached) and not scene_level_cls_tasks:
                 batch_pred_cls_np = []
                 batch_pred_reg_np = []
                 batch_pred_scene_cls_np = []
@@ -992,7 +1030,7 @@ class MultiTaskTester(TesterBase):
                     if self.cfg.empty_cache:
                         torch.cuda.empty_cache()
 
-                    for task_name in classification_tasks:
+                    for task_name in scene_level_cls_tasks:
                         if task_name not in cls_logits_by_task:
                             continue
                         logits = cls_logits_by_task[task_name]
@@ -1093,6 +1131,23 @@ class MultiTaskTester(TesterBase):
                                 batch_cls_logits_sum[b_idx][task_name] / float(cnt)
                             )
                             scene_cls_np[task_name] = int(avg_logits.argmax().item())
+                    for task_name in multilabel_tasks:
+                        if task_name not in batch_targets[b_idx]:
+                            continue
+                        cnt = batch_cls_logits_cnt[b_idx][task_name]
+                        if cnt > 0:
+                            avg_logits = (
+                                batch_cls_logits_sum[b_idx][task_name] / float(cnt)
+                            )
+                            threshold = float(
+                                task_configs[task_name].get("threshold", 0.5)
+                            )
+                            scene_cls_np[task_name] = (
+                                (torch.sigmoid(avg_logits) >= threshold)
+                                .cpu()
+                                .numpy()
+                                .astype(np.int64)
+                            )
                     batch_pred_scene_cls_np.append(scene_cls_np)
                         
             # Compute metrics for each scene in the batch
@@ -1155,6 +1210,21 @@ class MultiTaskTester(TesterBase):
                     scene_m_iou = np.mean(iou_class[mask]) if mask.any() else 0.0
                     running_cls_acc[task_name].update(scene_m_iou)
 
+                for task_name in multilabel_tasks:
+                    if task_name not in targets_by_task:
+                        continue
+                    if task_name not in pred_scene_cls_np:
+                        continue
+                    pred_np = np.asarray(
+                        pred_scene_cls_np[task_name], dtype=np.int64
+                    ).reshape(1, -1)
+                    tgt_np = np.asarray(
+                        targets_by_task[task_name], dtype=np.int64
+                    ).reshape(1, -1)
+                    accumulate_multilabel_stats(
+                        pred_np, tgt_np, multilabel_stats_global[task_name]
+                    )
+
                 for task_name in regression_tasks:
                     if task_name not in targets_by_task:
                         logger.warning(
@@ -1211,6 +1281,11 @@ class MultiTaskTester(TesterBase):
                 reg_sums_global[task_name]["mae"] = flat[base]
                 reg_sums_global[task_name]["mse"] = flat[base + 1]
                 reg_sums_global[task_name]["count"] = flat[base + 2]
+
+        for task_name in multilabel_tasks:
+            multilabel_stats_global[task_name] = self._sync_multilabel_stats(
+                multilabel_stats_global[task_name]
+            )
 
         record_sync = comm.gather(record, dst=0)
 
@@ -1315,6 +1390,45 @@ class MultiTaskTester(TesterBase):
                 )
                 log_dict[f"test/reg/{task_name}/mae"] = float(mae)
                 log_dict[f"test/reg/{task_name}/rmse"] = float(rmse)
+
+            for task_name in multilabel_tasks:
+                stats = multilabel_stats_global[task_name]
+                if stats.hamming_total <= 0:
+                    logger.warning(
+                        "[task=%s] Test multilabel: no samples accumulated; skipping metrics.",
+                        task_name,
+                    )
+                    continue
+                metrics = compute_multilabel_metrics(
+                    stats,
+                    task_configs[task_name]["names"],
+                )
+                logger.info(
+                    "[task={}] Test multilabel: macro_f1/micro_f1/subset_acc/hamming_acc "
+                    "{:.4f}/{:.4f}/{:.4f}/{:.4f}.".format(
+                        task_name,
+                        metrics["macro_f1"],
+                        metrics["micro_f1"],
+                        metrics["subset_accuracy"],
+                        metrics["hamming_accuracy"],
+                    )
+                )
+                log_dict[f"test/{task_name}/macro_f1"] = float(metrics["macro_f1"])
+                log_dict[f"test/{task_name}/micro_f1"] = float(metrics["micro_f1"])
+                log_dict[f"test/{task_name}/subset_acc"] = float(
+                    metrics["subset_accuracy"]
+                )
+                log_dict[f"test/{task_name}/hamming_acc"] = float(
+                    metrics["hamming_accuracy"]
+                )
+                for label_name, label_metrics in metrics["per_label"].items():
+                    slug = "".join(
+                        c if (c.isalnum() or c in "._-") else "_"
+                        for c in str(label_name).strip().replace(" ", "_")
+                    )
+                    log_dict[f"test/{task_name}/{slug}/f1"] = float(
+                        label_metrics["f1"]
+                    )
 
             log_test_f1 = getattr(self.cfg, "log_test_f1", False)
             if log_test_f1:

@@ -6,12 +6,26 @@ For each semantic task, names[i] is the display name for processed label id i.
 num_classes is the number of classes the model trains on (logit dimension); ignore_index labels
 are excluded from the loss. num_raw_classes (when present) is the number of distinct ids in
 source rasters before preprocessing remap (max raw id + 1).
+
+
+This file is used to configure, for each task/target:
+ - Number of classes
+ - Ignore index
+ - Names
+ - Loss
 """
 
 from __future__ import annotations
 
 from copy import deepcopy
 from typing import Any, Dict, Optional, Tuple
+
+import numpy as np
+
+from pointcept.datasets.preprocessing.flair3d_plus.natural_habitat_multilabel_tile_labels import (
+    MULTILABEL_CLASS_NAMES,
+    NUM_MULTILABEL_CLASSES,
+)
 
 # Semantic targets: one entry per target_key used by Flair3DDataset / configs.
 FLAIR3D_SEMANTIC_TASKS: Dict[str, Dict[str, Any]] = {
@@ -134,8 +148,21 @@ FLAIR3D_CLASSIFICATION_TASKS: Dict[str, Dict[str, Any]] = {
     },
 }
 
+FLAIR3D_MULTILABEL_CLASSIFICATION_TASKS: Dict[str, Dict[str, Any]] = {
+    "natural_habitat_multilabel": {
+        "task_type": "multilabel_classification",
+        "num_classes": NUM_MULTILABEL_CLASSES,
+        "names": list(MULTILABEL_CLASS_NAMES),
+        "pooling": "mean",
+        "threshold": 0.5,
+    },
+}
+
 FLAIR3D_SEMANTIC_TARGET_KEYS: Tuple[str, ...] = tuple(FLAIR3D_SEMANTIC_TASKS.keys())
 FLAIR3D_CLASSIFICATION_TARGET_KEYS: Tuple[str, ...] = tuple(FLAIR3D_CLASSIFICATION_TASKS.keys())
+FLAIR3D_MULTILABEL_CLASSIFICATION_TARGET_KEYS: Tuple[str, ...] = tuple(
+    FLAIR3D_MULTILABEL_CLASSIFICATION_TASKS.keys()
+)
 
 # Keys passed to GridSample / index_valid_keys (superset of all Flair3D+ targets).
 FLAIR3D_MULTITASK_INDEX_VALID_KEYS: Tuple[str, ...] = (
@@ -222,6 +249,16 @@ def get_classification_config(target_key: str) -> Dict[str, Any]:
     return deepcopy(FLAIR3D_CLASSIFICATION_TASKS[target_key])
 
 
+def get_multilabel_classification_config(target_key: str) -> Dict[str, Any]:
+    if target_key not in FLAIR3D_MULTILABEL_CLASSIFICATION_TASKS:
+        keys = ", ".join(sorted(FLAIR3D_MULTILABEL_CLASSIFICATION_TASKS.keys()))
+        raise KeyError(
+            f"Unknown multilabel classification target_key '{target_key}'. "
+            f"Expected one of: {keys}"
+        )
+    return deepcopy(FLAIR3D_MULTILABEL_CLASSIFICATION_TASKS[target_key])
+
+
 def get_elevation_config() -> Dict[str, Any]:
     return deepcopy(FLAIR3D_ELEVATION)
 
@@ -248,6 +285,7 @@ def _validate_target_keys(target_keys: Tuple[str, ...]) -> None:
     known = (
         set(FLAIR3D_SEMANTIC_TASKS.keys())
         | set(FLAIR3D_CLASSIFICATION_TASKS.keys())
+        | set(FLAIR3D_MULTILABEL_CLASSIFICATION_TASKS.keys())
         | {"elevation"}
     )
     for key in target_keys:
@@ -258,6 +296,16 @@ def _validate_target_keys(target_keys: Tuple[str, ...]) -> None:
 
 def _is_classification_target(target_key: str) -> bool:
     return target_key in FLAIR3D_CLASSIFICATION_TASKS
+
+
+def _is_multilabel_classification_target(target_key: str) -> bool:
+    return target_key in FLAIR3D_MULTILABEL_CLASSIFICATION_TASKS
+
+
+def _is_scene_level_target(target_key: str) -> bool:
+    return _is_classification_target(target_key) or _is_multilabel_classification_target(
+        target_key
+    )
 
 
 def init_multitask_collect_keys(
@@ -275,7 +323,7 @@ def init_multitask_collect_keys(
     train_keys = base + target_keys
     val_target_keys: Tuple[str, ...] = ()
     for key in target_keys:
-        if _is_classification_target(key):
+        if _is_scene_level_target(key):
             val_target_keys += (key,)
         else:
             val_target_keys += (key, f"origin_{key}")
@@ -304,10 +352,12 @@ def init_task_configs(
             out[task_name] = get_multitask_regression_task_config_elevation()
         elif task_name in FLAIR3D_CLASSIFICATION_TASKS:
             out[task_name] = get_classification_config(task_name)
+        elif task_name in FLAIR3D_MULTILABEL_CLASSIFICATION_TASKS:
+            out[task_name] = get_multilabel_classification_config(task_name)
         else:
             raise KeyError(
                 f"Unknown task_name '{task_name}'. Expected one of: "
-                f"{sorted((*FLAIR3D_SEMANTIC_TASKS.keys(), *FLAIR3D_CLASSIFICATION_TASKS.keys(), 'elevation'))}"
+                f"{sorted((*FLAIR3D_SEMANTIC_TASKS.keys(), *FLAIR3D_CLASSIFICATION_TASKS.keys(), *FLAIR3D_MULTILABEL_CLASSIFICATION_TASKS.keys(), 'elevation'))}"
             )
     return out
 
@@ -321,10 +371,25 @@ def get_missing_target_fill_value(target_key: str) -> Any:
         return int(get_semantic_config(target_key)["ignore_index"])
     if target_key in FLAIR3D_CLASSIFICATION_TASKS:
         return int(get_classification_config(target_key)["ignore_index"])
+    if target_key in FLAIR3D_MULTILABEL_CLASSIFICATION_TASKS:
+        return np.zeros(
+            (
+                1,
+                int(get_multilabel_classification_config(target_key)["num_classes"]),
+            ),
+            dtype=np.float32,
+        )
     if target_key == "elevation":
         return float("nan")
     keys = ", ".join(
-        sorted((*FLAIR3D_SEMANTIC_TASKS.keys(), *FLAIR3D_CLASSIFICATION_TASKS.keys(), "elevation"))
+        sorted(
+            (
+                *FLAIR3D_SEMANTIC_TASKS.keys(),
+                *FLAIR3D_CLASSIFICATION_TASKS.keys(),
+                *FLAIR3D_MULTILABEL_CLASSIFICATION_TASKS.keys(),
+                "elevation",
+            )
+        )
     )
     raise KeyError(f"Unknown target_key '{target_key}'. Expected one of: {keys}")
 
@@ -354,6 +419,13 @@ def init_task_criteria(task_configs: Dict[str, Any]) -> Dict[str, Any]:
                     type="CrossEntropyLoss",
                     loss_weight=1.0,
                     ignore_index=task_config["ignore_index"],
+                ),
+            ]
+        elif task_type == "multilabel_classification":
+            task_criteria[task_name] = [
+                dict(
+                    type="BCEWithLogitsLoss",
+                    loss_weight=1.0,
                 ),
             ]
         elif task_type == "regression":

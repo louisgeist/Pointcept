@@ -44,8 +44,10 @@ sh scripts/train.sh -g 1 -d s3dis -c ptv3_nonormal -n ptv3_nonormal
 #### Preprocessing
 
 Label remaps are defined in ``pointcept/datasets/preprocessing/flair3d_plus/flair3d_label_remap.py``.
-Use ``--{task}_definition`` flags to override defaults (land_use=filtered,
-natural_habitat=by_habitat_x_domain, segment/forest=default). Re-run with ``--force`` when
+Use ``--{task}_definition`` flags to override defaults (segment=v18, land_use=default,
+natural_habitat=by_habitat_x_domain, forest=default). ``climatic_domain.npy`` is written
+by default when ``--natural_habitat_definition default``; pass
+``--no-write-climatic-domain-category`` to skip. Re-run with ``--force`` when
 definitions change.
 
 **On-the-fly label remapping (e.g. natural_habitat `by_moisture`):** preprocess once with
@@ -100,6 +102,84 @@ python scripts/analyze_flair3d_tile_climatic_domain.py \
 
 Output: ``tile_domain_fractions.csv`` under ``--output_dir``.
 Requires NH preprocessed with ``--natural_habitat_definition default``.
+
+Analyze the exported CSV locally:
+
+```bash
+python scripts/analyze_flair3d_tile_domain_fractions_csv.py \
+  --input stats/flair3d/tile_climatic_domain/tile_domain_fractions.csv \
+  --output_dir stats/flair3d/tile_climatic_domain/analysis
+```
+
+Outputs: ``summary.json``, ``summary_1km.json``, classified CSVs, and bar plots
+(``subtile_*.png`` for subtiles, ``tile_1km_*.png`` for 1 km² tiles; percentages only).
+
+**Tile climatic-domain classification labels (`climatic_domain.npy`):** one scalar per subtile
+(0=Temperate, 1=Mediterranean, 2=Alpine, -1=mixed/void/missing), assigned at 1 km² granularity
+when exactly one climatic domain is present among NH points. Written automatically at the end of
+preprocessing when ``--natural_habitat_definition default`` (default-on; disable with
+``--no-write-climatic-domain-category``).
+
+If scene preprocessing finished but the climatic-domain pass failed with
+``ModuleNotFoundError: No module named 'pointcept'``, re-run the same preprocess command with
+``PYTHONPATH`` set to the repo root and **without** ``--force`` (existing scenes are skipped;
+only ``climatic_domain.npy`` is written):
+
+```bash
+export PYTHONPATH="$WORK/Pointcept:$PYTHONPATH"   # or export PYTHONPATH="$PWD" from repo root
+python pointcept/datasets/preprocessing/flair3d_plus/preprocess_flair3d_v2.py \
+  --ply_root /lustre/fsn1/projects/rech/unv/usi32yh/data_flair3d_build/flair3d_label_enhanced \
+  --dataset_root /lustre/fswork/projects/rech/unv/usi32yh/Pointcept/data/flair3d_plus/raw \
+  --output_root $WORK/Pointcept/data/flair3d_plus \
+  --split_manifest_csv data/flair3d_plus/raw/scene_split_manifest.csv \
+  --natural_habitat_definition default \
+  --num_workers 32
+```
+
+Or on an existing output root:
+
+```bash
+python scripts/assign_flair3d_climatic_domain_labels.py \
+  --output_root data/flair3d_plus \
+  --split_manifest_csv data/flair3d_plus/raw/scene_split_manifest.csv \
+  --splits train,val,test
+```
+
+**Per-subtile natural habitat multi-label (`natural_habitat_multilabel.npy`):** length-15 int8
+multi-hot per subtile (temperate, mediterranean, alpine, humid, mesic, dry, forest, open,
+acidic, basic, cultivated, built, road, mineral, aquatic). Each label is set when its point
+fraction is >= 1% of all subtile points (`coord.npy`). Computed **per subtile** (no 1 km²
+aggregation). Opt-in at preprocess time (`--write-natural-habitat-multilabel`); off by default.
+
+```bash
+python scripts/assign_flair3d_natural_habitat_multilabel.py \
+  --output_root data/flair3d_plus \
+  --split_manifest_csv data/flair3d_plus/raw/scene_split_manifest.csv \
+  --splits train,val,test \
+  --threshold 0.01
+```
+
+Requires NH preprocessed with ``--natural_habitat_definition default``.
+
+Train multi-task segment + forest + elevation + NH multilabel (LitePT):
+
+```bash
+sh scripts/train.sh -g 1 -d flair3d -c experiment/w101/8/nh_multilabel/litept-v1m0-flair3d_1 -n litept_nh_multilabel_mt
+```
+
+Val/test logs multi-label metrics: ``macro_f1``, ``micro_f1``, ``subset_acc``, ``hamming_acc``, per-label F1 under ``val/natural_habitat_multilabel/``.
+
+Train mono-task classification (LitePT):
+
+```bash
+sh scripts/train.sh -g 1 -d flair3d -c experiment/w101/5/climatic_domain_cls/litept-v1m0-flair3d_1 -n litept_climatic_domain_cls
+```
+
+Train multi-task natural_habitat + climatic_domain:
+
+```bash
+sh scripts/train.sh -g 1 -d flair3d -c experiment/w101/5/climatic_domain_cls/litept-v1m0-flair3d_2 -n litept_nh_climatic_domain
+```
 
 
 #### Train Flair3D

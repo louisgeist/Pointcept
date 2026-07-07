@@ -21,6 +21,7 @@ is the single source of truth: one row per patch, and only rows with
 - land_use.npy          (only when LAND_USE=True; ``--land_use_definition``)
 - elevation.npy         (only when DEM_ELEV=True in the manifest)
 - climatic_domain.npy   (by default when ``--natural_habitat_definition default``)
+- natural_habitat_multilabel.npy  (opt-in via ``--write-natural-habitat-multilabel``, default True)
 - meta.json      (date_gap_days, label_definitions)
 
 Required manifest columns (extra columns are ignored):
@@ -101,6 +102,9 @@ if _THIS_DIR not in sys.path:
 
 from climatic_domain_tile_labels import (  # noqa: E402
     run_climatic_domain_label_pass,
+)
+from natural_habitat_multilabel_tile_labels import (  # noqa: E402
+    run_natural_habitat_multilabel_label_pass,
 )
 from flair3d_label_remap import (  # noqa: E402
     DEFAULT_LABEL_DEFINITION_NAMES,
@@ -934,6 +938,16 @@ def main_process():
             "Skipped with a warning when natural_habitat is not stored as default."
         ),
     )
+    parser.add_argument(
+        "--write-natural-habitat-multilabel",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "After preprocessing, assign per-subtile natural_habitat_multilabel.npy "
+            "(15-d multi-hot from natural_habitat point fractions, default threshold 1%%). "
+            "Requires --natural_habitat_definition default. Off by default."
+        ),
+    )
     for task_key in ("segment", "forest", "land_use", "natural_habitat"):
         parser.add_argument(
             f"--{task_key}_definition",
@@ -1126,6 +1140,28 @@ def main_process():
                 "Running climatic domain label pass on %d manifest task(s)...", len(tasks)
             )
             run_climatic_domain_label_pass(args.output_root, tasks, logger=logger)
+
+    if args.write_natural_habitat_multilabel:
+        if args.natural_habitat_definition != "default":
+            logger.warning(
+                "Skipping natural habitat multilabel pass: requires "
+                "--natural_habitat_definition default (stored ids 0-43), got '%s'. "
+                "Use --no-write-natural-habitat-multilabel to silence this warning.",
+                args.natural_habitat_definition,
+            )
+        else:
+            if not any(t.has_natural_habitat for t in tasks):
+                logger.warning(
+                    "No manifest rows have NATURAL_HABITAT=True; multilabel vectors "
+                    "will not be written for subtiles without natural_habitat.npy."
+                )
+            logger.info(
+                "Running natural habitat multilabel pass on %d manifest task(s)...",
+                len(tasks),
+            )
+            run_natural_habitat_multilabel_label_pass(
+                args.output_root, tasks, logger=logger
+            )
 
     logger.info("Detailed logs saved to: %s", log_file_path)
 

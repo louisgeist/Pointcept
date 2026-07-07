@@ -300,7 +300,7 @@ class MultiTaskSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
     "V2" because it is the MultiTask version of the DefaultSegmentorV2.
 
     Each entry in the task_configs mapping must set "task_type" to "semantic",
-    "regression", or "classification".
+    "regression", "classification", or "multilabel_classification".
 
     - Semantic tasks read targets from input_dict[task_name] and write logits to
       seg_logits_by_task.
@@ -318,7 +318,9 @@ class MultiTaskSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
     - loss and loss_by_task when the corresponding targets are present in the batch.
     """
 
-    _TASK_TYPES = frozenset(("semantic", "regression", "classification"))
+    _TASK_TYPES = frozenset(
+        ("semantic", "regression", "classification", "multilabel_classification")
+    )
 
     def __init__(
         self,
@@ -374,11 +376,11 @@ class MultiTaskSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
                 self.seg_heads[task_name] = nn.Linear(backbone_out_channels, num_classes)
             elif task_type == "regression":
                 self.reg_heads[task_name] = nn.Linear(backbone_out_channels, 1)
-            else:
+            elif task_type in ("classification", "multilabel_classification"):
                 num_classes = int(task_config["num_classes"])
                 if num_classes <= 0:
                     raise ValueError(
-                        f"num_classes must be > 0 for classification task '{task_name}'."
+                        f"num_classes must be > 0 for task '{task_name}'."
                     )
                 pooling = str(task_config.get("pooling", "mean"))
                 if pooling not in _POOLING_MODES:
@@ -403,7 +405,7 @@ class MultiTaskSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
         if tt not in cls._TASK_TYPES:
             raise ValueError(
                 "Each task_configs entry must set task_type to 'semantic', "
-                "'regression', or 'classification' "
+                "'regression', 'classification', or 'multilabel_classification' "
                 f"(got {tt!r})."
             )
         return tt
@@ -416,6 +418,10 @@ class MultiTaskSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
         if pooling == "max":
             return torch_scatter.segment_csr(feat, indptr, reduce="max")
         return self.cls_attn_pools[task_name](feat, offset)
+
+    def _multilabel_pred_from_logits(self, logits, task_name):
+        threshold = float(self.task_configs[task_name].get("threshold", 0.5))
+        return (torch.sigmoid(logits) >= threshold).long()
 
     def _forward_backbone(self, input_dict):
         point = Point(input_dict)
@@ -487,6 +493,21 @@ class MultiTaskSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
                     task_loss = self.criteria_by_task[task_name](
                         logits[valid].float(), target[valid]
                     )
+            elif tt == "multilabel_classification":
+                if task_name not in cls_logits_by_task:
+                    continue
+                if task_name not in input_dict:
+                    continue
+                logits = cls_logits_by_task[task_name]
+                target = input_dict[task_name].float()
+                if target.ndim == 1:
+                    target = target.unsqueeze(0)
+                if logits.shape != target.shape:
+                    raise ValueError(
+                        f"Multilabel logits/target shape mismatch for "
+                        f"'{task_name}': {tuple(logits.shape)} vs {tuple(target.shape)}"
+                    )
+                task_loss = self.criteria_by_task[task_name](logits, target)
             else:
                 if task_name not in reg_pred_by_task:
                     continue
@@ -537,7 +558,12 @@ class MultiTaskSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
                     for task_name, logits in logits_by_task.items()
                 }
                 return_dict["pred_cls_by_task"] = {
-                    task_name: logits.argmax(dim=1)
+                    task_name: (
+                        self._multilabel_pred_from_logits(logits, task_name)
+                        if self._task_type(self.task_configs[task_name])
+                        == "multilabel_classification"
+                        else logits.argmax(dim=1)
+                    )
                     for task_name, logits in cls_logits_by_task.items()
                 }
 

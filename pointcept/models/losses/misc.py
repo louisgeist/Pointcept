@@ -45,6 +45,26 @@ class CrossEntropyLoss(nn.Module):
 
 
 @LOSSES.register_module()
+class BCEWithLogitsLoss(nn.Module):
+    def __init__(self, loss_weight=1.0, reduction="mean"):
+        super().__init__()
+        self.loss_weight = float(loss_weight)
+        self.reduction = reduction
+        self.loss = nn.BCEWithLogitsLoss(reduction=reduction)
+
+    def forward(self, pred, target):
+        pred = pred.float()
+        target = target.float()
+        if pred.ndim == 1:
+            pred = pred.unsqueeze(0)
+        if target.ndim == 1:
+            target = target.unsqueeze(0)
+        if pred.numel() == 0:
+            return pred.new_zeros(())
+        return self.loss(pred, target) * self.loss_weight
+
+
+@LOSSES.register_module()
 class SmoothCELoss(nn.Module):
     def __init__(self, smoothing_ratio=0.1):
         super(SmoothCELoss, self).__init__()
