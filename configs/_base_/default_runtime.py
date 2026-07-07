@@ -25,7 +25,9 @@ iter_per_epoch = None  # iteration steps per epoch (default 1000 when total_iter
 eval_every = None  # validate every N epochs (default 5 when total_iters is set)
 
 clip_grad = None  # disable with None, enable with a float
-log_task_gradient_norms = False  # per-task backbone/head L2 grad norms (multitask monitoring/debugging)
+# Per-task L2 grad norm on shared backbone and task head; logged to TB/W&B 
+# (per epoch 'train/gradient/...' and per-step 'train_batch/gradient/...').
+log_task_gradient_norms = False
 
 sync_bn = False
 enable_amp = False

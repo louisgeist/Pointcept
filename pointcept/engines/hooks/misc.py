@@ -208,6 +208,10 @@ class InformationWriter(HookBase):
                 wandb_tag = f"{prefix_tag}_{slug}"
                 yield tb_tag, wandb_tag, float(iou_class[class_idx])
 
+    @staticmethod
+    def _skip_console_scalar(key):
+        return str(key).startswith("gradient/")
+
     def before_step(self):
         self.curr_iter += 1
         info = "Train: [{epoch}/{max_epoch}][{iter}/{max_iter}] ".format(
@@ -342,6 +346,8 @@ class InformationWriter(HookBase):
                             accumulate_multilabel_stats(pred, target, stats)
 
         for key in self.model_output_keys:
+            if self._skip_console_scalar(key):
+                continue
             self.trainer.comm_info["iter_info"] += "{key}: {value:.4f} ".format(
                 key=key, value=self.trainer.storage.history(key).val
             )
@@ -358,18 +364,28 @@ class InformationWriter(HookBase):
                     self.trainer.storage.history(key).val,
                     self.curr_iter,
                 )
-            if self.trainer.cfg.enable_wandb and self.wandb_log_every_step:
-                wandb.log(
-                    {"Iter": self.curr_iter, "params/lr": lr}, step=self.curr_iter
+            if self.trainer.cfg.enable_wandb:
+                log_all_steps = self.wandb_log_every_step
+                log_grad_steps = getattr(
+                    self.trainer.cfg, "log_task_gradient_norms", False
                 )
-                for key in self.model_output_keys:
-                    wandb.log(
-                        {
-                            "Iter": self.curr_iter,
-                            f"train_batch/{key}": self.trainer.storage.history(key).val,
-                        },
-                        step=wandb.run.step,
-                    )
+                if log_all_steps or log_grad_steps:
+                    wandb_payload = {"Iter": self.curr_iter}
+                    if log_all_steps:
+                        wandb_payload["params/lr"] = lr
+                        step_keys = self.model_output_keys
+                    else:
+                        step_keys = [
+                            k
+                            for k in self.model_output_keys
+                            if k.startswith("gradient/")
+                        ]
+                    for key in step_keys:
+                        wandb_payload[f"train_batch/{key}"] = (
+                            self.trainer.storage.history(key).val
+                        )
+                    if len(wandb_payload) > 1:
+                        wandb.log(wandb_payload, step=self.curr_iter)
 
     def after_epoch(self):
         # Epoch-level metrics (rank 0 only): train/loss and train/mIoU are both
@@ -392,6 +408,8 @@ class InformationWriter(HookBase):
 
         epoch_info = "Train result: "
         for key in self.model_output_keys:
+            if self._skip_console_scalar(key):
+                continue
             epoch_info += "{key}: {value:.4f} ".format(
                 key=key, value=self.trainer.storage.history(key).avg
             )
