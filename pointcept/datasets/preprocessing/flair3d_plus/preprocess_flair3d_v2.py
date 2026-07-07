@@ -17,7 +17,7 @@ is the single source of truth: one row per patch, and only rows with
 - segment.npy    (from PLY ``semantic``; remapped via ``--segment_definition``)
 - strength.npy   (LiDAR intensity)
 - forest.npy     (FOREST GeoTIFF — always sampled; remapped via ``--forest_definition``)
-- natural_habitat.npy   (only when NATURAL_HABITAT=True; ``--natural_habitat_definition``)
+- natural_habitat.npy   (only when NATURAL_HABITAT=True; default definition = full CarHab ids 0-43)
 - land_use.npy          (only when LAND_USE=True; ``--land_use_definition``)
 - elevation.npy         (only when DEM_ELEV=True in the manifest)
 - climatic_domain.npy   (opt-in via ``--write-climatic-domain-category``)
@@ -120,6 +120,13 @@ from flair3d_label_remap import (  # noqa: E402
     build_preprocess_label_definitions,
     supported_definitions,
 )
+
+# Preprocess stores natural_habitat.npy with the full CarHab id space (0-43), not a
+# collapsed taxonomy. Training may still use another definition via config / meta.json.
+PREPROCESS_LABEL_DEFINITION_DEFAULTS = {
+    **DEFAULT_LABEL_DEFINITION_NAMES,
+    "natural_habitat": "default",
+}
 
 # Columns that must be present in --split_manifest_csv (others may be present and are ignored).
 REQUIRED_MANIFEST_COLUMNS = frozenset(
@@ -970,7 +977,7 @@ def main_process():
         parser.add_argument(
             f"--{task_key}_definition",
             type=str,
-            default=DEFAULT_LABEL_DEFINITION_NAMES[task_key],
+            default=PREPROCESS_LABEL_DEFINITION_DEFAULTS[task_key],
             choices=supported_definitions(task_key),
             help=(
                 f"Label definition for task '{task_key}' "
