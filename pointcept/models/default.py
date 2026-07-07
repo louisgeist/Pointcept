@@ -399,6 +399,21 @@ class MultiTaskSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
             for p in self.backbone.parameters():
                 p.requires_grad = False
 
+    def backbone_parameters(self):
+        return [p for p in self.backbone.parameters() if p.requires_grad]
+
+    def task_head_parameters(self, task_name):
+        params = []
+        if task_name in self.seg_heads:
+            params.extend(self.seg_heads[task_name].parameters())
+        if task_name in self.reg_heads:
+            params.extend(self.reg_heads[task_name].parameters())
+        if task_name in self.cls_heads:
+            params.extend(self.cls_heads[task_name].parameters())
+        if task_name in self.cls_attn_pools:
+            params.extend(self.cls_attn_pools[task_name].parameters())
+        return [p for p in params if p.requires_grad]
+
     @classmethod
     def _task_type(cls, task_config):
         tt = task_config.get("task_type")

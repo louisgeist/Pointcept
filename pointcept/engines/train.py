@@ -33,6 +33,7 @@ from pointcept.utils.logger import get_root_logger
 from pointcept.utils.optimizer import build_optimizer
 from pointcept.utils.scheduler import build_scheduler
 from pointcept.utils.events import EventStorage, ExceptionWriter
+from pointcept.utils.gradient_norm import compute_task_gradient_norms
 from pointcept.utils.registry import Registry
 from pointcept.datasets.dataloader import (
     DistributedImbalancedSampler,
@@ -282,6 +283,29 @@ class Trainer(TrainerBase):
             loss = (
                 output_dict["loss"] / self.cfg.gradient_accumulation_steps
             )  # scale loss
+
+        if getattr(self.cfg, "log_task_gradient_norms", False):
+            loss_by_task = output_dict.get("loss_by_task")
+            if isinstance(loss_by_task, dict) and loss_by_task:
+                model = (
+                    self.model.module
+                    if hasattr(self.model, "module")
+                    else self.model
+                )
+                if hasattr(model, "backbone_parameters"):
+                    task_weights = getattr(model, "task_weights", {})
+                    self.comm_info["task_gradient_norms"] = compute_task_gradient_norms(
+                        model,
+                        loss_by_task,
+                        task_weights,
+                        self.cfg.gradient_accumulation_steps,
+                    )
+                else:
+                    self.comm_info.pop("task_gradient_norms", None)
+            else:
+                self.comm_info.pop("task_gradient_norms", None)
+        else:
+            self.comm_info.pop("task_gradient_norms", None)
 
         # Backward pass
         if self.cfg.enable_amp:

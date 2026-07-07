@@ -25,6 +25,7 @@ iter_per_epoch = None  # iteration steps per epoch (default 1000 when total_iter
 eval_every = None  # validate every N epochs (default 5 when total_iters is set)
 
 clip_grad = None  # disable with None, enable with a float
+log_task_gradient_norms = False  # per-task backbone/head L2 grad norms (multitask monitoring/debugging)
 
 sync_bn = False
 enable_amp = False

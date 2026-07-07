@@ -123,6 +123,7 @@ class InformationWriter(HookBase):
             wandb.define_metric("train_batch/*", step_metric="Iter")
             wandb.define_metric("train/*", step_metric="Epoch")
             wandb.define_metric("train/loss/*", step_metric="Epoch")
+            wandb.define_metric("train/gradient/*", step_metric="Epoch")
 
     @staticmethod
     def _cfg_get(obj, key, default=None):
@@ -244,6 +245,20 @@ class InformationWriter(HookBase):
                     subkey = f"loss/{task_name}"
                     self.trainer.storage.put_scalar(subkey, float(v))
                     scalar_keys.append(subkey)
+
+            task_gradient_norms = self.trainer.comm_info.get("task_gradient_norms")
+            if isinstance(task_gradient_norms, dict):
+                for task_name, norms in task_gradient_norms.items():
+                    if not isinstance(norms, dict):
+                        continue
+                    for part in ("backbone", "head"):
+                        value = norms.get(part)
+                        if value is None:
+                            continue
+                        subkey = f"gradient/{part}/{task_name}"
+                        self.trainer.storage.put_scalar(subkey, float(value))
+                        scalar_keys.append(subkey)
+
             self.model_output_keys = scalar_keys
 
             # Accumulate epoch-level confusion stats for segmentation (rank 0 only).
