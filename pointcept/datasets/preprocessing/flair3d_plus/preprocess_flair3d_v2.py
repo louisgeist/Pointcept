@@ -63,7 +63,14 @@ data/flair3d_plus/
             │   └── ...
 
 Examples:
-JZ : 
+JZ (multilabel only, on an already-preprocessed output_root):
+python pointcept/datasets/preprocessing/flair3d_plus/preprocess_flair3d_v2.py \
+    --output_root data/flair3d_plus \
+    --split_manifest_csv data/flair3d_plus/raw/scene_split_manifest.csv \
+    --num_workers 24 \
+    --multilabel-only
+
+JZ (full preprocess):
 python pointcept/datasets/preprocessing/flair3d_plus/preprocess_flair3d_v2.py \
     --ply_root /lustre/fsn1/projects/rech/unv/usi32yh/data_flair3d_build/flair3d_label_enhanced \
     --dataset_root /lustre/fswork/projects/rech/unv/usi32yh/Pointcept/data/flair3d_plus/raw \
@@ -851,11 +858,11 @@ def main_process():
     parser.add_argument(
         "--ply_root",
         type=str,
-        required=True,
-        default="/data/geist/Flair3d-build/data/flair3d_label_enhanced",
+        default="",
         help=(
             "Root directory of pre-labeled PLY files "
-            "(layout: LIDARHD/<dept_year>_LIDARHD/<roi>/<stem>.ply)"
+            "(layout: LIDARHD/<dept_year>_LIDARHD/<roi>/<stem>.ply). "
+            "Not required with --multilabel-only."
         ),
     )
     parser.add_argument(
@@ -928,6 +935,17 @@ def main_process():
         ),
     )
     parser.add_argument(
+        "--multilabel-only",
+        action="store_true",
+        default=False,
+        help=(
+            "Skip PLY preprocessing and label passes; only assign "
+            "natural_habitat_multilabel.npy on an existing output_root. "
+            "Requires --natural_habitat_definition default. "
+            "--ply_root and --dataset_root are not used."
+        ),
+    )
+    parser.add_argument(
         "--write_climatic_domain_category",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -961,22 +979,57 @@ def main_process():
         )
     args = parser.parse_args()
 
+    if not args.multilabel_only and not args.ply_root:
+        parser.error("--ply_root is required unless --multilabel-only is set")
+
     os.makedirs(args.output_root, exist_ok=True)
     log_file_path = args.log_file or os.path.join(args.output_root, "preprocess_flair3d.log")
+    logger = setup_file_logger(log_file_path)
+
+    splits = args.split if isinstance(args.split, list) else [args.split]
+    logger.info("Using split manifest CSV: %s", args.split_manifest_csv)
+    logger.info("Splits to process: %s", splits)
+
+    tasks = load_manifest_tasks(args.split_manifest_csv, splits)
+    logger.info("Loaded %d tasks (LIDARHD=True) from manifest.", len(tasks))
+    for split in splits:
+        n = sum(1 for t in tasks if t.split == split)
+        logger.info("  split '%s': %d tasks", split, n)
+
+    if args.multilabel_only:
+        if args.natural_habitat_definition != "default":
+            parser.error(
+                "--multilabel-only requires --natural_habitat_definition default "
+                f"(stored ids 0-43), got '{args.natural_habitat_definition}'"
+            )
+        if not any(t.has_natural_habitat for t in tasks):
+            logger.warning(
+                "No manifest rows have NATURAL_HABITAT=True; multilabel vectors "
+                "will not be written for subtiles without natural_habitat.npy."
+            )
+        logger.info(
+            "Multilabel-only mode: running natural habitat multilabel pass on "
+            "%d manifest task(s)...",
+            len(tasks),
+        )
+        run_natural_habitat_multilabel_label_pass(
+            args.output_root,
+            tasks,
+            num_workers=args.num_workers,
+            logger=logger,
+        )
+        logger.info("Detailed logs saved to: %s", log_file_path)
+        return
+
     missing_scenes_path = args.missing_scenes_file or os.path.join(
         args.output_root, "missing_scenes.txt"
     )
     missing_ply_preflight_path = args.missing_ply_preflight_file or os.path.join(
         args.output_root, "missing_ply_preflight.txt"
     )
-    logger = setup_file_logger(log_file_path)
-
-    splits = args.split if isinstance(args.split, list) else [args.split]
 
     logger.info("PLY root: %s", args.ply_root)
     logger.info("Dataset root (rasters): %s", args.dataset_root)
-    logger.info("Splits to process: %s", splits)
-    logger.info("Using split manifest CSV: %s", args.split_manifest_csv)
 
     label_definitions = build_preprocess_label_definitions(
         segment=args.segment_definition,
@@ -985,12 +1038,6 @@ def main_process():
         natural_habitat=args.natural_habitat_definition,
     )
     logger.info("Label definitions: %s", label_definitions.to_meta_dict())
-
-    tasks = load_manifest_tasks(args.split_manifest_csv, splits)
-    logger.info("Loaded %d tasks (LIDARHD=True) from manifest.", len(tasks))
-    for split in splits:
-        n = sum(1 for t in tasks if t.split == split)
-        logger.info("  split '%s': %d tasks", split, n)
 
     # Pre-create output split directories (only for splits that have tasks).
     for split in {t.split for t in tasks}:
