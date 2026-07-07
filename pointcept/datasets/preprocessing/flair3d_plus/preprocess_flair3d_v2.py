@@ -1160,7 +1160,10 @@ def main_process():
                 len(tasks),
             )
             run_natural_habitat_multilabel_label_pass(
-                args.output_root, tasks, logger=logger
+                args.output_root,
+                tasks,
+                num_workers=args.num_workers,
+                logger=logger,
             )
 
     logger.info("Detailed logs saved to: %s", log_file_path)

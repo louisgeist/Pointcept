@@ -10,10 +10,12 @@ A label is set when its point fraction >= threshold (default 1%) over all subtil
 from __future__ import annotations
 
 import os
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
+from tqdm import tqdm
 
 try:
     from climatic_domain_tile_labels import (
@@ -144,50 +146,110 @@ def _subtile_point_total(scene_path: str) -> Tuple[int, str]:
     return 0, "missing_coord"
 
 
+def _merge_multilabel_stats(
+    parts: Iterable[MultilabelAssignmentStats],
+) -> MultilabelAssignmentStats:
+    merged = MultilabelAssignmentStats()
+    for part in parts:
+        merged.n_subtiles_seen += part.n_subtiles_seen
+        merged.n_subtiles_written += part.n_subtiles_written
+        merged.n_missing_coord += part.n_missing_coord
+        merged.n_missing_nh += part.n_missing_nh
+        merged.n_all_zero += part.n_all_zero
+        for name, count in part.label_counts.items():
+            merged.label_counts[name] = merged.label_counts.get(name, 0) + count
+    return merged
+
+
+def _assign_multilabel_one_scene(
+    scene_path: str,
+    *,
+    threshold: float = DEFAULT_THRESHOLD,
+    only_existing_coord: bool = True,
+    bitmap: Optional[np.ndarray] = None,
+) -> MultilabelAssignmentStats:
+    """Worker entry point: write natural_habitat_multilabel.npy for one subtile."""
+    stats = MultilabelAssignmentStats(n_subtiles_seen=1)
+    n_total, coord_error = _subtile_point_total(scene_path)
+    if only_existing_coord and coord_error == "missing_coord":
+        stats.n_missing_coord = 1
+        return stats
+
+    nh_path = os.path.join(scene_path, "natural_habitat.npy")
+    if not os.path.isfile(nh_path):
+        stats.n_missing_nh = 1
+        return stats
+
+    stored = np.load(nh_path).reshape(-1)
+    if n_total <= 0:
+        n_total = int(stored.size)
+
+    vector = compute_multilabel_vector(
+        stored,
+        n_total,
+        threshold=threshold,
+        bitmap=bitmap,
+    )
+    out_path = os.path.join(scene_path, MULTILABEL_FILENAME)
+    np.save(out_path, vector)
+    stats.n_subtiles_written = 1
+    if not np.any(vector):
+        stats.n_all_zero = 1
+    for name, active in zip(MULTILABEL_CLASS_NAMES, vector):
+        if active:
+            stats.label_counts[name] = 1
+    return stats
+
+
 def assign_natural_habitat_multilabel_labels(
     scenes: Sequence[SubtileScene],
     *,
     threshold: float = DEFAULT_THRESHOLD,
     bitmap: Optional[np.ndarray] = None,
     only_existing_coord: bool = True,
+    num_workers: int = 1,
 ) -> MultilabelAssignmentStats:
     """Write natural_habitat_multilabel.npy for each subtile independently."""
-    if bitmap is None:
-        bitmap = build_stored_id_multilabel_bitmap()
+    scene_paths = [scene.scene_path for scene in scenes]
+    if not scene_paths:
+        return MultilabelAssignmentStats()
 
-    stats = MultilabelAssignmentStats()
-    for scene in scenes:
-        stats.n_subtiles_seen += 1
-        n_total, coord_error = _subtile_point_total(scene.scene_path)
-        if only_existing_coord and coord_error == "missing_coord":
-            stats.n_missing_coord += 1
-            continue
+    if num_workers <= 1:
+        results = []
+        for scene_path in tqdm(
+            scene_paths,
+            desc="multilabel",
+            unit="subtile",
+        ):
+            results.append(
+                _assign_multilabel_one_scene(
+                    scene_path,
+                    threshold=threshold,
+                    only_existing_coord=only_existing_coord,
+                    bitmap=bitmap,
+                )
+            )
+        return _merge_multilabel_stats(results)
 
-        nh_path = os.path.join(scene.scene_path, "natural_habitat.npy")
-        if not os.path.isfile(nh_path):
-            stats.n_missing_nh += 1
-            continue
-
-        stored = np.load(nh_path).reshape(-1)
-        if n_total <= 0:
-            n_total = int(stored.size)
-
-        vector = compute_multilabel_vector(
-            stored,
-            n_total,
-            threshold=threshold,
-            bitmap=bitmap,
-        )
-        out_path = os.path.join(scene.scene_path, MULTILABEL_FILENAME)
-        np.save(out_path, vector)
-        stats.n_subtiles_written += 1
-        if not np.any(vector):
-            stats.n_all_zero += 1
-        for name, active in zip(MULTILABEL_CLASS_NAMES, vector):
-            if active:
-                stats.label_counts[name] = stats.label_counts.get(name, 0) + 1
-
-    return stats
+    with ProcessPoolExecutor(max_workers=num_workers) as pool:
+        futures = {
+            pool.submit(
+                _assign_multilabel_one_scene,
+                scene_path,
+                threshold=threshold,
+                only_existing_coord=only_existing_coord,
+            ): scene_path
+            for scene_path in scene_paths
+        }
+        results = []
+        for future in tqdm(
+            as_completed(futures),
+            total=len(futures),
+            desc="multilabel",
+            unit="subtile",
+        ):
+            results.append(future.result())
+    return _merge_multilabel_stats(results)
 
 
 def run_natural_habitat_multilabel_label_pass(
@@ -195,10 +257,15 @@ def run_natural_habitat_multilabel_label_pass(
     tasks: Sequence[object],
     *,
     threshold: float = DEFAULT_THRESHOLD,
+    num_workers: int = 1,
     logger=None,
 ) -> MultilabelAssignmentStats:
     scenes = scenes_from_patch_tasks(output_root, tasks)
-    stats = assign_natural_habitat_multilabel_labels(scenes, threshold=threshold)
+    stats = assign_natural_habitat_multilabel_labels(
+        scenes,
+        threshold=threshold,
+        num_workers=num_workers,
+    )
     if logger is not None:
         logger.info(
             "Natural habitat multilabel: seen=%d written=%d missing_coord=%d "
