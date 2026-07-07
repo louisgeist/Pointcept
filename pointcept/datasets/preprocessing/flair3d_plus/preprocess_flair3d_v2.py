@@ -20,7 +20,7 @@ is the single source of truth: one row per patch, and only rows with
 - natural_habitat.npy   (only when NATURAL_HABITAT=True; ``--natural_habitat_definition``)
 - land_use.npy          (only when LAND_USE=True; ``--land_use_definition``)
 - elevation.npy         (only when DEM_ELEV=True in the manifest)
-- climatic_domain.npy   (by default when ``--natural_habitat_definition default``)
+- climatic_domain.npy   (opt-in via ``--write-climatic-domain-category``)
 - natural_habitat_multilabel.npy  (opt-in via ``--write-natural-habitat-multilabel``, default True)
 - meta.json      (date_gap_days, label_definitions)
 
@@ -948,12 +948,12 @@ def main_process():
     parser.add_argument(
         "--write_climatic_domain_category",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=False,
         help=(
             "After preprocessing, assign per-subtile climatic_domain.npy labels "
             "by aggregating natural_habitat at 1 km² tile level (pure domain only). "
             "Requires natural_habitat rasters and --natural_habitat_definition default. "
-            "Skipped with a warning when natural_habitat is not stored as default."
+            "Off by default."
         ),
     )
     parser.add_argument(
