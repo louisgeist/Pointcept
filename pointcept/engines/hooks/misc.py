@@ -124,6 +124,7 @@ class InformationWriter(HookBase):
             wandb.define_metric("train/*", step_metric="Epoch")
             wandb.define_metric("train/loss/*", step_metric="Epoch")
             wandb.define_metric("train/gradient/*", step_metric="Epoch")
+            wandb.define_metric("train/gradient/backbone_cos/*", step_metric="Epoch")
 
     @staticmethod
     def _cfg_get(obj, key, default=None):
@@ -252,7 +253,14 @@ class InformationWriter(HookBase):
 
             task_gradient_norms = self.trainer.comm_info.get("task_gradient_norms")
             if isinstance(task_gradient_norms, dict):
-                for task_name, norms in task_gradient_norms.items():
+                norms_by_task = task_gradient_norms.get("norms")
+                if norms_by_task is None:
+                    norms_by_task = {
+                        task_name: value
+                        for task_name, value in task_gradient_norms.items()
+                        if isinstance(value, dict) and "backbone" in value
+                    }
+                for task_name, norms in norms_by_task.items():
                     if not isinstance(norms, dict):
                         continue
                     for part in ("backbone", "head"):
@@ -260,6 +268,15 @@ class InformationWriter(HookBase):
                         if value is None:
                             continue
                         subkey = f"gradient/{part}/{task_name}"
+                        self.trainer.storage.put_scalar(subkey, float(value))
+                        scalar_keys.append(subkey)
+
+                backbone_cos = task_gradient_norms.get("backbone_cos", {})
+                if isinstance(backbone_cos, dict):
+                    for pair_key, value in backbone_cos.items():
+                        if value is None:
+                            continue
+                        subkey = f"gradient/backbone_cos/{pair_key}"
                         self.trainer.storage.put_scalar(subkey, float(value))
                         scalar_keys.append(subkey)
 
@@ -343,7 +360,12 @@ class InformationWriter(HookBase):
                             if stats is None:
                                 stats = MultilabelStats()
                                 self._train_multilabel_stats[task_name] = stats
-                            accumulate_multilabel_stats(pred, target, stats)
+                            accumulate_multilabel_stats(
+                                pred,
+                                target,
+                                stats,
+                                ignore_index=_task_conf.get("ignore_index"),
+                            )
 
         for key in self.model_output_keys:
             if self._skip_console_scalar(key):
