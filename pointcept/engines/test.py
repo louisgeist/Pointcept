@@ -1222,7 +1222,10 @@ class MultiTaskTester(TesterBase):
                         targets_by_task[task_name], dtype=np.int64
                     ).reshape(1, -1)
                     accumulate_multilabel_stats(
-                        pred_np, tgt_np, multilabel_stats_global[task_name]
+                        pred_np,
+                        tgt_np,
+                        multilabel_stats_global[task_name],
+                        ignore_index=task_configs[task_name].get("ignore_index"),
                     )
 
                 for task_name in regression_tasks:

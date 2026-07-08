@@ -152,6 +152,7 @@ FLAIR3D_MULTILABEL_CLASSIFICATION_TASKS: Dict[str, Dict[str, Any]] = {
     "natural_habitat_multilabel": {
         "task_type": "multilabel_classification",
         "num_classes": NUM_MULTILABEL_CLASSES,
+        "ignore_index": -1,
         "names": list(MULTILABEL_CLASS_NAMES),
         "pooling": "mean",
         "threshold": 0.5,
@@ -365,6 +366,7 @@ def get_missing_target_fill_value(target_key: str) -> Any:
     """Return the fallback value used when a target file is missing.
 
     - Semantic targets fallback to their ignore_index.
+    - Multilabel targets fallback to ignore_index on all labels (missing NH raster).
     - Elevation regression falls back to NaN so masked losses ignore it.
     """
     if target_key in FLAIR3D_SEMANTIC_TASKS:
@@ -372,11 +374,11 @@ def get_missing_target_fill_value(target_key: str) -> Any:
     if target_key in FLAIR3D_CLASSIFICATION_TASKS:
         return int(get_classification_config(target_key)["ignore_index"])
     if target_key in FLAIR3D_MULTILABEL_CLASSIFICATION_TASKS:
-        return np.zeros(
-            (
-                1,
-                int(get_multilabel_classification_config(target_key)["num_classes"]),
-            ),
+        cfg = get_multilabel_classification_config(target_key)
+        ignore_index = int(cfg.get("ignore_index", -1))
+        return np.full(
+            (1, int(cfg["num_classes"])),
+            ignore_index,
             dtype=np.float32,
         )
     if target_key == "elevation":

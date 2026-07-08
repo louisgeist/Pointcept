@@ -855,7 +855,10 @@ class MultiTaskEvaluator(HookBase):
                         target_tensor = target_tensor.unsqueeze(0)
                     target = target_tensor.cpu().numpy()
                     accumulate_multilabel_stats(
-                        pred, target, multilabel_stats[task_name]
+                        pred,
+                        target,
+                        multilabel_stats[task_name],
+                        ignore_index=task_config.get("ignore_index"),
                     )
 
                 self.trainer.storage.put_scalar("val_loss", loss.item())

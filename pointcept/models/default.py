@@ -522,7 +522,18 @@ class MultiTaskSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
                         f"Multilabel logits/target shape mismatch for "
                         f"'{task_name}': {tuple(logits.shape)} vs {tuple(target.shape)}"
                     )
-                task_loss = self.criteria_by_task[task_name](logits, target)
+                ignore_index = task_config.get("ignore_index")
+                if ignore_index is not None:
+                    ignore_index = int(ignore_index)
+                    valid = (target != ignore_index).any(dim=-1)
+                    if not valid.any():
+                        task_loss = logits.new_zeros(())
+                    else:
+                        task_loss = self.criteria_by_task[task_name](
+                            logits[valid], target[valid]
+                        )
+                else:
+                    task_loss = self.criteria_by_task[task_name](logits, target)
             else:
                 if task_name not in reg_pred_by_task:
                     continue

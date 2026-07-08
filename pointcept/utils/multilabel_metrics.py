@@ -40,10 +40,24 @@ def binarize_multilabel_predictions(
     return (arr >= threshold).astype(np.int64)
 
 
+def multilabel_valid_sample_mask(
+    target: np.ndarray,
+    *,
+    ignore_index: int = -1,
+) -> np.ndarray:
+    """Return a boolean mask of shape (N,) for samples not marked as ignored."""
+    target_arr = np.asarray(target)
+    if target_arr.ndim == 1:
+        target_arr = target_arr.reshape(1, -1)
+    return (target_arr != ignore_index).any(axis=1)
+
+
 def accumulate_multilabel_stats(
     pred: np.ndarray,
     target: np.ndarray,
     stats: MultilabelStats,
+    *,
+    ignore_index: Optional[int] = None,
 ) -> None:
     """Update ``stats`` from binary pred/target arrays of shape (N, C)."""
     pred_bin = np.asarray(pred).astype(np.int64)
@@ -52,6 +66,12 @@ def accumulate_multilabel_stats(
         pred_bin = pred_bin.reshape(1, -1)
     if target_bin.ndim == 1:
         target_bin = target_bin.reshape(1, -1)
+    if ignore_index is not None:
+        valid = multilabel_valid_sample_mask(target_bin, ignore_index=ignore_index)
+        if not np.any(valid):
+            return
+        pred_bin = pred_bin[valid]
+        target_bin = target_bin[valid]
     if pred_bin.shape != target_bin.shape:
         raise ValueError(
             f"pred/target shape mismatch: {pred_bin.shape} vs {target_bin.shape}"
