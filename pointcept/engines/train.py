@@ -33,6 +33,7 @@ from pointcept.utils.logger import get_root_logger
 from pointcept.utils.optimizer import build_optimizer
 from pointcept.utils.scheduler import build_scheduler
 from pointcept.utils.events import EventStorage, ExceptionWriter
+from pointcept.utils.wandb_metrics import define_wandb_metrics
 from pointcept.utils.gradient_norm import compute_task_gradient_norms
 from pointcept.utils.registry import Registry
 from pointcept.datasets.dataloader import (
@@ -167,6 +168,7 @@ class TrainerBase:
         ):
             wandb.log(
                 {
+                    "Epoch": self.max_epoch,
                     "runtime/total_s": float(total_runtime_seconds),
                     "runtime/total_h": float(total_runtime_seconds / 3600.0),
                 }
@@ -402,6 +404,7 @@ class Trainer(TrainerBase):
                 init_kw["resume"] = "allow"
                 self.logger.info("Resuming W&B run: %s", run_id)
             wandb.init(**init_kw)
+            define_wandb_metrics()
             with open(wandb_run_id_path, "w") as f:
                 f.write(wandb.run.id)
             wandb.log({"model/free_params": self.n_free_parameters})

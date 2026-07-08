@@ -123,8 +123,6 @@ class ClsEvaluator(HookBase):
 
     def before_train(self):
         self._best_m_iou = -np.inf
-        if self.trainer.writer is not None and self.trainer.cfg.enable_wandb:
-            wandb.define_metric("val/*", step_metric="Epoch")
 
     def after_epoch(self):
         if self.should_evaluate():
@@ -253,10 +251,6 @@ class SemSegEvaluator(HookBase):
     def __init__(self, write_cls_iou=False):
         self.write_cls_iou = write_cls_iou
 
-    def before_train(self):
-        if self.trainer.writer is not None and self.trainer.cfg.enable_wandb:
-            wandb.define_metric("val/*", step_metric="Epoch")
-
     def after_epoch(self):
         if self.should_evaluate():
             self.eval()
@@ -378,7 +372,6 @@ class SemSegEvaluator(HookBase):
                                     i
                                 ],
                             },
-                            step=wandb.run.step,
                         )
         else:
             finalize_val_epoch_timing(self.trainer, val_start, current_epoch)
@@ -398,11 +391,6 @@ class RegressionEvaluator(HookBase):
 
     def __init__(self):
         self._best_neg_rmse = float("-inf")
-
-    def before_train(self):
-        if self.trainer.writer is not None and self.trainer.cfg.enable_wandb:
-            wandb.define_metric("val/*", step_metric="Epoch")
-            wandb.define_metric("val/reg/*", step_metric="Epoch")
 
     def after_epoch(self):
         if self.should_evaluate():
@@ -561,11 +549,6 @@ class MultiTaskEvaluator(HookBase):
     def __init__(self, write_cls_iou=False):
         self.write_cls_iou = write_cls_iou
         self._best_neg_rmse = float("-inf")
-
-    def before_train(self):
-        if self.trainer.writer is not None and self.trainer.cfg.enable_wandb:
-            wandb.define_metric("val/*", step_metric="Epoch")
-            wandb.define_metric("val/reg/*", step_metric="Epoch")
 
     def after_epoch(self):
         if self.should_evaluate():
@@ -1045,7 +1028,7 @@ class MultiTaskEvaluator(HookBase):
                             for c in str(label_name).strip().replace(" ", "_")
                         )
                         ml_wandb[f"{prefix}/{slug}/f1"] = float(label_metrics["f1"])
-                wandb.log(ml_wandb, step=wandb.run.step)
+                wandb.log(ml_wandb)
 
             # Per-class metrics
             if self.write_cls_iou:
@@ -1074,7 +1057,7 @@ class MultiTaskEvaluator(HookBase):
                         if cls_log is not None:
                             cls_log[wandb_tag] = float(metric["iou_class"][class_idx])
                 if cls_log is not None:
-                    wandb.log(cls_log, step=wandb.run.step)
+                    wandb.log(cls_log)
 
         reg_wandb = {"Epoch": current_epoch}
         best_neg_rmse_epoch = float("-inf")
@@ -1544,10 +1527,6 @@ class ShapeNetPartSegEvaluator(HookBase):
     def __init__(self, write_cls_iou=False):
         self.write_cls_iou = write_cls_iou
 
-    def before_train(self):
-        if self.trainer.writer is not None and self.trainer.cfg.enable_wandb:
-            wandb.define_metric("val/*", step_metric="Epoch")
-
     def after_epoch(self):
         if self.should_evaluate():
             self.eval()
@@ -1692,10 +1671,6 @@ class PartNetEPartSegEvaluator(HookBase):
     def __init__(self, num_parts=None, write_part_iou=False):
         self.num_parts = sum(num_parts)
         self.write_part_iou = write_part_iou
-
-    def before_train(self):
-        if self.trainer.writer is not None and self.trainer.cfg.enable_wandb:
-            wandb.define_metric("val/*", step_metric="Epoch")
 
     def after_epoch(self):
         if self.should_evaluate():

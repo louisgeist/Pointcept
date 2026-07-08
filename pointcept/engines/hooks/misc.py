@@ -118,13 +118,6 @@ class InformationWriter(HookBase):
     def before_train(self):
         self.trainer.comm_info["iter_info"] = ""
         self.curr_iter = self.trainer.start_epoch * len(self.trainer.train_loader)
-        if self.trainer.writer is not None and self.trainer.cfg.enable_wandb:
-            wandb.define_metric("params/*", step_metric="Iter")
-            wandb.define_metric("train_batch/*", step_metric="Iter")
-            wandb.define_metric("train/*", step_metric="Epoch")
-            wandb.define_metric("train/loss/*", step_metric="Epoch")
-            wandb.define_metric("train/gradient/*", step_metric="Epoch")
-            wandb.define_metric("train/gradient/backbone_cos/*", step_metric="Epoch")
 
     @staticmethod
     def _cfg_get(obj, key, default=None):
@@ -407,7 +400,7 @@ class InformationWriter(HookBase):
                             self.trainer.storage.history(key).val
                         )
                     if len(wandb_payload) > 1:
-                        wandb.log(wandb_payload, step=self.curr_iter)
+                        wandb.log(wandb_payload)
 
     def after_epoch(self):
         # Epoch-level metrics (rank 0 only): train/loss and train/mIoU are both
@@ -484,6 +477,7 @@ class InformationWriter(HookBase):
                 lr = self.trainer.optimizer.state_dict()["param_groups"][0]["lr"]
                 wandb_dict = {
                     "Epoch": epoch_step,
+                    "Iter": self.curr_iter,
                     "params/lr": lr,
                 }
                 for key in self.model_output_keys:
