@@ -19,7 +19,7 @@ num_worker = 8 * num_gpu
 enable_amp = True
 
 batch_size = 20 * num_gpu
-batch_size_val = batch_size // 2
+batch_size_val = batch_size // 4
 batch_size_test = batch_size // 4
 
 grid_size = 0.1
