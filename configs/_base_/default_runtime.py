@@ -23,9 +23,14 @@ eval_epoch = 100  # number of validation epochs
 total_iters = None  # total optimizer steps; enables iter-limited mode when set
 iter_per_epoch = None  # iteration steps per epoch (default 1000 when total_iters is set)
 eval_every = None  # validate every N epochs (default 5 when total_iters is set)
+iter_limited_cross_epoch = True  # draw without replacement from a persistent unseen pool
 
 clip_grad = None  # disable with None, enable with a float
-# Per-task L2 grad norm on shared backbone and task head, plus pairwise
+# Global L2 grad norm (train/gradient/global) and weight update norm
+# (train/gradient/weight_update) are always logged at each optimizer step
+# (TB per-step train_batch/... + epoch avg in W&B).
+# log_task_gradient_norms enables additional per-task decomposition (costly):
+# per-task L2 grad norm on shared backbone and task head, plus pairwise
 # backbone cosine similarities between tasks (upper triangle, e.g. 6 metrics for
 # 4 tasks: train/gradient/backbone_cos/{task_a}__{task_b}); logged to TB/W&B
 # (per epoch 'train/gradient/...' and per-step 'train_batch/gradient/...').

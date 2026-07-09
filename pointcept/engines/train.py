@@ -34,7 +34,12 @@ from pointcept.utils.optimizer import build_optimizer
 from pointcept.utils.scheduler import build_scheduler
 from pointcept.utils.events import EventStorage, ExceptionWriter
 from pointcept.utils.wandb_metrics import define_wandb_metrics
-from pointcept.utils.gradient_norm import compute_task_gradient_norms
+from pointcept.utils.gradient_norm import (
+    compute_task_gradient_norms,
+    l2_model_grad_norm,
+    l2_model_update_norm,
+    snapshot_trainable_params,
+)
 from pointcept.utils.registry import Registry
 from pointcept.datasets.dataloader import (
     DistributedImbalancedSampler,
@@ -318,12 +323,19 @@ class Trainer(TrainerBase):
 
         # Perform optimizer step only when enough gradients have accumulated
         if self._gradient_accumulation_counter >= self.cfg.gradient_accumulation_steps:
+            global_gradient_diag = {}
             if self.cfg.enable_amp:
                 self.scaler.unscale_(self.optimizer)
                 if self.cfg.clip_grad is not None:
-                    torch.nn.utils.clip_grad_norm_(
+                    grad_l2 = torch.nn.utils.clip_grad_norm_(
                         self.model.parameters(), self.cfg.clip_grad
                     )
+                    global_gradient_diag["gradient/global"] = float(grad_l2)
+                else:
+                    global_gradient_diag["gradient/global"] = l2_model_grad_norm(
+                        self.model
+                    )
+                param_snapshot = snapshot_trainable_params(self.model)
                 self.scaler.step(self.optimizer)
 
                 # When enable amp, optimizer.step call are skipped if the loss scaling factor is too large.
@@ -331,17 +343,33 @@ class Trainer(TrainerBase):
                 scale = self.scaler.get_scale()
                 self.scaler.update()
                 if scale <= self.scaler.get_scale():
+                    global_gradient_diag["gradient/weight_update"] = (
+                        l2_model_update_norm(self.model, param_snapshot)
+                    )
                     self.scheduler.step()
             else:
                 if self.cfg.clip_grad is not None:
-                    torch.nn.utils.clip_grad_norm_(
+                    grad_l2 = torch.nn.utils.clip_grad_norm_(
                         self.model.parameters(), self.cfg.clip_grad
                     )
+                    global_gradient_diag["gradient/global"] = float(grad_l2)
+                else:
+                    global_gradient_diag["gradient/global"] = l2_model_grad_norm(
+                        self.model
+                    )
+                param_snapshot = snapshot_trainable_params(self.model)
                 self.optimizer.step()
+                global_gradient_diag["gradient/weight_update"] = l2_model_update_norm(
+                    self.model, param_snapshot
+                )
                 self.scheduler.step()
+
+            self.comm_info["global_gradient_diag"] = global_gradient_diag
 
             # Reset grad accumulation counter
             self._gradient_accumulation_counter = 0
+        else:
+            self.comm_info.pop("global_gradient_diag", None)
 
         if self.cfg.empty_cache:
             torch.cuda.empty_cache()
@@ -416,6 +444,7 @@ class Trainer(TrainerBase):
         seed = self.cfg.seed if self.cfg.seed is not None else 0
 
         if iter_per_epoch is not None:
+            cross_epoch = self.cfg.iter_limited_cross_epoch
             if comm.get_world_size() > 1:
                 train_sampler = IterLimitedDistributedSampler(
                     train_data,
@@ -425,6 +454,7 @@ class Trainer(TrainerBase):
                     rank=comm.get_rank(),
                     shuffle=True,
                     seed=seed,
+                    cross_epoch=cross_epoch,
                 )
             else:
                 train_sampler = IterLimitedSampler(
@@ -433,6 +463,7 @@ class Trainer(TrainerBase):
                     batch_size=self.cfg.batch_size_per_gpu,
                     shuffle=True,
                     seed=seed,
+                    cross_epoch=cross_epoch,
                 )
         elif comm.get_world_size() > 1:
             train_sampler = torch.utils.data.distributed.DistributedSampler(train_data)

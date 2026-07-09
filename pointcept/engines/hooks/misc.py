@@ -273,6 +273,14 @@ class InformationWriter(HookBase):
                         self.trainer.storage.put_scalar(subkey, float(value))
                         scalar_keys.append(subkey)
 
+            global_diag = self.trainer.comm_info.get("global_gradient_diag")
+            if isinstance(global_diag, dict):
+                for key, value in global_diag.items():
+                    if value is None:
+                        continue
+                    self.trainer.storage.put_scalar(key, float(value))
+                    scalar_keys.append(key)
+
             self.model_output_keys = scalar_keys
 
             # Accumulate epoch-level confusion stats for segmentation (rank 0 only).
