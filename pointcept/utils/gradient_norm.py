@@ -15,6 +15,33 @@ def l2_grad_norm(grads):
     return float(total_sq.sqrt().item())
 
 
+def l2_model_grad_norm(model):
+    """Global L2 norm of accumulated parameter gradients."""
+    grads = [p.grad for p in model.parameters() if p.requires_grad]
+    return l2_grad_norm(grads)
+
+
+def snapshot_trainable_params(model):
+    """Shallow snapshot {id(param): tensor} before optimizer.step()."""
+    return {id(p): p.detach().clone() for p in model.parameters() if p.requires_grad}
+
+
+def l2_model_update_norm(model, snapshot):
+    """Global L2 norm of parameter updates after optimizer.step()."""
+    total_sq = None
+    for p in model.parameters():
+        if not p.requires_grad:
+            continue
+        old = snapshot.get(id(p))
+        if old is None:
+            continue
+        sq = (p.detach() - old).pow(2).sum()
+        total_sq = sq if total_sq is None else total_sq + sq
+    if total_sq is None:
+        return 0.0
+    return float(total_sq.sqrt().item())
+
+
 def _flatten_grads(grads):
     parts = []
     for g in grads:
