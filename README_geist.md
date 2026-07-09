@@ -270,6 +270,45 @@ export EXTRA_OPTIONS="epoch=10 eval_epoch=10 max_sample_train=2 max_sample_val=2
 sh scripts/train.sh -g 1 -d flair3d -c ptv3_nonormal_subtile -n ptv3_nonormal_subtile
 ```
 
+#### Stratified split
+
+Use a **precomputed CSV sidecar** to validate on a fixed subset (~2k tiles on ~34k val) instead of the full split. Selection stratifies on **segment** (point-level histogram L1) and **natural_habitat_multilabel** (15-label presence L1, inverse-frequency weighted for rare labels such as `mineral`, `aquatic`, `built`).
+
+Generate the sidecar once (warm random + greedy, fixed `--seed`):
+
+```bash
+python scripts/build_stratified_subset.py \
+  --data_root data/flair3d_plus \
+  --csv_manifest data/flair3d_plus/raw/scene_split_manifest.csv \
+  --split val \
+  --max_sample 2000 \
+  --warm-random 1000 \
+  --seed 0 \
+  --keys segment natural_habitat_multilabel \
+  --output data/flair3d_plus/manifests/val_dev_subset_2000.csv
+```
+
+Definie `data.val` (and optionally `data.test`):
+
+```python
+val=dict(
+    ...
+    stratified_subset_manifest="data/flair3d_plus/manifests/val_dev_subset_2000.csv",
+)
+```
+
+Behavior:
+
+- **`stratified_subset_manifest` set** → filter val/test to the fixed sidecar (no recompute at train time)..
+
+Generated files (same output prefix):
+
+- Sidecar: `val_dev_subset_2000.csv` (`split`, `patch_id`, diagnostic columns)
+- Segment distribution: `val_dev_subset_2000.distribution_segment.csv` (`stage=full|subset`, point fractions)
+- NH distribution: `val_dev_subset_2000.distribution_nh.csv` (`stage=full|subset`, scene presence per label)
+- Metadata: `val_dev_subset_2000.csv.meta.json`
+
+
 #### Flair3D+ mono-task (one semantic target per run)
 
 Configs under [`configs/flair3d_default/`](configs/flair3d_default/) — one folder per target, four backbones each (LitePT, SpUNet, PTv3, KPConvX). All mono runs use ``lr=1e-3`` and ``scene_split_manifest.csv``.
