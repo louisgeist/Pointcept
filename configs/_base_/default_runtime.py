@@ -23,7 +23,6 @@ eval_epoch = 100  # number of validation epochs
 total_iters = None  # total optimizer steps; enables iter-limited mode when set
 iter_per_epoch = None  # iteration steps per epoch (default 1000 when total_iters is set)
 eval_every = None  # validate every N epochs (default 5 when total_iters is set)
-iter_limited_cross_epoch = True  # draw without replacement from a persistent unseen pool
 
 clip_grad = None  # disable with None, enable with a float
 # Global L2 grad norm (train/gradient/global) and weight update norm

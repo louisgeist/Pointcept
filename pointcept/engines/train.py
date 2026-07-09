@@ -444,7 +444,6 @@ class Trainer(TrainerBase):
         seed = self.cfg.seed if self.cfg.seed is not None else 0
 
         if iter_per_epoch is not None:
-            cross_epoch = self.cfg.iter_limited_cross_epoch
             if comm.get_world_size() > 1:
                 train_sampler = IterLimitedDistributedSampler(
                     train_data,
@@ -454,7 +453,6 @@ class Trainer(TrainerBase):
                     rank=comm.get_rank(),
                     shuffle=True,
                     seed=seed,
-                    cross_epoch=cross_epoch,
                 )
             else:
                 train_sampler = IterLimitedSampler(
@@ -463,7 +461,6 @@ class Trainer(TrainerBase):
                     batch_size=self.cfg.batch_size_per_gpu,
                     shuffle=True,
                     seed=seed,
-                    cross_epoch=cross_epoch,
                 )
         elif comm.get_world_size() > 1:
             train_sampler = torch.utils.data.distributed.DistributedSampler(train_data)

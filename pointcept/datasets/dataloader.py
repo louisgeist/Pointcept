@@ -137,6 +137,19 @@ def _sample_iter_limited_indices(
     return torch.randperm(dataset_size, generator=generator)[:num_requested]
 
 
+def _draw_cross_epoch_indices(num_requested, dataset_size, unseen_pool, generator):
+    """Draw indices from a persistent unseen pool across trainer epochs.
+
+    When the remaining pool is smaller than ``num_requested``, the leftover
+    indices are discarded and a fresh full shuffle is created before drawing.
+    """
+    if unseen_pool is None or len(unseen_pool) < num_requested:
+        unseen_pool = torch.randperm(dataset_size, generator=generator).tolist()
+    selected = unseen_pool[:num_requested]
+    unseen_pool = unseen_pool[num_requested:]
+    return selected, unseen_pool
+
+
 def _compute_needs_replacement(shuffle, num_requested, dataset_size):
     """
     Compute whether replacement is needed for the given parameters.
@@ -155,11 +168,13 @@ class IterLimitedSampler(Sampler):
 
     Each epoch yields exactly ``iter_per_epoch * batch_size`` indices.
 
-    When ``shuffle=True`` (the default used by the trainer):
-    - if ``num_samples <= dataset_size``: random **without** replacement
-      (``randperm``);
-    - if ``num_samples > dataset_size``: random **with** replacement
-      (``randint``).
+    When ``shuffle=True`` and ``num_samples <= dataset_size``, indices are drawn
+    without replacement from a persistent unseen pool across epochs. The pool
+    is fully reshuffled when the remaining unseen indices are fewer than
+    ``num_samples``.
+
+    When ``num_samples > dataset_size`` and ``shuffle=True``, random **with**
+    replacement (``randint``) is used within the epoch.
 
     When ``shuffle=False``, indices follow a fixed cyclic order
     (``0, 1, …, dataset_size-1, 0, …``). Repeats can occur when
@@ -184,6 +199,7 @@ class IterLimitedSampler(Sampler):
         self.shuffle = shuffle
         self.seed = seed
         self.epoch = 0
+        self._unseen_pool = None
         self.num_samples = iter_per_epoch * batch_size
         self.needs_replacement = _compute_needs_replacement(
             self.shuffle, self.num_samples, self.dataset_size
@@ -192,6 +208,14 @@ class IterLimitedSampler(Sampler):
     def __iter__(self):
         g = torch.Generator()
         g.manual_seed(self.seed + self.epoch)
+        if self.shuffle and not self.needs_replacement:
+            indices, self._unseen_pool = _draw_cross_epoch_indices(
+                self.num_samples,
+                self.dataset_size,
+                self._unseen_pool,
+                g,
+            )
+            return iter(indices)
         indices = _sample_iter_limited_indices(
             self.num_samples,
             self.dataset_size,
@@ -251,6 +275,7 @@ class IterLimitedDistributedSampler(Sampler):
         self.shuffle = shuffle
         self.seed = seed
         self.epoch = 0
+        self._unseen_pool = None
         self.num_samples = iter_per_epoch * batch_size_per_gpu
         self.total_size = self.num_samples * self.num_replicas
         self.needs_replacement = _compute_needs_replacement(
@@ -260,17 +285,25 @@ class IterLimitedDistributedSampler(Sampler):
     def __iter__(self):
         g = torch.Generator()
         g.manual_seed(self.seed + self.epoch)
-        indices = _sample_iter_limited_indices(
-            self.total_size,
-            self.dataset_size,
-            self.shuffle,
-            self.needs_replacement,
-            g,
-        )
+        if self.shuffle and not self.needs_replacement:
+            indices, self._unseen_pool = _draw_cross_epoch_indices(
+                self.total_size,
+                self.dataset_size,
+                self._unseen_pool,
+                g,
+            )
+        else:
+            indices = _sample_iter_limited_indices(
+                self.total_size,
+                self.dataset_size,
+                self.shuffle,
+                self.needs_replacement,
+                g,
+            ).tolist()
         indices = indices[
             self.rank * self.num_samples : (self.rank + 1) * self.num_samples
         ]
-        return iter(indices.tolist())
+        return iter(indices)
 
     def __len__(self):
         return self.num_samples

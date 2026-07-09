@@ -64,7 +64,7 @@ python pointcept/datasets/preprocessing/flair3d_plus/preprocess_flair3d_v2.py \
  --output_root $WORK/Pointcept/data/flair3d_plus \
  --split_manifest_csv data/flair3d_plus/raw/scene_split_manifest.csv \
  --natural_habitat_definition default \
- --num_workers 32 \
+ --num_workers 24 \
  --force
 ```
 
@@ -195,7 +195,7 @@ Or directly with Python (from repo root):
 ```bash
 export PYTHONPATH="$PWD"
 export LD_LIBRARY_PATH="$CONDA_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-python tools/train.py --config-file configs/pureforest/kpconvx-toy.py --num-gpus 1
+python tools/train.py --config-file configs/flair3d_default/spunet_nh_multilabel_toy.py --num-gpus 1
 ```
 
 Mini-dataset smoke test (10 epochs, eval every 10, 2 train + 2 val samples).
@@ -228,9 +228,18 @@ steps instead of a full dataset pass.
 | `eval_every` | Run validation every N epochs (default **5**); also on the last epoch |
 | `loop` | Forced to **1** |
 
-`IterLimitedSampler` draws without replacement when the per-epoch index budget fits in the
-dataset (`iter_per_epoch × batch_size` per GPU, or `× world_size` globally in DDP);
-otherwise it falls back to sampling with replacement.
+`IterLimitedSampler` keeps a **persistent unseen pool** across trainer epochs:
+each epoch draws the next `iter_per_epoch × batch_size` indices (per GPU, or
+`× world_size` globally in DDP) without replacement. When the remaining unseen
+indices are fewer than the epoch budget, the leftover pool is discarded and a
+fresh full shuffle is created.
+
+When the per-epoch index budget exceeds the dataset size, the sampler falls back
+to sampling with replacement within the epoch.
+
+**Resume caveat:** the unseen pool is not checkpointed; on resume a new shuffle is
+started (training continues normally, but sampling order is not bit-identical to
+an uninterrupted run).
 
 `total_iters` must be divisible by `iter_per_epoch`. `epoch` and `eval_epoch` are **classic-mode only**.
 
