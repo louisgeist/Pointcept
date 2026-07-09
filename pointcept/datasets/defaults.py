@@ -22,6 +22,7 @@ from pointcept.utils.cache import shared_dict
 
 from .builder import DATASETS, build_dataset
 from .transform import Compose, TRANSFORMS, record_data_pipeline
+from .subset_utils import apply_subset_selection
 
 INTERPOLATION_MODE = {
     "bilinear": InterpolationMode.BILINEAR,
@@ -53,6 +54,7 @@ class DefaultDataset(Dataset):
         ignore_index=-1,
         loop=1,
         max_sample=None,
+        stratified_subset_manifest=None,
     ):
         super(DefaultDataset, self).__init__()
         self.data_root = data_root
@@ -66,6 +68,7 @@ class DefaultDataset(Dataset):
         self.test_mode = test_mode
         self.test_cfg = test_cfg if test_mode else None
         self.max_sample = max_sample
+        self.stratified_subset_manifest = stratified_subset_manifest
 
         if test_mode:
             self.test_voxelize = TRANSFORMS.build(self.test_cfg.voxelize)
@@ -76,8 +79,12 @@ class DefaultDataset(Dataset):
             self.aug_transform = [Compose(aug) for aug in self.test_cfg.aug_transform]
 
         self.data_list = self.get_data_list()
-        if self.max_sample is not None and self.max_sample < len(self.data_list):
-            self.data_list = self.data_list[: self.max_sample]
+        self.data_list = apply_subset_selection(
+            self.data_list,
+            split=self.split,
+            max_sample=self.max_sample,
+            stratified_subset_manifest=self.stratified_subset_manifest,
+        )
         logger = get_root_logger()
         logger.info(
             "Totally {} x {} samples in {} {} set.".format(
