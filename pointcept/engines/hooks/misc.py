@@ -174,6 +174,16 @@ class InformationWriter(HookBase):
             stats["intersection"] += area_intersection.detach()
             stats["union"] += area_union.detach()
 
+    def _epoch_miou_for_task(self, task_name):
+        if task_name not in self._train_seg_stats:
+            return None
+        intersection = self._train_seg_stats[task_name]["intersection"]
+        union = self._train_seg_stats[task_name]["union"]
+        valid = union > 0
+        if valid.any():
+            return (intersection[valid] / (union[valid] + 1e-10)).mean().item()
+        return 0.0
+
     def _train_per_cls_iou_items(self, data_cfg, tc, use_task_in_tag):
         """Yields (tb_tag, wandb_tag, value) for each logged train class-IoU (epoch-level, rank 0)."""
         for task_name, stats in self._train_seg_stats.items():
@@ -417,17 +427,11 @@ class InformationWriter(HookBase):
         # full-resolution labels after inverse remap (see SemSegEvaluator).
         data_cfg = self.trainer.cfg.data
         main_task = self._cfg_get(data_cfg, "main_task", None) or "segment"
-        epoch_miou_main = None
-        if main_task in self._train_seg_stats:
-            intersection = self._train_seg_stats[main_task]["intersection"]
-            union = self._train_seg_stats[main_task]["union"]
-            valid = union > 0
-            if valid.any():
-                epoch_miou_main = (
-                    intersection[valid] / (union[valid] + 1e-10)
-                ).mean().item()
-            else:
-                epoch_miou_main = 0.0
+        epoch_miou_main = self._epoch_miou_for_task(main_task)
+        train_miou_by_task = {
+            task_name: self._epoch_miou_for_task(task_name)
+            for task_name in self._train_seg_stats
+        }
 
         epoch_info = "Train result: "
         for key in self.model_output_keys:
@@ -438,6 +442,9 @@ class InformationWriter(HookBase):
             )
         if epoch_miou_main is not None:
             epoch_info += "mIoU: {:.4f} ".format(epoch_miou_main)
+        for task_name, task_miou in train_miou_by_task.items():
+            if task_name != main_task and task_miou is not None:
+                epoch_info += f"{task_name}_mIoU: {task_miou:.4f} "
         tc = self._cfg_get(data_cfg, "task_configs", None)
         train_multilabel_macro_f1 = {}
         if comm.is_main_process() and self._train_multilabel_stats:
@@ -457,7 +464,7 @@ class InformationWriter(HookBase):
         epoch_step = self.trainer.epoch + 1
         wandb_dict = None
 
-        if self.trainer.writer is not None:
+        if comm.is_main_process() and self.trainer.writer is not None:
             for key in self.model_output_keys:
                 self.trainer.writer.add_scalar(
                     "train/" + key,
@@ -468,6 +475,13 @@ class InformationWriter(HookBase):
                 self.trainer.writer.add_scalar(
                     "train/mIoU", float(epoch_miou_main), self.trainer.epoch + 1
                 )
+            for task_name, task_miou in train_miou_by_task.items():
+                if task_miou is not None:
+                    self.trainer.writer.add_scalar(
+                        f"train/{task_name}/mIoU",
+                        float(task_miou),
+                        self.trainer.epoch + 1,
+                    )
             for task_name, macro_f1 in train_multilabel_macro_f1.items():
                 self.trainer.writer.add_scalar(
                     f"train/{task_name}/macro_f1",
@@ -481,24 +495,31 @@ class InformationWriter(HookBase):
                 ):
                     self.trainer.writer.add_scalar(tb_tag, value, epoch_step)
 
-            if self.trainer.cfg.enable_wandb:
-                lr = self.trainer.optimizer.state_dict()["param_groups"][0]["lr"]
-                wandb_dict = {
-                    "Epoch": epoch_step,
-                    "Iter": self.curr_iter,
-                    "params/lr": lr,
-                }
-                for key in self.model_output_keys:
-                    wandb_dict[f"train/{key}"] = self.trainer.storage.history(key).avg
-                if epoch_miou_main is not None:
-                    wandb_dict["train/mIoU"] = float(epoch_miou_main)
-                for task_name, macro_f1 in train_multilabel_macro_f1.items():
-                    wandb_dict[f"train/{task_name}/macro_f1"] = macro_f1
-                if self.write_cls_iou:
-                    for _, wandb_tag, value in self._train_per_cls_iou_items(
-                        data_cfg, tc, use_task_in_tag
-                    ):
-                        wandb_dict[wandb_tag] = value
+        if (
+            comm.is_main_process()
+            and self.trainer.cfg.enable_wandb
+            and wandb.run is not None
+        ):
+            lr = self.trainer.optimizer.state_dict()["param_groups"][0]["lr"]
+            wandb_dict = {
+                "Epoch": epoch_step,
+                "Iter": self.curr_iter,
+                "params/lr": lr,
+            }
+            for key in self.model_output_keys:
+                wandb_dict[f"train/{key}"] = self.trainer.storage.history(key).avg
+            if epoch_miou_main is not None:
+                wandb_dict["train/mIoU"] = float(epoch_miou_main)
+            for task_name, task_miou in train_miou_by_task.items():
+                if task_miou is not None:
+                    wandb_dict[f"train/{task_name}/miou"] = float(task_miou)
+            for task_name, macro_f1 in train_multilabel_macro_f1.items():
+                wandb_dict[f"train/{task_name}/macro_f1"] = macro_f1
+            if self.write_cls_iou:
+                for _, wandb_tag, value in self._train_per_cls_iou_items(
+                    data_cfg, tc, use_task_in_tag
+                ):
+                    wandb_dict[wandb_tag] = value
 
         finalize_epoch_wall_timing(
             self.trainer,

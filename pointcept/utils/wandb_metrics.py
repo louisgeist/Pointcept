@@ -16,7 +16,9 @@ def define_wandb_metrics():
     wandb.define_metric("train_batch/*", step_metric="Iter")
 
     wandb.define_metric("train/*", step_metric="Epoch")
+    wandb.define_metric("train/*/*", step_metric="Epoch")
     wandb.define_metric("val/*", step_metric="Epoch")
+    wandb.define_metric("val/*/*", step_metric="Epoch")
     wandb.define_metric("val/reg/*", step_metric="Epoch")
     wandb.define_metric("train/s_per_epoch", step_metric="Epoch")
     wandb.define_metric("val/s_per_epoch", step_metric="Epoch")
