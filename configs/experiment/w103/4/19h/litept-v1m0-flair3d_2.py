@@ -38,7 +38,7 @@ coord_feat_scale = 0.01
 
 wandb_run_name = (
     f"Flair3D+ LitePT "
-    f"({grp_exp}.{num_exp}) lr={lr}, mix_prob={mix_prob}, nh_pool=mean | val STRATIFIED check"
+    f"({grp_exp}.{num_exp}) lr={lr}, mix_prob={mix_prob}, nh_pool=max | val STRATIFIED check"
 )
 wandb_project = "flair3d_nh_multilabel"
 
@@ -64,7 +64,7 @@ label_definitions = dict(
 )
 
 task_configs = init_task_configs(target_keys, definitions=label_definitions)
-task_configs["natural_habitat_multilabel"]["pooling"] = "mean"
+task_configs["natural_habitat_multilabel"]["pooling"] = "max"
 task_criteria = init_task_criteria(task_configs)
 task_weights = {task_name: 1.0 for task_name in task_configs.keys()}
 
