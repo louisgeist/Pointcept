@@ -15,6 +15,7 @@ python scripts/build_stratified_subset.py \
   --output data/flair3d_plus/manifests/val_dev_subset_D067_300.csv
 
 Jean-Zay : 
+VAL:
 python scripts/build_stratified_subset.py \
   --data_root data/flair3d_plus \
   --csv_manifest data/flair3d_plus/raw/scene_split_manifest.csv \
@@ -24,6 +25,16 @@ python scripts/build_stratified_subset.py \
   --seed 0 \
   --keys segment natural_habitat_multilabel \
   --output data/flair3d_plus/manifests/val_dev_subset_2000.csv
+  
+TEST:
+python scripts/build_stratified_subset.py \
+  --data_root data/flair3d_plus \
+  --csv_manifest data/flair3d_plus/raw/scene_split_manifest.csv \
+  --split test \
+  --max_sample 10000 \
+  --seed 0 \
+  --keys segment natural_habitat_multilabel \
+  --output data/flair3d_plus/manifests/test_dev_subset_10k.csv
 """
 
 from __future__ import annotations
