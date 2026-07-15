@@ -140,6 +140,42 @@ class SmoothL1Loss(nn.Module):
 
 
 @LOSSES.register_module()
+class L1Loss(nn.Module):
+    """L1 on finite elements only (ignores NaN/Inf in pred or target)."""
+
+    def __init__(self, loss_weight=1.0):
+        super().__init__()
+        self.loss_weight = loss_weight
+
+    def forward(self, pred, target):
+        pred = pred.reshape(-1)
+        target = target.reshape(-1)
+        mask = torch.isfinite(pred) & torch.isfinite(target)
+        if mask.sum() == 0:
+            return pred.sum() * 0.0
+        diff = F.l1_loss(pred[mask], target[mask], reduction="sum")
+        return diff / mask.sum().clamp(min=1) * self.loss_weight
+
+
+@LOSSES.register_module()
+class MSELoss(nn.Module):
+    """MSE on finite elements only (ignores NaN/Inf in pred or target)."""
+
+    def __init__(self, loss_weight=1.0):
+        super().__init__()
+        self.loss_weight = loss_weight
+
+    def forward(self, pred, target):
+        pred = pred.reshape(-1)
+        target = target.reshape(-1)
+        mask = torch.isfinite(pred) & torch.isfinite(target)
+        if mask.sum() == 0:
+            return pred.sum() * 0.0
+        diff = F.mse_loss(pred[mask], target[mask], reduction="sum")
+        return diff / mask.sum().clamp(min=1) * self.loss_weight
+
+
+@LOSSES.register_module()
 class FocalLoss(nn.Module):
     def __init__(
         self, gamma=2.0, alpha=0.5, reduction="mean", loss_weight=1.0, ignore_index=-1
