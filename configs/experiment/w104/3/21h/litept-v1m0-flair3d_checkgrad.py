@@ -38,7 +38,7 @@ coord_feat_scale = 0.01
 
 wandb_run_name = (
     f"Flair3D+ LitePT "
-    f"({grp_exp}.{num_exp}) lr={lr}, mix_prob={mix_prob}, nh_pool=max | check grad norms"
+    f"({grp_exp}.{num_exp}) lr={lr}, mix_prob={mix_prob}, nh_pool=max, reg_loss=MSE | check grad norms"
 )
 wandb_project = "flair3d_nh_multilabel"
 
