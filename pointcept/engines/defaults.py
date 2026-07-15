@@ -169,7 +169,10 @@ def default_config_parser(file_path, options):
             )
         cfg.num_epochs = total_iters // cfg.iter_per_epoch
 
-        cfg.data.train.loop = 1
+        # Default loop=1 (epoch length is iter_per_epoch). Preserve an explicit
+        # train loop > 1 for single-scene overfit (repeat one tile in the dataset).
+        if getattr(cfg.data.train, "loop", 1) <= 1:
+            cfg.data.train.loop = 1
     else: # classic mode
         # Deactivate iter-limited mode parameters
         cfg.iter_per_epoch = None
