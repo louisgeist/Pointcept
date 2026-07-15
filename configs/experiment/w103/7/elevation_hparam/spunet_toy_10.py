@@ -1,8 +1,7 @@
 """
-LitePT-v1 multi-task: segment (v18) + forest + elevation + tile natural_habitat_multilabel.
+Toy SpUNet elevation hparam ablation (target_scale_1.0).
 
-On-disk segment labels: preprocess --segment_definition v18.
-natural_habitat_multilabel.npy from assign_flair3d_natural_habitat_multilabel.py.
+elevation_target_scale=1.0. Small subset (D067 manifest, max_sample caps), DefaultRegressorV2 on elevation only.
 """
 
 # -----------------------------------------------------------------------------
@@ -10,158 +9,146 @@ natural_habitat_multilabel.npy from assign_flair3d_natural_habitat_multilabel.py
 # -----------------------------------------------------------------------------
 _base_ = ["../../../../_base_/default_runtime.py"]
 
-grp_exp = 8
-num_exp = 3
+# -----------------------------------------------------------------------------
+# Run-level settings
+# -----------------------------------------------------------------------------
 
-log_task_gradient_norms = True
+# Logging parameters
+grp_exp = 2
+num_exp = 10
+
+# Reproducibility
+seed = 14028665
+
+# Hardware parameters
 num_gpu = 1
-num_worker = 8 * num_gpu
+num_worker= 20 * num_gpu
 enable_amp = True
 
-batch_size = 20 * num_gpu
-batch_size_val = batch_size // 4
-batch_size_test = batch_size // 4
+# Data parameters
+batch_size = 20 * num_gpu  # total batch size across all gpus
+batch_size_val = batch_size // 2
+batch_size_test = batch_size // 2
+
+# One unique scene; train `loop` repeats it so DataLoader can form full batches
+# (each index maps to the same tile via idx % len(data_list)).
+overfit_unique_samples = 1
+overfit_train_loop = batch_size
+
+train_max_sample = overfit_unique_samples
+val_max_sample = overfit_unique_samples
+test_max_sample = overfit_unique_samples
 
 grid_size = 0.1
-point_max = 102400
+point_max = 100000
 mix_prob = 0.8
-patch_size = 1024
 
+# Optimization parameters
 lr = 1e-3
-total_iters = 1_000
+total_iters = 1000
+iter_per_epoch = 10
+eval_every = 1
 warmup_iters = 500
 
+# Features
 learned_masked_feat = True
 feat_keys = ["coord", "color", "strength"]
 coord_feat_scale = 0.01
+feat_scales = dict(coord=coord_feat_scale)
 
+# Wandb parameters
 wandb_run_name = (
-    f"Flair3D+ LitePT segment v18+forest+elevation+nh_multilabel "
-    f"({grp_exp}.{num_exp}) lr={lr}, mix_prob={mix_prob} | LOG GRAD"
+    f"SpUNet elev overfit (2.10) | target_scale_1.0"
 )
-wandb_project = "flair3d_nh_multilabel"
+wandb_project = "flair3d_elevation"
 
+# -----------------------------------------------------------------------------
+# Mono-task regression configuration
+# -----------------------------------------------------------------------------
 from pointcept.datasets.flair3d_config_utils import (
-    ELEVATION_TARGET_SCALE,
-    init_task_configs,
-    init_task_criteria,
-    FLAIR3D_COLLECT_PREFIX_LITEPT,
+    FLAIR3D_COLLECT_PREFIX_GRID,
     init_multitask_collect_keys,
+    ELEVATION_TARGET_SCALE,
+    ELEVATION_SMOOTH_L1_BETA,
     get_regression_target_scales,
 )
 
-main_task = "segment"
-semantic_target_keys = (main_task, "forest")
-target_keys = semantic_target_keys + ("elevation", "natural_habitat_multilabel")
+target_key = "elevation"
+target_keys = (target_key,)
+origin_target_key = f"origin_{target_key}"
 
-elevation_target_scale = ELEVATION_TARGET_SCALE
+elevation_target_scale = 1.0
 elevation_key_scales = dict(elevation=elevation_target_scale)
 target_scales = get_regression_target_scales(target_keys)
+target_scales["elevation"] = elevation_target_scale
 
-label_definitions = dict(
-    segment="v18",
-)
-
-task_configs = init_task_configs(target_keys, definitions=label_definitions)
-task_criteria = init_task_criteria(task_configs)
-task_weights = {task_name: 1.0 for task_name in task_configs.keys()}
-# task_weights = {
-#     "segment": 1.0,
-#     "forest": 1.0,
-#     "elevation": 1.0,
-#     "natural_habitat_multilabel": 1.0,
-# }
-
-del init_task_configs, init_task_criteria, get_regression_target_scales
-
-num_classes = task_configs[main_task]["num_classes"]
-ignore_index = task_configs[main_task]["ignore_index"]
-names = task_configs[main_task]["names"]
-
+# -----------------------------------------------------------------------------
+# Hooks
+# -----------------------------------------------------------------------------
 hooks = [
     dict(type="CheckpointLoader"),
     dict(type="ModelHook"),
     dict(type="IterationTimer", warmup_iter=2),
-    dict(type="InformationWriter", log_interval=100),
-    dict(type="MultiTaskEvaluator", write_cls_iou=True),
+    dict(type="InformationWriter", log_interval=1),
+    dict(type="RegressionEvaluator"),
     dict(type="CheckpointSaver", save_freq=None),
     dict(type="PreciseEvaluator", test_last=False),
 ]
 
 test_single_fragment = True
-test = dict(type="MultiTaskTester", verbose=True, write_cls_iou=True)
+test = dict(type="RegressionTester", verbose=True)
+
+# -----------------------------------------------------------------------------
+# Model
+# -----------------------------------------------------------------------------
+backbone_channels = (32, 64, 128, 256, 256, 128, 96, 96)
 
 model = dict(
-    type="MultiTaskSegmentorV2",
-    backbone_out_channels=72,
+    type="DefaultRegressorV2",
+    target_key=target_key,
+    backbone_out_channels=backbone_channels[-1],
+    criteria=[dict(type="SmoothL1Loss", beta=ELEVATION_SMOOTH_L1_BETA, loss_weight=1.0)],
     backbone=dict(
-        type="LitePT-v1",
-        in_channels=7,
-        order=("z", "z-trans", "hilbert", "hilbert-trans"),
-        stride=(2, 2, 2, 2),
-        enc_depths=(2, 2, 2, 6, 2),
-        enc_channels=(36, 72, 144, 252, 504),
-        enc_num_head=(2, 4, 8, 14, 28),
-        enc_patch_size=(patch_size, patch_size, patch_size, patch_size, patch_size),
-        enc_conv=(True, True, True, False, False),
-        enc_attn=(False, False, False, True, True),
-        enc_rope_freq=(100.0, 100.0, 100.0, 100.0, 100.0),
-        dec_depths=(0, 0, 0, 0),
-        dec_channels=(72, 72, 144, 252),
-        dec_num_head=(4, 4, 8, 14),
-        dec_patch_size=(patch_size, patch_size, patch_size, patch_size),
-        dec_conv=(False, False, False, False),
-        dec_attn=(False, False, False, False),
-        dec_rope_freq=(100.0, 100.0, 100.0, 100.0),
-        mlp_ratio=4,
-        qkv_bias=True,
-        qk_scale=None,
-        attn_drop=0.0,
-        proj_drop=0.0,
-        drop_path=0.3,
-        shuffle_orders=True,
-        pre_norm=True,
-        enc_mode=False,
+        type="SpUNet-v1m1",
+        in_channels=7,  # feat_keys channels
+        num_classes=0,
+        channels=backbone_channels,
+        layers=(2, 3, 4, 6, 2, 2, 2, 2),
     ),
     feature_mask_values=dict(
-        enable=learned_masked_feat,
+        enable=True,
         masked_feat_keys=["color", "strength"],
     ),
-    task_configs=task_configs,
-    main_task=main_task,
-    task_criteria=task_criteria,
-    task_weights=task_weights,
 )
 
+# -----------------------------------------------------------------------------
+# Optimizer / scheduler
+# -----------------------------------------------------------------------------
 optimizer = dict(type="AdamW", lr=lr, weight_decay=0.005)
 scheduler = dict(
     type="LinearLR",
     start_factor=1 / 10,
     total_iters=warmup_iters,
 )
-param_dicts = [dict(keyword="block", lr=lr / 10)]
 
+# -----------------------------------------------------------------------------
+# Dataset
+# -----------------------------------------------------------------------------
 dataset_type = "Flair3DDataset"
 data_root = "data/flair3d_plus"
-csv_manifest = "data/flair3d_plus/raw/scene_split_manifest.csv"
+csv_manifest = "data/flair3d_plus/raw/scene_split_manifest_D067.csv"
 missing_tiles_manifest = "data/flair3d_plus/missing_ply_preflight.txt"
 too_small_tiles_manifest = "data/flair3d_plus/too_small_tiles.csv"
 
-train_multitask_keys, val_multitask_keys, multitask_index_valid_keys = (
-    init_multitask_collect_keys(
-        target_keys, collect_prefix_keys=FLAIR3D_COLLECT_PREFIX_LITEPT
-    )
+train_collect_keys, val_collect_keys, index_valid_keys = init_multitask_collect_keys(
+    target_keys, collect_prefix_keys=FLAIR3D_COLLECT_PREFIX_GRID
 )
 
-del FLAIR3D_COLLECT_PREFIX_LITEPT, init_multitask_collect_keys
+del FLAIR3D_COLLECT_PREFIX_GRID, init_multitask_collect_keys, get_regression_target_scales
 
 data = dict(
-    num_classes=num_classes,
-    ignore_index=ignore_index,
-    names=names,
     target_scales=target_scales,
-    task_configs=task_configs,
-    main_task=main_task,
+    target_key=target_key,
     train=dict(
         type=dataset_type,
         split="train",
@@ -170,11 +157,13 @@ data = dict(
         missing_tiles_manifest=missing_tiles_manifest,
         too_small_tiles_manifest=too_small_tiles_manifest,
         target_keys=list(target_keys),
-        primary_target_key=main_task,
+        primary_target_key=target_key,
+        max_sample=train_max_sample,
+        loop=overfit_train_loop,
         transform=[
             dict(
                 type="Update",
-                keys_dict={"index_valid_keys": list(multitask_index_valid_keys)},
+                keys_dict={"index_valid_keys": list(index_valid_keys)},
             ),
             dict(type="CenterShift", apply_z=True),
             dict(type="Z_MinShift"),
@@ -201,13 +190,13 @@ data = dict(
             dict(type="RandomDropColor", drop_ratio=0.1, drop_application_ratio=0.5, keep_mask=True),
             dict(type="RandomDropStrength", drop_ratio=1.0, drop_application_ratio=0.2, keep_mask=True),
             dict(type="RandomDropStrength", drop_ratio=0.1, drop_application_ratio=0.5, keep_mask=True),
+            dict(type="ShufflePoint"),
             dict(type="ToTensor"),
-            dict(type="Update", keys_dict={"grid_size": grid_size}),
             dict(
                 type="Collect",
-                keys=train_multitask_keys,
+                keys=train_collect_keys,
                 feat_keys=feat_keys,
-                feat_scales=dict(coord=coord_feat_scale),
+                feat_scales=feat_scales,
                 key_scales=elevation_key_scales,
             ),
         ],
@@ -221,21 +210,18 @@ data = dict(
         missing_tiles_manifest=missing_tiles_manifest,
         too_small_tiles_manifest=too_small_tiles_manifest,
         target_keys=list(target_keys),
-        primary_target_key=main_task,
+        primary_target_key=target_key,
+        max_sample=val_max_sample,
         transform=[
             dict(
                 type="Update",
-                keys_dict={"index_valid_keys": list(multitask_index_valid_keys)},
+                keys_dict={"index_valid_keys": list(index_valid_keys)},
             ),
             dict(type="CenterShift", apply_z=True),
             dict(type="Z_MinShift"),
             dict(
                 type="Copy",
-                keys_dict={
-                    "segment": "origin_segment",
-                    "forest": "origin_forest",
-                    "elevation": "origin_elevation",
-                },
+                keys_dict={target_key: origin_target_key},
             ),
             dict(
                 type="GridSample",
@@ -248,10 +234,9 @@ data = dict(
             dict(type="CenterShift", apply_z=False),
             dict(type="NormalizeColor"),
             dict(type="ToTensor"),
-            dict(type="Update", keys_dict={"grid_size": grid_size}),
             dict(
                 type="Collect",
-                keys=val_multitask_keys,
+                keys=val_collect_keys,
                 feat_keys=feat_keys,
                 feat_scales=dict(coord=coord_feat_scale),
                 key_scales=elevation_key_scales,
@@ -261,13 +246,14 @@ data = dict(
     ),
     test=dict(
         type=dataset_type,
-        split="test",
+        split="val",
         data_root=data_root,
         csv_manifest=csv_manifest,
         missing_tiles_manifest=missing_tiles_manifest,
         too_small_tiles_manifest=too_small_tiles_manifest,
         target_keys=list(target_keys),
-        primary_target_key=main_task,
+        primary_target_key=target_key,
+        max_sample=test_max_sample,
         transform=[
             dict(type="CenterShift", apply_z=True),
             dict(type="Z_MinShift"),
