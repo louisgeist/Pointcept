@@ -8,6 +8,7 @@ Please cite our work if the code is helpful to you.
 import sys
 import glob
 import os
+import math
 import shutil
 import time
 import gc
@@ -214,7 +215,8 @@ class InformationWriter(HookBase):
 
     @staticmethod
     def _skip_console_scalar(key):
-        return str(key).startswith("gradient/")
+        key = str(key)
+        return key.startswith("gradient/") or key.startswith("loss_scale/")
 
     def before_step(self):
         self.curr_iter += 1
@@ -281,6 +283,31 @@ class InformationWriter(HookBase):
                             continue
                         subkey = f"gradient/backbone_cos/{pair_key}"
                         self.trainer.storage.put_scalar(subkey, float(value))
+                        scalar_keys.append(subkey)
+
+            grad_norm_lite = self.trainer.comm_info.get("grad_norm_lite")
+            if isinstance(grad_norm_lite, dict):
+                last_layer_norms = grad_norm_lite.get("last_layer_norms")
+                if isinstance(last_layer_norms, dict):
+                    for task_name, value in last_layer_norms.items():
+                        if value is None:
+                            continue
+                        value = float(value)
+                        if not math.isfinite(value):
+                            continue
+                        subkey = f"gradient/last_layer/{task_name}"
+                        self.trainer.storage.put_scalar(subkey, value)
+                        scalar_keys.append(subkey)
+                loss_scales = grad_norm_lite.get("loss_scales")
+                if isinstance(loss_scales, dict):
+                    for task_name, value in loss_scales.items():
+                        if value is None:
+                            continue
+                        value = float(value)
+                        if not math.isfinite(value):
+                            continue
+                        subkey = f"loss_scale/{task_name}"
+                        self.trainer.storage.put_scalar(subkey, value)
                         scalar_keys.append(subkey)
 
             global_diag = self.trainer.comm_info.get("global_gradient_diag")
@@ -401,7 +428,7 @@ class InformationWriter(HookBase):
                 log_all_steps = self.wandb_log_every_step
                 log_grad_steps = getattr(
                     self.trainer.cfg, "log_task_gradient_norms", False
-                )
+                ) or getattr(self.trainer.cfg, "grad_norm_lite", False)
                 if log_all_steps or log_grad_steps:
                     wandb_payload = {"Iter": self.curr_iter}
                     if log_all_steps:
@@ -411,7 +438,7 @@ class InformationWriter(HookBase):
                         step_keys = [
                             k
                             for k in self.model_output_keys
-                            if k.startswith("gradient/")
+                            if k.startswith("gradient/") or k.startswith("loss_scale/")
                         ]
                     for key in step_keys:
                         wandb_payload[f"train_batch/{key}"] = (

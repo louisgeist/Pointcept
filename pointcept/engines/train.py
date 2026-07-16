@@ -35,7 +35,10 @@ from pointcept.utils.scheduler import build_scheduler
 from pointcept.utils.events import EventStorage, ExceptionWriter
 from pointcept.utils.wandb_metrics import define_wandb_metrics
 from pointcept.utils.gradient_norm import (
+    GradNormLiteEMA,
+    all_reduce_mean_task_norms,
     compute_task_gradient_norms,
+    compute_task_last_layer_grad_norms,
     l2_model_grad_norm,
     l2_model_update_norm,
     snapshot_trainable_params,
@@ -229,6 +232,7 @@ class Trainer(TrainerBase):
         self.logger.info("=> Building hooks ...")
         self.register_hooks(self.cfg.hooks)
         self._gradient_accumulation_counter = 0
+        self._grad_norm_lite_ema = None
 
     def before_train(self):
         if comm.is_main_process():
@@ -291,21 +295,87 @@ class Trainer(TrainerBase):
                 output_dict["loss"] / self.cfg.gradient_accumulation_steps
             )  # scale loss
 
-        if getattr(self.cfg, "log_task_gradient_norms", False):
-            loss_by_task = output_dict.get("loss_by_task")
+        model = (
+            self.model.module if hasattr(self.model, "module") else self.model
+        )
+        loss_by_task = output_dict.get("loss_by_task")
+
+        if getattr(self.cfg, "grad_norm_lite", False):
             if isinstance(loss_by_task, dict) and loss_by_task:
-                model = (
-                    self.model.module
-                    if hasattr(self.model, "module")
-                    else self.model
+                if not hasattr(model, "last_backbone_layer_parameters"):
+                    raise AttributeError(
+                        "grad_norm_lite requires a model with "
+                        "last_backbone_layer_parameters() (e.g. MultiTaskSegmentorV2)."
+                    )
+                if self._grad_norm_lite_ema is None:
+                    self._grad_norm_lite_ema = GradNormLiteEMA(
+                        alpha=getattr(self.cfg, "grad_norm_lite_ema_alpha", 0.1),
+                        eps=getattr(self.cfg, "grad_norm_lite_eps", 1e-3),
+                    )
+                interval = int(getattr(self.cfg, "grad_norm_lite_interval", 100))
+                lite_info = {}
+                iter_idx = int(self.comm_info["iter"])
+                # Scene-level losses underflow in fp16 without a probe scale.
+                amp_probe_scale = float(
+                    getattr(
+                        self.cfg,
+                        "grad_norm_amp_probe_scale",
+                        1024.0 if self.cfg.enable_amp else 1.0,
+                    )
                 )
+                if iter_idx > 0 and iter_idx % interval == 0:
+                    norms = compute_task_last_layer_grad_norms(
+                        model, loss_by_task, probe_scale=amp_probe_scale
+                    )
+                    # Align with SyncBatchNorm: sync across ranks only when sync_bn.
+                    if getattr(self.cfg, "sync_bn", False):
+                        task_order = getattr(model, "tasks", None) or sorted(
+                            loss_by_task.keys()
+                        )
+                        norms = all_reduce_mean_task_norms(
+                            norms, task_names=task_order
+                        )
+                    self._grad_norm_lite_ema.update(norms)
+                    lite_info["last_layer_norms"] = norms
+
+                task_weights = getattr(model, "task_weights", {})
+                total_loss = None
+                scales = {}
+                for task_name, task_loss in loss_by_task.items():
+                    w = float(task_weights.get(task_name, 1.0))
+                    scale = self._grad_norm_lite_ema.scale(task_name)
+                    scales[task_name] = scale
+                    weighted = task_loss * w * scale
+                    total_loss = (
+                        weighted if total_loss is None else total_loss + weighted
+                    )
+                loss = total_loss / self.cfg.gradient_accumulation_steps
+                output_dict["loss"] = total_loss
+                lite_info["loss_scales"] = scales
+                self.comm_info["grad_norm_lite"] = lite_info
+            else:
+                self.comm_info.pop("grad_norm_lite", None)
+        else:
+            self.comm_info.pop("grad_norm_lite", None)
+
+        if getattr(self.cfg, "log_task_gradient_norms", False):
+            if isinstance(loss_by_task, dict) and loss_by_task:
                 if hasattr(model, "backbone_parameters"):
                     task_weights = getattr(model, "task_weights", {})
+                    amp_probe_scale = float(
+                        getattr(
+                            self.cfg,
+                            "grad_norm_amp_probe_scale",
+                            1024.0 if self.cfg.enable_amp else 1.0,
+                        )
+                    )
+                    print(f"amp_probe_scale: {amp_probe_scale}")
                     self.comm_info["task_gradient_norms"] = compute_task_gradient_norms(
                         model,
                         loss_by_task,
                         task_weights,
                         self.cfg.gradient_accumulation_steps,
+                        probe_scale=amp_probe_scale,
                     )
                 else:
                     self.comm_info.pop("task_gradient_norms", None)

@@ -402,6 +402,11 @@ class MultiTaskSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
     def backbone_parameters(self):
         return [p for p in self.backbone.parameters() if p.requires_grad]
 
+    def last_backbone_layer_parameters(self):
+        from pointcept.utils.gradient_norm import resolve_last_backbone_layer_params
+
+        return resolve_last_backbone_layer_params(self.backbone)
+
     def task_head_parameters(self, task_name):
         params = []
         if task_name in self.seg_heads:

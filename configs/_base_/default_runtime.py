@@ -35,6 +35,18 @@ clip_grad = None  # disable with None, enable with a float
 # (per epoch 'train/gradient/...' and per-step 'train_batch/gradient/...').
 log_task_gradient_norms = False
 
+# GradNormLite (multitask): every N steps (first measure at N, not 0), measure
+# per-task L2 grad norms on the backbone last layer only, update an EMA, and
+# divide each task loss by that EMA before the main backward. Logged keys:
+# gradient/last_layer/* and loss_scale/* (TB + W&B). Independent of
+# log_task_gradient_norms. EMA sync follows sync_bn: all_reduce mean across
+# ranks only when sync_bn=True (otherwise local per rank, like non-synced
+# BatchNorm stats).
+grad_norm_lite = False
+grad_norm_lite_interval = 100
+grad_norm_lite_ema_alpha = 0.1
+grad_norm_lite_eps = 1e-3
+
 sync_bn = False
 enable_amp = False
 amp_dtype = "float16"
