@@ -3,15 +3,25 @@
 Compute per-class label distributions on Flair3D+ train (or other splits).
 
 Uses the same scene list as Flair3DDataset (CSV manifest, LIDARHD=True, excluded tiles).
-Aggregates segment, forest, land_use, and natural_habitat in one pass per scene.
+Aggregates segment, forest, land_use, and natural_habitat (point-level) plus
+natural_habitat_multilabel (scene-level multi-hot presence) in one pass per scene.
 
-Example:
+Label definitions match training: on-disk storage defs (e.g. natural_habitat=default from
+preprocess) can be remapped on the fly to a target def (e.g. by_moisture_v3) via the same
+LUT logic as Flair3DLabelRemap.
+
+natural_habitat_multilabel.npy is counted as scene presence over its 15 binary labels
+(no remap): percent = scenes_with_label / scenes_with_file.
+
+Example (on-disk default NH):
 python scripts/count_flair3d_train_label_distribution.py \
 --data_root data/flair3d_plus \
 --csv_manifest data/flair3d_plus/raw/scene_split_manifest.csv \
 --split train \
 --missing_tiles_manifest data/flair3d_plus/missing_ply_preflight.txt \
 --too_small_tiles_manifest data/flair3d_plus/too_small_tiles.csv \
+--label_definitions natural_habitat=default \
+--storage_definitions natural_habitat=default \
 --num_workers 8 \
 --output_dir stats/flair3d/label_distribution_train
 """
@@ -23,6 +33,7 @@ import csv
 import importlib.util
 import json
 import os
+import sys
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from typing import Any, Dict, List, Tuple
@@ -47,8 +58,100 @@ _flair3d_cfg = _load_flair3d_config_utils()
 FLAIR3D_SEMANTIC_TARGET_KEYS = _flair3d_cfg.FLAIR3D_SEMANTIC_TARGET_KEYS
 get_missing_target_fill_value = _flair3d_cfg.get_missing_target_fill_value
 get_semantic_config = _flair3d_cfg.get_semantic_config
+get_multilabel_classification_config = _flair3d_cfg.get_multilabel_classification_config
 
 SEMANTIC_TASKS = tuple(FLAIR3D_SEMANTIC_TARGET_KEYS)
+
+MULTILABEL_TASK = "natural_habitat_multilabel"
+_MULTILABEL_CFG = get_multilabel_classification_config(MULTILABEL_TASK)
+MULTILABEL_CLASS_NAMES: Tuple[str, ...] = tuple(_MULTILABEL_CFG["names"])
+NUM_MULTILABEL_CLASSES = int(_MULTILABEL_CFG["num_classes"])
+MULTILABEL_FILENAME = f"{MULTILABEL_TASK}.npy"
+
+# Set in main() before workers start; read by _process_scene in child processes.
+_TASK_REMAP_STATE: Dict[str, "TaskRemapState"] = {}
+
+
+def _load_label_remap_module():
+    module_name = "flair3d_label_remap_count_script"
+    path = os.path.join(
+        REPO_ROOT,
+        "pointcept",
+        "datasets",
+        "preprocessing",
+        "flair3d_plus",
+        "flair3d_label_remap.py",
+    )
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Cannot load flair3d_label_remap from {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+@dataclass(frozen=True)
+class TaskRemapState:
+    target_definition: str
+    storage_definition: str
+    stored_to_train_lut: np.ndarray | None
+    missing_fill_after_remap: int
+    num_classes: int
+    ignore_index: int | None
+
+
+def parse_definition_mapping(spec: str, *, arg_name: str) -> Dict[str, str]:
+    if not spec.strip():
+        return {}
+    result: Dict[str, str] = {}
+    for part in spec.split(","):
+        token = part.strip()
+        if not token:
+            continue
+        if "=" not in token:
+            raise ValueError(f"{arg_name}: expected task=definition, got {token!r}")
+        task_key, definition = token.split("=", 1)
+        task_key = task_key.strip()
+        definition = definition.strip()
+        if task_key not in SEMANTIC_TASKS:
+            known = ", ".join(SEMANTIC_TASKS)
+            raise ValueError(f"{arg_name}: unknown task {task_key!r}. Expected one of: {known}")
+        if not definition:
+            raise ValueError(f"{arg_name}: empty definition for task {task_key!r}")
+        result[task_key] = definition
+    return result
+
+
+def build_task_remap_state(
+    target_definitions: Dict[str, str],
+    storage_definitions: Dict[str, str],
+) -> Dict[str, TaskRemapState]:
+    """Mirror Flair3DLabelRemap: storage on-disk defs -> target training defs."""
+    label_remap = _load_label_remap_module()
+    get_default_definition_name = label_remap.get_default_definition_name
+    get_definition = label_remap.get_definition
+    build_stored_to_train_lut = label_remap.build_stored_to_train_lut
+
+    state: Dict[str, TaskRemapState] = {}
+    for task in SEMANTIC_TASKS:
+        target_name = target_definitions.get(task, get_default_definition_name(task))
+        storage_name = storage_definitions.get(task, get_default_definition_name(task))
+        target_def = get_definition(task, target_name)
+        stored_to_train_lut = None
+        if storage_name != target_name:
+            storage_def = get_definition(task, storage_name)
+            stored_to_train_lut = build_stored_to_train_lut(storage_def, target_def)
+        cfg = label_remap.definition_to_task_config(target_def)
+        state[task] = TaskRemapState(
+            target_definition=target_name,
+            storage_definition=storage_name,
+            stored_to_train_lut=stored_to_train_lut,
+            missing_fill_after_remap=int(target_def.lut[target_def.missing_fill_raw_id]),
+            num_classes=int(cfg["num_classes"]),
+            ignore_index=cfg["ignore_index"],
+        )
+    return state
 
 
 @dataclass(frozen=True)
@@ -168,21 +271,34 @@ def load_scene_records(
     return scene_records
 
 
-def _count_array_length() -> Dict[str, int]:
-    lengths: Dict[str, int] = {}
-    for task in SEMANTIC_TASKS:
-        cfg = get_semantic_config(task)
-        num_classes = int(cfg["num_classes"])
-        ignore_index = cfg["ignore_index"]
-        void_bin = num_classes
-        if ignore_index is not None and ignore_index >= 0:
-            void_bin = max(void_bin, int(ignore_index))
-        lengths[task] = void_bin + 2
-    return lengths
+def _count_array_length(task_state: TaskRemapState) -> int:
+    num_classes = task_state.num_classes
+    ignore_index = task_state.ignore_index
+    void_bin = num_classes
+    if ignore_index is not None and ignore_index >= 0:
+        void_bin = max(void_bin, int(ignore_index))
+    return void_bin + 2
 
 
 def _init_task_counts() -> Dict[str, np.ndarray]:
-    return {task: np.zeros(_count_array_length()[task], dtype=np.int64) for task in SEMANTIC_TASKS}
+    return {
+        task: np.zeros(_count_array_length(_TASK_REMAP_STATE[task]), dtype=np.int64)
+        for task in SEMANTIC_TASKS
+    }
+
+
+def _apply_stored_to_train(labels: np.ndarray, task: str) -> np.ndarray:
+    task_state = _TASK_REMAP_STATE[task]
+    labels = labels.reshape(-1)
+    lut = task_state.stored_to_train_lut
+    if lut is None:
+        return labels.astype(np.int64, copy=False)
+    idx = labels.astype(np.int64, copy=False)
+    remapped = np.full(idx.shape, task_state.missing_fill_after_remap, dtype=np.int32)
+    valid = (idx >= 0) & (idx < lut.shape[0])
+    if np.any(valid):
+        remapped[valid] = lut[idx[valid]]
+    return remapped
 
 
 def _accumulate_labels(
@@ -225,14 +341,41 @@ def _load_task_labels(scene_path: str, task: str, n_points: int) -> np.ndarray |
     return np.full(n_points, fill, dtype=np.int32)
 
 
-def _process_scene(task: tuple[SceneRecord, bool]) -> tuple[Dict[str, np.ndarray], Dict[str, int], str | None]:
+def _empty_multilabel_counts() -> np.ndarray:
+    return np.zeros(NUM_MULTILABEL_CLASSES, dtype=np.int64)
+
+
+def _load_multilabel_vector(
+    scene_path: str,
+) -> tuple[np.ndarray | None, str | None]:
+    """Return (binary vector, error). Missing file -> (None, None)."""
+    path = os.path.join(scene_path, MULTILABEL_FILENAME)
+    if not os.path.isfile(path):
+        return None, None
+    vector = np.load(path).reshape(-1)
+    if vector.shape[0] != NUM_MULTILABEL_CLASSES:
+        return (
+            None,
+            f"{MULTILABEL_TASK} length {vector.shape[0]} != "
+            f"{NUM_MULTILABEL_CLASSES}: {scene_path}",
+        )
+    return (vector > 0).astype(np.int64), None
+
+
+def _process_scene(
+    task: tuple[SceneRecord, bool],
+) -> tuple[Dict[str, np.ndarray], np.ndarray, Dict[str, int], str | None]:
     scene, use_fill_for_missing = task
     partial = _init_task_counts()
+    ml_counts = _empty_multilabel_counts()
     meta = {f"{t}_from_file": 0 for t in SEMANTIC_TASKS}
+    meta[f"{MULTILABEL_TASK}_from_file"] = 0
+    meta[f"{MULTILABEL_TASK}_all_zero"] = 0
+    meta[f"{MULTILABEL_TASK}_missing"] = 0
 
     coord_path = os.path.join(scene.scene_path, "coord.npy")
     if not os.path.isfile(coord_path):
-        return partial, meta, f"missing coord.npy: {scene.scene_path}"
+        return partial, ml_counts, meta, f"missing coord.npy: {scene.scene_path}"
 
     n_points = int(np.load(coord_path, mmap_mode="r").shape[0])
 
@@ -241,16 +384,27 @@ def _process_scene(task: tuple[SceneRecord, bool]) -> tuple[Dict[str, np.ndarray
         has_file = os.path.isfile(file_path)
         if not has_file:
             if task == "segment":
-                return partial, meta, f"missing {task}.npy: {scene.scene_path}"
+                return (
+                    partial,
+                    ml_counts,
+                    meta,
+                    f"missing {task}.npy: {scene.scene_path}",
+                )
             if not use_fill_for_missing:
                 continue
 
         labels = _load_task_labels(scene.scene_path, task, n_points)
         if labels is None:
-            return partial, meta, f"missing {task}.npy: {scene.scene_path}"
+            return (
+                partial,
+                ml_counts,
+                meta,
+                f"missing {task}.npy: {scene.scene_path}",
+            )
         if labels.shape[0] != n_points:
             return (
                 partial,
+                ml_counts,
                 meta,
                 f"{task} length {labels.shape[0]} != coord {n_points}: {scene.scene_path}",
             )
@@ -258,14 +412,27 @@ def _process_scene(task: tuple[SceneRecord, bool]) -> tuple[Dict[str, np.ndarray
         if has_file:
             meta[f"{task}_from_file"] = 1
 
-        cfg = get_semantic_config(task)
+        labels = _apply_stored_to_train(labels, task)
+        task_state = _TASK_REMAP_STATE[task]
         _accumulate_labels(
             partial[task],
             labels,
-            num_classes=int(cfg["num_classes"]),
-            ignore_index=cfg["ignore_index"],
+            num_classes=task_state.num_classes,
+            ignore_index=task_state.ignore_index,
         )
-    return partial, meta, None
+
+    ml_vector, ml_error = _load_multilabel_vector(scene.scene_path)
+    if ml_error is not None:
+        return partial, ml_counts, meta, ml_error
+    if ml_vector is None:
+        meta[f"{MULTILABEL_TASK}_missing"] = 1
+    else:
+        meta[f"{MULTILABEL_TASK}_from_file"] = 1
+        ml_counts += ml_vector
+        if not np.any(ml_vector):
+            meta[f"{MULTILABEL_TASK}_all_zero"] = 1
+
+    return partial, ml_counts, meta, None
 
 
 def _merge_counts(total: Dict[str, np.ndarray], partial: Dict[str, np.ndarray]) -> None:
@@ -303,7 +470,11 @@ def _build_task_distribution(
     scenes_with_file: int,
     scenes_total: int,
 ) -> TaskDistribution:
-    cfg = get_semantic_config(task)
+    task_state = _TASK_REMAP_STATE[task]
+    label_remap = _load_label_remap_module()
+    cfg = label_remap.definition_to_task_config(
+        label_remap.get_definition(task, task_state.target_definition)
+    )
     class_names = cfg["names"]
     num_classes = int(cfg["num_classes"])
     ignore_index = cfg["ignore_index"]
@@ -367,6 +538,58 @@ def _build_task_distribution(
     )
 
 
+def _build_multilabel_distribution(
+    counts: np.ndarray,
+    *,
+    scenes_with_file: int,
+    scenes_total: int,
+    scenes_all_zero: int,
+    scenes_missing: int,
+) -> TaskDistribution:
+    """Scene-level multi-hot presence histogram for natural_habitat_multilabel."""
+    denom = max(scenes_with_file, 1)
+    rows: List[DistributionRow] = []
+    for i, name in enumerate(MULTILABEL_CLASS_NAMES):
+        n = int(counts[i]) if i < counts.size else 0
+        rows.append(
+            DistributionRow(
+                class_id=i,
+                class_name=name,
+                bucket="class",
+                count=n,
+                percent=100.0 * n / denom,
+            )
+        )
+    if scenes_all_zero > 0:
+        rows.append(
+            DistributionRow(
+                class_id=None,
+                class_name="all_zero",
+                bucket="all_zero",
+                count=scenes_all_zero,
+                percent=100.0 * scenes_all_zero / denom,
+            )
+        )
+    if scenes_missing > 0:
+        missing_denom = max(scenes_total, 1)
+        rows.append(
+            DistributionRow(
+                class_id=None,
+                class_name="missing_file",
+                bucket="missing",
+                count=scenes_missing,
+                percent=100.0 * scenes_missing / missing_denom,
+            )
+        )
+    return TaskDistribution(
+        task=MULTILABEL_TASK,
+        scenes_with_file=scenes_with_file,
+        scenes_total=scenes_total,
+        total_points=scenes_with_file,
+        rows=tuple(rows),
+    )
+
+
 def _total_distribution_row(dist: TaskDistribution) -> DistributionRow:
     return DistributionRow(
         class_id=None,
@@ -394,8 +617,14 @@ def _format_distribution_text(dist: TaskDistribution) -> str:
     lines = [
         f"=== {dist.task} ===",
         f"Scenes with on-disk {dist.task}.npy: {dist.scenes_with_file}/{dist.scenes_total}",
-        "-" * 72,
     ]
+    if dist.task == MULTILABEL_TASK:
+        lines.append("Unit: scene presence (multi-hot)")
+        lines.append(
+            "TOTAL row = scenes with on-disk file "
+            "(percents for labels use this denominator)"
+        )
+    lines.append("-" * 72)
     lines.extend(_format_distribution_row(row) for row in _iter_distribution_rows(dist))
     lines.append("-" * 72)
     return "\n".join(lines)
@@ -450,6 +679,11 @@ def _save_run_summary(
                 "scenes_with_file": dist.scenes_with_file,
                 "scenes_total": dist.scenes_total,
                 "total_points": dist.total_points,
+                "unit": (
+                    "scene_presence"
+                    if task == MULTILABEL_TASK
+                    else "points"
+                ),
                 "csv": f"{task}_label_distribution.csv",
                 "txt": f"{task}_label_distribution.txt",
             }
@@ -507,6 +741,18 @@ def main() -> None:
         help="Skip optional tasks (forest/land_use/natural_habitat) when .npy is absent "
         "(default: use ignore fill like Flair3DDataset).",
     )
+    parser.add_argument(
+        "--label_definitions",
+        default="",
+        help="Comma-separated task=definition for training label defs "
+        "(e.g. natural_habitat=by_moisture_v3). Defaults match flair3d_label_remap.",
+    )
+    parser.add_argument(
+        "--storage_definitions",
+        default="",
+        help="Comma-separated task=definition for on-disk label defs "
+        "(e.g. natural_habitat=default). Defaults match flair3d_label_remap defaults.",
+    )
     parser.add_argument("--num_workers", type=int, default=1)
     parser.add_argument(
         "--no_progress",
@@ -521,6 +767,17 @@ def main() -> None:
         "(default: data/flair3d_plus/stats/label_distribution_<split>).",
     )
     args = parser.parse_args()
+
+    global _TASK_REMAP_STATE
+    target_definitions = parse_definition_mapping(
+        args.label_definitions,
+        arg_name="--label_definitions",
+    )
+    storage_definitions = parse_definition_mapping(
+        args.storage_definitions,
+        arg_name="--storage_definitions",
+    )
+    _TASK_REMAP_STATE = build_task_remap_state(target_definitions, storage_definitions)
 
     data_root = resolve_repo_path(args.data_root)
     csv_manifest = resolve_repo_path(args.csv_manifest)
@@ -551,9 +808,28 @@ def main() -> None:
     print(f"excluded tiles: {len(excluded)}")
     print(f"scenes to scan: {len(scenes)}")
     print(f"use_fill_for_missing={not args.skip_missing_optional}")
+    for task in SEMANTIC_TASKS:
+        state = _TASK_REMAP_STATE[task]
+        remap_note = (
+            " (on-the-fly remap)"
+            if state.stored_to_train_lut is not None
+            else ""
+        )
+        print(
+            f"{task}: storage={state.storage_definition} -> "
+            f"target={state.target_definition}{remap_note}"
+        )
+    print(
+        f"{MULTILABEL_TASK}: scene multi-hot presence "
+        f"({NUM_MULTILABEL_CLASSES} labels, no remap)"
+    )
 
     total_counts = _init_task_counts()
+    multilabel_counts = _empty_multilabel_counts()
     scenes_with_file = {task: 0 for task in SEMANTIC_TASKS}
+    multilabel_scenes_with_file = 0
+    multilabel_scenes_all_zero = 0
+    multilabel_scenes_missing = 0
     errors: list[str] = []
 
     use_fill = not args.skip_missing_optional
@@ -564,13 +840,21 @@ def main() -> None:
 
     def _consume_results(result_iter):
         nonlocal processed
-        for partial, meta, err in result_iter:
+        nonlocal multilabel_counts
+        nonlocal multilabel_scenes_with_file
+        nonlocal multilabel_scenes_all_zero
+        nonlocal multilabel_scenes_missing
+        for partial, ml_partial, meta, err in result_iter:
             if err:
                 errors.append(err)
                 continue
             _merge_counts(total_counts, partial)
+            multilabel_counts += ml_partial
             for task in SEMANTIC_TASKS:
                 scenes_with_file[task] += meta[f"{task}_from_file"]
+            multilabel_scenes_with_file += meta[f"{MULTILABEL_TASK}_from_file"]
+            multilabel_scenes_all_zero += meta[f"{MULTILABEL_TASK}_all_zero"]
+            multilabel_scenes_missing += meta[f"{MULTILABEL_TASK}_missing"]
             processed += 1
 
     if args.num_workers <= 1:
@@ -612,6 +896,18 @@ def main() -> None:
         csv_path, txt_path = _save_task_distribution(dist, output_dir)
         saved_paths.extend([csv_path, txt_path])
 
+    multilabel_dist = _build_multilabel_distribution(
+        multilabel_counts,
+        scenes_with_file=multilabel_scenes_with_file,
+        scenes_total=processed,
+        scenes_all_zero=multilabel_scenes_all_zero,
+        scenes_missing=multilabel_scenes_missing,
+    )
+    distributions[MULTILABEL_TASK] = multilabel_dist
+    _print_task_distribution(multilabel_dist)
+    csv_path, txt_path = _save_task_distribution(multilabel_dist, output_dir)
+    saved_paths.extend([csv_path, txt_path])
+
     summary_path = _save_run_summary(
         output_dir,
         meta={
@@ -622,6 +918,14 @@ def main() -> None:
             "scenes_scanned": len(scenes),
             "scenes_processed": processed,
             "use_fill_for_missing": not args.skip_missing_optional,
+            "label_definitions": {
+                task: _TASK_REMAP_STATE[task].target_definition for task in SEMANTIC_TASKS
+            },
+            "storage_definitions": {
+                task: _TASK_REMAP_STATE[task].storage_definition for task in SEMANTIC_TASKS
+            },
+            f"{MULTILABEL_TASK}_missing": multilabel_scenes_missing,
+            f"{MULTILABEL_TASK}_all_zero": multilabel_scenes_all_zero,
         },
         distributions=distributions,
         errors=errors,
