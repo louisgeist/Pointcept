@@ -292,6 +292,21 @@ def all_reduce_mean_task_norms(norms, task_names=None):
     return {name: float(buf[i].item()) for i, name in enumerate(task_names)}
 
 
+def combine_weighted_task_losses(loss_by_task, task_weights, scales=None):
+    """Combine per-task losses as total = Σ L_t * w_t * s_t (s_t defaults to 1.0)."""
+    task_weights = task_weights or {}
+    scales = scales or {}
+    total_loss = None
+    applied_scales = {}
+    for task_name, task_loss in loss_by_task.items():
+        w = float(task_weights.get(task_name, 1.0))
+        scale = float(scales.get(task_name, 1.0))
+        applied_scales[task_name] = scale
+        weighted = task_loss * w * scale
+        total_loss = weighted if total_loss is None else total_loss + weighted
+    return total_loss, applied_scales
+
+
 class GradNormLiteEMA:
     """Per-task EMA of last-layer gradient norms for loss reweighting."""
 

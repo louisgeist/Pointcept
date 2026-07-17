@@ -41,6 +41,7 @@ from pointcept.utils.wandb_metrics import (
     iou_class_tag,
     metric_tag,
 )
+from pointcept.utils.gradient_norm import combine_weighted_task_losses
 
 from .default import HookBase
 from .builder import HOOKS
@@ -755,6 +756,25 @@ class MultiTaskEvaluator(HookBase):
                     output_dict = self.trainer.model(input_dict)
 
                 loss = output_dict["loss"]
+                loss_by_task = output_dict.get("loss_by_task")
+                if (
+                    getattr(self.trainer.cfg, "grad_norm_lite", False)
+                    and isinstance(loss_by_task, dict)
+                    and loss_by_task
+                ):
+                    model = self.trainer.model
+                    if hasattr(model, "module"):
+                        model = model.module
+                    ema = getattr(self.trainer, "_grad_norm_lite_ema", None)
+                    scales = (
+                        ema.scales(loss_by_task.keys()) if ema is not None else None
+                    )
+                    loss, _ = combine_weighted_task_losses(
+                        loss_by_task,
+                        getattr(model, "task_weights", {}),
+                        scales,
+                    )
+
                 logits_by_task = output_dict.get("seg_logits_by_task", None)
                 if not isinstance(logits_by_task, dict):
                     logits_by_task = {"segment": output_dict["seg_logits"]}
@@ -844,7 +864,6 @@ class MultiTaskEvaluator(HookBase):
                     )
 
                 self.trainer.storage.put_scalar("val_loss", loss.item())
-                loss_by_task = output_dict.get("loss_by_task")
                 # Skip when only one task: scalar "loss" already logged
                 if isinstance(loss_by_task, dict) and len(loss_by_task) > 1:
                     for task_name, v in loss_by_task.items():

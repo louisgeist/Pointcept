@@ -37,6 +37,7 @@ from pointcept.utils.wandb_metrics import define_wandb_metrics
 from pointcept.utils.gradient_norm import (
     GradNormLiteEMA,
     all_reduce_mean_task_norms,
+    combine_weighted_task_losses,
     compute_task_gradient_norms,
     compute_task_last_layer_grad_norms,
     l2_model_grad_norm,
@@ -338,17 +339,12 @@ class Trainer(TrainerBase):
                     self._grad_norm_lite_ema.update(norms)
                     lite_info["last_layer_norms"] = norms
 
-                task_weights = getattr(model, "task_weights", {})
-                total_loss = None
-                scales = {}
-                for task_name, task_loss in loss_by_task.items():
-                    w = float(task_weights.get(task_name, 1.0))
-                    scale = self._grad_norm_lite_ema.scale(task_name)
-                    scales[task_name] = scale
-                    weighted = task_loss * w * scale
-                    total_loss = (
-                        weighted if total_loss is None else total_loss + weighted
-                    )
+                scales = self._grad_norm_lite_ema.scales(loss_by_task.keys())
+                total_loss, scales = combine_weighted_task_losses(
+                    loss_by_task,
+                    getattr(model, "task_weights", {}),
+                    scales,
+                )
                 loss = total_loss / self.cfg.gradient_accumulation_steps
                 output_dict["loss"] = total_loss
                 lite_info["loss_scales"] = scales
