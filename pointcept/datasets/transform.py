@@ -505,6 +505,9 @@ class RandomScale(object):
                 self.scale[0], self.scale[1], 3 if self.anisotropic else 1
             )
             data_dict["coord"] *= scale
+            if "elevation" in data_dict.keys():
+                z_scale = scale[2] if self.anisotropic else scale
+                data_dict["elevation"] = data_dict["elevation"] * z_scale
         return data_dict
 
 
@@ -542,6 +545,9 @@ class RandomJitter(object):
                 self.clip,
             )
             data_dict["coord"] += jitter
+            # Approx: assume locally flat DTM so height-above-ground shifts by Δz only.
+            if "elevation" in data_dict.keys():
+                data_dict["elevation"] = data_dict["elevation"] + jitter[:, 2]
         return data_dict
 
 
