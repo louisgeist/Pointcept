@@ -31,6 +31,7 @@ from pointcept.utils.cache import shared_dict
 from pointcept.utils.scheduler import CosineScheduler
 import pointcept.utils.comm as comm
 from pointcept.utils.misc import intersection_and_union_gpu
+from pointcept.utils.wandb_metrics import class_name_slug, iou_class_tag, metric_tag
 from pointcept.utils.multilabel_metrics import (
     MultilabelStats,
     accumulate_multilabel_stats,
@@ -126,13 +127,6 @@ class InformationWriter(HookBase):
             return obj.get(key, default)
         return getattr(obj, key, default)
 
-    @staticmethod
-    def _iou_class_slug(class_name):
-        return "".join(
-            c if (c.isalnum() or c in "._-") else "_"
-            for c in str(class_name).strip().replace(" ", "_")
-        )
-
     def _semantic_task_specs(self, data_cfg):
         """Returns list of (task_name, task_config) for semantic multitask configs."""
         tc = self._cfg_get(data_cfg, "task_configs", None)
@@ -186,7 +180,10 @@ class InformationWriter(HookBase):
         return 0.0
 
     def _train_per_cls_iou_items(self, data_cfg, tc, use_task_in_tag):
-        """Yields (tb_tag, wandb_tag, value) for each logged train class-IoU (epoch-level, rank 0)."""
+        """Yields (tag, value) for each logged train class-IoU (epoch-level, rank 0).
+
+        TensorBoard and W&B share the same tag path.
+        """
         for task_name, stats in self._train_seg_stats.items():
             intersection = stats["intersection"].cpu().numpy()
             union = stats["union"].cpu().numpy()
@@ -196,22 +193,19 @@ class InformationWriter(HookBase):
                 num_classes = int(task_conf["num_classes"])
                 ignore_index = int(task_conf["ignore_index"])
                 names = list(task_conf["names"])
-                prefix_tag = (
-                    f"train/{task_name}/iou" if use_task_in_tag else "train/iou"
-                )
+                task_for_tag = task_name if use_task_in_tag else None
             else:
                 num_classes = int(self._cfg_get(data_cfg, "num_classes"))
                 ignore_index = int(self._cfg_get(data_cfg, "ignore_index", -1))
                 names = list(self._cfg_get(data_cfg, "names"))
-                prefix_tag = "train/iou"
+                task_for_tag = None
             for class_idx in range(num_classes):
                 if class_idx == ignore_index:
                     continue
-                class_name = names[class_idx]
-                slug = self._iou_class_slug(class_name)
-                tb_tag = f"{prefix_tag}/{slug}"
-                wandb_tag = f"{prefix_tag}_{slug}"
-                yield tb_tag, wandb_tag, float(iou_class[class_idx])
+                slug = class_name_slug(names[class_idx])
+                yield iou_class_tag("train", slug, task=task_for_tag), float(
+                    iou_class[class_idx]
+                )
 
     @staticmethod
     def _skip_console_scalar(key):
@@ -505,22 +499,22 @@ class InformationWriter(HookBase):
             for task_name, task_miou in train_miou_by_task.items():
                 if task_miou is not None:
                     self.trainer.writer.add_scalar(
-                        f"train/{task_name}/mIoU",
+                        metric_tag("train", "mIoU", task=task_name),
                         float(task_miou),
                         self.trainer.epoch + 1,
                     )
             for task_name, macro_f1 in train_multilabel_macro_f1.items():
                 self.trainer.writer.add_scalar(
-                    f"train/{task_name}/macro_f1",
+                    metric_tag("train", "macro_f1", task=task_name),
                     macro_f1,
                     self.trainer.epoch + 1,
                 )
 
             if self.write_cls_iou:
-                for tb_tag, _, value in self._train_per_cls_iou_items(
+                for tag, value in self._train_per_cls_iou_items(
                     data_cfg, tc, use_task_in_tag
                 ):
-                    self.trainer.writer.add_scalar(tb_tag, value, epoch_step)
+                    self.trainer.writer.add_scalar(tag, value, epoch_step)
 
         if (
             comm.is_main_process()
@@ -539,14 +533,16 @@ class InformationWriter(HookBase):
                 wandb_dict["train/mIoU"] = float(epoch_miou_main)
             for task_name, task_miou in train_miou_by_task.items():
                 if task_miou is not None:
-                    wandb_dict[f"train/{task_name}/miou"] = float(task_miou)
+                    wandb_dict[metric_tag("train", "mIoU", task=task_name)] = float(
+                        task_miou
+                    )
             for task_name, macro_f1 in train_multilabel_macro_f1.items():
-                wandb_dict[f"train/{task_name}/macro_f1"] = macro_f1
+                wandb_dict[metric_tag("train", "macro_f1", task=task_name)] = macro_f1
             if self.write_cls_iou:
-                for _, wandb_tag, value in self._train_per_cls_iou_items(
+                for tag, value in self._train_per_cls_iou_items(
                     data_cfg, tc, use_task_in_tag
                 ):
-                    wandb_dict[wandb_tag] = value
+                    wandb_dict[tag] = value
 
         finalize_epoch_wall_timing(
             self.trainer,

@@ -30,6 +30,8 @@ from pointcept.utils.misc import (
     intersection_and_union,
     intersection_and_union_gpu,
     make_dirs,
+    mean_acc_from_hist,
+    mean_iou_from_hist,
 )
 from pointcept.utils.progress import EvaluationProgressBar
 from pointcept.utils.regression import (
@@ -43,6 +45,7 @@ from pointcept.utils.multilabel_metrics import (
     multilabel_stats_from_tensors,
     multilabel_stats_to_tensors,
 )
+from pointcept.utils.wandb_metrics import class_name_slug, iou_class_tag, metric_tag
 
 try:
     import pointops
@@ -1329,8 +1332,10 @@ class MultiTaskTester(TesterBase):
                 task_config = task_configs[task_name]
                 iou_class = intersection / (union + 1e-10)
                 acc_class = intersection / (target_hist + 1e-10)
-                m_iou = np.mean(iou_class)
-                m_acc = np.mean(acc_class)
+                m_iou = mean_iou_from_hist(intersection, union)
+                m_acc = mean_acc_from_hist(
+                    intersection, target_hist, union=union
+                )
                 all_acc = sum(intersection) / (sum(target_hist) + 1e-10)
                 per_task_metrics[task_name] = dict(
                     iou_class=iou_class,
@@ -1362,22 +1367,24 @@ class MultiTaskTester(TesterBase):
 
             log_dict = {}
             for task_name, metric in per_task_metrics.items():
-                log_dict[f"test/{task_name}/mIoU"] = float(metric["m_iou"])
-                log_dict[f"test/{task_name}/mAcc"] = float(metric["m_acc"])
-                log_dict[f"test/{task_name}/allAcc"] = float(metric["all_acc"])
+                log_dict[metric_tag("test", "mIoU", task=task_name)] = float(
+                    metric["m_iou"]
+                )
+                log_dict[metric_tag("test", "mAcc", task=task_name)] = float(
+                    metric["m_acc"]
+                )
+                log_dict[metric_tag("test", "allAcc", task=task_name)] = float(
+                    metric["all_acc"]
+                )
                 if self.write_cls_iou:
                     task_config = task_configs[task_name]
                     for class_idx in range(int(task_config["num_classes"])):
                         if class_idx == task_config["ignore_index"]:
                             continue
-                        class_name = metric["names"][class_idx]
-                        slug = "".join(
-                            c if (c.isalnum() or c in "._-") else "_"
-                            for c in str(class_name).strip().replace(" ", "_")
-                        )
-                        log_dict[f"test/{task_name}/iou_{slug}"] = float(
-                            metric["iou_class"][class_idx]
-                        )
+                        slug = class_name_slug(metric["names"][class_idx])
+                        log_dict[
+                            iou_class_tag("test", slug, task=task_name)
+                        ] = float(metric["iou_class"][class_idx])
 
             for task_name in regression_tasks:
                 s = reg_sums_global[task_name]
@@ -1416,19 +1423,20 @@ class MultiTaskTester(TesterBase):
                         metrics["hamming_accuracy"],
                     )
                 )
-                log_dict[f"test/{task_name}/macro_f1"] = float(metrics["macro_f1"])
-                log_dict[f"test/{task_name}/micro_f1"] = float(metrics["micro_f1"])
-                log_dict[f"test/{task_name}/subset_acc"] = float(
+                log_dict[metric_tag("test", "macro_f1", task=task_name)] = float(
+                    metrics["macro_f1"]
+                )
+                log_dict[metric_tag("test", "micro_f1", task=task_name)] = float(
+                    metrics["micro_f1"]
+                )
+                log_dict[metric_tag("test", "subset_acc", task=task_name)] = float(
                     metrics["subset_accuracy"]
                 )
-                log_dict[f"test/{task_name}/hamming_acc"] = float(
+                log_dict[metric_tag("test", "hamming_acc", task=task_name)] = float(
                     metrics["hamming_accuracy"]
                 )
                 for label_name, label_metrics in metrics["per_label"].items():
-                    slug = "".join(
-                        c if (c.isalnum() or c in "._-") else "_"
-                        for c in str(label_name).strip().replace(" ", "_")
-                    )
+                    slug = class_name_slug(label_name)
                     log_dict[f"test/{task_name}/{slug}/f1"] = float(
                         label_metrics["f1"]
                     )
@@ -1457,16 +1465,12 @@ class MultiTaskTester(TesterBase):
                                 f1_class[class_idx],
                             )
                         )
-                    log_dict[f"test/{task_name}/f1_macro"] = float(macro_f1)
+                    log_dict[metric_tag("test", "macro_f1", task=task_name)] = float(
+                        macro_f1
+                    )
                     for i in range(len(f1_class)):
-                        cn = metric["names"][i]
-                        slug = "".join(
-                            c if (c.isalnum() or c in "._-") else "_"
-                            for c in str(cn).strip().replace(" ", "_")
-                        )
-                        log_dict[f"test/{task_name}/f1_{i}_{slug}"] = float(
-                            f1_class[i]
-                        )
+                        slug = class_name_slug(metric["names"][i])
+                        log_dict[f"test/{task_name}/f1/{slug}"] = float(f1_class[i])
         else:
             log_dict = None
 

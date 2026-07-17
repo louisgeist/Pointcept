@@ -140,7 +140,7 @@ class DefaultSegmentor(nn.Module, LearnedMaskedFeatMixin):
             loss = self.criteria(seg_logits, input_dict["segment"])
             return_dict = dict(loss=loss)
             with torch.no_grad():
-                # Expose predictions for epoch-level confusion accumulation in hooks. (for train/miou)
+                # Expose predictions for epoch-level confusion accumulation in hooks (train/mIoU).
                 # (We avoid logging this tensor directly; the writer filters non-scalars.)
                 return_dict["pred"] = seg_logits.argmax(dim=1)
             return return_dict

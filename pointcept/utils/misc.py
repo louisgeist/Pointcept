@@ -122,6 +122,32 @@ def f1_scores_from_hist(intersection, union, target):
     return f1, macro_f1
 
 
+def mean_iou_from_hist(intersection, union):
+    """Mean IoU over classes with non-zero union (train/val/test multi-task)."""
+    intersection = np.asarray(intersection, dtype=np.float64)
+    union = np.asarray(union, dtype=np.float64)
+    iou_class = intersection / (union + 1e-10)
+    mask = union != 0
+    if mask.any():
+        return float(np.mean(iou_class[mask]))
+    return 0.0
+
+
+def mean_acc_from_hist(intersection, target, union=None):
+    """Mean per-class accuracy over classes with non-zero union (or target)."""
+    intersection = np.asarray(intersection, dtype=np.float64)
+    target = np.asarray(target, dtype=np.float64)
+    acc_class = intersection / (target + 1e-10)
+    if union is not None:
+        union = np.asarray(union, dtype=np.float64)
+        mask = union != 0
+    else:
+        mask = target != 0
+    if mask.any():
+        return float(np.mean(acc_class[mask]))
+    return 0.0
+
+
 def make_dirs(dir_name):
     if not os.path.exists(dir_name):
         os.makedirs(dir_name, exist_ok=True)

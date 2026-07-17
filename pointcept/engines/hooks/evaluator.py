@@ -16,6 +16,8 @@ import pointcept.utils.comm as comm
 from pointcept.utils.misc import (
     accumulate_regression_errors,
     intersection_and_union_gpu,
+    mean_acc_from_hist,
+    mean_iou_from_hist,
 )
 from pointcept.utils.regression import (
     denorm_regression_prediction,
@@ -32,6 +34,12 @@ from pointcept.utils.multilabel_metrics import (
     compute_multilabel_metrics,
     multilabel_stats_from_tensors,
     multilabel_stats_to_tensors,
+)
+from pointcept.utils.wandb_metrics import (
+    best_miou_tag,
+    class_name_slug,
+    iou_class_tag,
+    metric_tag,
 )
 
 from .default import HookBase
@@ -84,15 +92,6 @@ def remap_pred_with_inverse(
         f"remapped pred length {pred_full.shape[0]} != inverse length {inverse.shape[0]}"
     )
     return pred_full
-
-
-def mean_iou_from_hist(intersection, union):
-    """Mean IoU over classes with non-zero union (consistent with train/test logging)."""
-    iou_class = intersection / (union + 1e-10)
-    mask = union != 0
-    if mask.any():
-        return float(np.mean(iou_class[mask]))
-    return 0.0
 
 
 def begin_val_epoch_timing():
@@ -922,8 +921,7 @@ class MultiTaskEvaluator(HookBase):
             iou_class = intersection / (union + 1e-10)
             acc_class = intersection / (target + 1e-10)
             m_iou = mean_iou_from_hist(intersection, union)
-            valid = union != 0
-            m_acc = float(np.mean(acc_class[valid])) if valid.any() else 0.0
+            m_acc = mean_acc_from_hist(intersection, target, union=union)
             all_acc = sum(intersection) / (sum(target) + 1e-10)
             per_task_metrics[task_name] = dict(
                 iou_class=iou_class,
@@ -982,13 +980,22 @@ class MultiTaskEvaluator(HookBase):
                 if vk not in val_histories:
                     continue
                 task_loss_avg = val_histories[vk].avg
-                wandb_log[f"val/{task_name}/loss"] = float(task_loss_avg)
+                wandb_log[metric_tag("val", "loss", task=task_name)] = float(
+                    task_loss_avg
+                )
             for task_name, metric in per_task_metrics.items():
-                prefix = f"val/{task_name}"
-                wandb_log[f"{prefix}/miou"] = float(metric["m_iou"])
-                wandb_log[f"{prefix}/best_miou"] = float(miou_best_by_task[task_name])
-                wandb_log[f"{prefix}/mAcc"] = float(metric["m_acc"])
-                wandb_log[f"{prefix}/allAcc"] = float(metric["all_acc"])
+                wandb_log[metric_tag("val", "mIoU", task=task_name)] = float(
+                    metric["m_iou"]
+                )
+                wandb_log[best_miou_tag("val", task=task_name)] = float(
+                    miou_best_by_task[task_name]
+                )
+                wandb_log[metric_tag("val", "mAcc", task=task_name)] = float(
+                    metric["m_acc"]
+                )
+                wandb_log[metric_tag("val", "allAcc", task=task_name)] = float(
+                    metric["all_acc"]
+                )
 
         if comm.is_main_process() and self.trainer.writer is not None:
             self.trainer.writer.add_scalar("val/loss", loss_avg, current_epoch)
@@ -998,30 +1005,39 @@ class MultiTaskEvaluator(HookBase):
                 if vk not in val_histories:
                     continue
                 task_loss_avg = val_histories[vk].avg
-                prefix = f"val/{task_name}"
                 self.trainer.writer.add_scalar(
-                    f"{prefix}/loss", task_loss_avg, current_epoch
+                    metric_tag("val", "loss", task=task_name),
+                    task_loss_avg,
+                    current_epoch,
                 )
 
             for task_name, metric in per_task_metrics.items():
-                prefix = f"val/{task_name}"
                 task_m_iou_best = miou_best_by_task[task_name]
                 self.trainer.writer.add_scalar(
-                    f"{prefix}/mIoU", metric["m_iou"], current_epoch
+                    metric_tag("val", "mIoU", task=task_name),
+                    metric["m_iou"],
+                    current_epoch,
                 )
                 self.trainer.writer.add_scalar(
-                    f"{prefix}/mIoU_best", task_m_iou_best, current_epoch
+                    best_miou_tag("val", task=task_name),
+                    task_m_iou_best,
+                    current_epoch,
                 )
                 self.trainer.writer.add_scalar(
-                    f"{prefix}/mAcc", metric["m_acc"], current_epoch
+                    metric_tag("val", "mAcc", task=task_name),
+                    metric["m_acc"],
+                    current_epoch,
                 )
                 self.trainer.writer.add_scalar(
-                    f"{prefix}/allAcc", metric["all_acc"], current_epoch
+                    metric_tag("val", "allAcc", task=task_name),
+                    metric["all_acc"],
+                    current_epoch,
                 )
 
+        if comm.is_main_process():
             for task_name, metrics in multilabel_metrics_by_task.items():
                 self._log_multilabel_task_metrics(
-                    task_name, metrics, current_epoch, wandb_log=None
+                    task_name, metrics, current_epoch, wandb_log=wandb_log
                 )
 
             if self.write_cls_iou:
@@ -1030,65 +1046,18 @@ class MultiTaskEvaluator(HookBase):
                     for class_idx in range(int(task_config["num_classes"])):
                         if class_idx == task_config["ignore_index"]:
                             continue
-                        class_name = task_config["names"][class_idx]
-                        slug = "".join(
-                            c if (c.isalnum() or c in "._-") else "_"
-                            for c in str(class_name).strip().replace(" ", "_")
-                        )
-                        tb_tag = f"val/{task_name}/iou/{slug}"
-                        self.trainer.writer.add_scalar(
-                            tb_tag,
-                            metric["iou_class"][class_idx],
-                            current_epoch,
-                        )
+                        slug = class_name_slug(task_config["names"][class_idx])
+                        tag = iou_class_tag("val", slug, task=task_name)
+                        value = float(metric["iou_class"][class_idx])
+                        if self.trainer.writer is not None:
+                            self.trainer.writer.add_scalar(
+                                tag, value, current_epoch
+                            )
+                        if wandb_log is not None:
+                            wandb_log[tag] = value
 
-        if comm.is_main_process():
-            finalize_val_epoch_timing(
-                self.trainer, val_start, current_epoch, wandb_dict=wandb_log
-            )
-            if wandb_log is not None:
-                wandb.log(wandb_log)
-
-            if self.trainer.cfg.enable_wandb and multilabel_metrics_by_task:
-                ml_wandb = {"Epoch": current_epoch}
-                for task_name, metrics in multilabel_metrics_by_task.items():
-                    prefix = f"val/{task_name}"
-                    ml_wandb[f"{prefix}/macro_f1"] = float(metrics["macro_f1"])
-                    ml_wandb[f"{prefix}/micro_f1"] = float(metrics["micro_f1"])
-                    ml_wandb[f"{prefix}/subset_acc"] = float(
-                        metrics["subset_accuracy"]
-                    )
-                    ml_wandb[f"{prefix}/hamming_acc"] = float(
-                        metrics["hamming_accuracy"]
-                    )
-                    for label_name, label_metrics in metrics["per_label"].items():
-                        slug = "".join(
-                            c if (c.isalnum() or c in "._-") else "_"
-                            for c in str(label_name).strip().replace(" ", "_")
-                        )
-                        ml_wandb[f"{prefix}/{slug}/f1"] = float(label_metrics["f1"])
-                wandb.log(ml_wandb)
-
-            if self.write_cls_iou and self.trainer.cfg.enable_wandb and wandb.run is not None:
-                cls_log = {"Epoch": current_epoch}
-                for task_name, metric in per_task_metrics.items():
-                    task_config = task_configs[task_name]
-                    for class_idx in range(int(task_config["num_classes"])):
-                        if class_idx == task_config["ignore_index"]:
-                            continue
-                        class_name = task_config["names"][class_idx]
-                        slug = "".join(
-                            c if (c.isalnum() or c in "._-") else "_"
-                            for c in str(class_name).strip().replace(" ", "_")
-                        )
-                        wandb_tag = f"val/{task_name}/iou_{slug}"
-                        cls_log[wandb_tag] = float(metric["iou_class"][class_idx])
-                wandb.log(cls_log)
-
-        reg_wandb = {"Epoch": current_epoch}
         best_neg_rmse_epoch = float("-inf")
         writer = self.trainer.writer
-        enable_wandb = self.trainer.cfg.enable_wandb
         for task_name in regression_tasks:
             s = reg_sums[task_name]
             cnt = s["count"]
@@ -1109,26 +1078,25 @@ class MultiTaskEvaluator(HookBase):
                 writer.add_scalar(
                     f"val/reg/{task_name}/rmse", rmse, current_epoch
                 )
-            if enable_wandb and comm.is_main_process() and wandb.run is not None:
-                reg_wandb[f"val/reg/{task_name}/mae"] = float(mae)
-                reg_wandb[f"val/reg/{task_name}/rmse"] = float(rmse)
+            if wandb_log is not None:
+                wandb_log[f"val/reg/{task_name}/mae"] = float(mae)
+                wandb_log[f"val/reg/{task_name}/rmse"] = float(rmse)
         if best_neg_rmse_epoch > float("-inf"):
             self._best_neg_rmse = max(self._best_neg_rmse, best_neg_rmse_epoch)
             if writer is not None:
                 writer.add_scalar(
                     "val/reg/rmse_best_neg", self._best_neg_rmse, current_epoch
                 )
-            if enable_wandb and comm.is_main_process() and wandb.run is not None:
-                reg_wandb["val/reg/rmse_best_neg"] = float(self._best_neg_rmse)
-        if (
-            enable_wandb
-            and comm.is_main_process()
-            and wandb.run is not None
-            and len(reg_wandb) > 1
-        ):
-            wandb.log(reg_wandb)
+            if wandb_log is not None:
+                wandb_log["val/reg/rmse_best_neg"] = float(self._best_neg_rmse)
 
-        if not comm.is_main_process():
+        if comm.is_main_process():
+            finalize_val_epoch_timing(
+                self.trainer, val_start, current_epoch, wandb_dict=wandb_log
+            )
+            if wandb_log is not None:
+                wandb.log(wandb_log)
+        else:
             finalize_val_epoch_timing(self.trainer, val_start, current_epoch)
 
         self.trainer.logger.info("<<<<<<<<<<<<<<<<< End Evaluation <<<<<<<<<<<<<<<<<")

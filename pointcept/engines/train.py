@@ -503,12 +503,10 @@ class Trainer(TrainerBase):
                 self.logger.info("Resuming W&B run: %s", run_id)
             wandb.init(**init_kw)
             task_configs = getattr(self.cfg.data, "task_configs", None) or {}
-            semantic_task_names = []
+            task_names = []
             if isinstance(task_configs, dict):
-                for name, conf in task_configs.items():
-                    if isinstance(conf, dict) and conf.get("task_type") == "semantic":
-                        semantic_task_names.append(str(name))
-            define_wandb_metrics(semantic_task_names=semantic_task_names)
+                task_names = [str(name) for name in task_configs]
+            define_wandb_metrics(task_names=task_names)
             with open(wandb_run_id_path, "w") as f:
                 f.write(wandb.run.id)
             wandb.log({"model/free_params": self.n_free_parameters})
