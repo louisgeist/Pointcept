@@ -340,6 +340,16 @@ class CenterShift(object):
         return data_dict
 
 @TRANSFORMS.register_module()
+class ExtractAbsZ(object):
+    """Save absolute altitude (coord z) before geometric shifts normalize it away."""
+
+    def __call__(self, data_dict):
+        if "coord" in data_dict.keys():
+            data_dict["abs_z"] = data_dict["coord"][:, 2].copy()
+        return data_dict
+
+
+@TRANSFORMS.register_module()
 class Z_MinShift(object):
     def __call__(self, data_dict):
         if "coord" in data_dict.keys():
