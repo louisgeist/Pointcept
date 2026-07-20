@@ -48,6 +48,8 @@ while getopts "p:d:c:n:w:g:m:r:" opt; do
   esac
 done
 
+rm -rf exp/flair3d/${EXP_NAME}
+
 if [ "${NUM_GPU}" = 'None' ]
 then
   NUM_GPU=`$PYTHON -c 'import torch; print(torch.cuda.device_count())'`
@@ -82,9 +84,16 @@ echo "Dist URL: $DIST_URL"
 # Use JOB_DIR if set (e.g. by sbatch to put exp inside logs/slurm/%j/), else default
 EXP_DIR=exp/${DATASET}/${EXP_NAME}
 [ -n "${JOB_DIR}" ] && EXP_DIR=${JOB_DIR}  # override when running under Slurm with JOB_DIR exported
+[ -n "${EXP_DIR}" ] && export POINTCEPT_SAVE_PATH="${EXP_DIR}"
 MODEL_DIR=${EXP_DIR}/model
 CODE_DIR=${EXP_DIR}/code
-CONFIG_DIR=configs/${DATASET}/${CONFIG}.py
+if [ -f "configs/${CONFIG}.py" ]; then
+  CONFIG_DIR=configs/${CONFIG}.py
+elif [ -f "configs/${DATASET}/${CONFIG}.py" ]; then
+  CONFIG_DIR=configs/${DATASET}/${CONFIG}.py
+else
+  CONFIG_DIR=configs/${DATASET}/${CONFIG}.py
+fi
 
 
 echo " =========> CREATE EXP DIR <========="
