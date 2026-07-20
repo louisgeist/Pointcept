@@ -115,6 +115,8 @@ class InformationWriter(HookBase):
     def before_epoch(self):
         self._train_seg_stats = {}
         self._train_multilabel_stats = {}
+        self._epoch_scalar_keys = []
+        self._epoch_scalar_key_set = set()
         self._train_epoch_start = begin_epoch_wall_timing()
 
     def before_train(self):
@@ -212,6 +214,48 @@ class InformationWriter(HookBase):
         key = str(key)
         return key.startswith("gradient/") or key.startswith("loss_scale/")
 
+    _GLOBAL_GRAD_STEP_KEYS = frozenset(
+        {"gradient/global", "gradient/weight_update"}
+    )
+
+    @classmethod
+    def _include_in_train_batch(cls, key, log_task_gradient_norms):
+        """Whether key should be written to per-step train_batch (TB/W&B).
+
+        gradient/global and gradient/weight_update are always put_scalar'd for
+        epoch averages, but only appear in train_batch when
+        log_task_gradient_norms is True.
+        """
+        if key in cls._GLOBAL_GRAD_STEP_KEYS:
+            return bool(log_task_gradient_norms)
+        return True
+
+    @classmethod
+    def _wandb_step_keys(
+        cls, model_output_keys, log_all_steps, log_task_grads, log_lite
+    ):
+        """Select keys for per-step W&B train_batch logging."""
+        if log_all_steps:
+            return [
+                k
+                for k in model_output_keys
+                if cls._include_in_train_batch(k, log_task_grads)
+            ]
+        step_keys = []
+        for key in model_output_keys:
+            if key in cls._GLOBAL_GRAD_STEP_KEYS:
+                if log_task_grads:
+                    step_keys.append(key)
+            elif key.startswith("gradient/last_layer/") or key.startswith(
+                "loss_scale/"
+            ):
+                if log_lite or log_task_grads:
+                    step_keys.append(key)
+            elif key.startswith("gradient/"):
+                if log_task_grads:
+                    step_keys.append(key)
+        return step_keys
+
     def before_step(self):
         self.curr_iter += 1
         info = "Train: [{epoch}/{max_epoch}][{iter}/{max_iter}] ".format(
@@ -282,6 +326,7 @@ class InformationWriter(HookBase):
             grad_norm_lite = self.trainer.comm_info.get("grad_norm_lite")
             if isinstance(grad_norm_lite, dict):
                 last_layer_norms = grad_norm_lite.get("last_layer_norms")
+                # Log last_layer + loss_scale only on EMA update steps (interval).
                 if isinstance(last_layer_norms, dict):
                     for task_name, value in last_layer_norms.items():
                         if value is None:
@@ -292,17 +337,17 @@ class InformationWriter(HookBase):
                         subkey = f"gradient/last_layer/{task_name}"
                         self.trainer.storage.put_scalar(subkey, value)
                         scalar_keys.append(subkey)
-                loss_scales = grad_norm_lite.get("loss_scales")
-                if isinstance(loss_scales, dict):
-                    for task_name, value in loss_scales.items():
-                        if value is None:
-                            continue
-                        value = float(value)
-                        if not math.isfinite(value):
-                            continue
-                        subkey = f"loss_scale/{task_name}"
-                        self.trainer.storage.put_scalar(subkey, value)
-                        scalar_keys.append(subkey)
+                    loss_scales = grad_norm_lite.get("loss_scales")
+                    if isinstance(loss_scales, dict):
+                        for task_name, value in loss_scales.items():
+                            if value is None:
+                                continue
+                            value = float(value)
+                            if not math.isfinite(value):
+                                continue
+                            subkey = f"loss_scale/{task_name}"
+                            self.trainer.storage.put_scalar(subkey, value)
+                            scalar_keys.append(subkey)
 
             global_diag = self.trainer.comm_info.get("global_gradient_diag")
             if isinstance(global_diag, dict):
@@ -313,6 +358,13 @@ class InformationWriter(HookBase):
                     scalar_keys.append(key)
 
             self.model_output_keys = scalar_keys
+            if not hasattr(self, "_epoch_scalar_key_set"):
+                self._epoch_scalar_keys = []
+                self._epoch_scalar_key_set = set()
+            for key in scalar_keys:
+                if key not in self._epoch_scalar_key_set:
+                    self._epoch_scalar_key_set.add(key)
+                    self._epoch_scalar_keys.append(key)
 
             # Accumulate epoch-level confusion stats for segmentation (rank 0 only).
             if comm.is_main_process() and "input_dict" in self.trainer.comm_info:
@@ -411,8 +463,14 @@ class InformationWriter(HookBase):
             self.trainer.logger.info(self.trainer.comm_info["iter_info"])
         self.trainer.comm_info["iter_info"] = ""  # reset iter info
         if self.trainer.writer is not None:
+            log_task_grads = getattr(
+                self.trainer.cfg, "log_task_gradient_norms", False
+            )
+            log_lite = getattr(self.trainer.cfg, "grad_norm_lite", False)
             self.trainer.writer.add_scalar("params/lr", lr, self.curr_iter)
             for key in self.model_output_keys:
+                if not self._include_in_train_batch(key, log_task_grads):
+                    continue
                 self.trainer.writer.add_scalar(
                     "train_batch/" + key,
                     self.trainer.storage.history(key).val,
@@ -420,20 +478,16 @@ class InformationWriter(HookBase):
                 )
             if self.trainer.cfg.enable_wandb:
                 log_all_steps = self.wandb_log_every_step
-                log_grad_steps = getattr(
-                    self.trainer.cfg, "log_task_gradient_norms", False
-                ) or getattr(self.trainer.cfg, "grad_norm_lite", False)
-                if log_all_steps or log_grad_steps:
+                if log_all_steps or log_task_grads or log_lite:
                     wandb_payload = {"Iter": self.curr_iter}
                     if log_all_steps:
                         wandb_payload["params/lr"] = lr
-                        step_keys = self.model_output_keys
-                    else:
-                        step_keys = [
-                            k
-                            for k in self.model_output_keys
-                            if k.startswith("gradient/") or k.startswith("loss_scale/")
-                        ]
+                    step_keys = self._wandb_step_keys(
+                        self.model_output_keys,
+                        log_all_steps,
+                        log_task_grads,
+                        log_lite,
+                    )
                     for key in step_keys:
                         wandb_payload[f"train_batch/{key}"] = (
                             self.trainer.storage.history(key).val
@@ -455,7 +509,8 @@ class InformationWriter(HookBase):
         }
 
         epoch_info = "Train result: "
-        for key in self.model_output_keys:
+        epoch_keys = getattr(self, "_epoch_scalar_keys", None) or self.model_output_keys
+        for key in epoch_keys:
             if self._skip_console_scalar(key):
                 continue
             epoch_info += "{key}: {value:.4f} ".format(
@@ -486,7 +541,7 @@ class InformationWriter(HookBase):
         wandb_dict = None
 
         if comm.is_main_process() and self.trainer.writer is not None:
-            for key in self.model_output_keys:
+            for key in epoch_keys:
                 self.trainer.writer.add_scalar(
                     "train/" + key,
                     self.trainer.storage.history(key).avg,
@@ -527,7 +582,7 @@ class InformationWriter(HookBase):
                 "Iter": self.curr_iter,
                 "params/lr": lr,
             }
-            for key in self.model_output_keys:
+            for key in epoch_keys:
                 wandb_dict[f"train/{key}"] = self.trainer.storage.history(key).avg
             if epoch_miou_main is not None:
                 wandb_dict["train/mIoU"] = float(epoch_miou_main)

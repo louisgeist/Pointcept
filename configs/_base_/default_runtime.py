@@ -26,19 +26,22 @@ eval_every = None  # validate every N epochs (default 5 when total_iters is set)
 
 clip_grad = None  # disable with None, enable with a float
 # Global L2 grad norm (train/gradient/global) and weight update norm
-# (train/gradient/weight_update) are always logged at each optimizer step
-# (TB per-step train_batch/... + epoch avg in W&B).
+# (train/gradient/weight_update) are always put_scalar'd each optimizer step
+# for epoch averages (train/...). Per-step train_batch/... logging (TB + W&B)
+# is enabled only when log_task_gradient_norms=True.
 # log_task_gradient_norms enables additional per-task decomposition (costly):
 # per-task L2 grad norm on shared backbone and task head, plus pairwise
 # backbone cosine similarities between tasks (upper triangle, e.g. 6 metrics for
 # 4 tasks: train/gradient/backbone_cos/{task_a}__{task_b}); logged to TB/W&B
-# (per epoch 'train/gradient/...' and per-step 'train_batch/gradient/...').
+# (per epoch 'train/gradient/...' and per-step 'train_batch/gradient/...'),
+# including per-step train_batch for gradient/global and weight_update.
 log_task_gradient_norms = False
 
 # GradNormLite (multitask): every N steps (first measure at N, not 0), measure
 # per-task L2 grad norms on the backbone last layer only, update an EMA, and
-# divide each task loss by that EMA before the main backward. Logged keys:
-# gradient/last_layer/* and loss_scale/* (TB + W&B). Independent of
+# divide each task loss by that EMA before the main backward. Logged keys
+# gradient/last_layer/* and loss_scale/* are written to TB/W&B only on those
+# interval update steps (not every iter). Independent of
 # log_task_gradient_norms. EMA sync follows sync_bn: all_reduce mean across
 # ranks only when sync_bn=True (otherwise local per rank, like non-synced
 # BatchNorm stats).
