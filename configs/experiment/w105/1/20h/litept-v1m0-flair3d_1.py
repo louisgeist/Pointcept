@@ -1,7 +1,6 @@
 """
-LitePT-v1 Base multi-task: segment (v19) + forest + elevation + tile natural_habitat_multilabel.
+LitePT-v1 multi-task: segment (v19) + forest + elevation + tile natural_habitat_multilabel.
 
-LitePT-Base backbone (official dims): deeper/wider than Small used in 11.1–11.10.
 natural_habitat_multilabel uses mean scene pooling.
 On-disk segment labels: preprocess --segment_definition v19.
 natural_habitat_multilabel.npy from assign_flair3d_natural_habitat_multilabel.py.
@@ -12,8 +11,8 @@ natural_habitat_multilabel.npy from assign_flair3d_natural_habitat_multilabel.py
 # -----------------------------------------------------------------------------
 _base_ = ["../../../../_base_/default_runtime.py"]
 
-grp_exp = 11
-num_exp = 11
+grp_exp = 12
+num_exp = 1
 
 log_task_gradient_norms = False
 grad_norm_lite = True
@@ -24,7 +23,7 @@ num_gpu = 1
 num_worker = 8 * num_gpu
 enable_amp = True
 
-batch_size = 16 * num_gpu
+batch_size = 20 * num_gpu
 batch_size_val = batch_size // 4
 batch_size_test = batch_size // 4
 
@@ -42,7 +41,7 @@ feat_keys = ["coord", "color", "strength"]
 coord_feat_scale = 0.01
 
 wandb_run_name = (
-    f"Flair3D+ LitePT ({grp_exp}.{num_exp}) | OneCycleLR + LitePT-B"
+    f"Flair3D+ LitePT ({grp_exp}.{num_exp}) | OneCycleLR 30k"
 )
 wandb_project = "flair3d_nh_multilabel"
 
@@ -99,16 +98,16 @@ model = dict(
         in_channels=7,
         order=("z", "z-trans", "hilbert", "hilbert-trans"),
         stride=(2, 2, 2, 2),
-        enc_depths=(3, 3, 3, 12, 3),
-        enc_channels=(54, 108, 216, 432, 576),
-        enc_num_head=(3, 6, 12, 24, 32),
+        enc_depths=(2, 2, 2, 6, 2),
+        enc_channels=(36, 72, 144, 252, 504),
+        enc_num_head=(2, 4, 8, 14, 28),
         enc_patch_size=(patch_size, patch_size, patch_size, patch_size, patch_size),
         enc_conv=(True, True, True, False, False),
         enc_attn=(False, False, False, True, True),
         enc_rope_freq=(100.0, 100.0, 100.0, 100.0, 100.0),
         dec_depths=(0, 0, 0, 0),
-        dec_channels=(72, 108, 216, 432),
-        dec_num_head=(4, 6, 12, 24),
+        dec_channels=(72, 72, 144, 252),
+        dec_num_head=(4, 4, 8, 14),
         dec_patch_size=(patch_size, patch_size, patch_size, patch_size),
         dec_conv=(False, False, False, False),
         dec_attn=(False, False, False, False),

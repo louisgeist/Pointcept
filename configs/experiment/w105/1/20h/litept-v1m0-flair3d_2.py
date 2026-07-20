@@ -1,7 +1,8 @@
 """
-LitePT-v1 Base multi-task: segment (v19) + forest + elevation + tile natural_habitat_multilabel.
+LitePT-v1 multi-task: segment (v19) + forest + elevation + tile natural_habitat_multilabel.
 
-LitePT-Base backbone (official dims): deeper/wider than Small used in 11.1–11.10.
+Adds absolute altitude (abs_z) as an extra input feature channel.
+abs_z is reconstructed as coord_z + coord_translation[2] (Flair3D+ preprocess offset).
 natural_habitat_multilabel uses mean scene pooling.
 On-disk segment labels: preprocess --segment_definition v19.
 natural_habitat_multilabel.npy from assign_flair3d_natural_habitat_multilabel.py.
@@ -12,8 +13,8 @@ natural_habitat_multilabel.npy from assign_flair3d_natural_habitat_multilabel.py
 # -----------------------------------------------------------------------------
 _base_ = ["../../../../_base_/default_runtime.py"]
 
-grp_exp = 11
-num_exp = 11
+grp_exp = 12
+num_exp = 2
 
 log_task_gradient_norms = False
 grad_norm_lite = True
@@ -24,7 +25,7 @@ num_gpu = 1
 num_worker = 8 * num_gpu
 enable_amp = True
 
-batch_size = 16 * num_gpu
+batch_size = 20 * num_gpu
 batch_size_val = batch_size // 4
 batch_size_test = batch_size // 4
 
@@ -38,11 +39,11 @@ total_iters = 30_000
 warmup_iters = 500
 
 learned_masked_feat = True
-feat_keys = ["coord", "color", "strength"]
+feat_keys = ["coord", "color", "strength", "abs_z"]
 coord_feat_scale = 0.01
 
 wandb_run_name = (
-    f"Flair3D+ LitePT ({grp_exp}.{num_exp}) | OneCycleLR + LitePT-B"
+    f"Flair3D+ LitePT ({grp_exp}.{num_exp}) | abs_z via coord_translation"
 )
 wandb_project = "flair3d_nh_multilabel"
 
@@ -96,19 +97,19 @@ model = dict(
     backbone_out_channels=72,
     backbone=dict(
         type="LitePT-v1",
-        in_channels=7,
+        in_channels=8,
         order=("z", "z-trans", "hilbert", "hilbert-trans"),
         stride=(2, 2, 2, 2),
-        enc_depths=(3, 3, 3, 12, 3),
-        enc_channels=(54, 108, 216, 432, 576),
-        enc_num_head=(3, 6, 12, 24, 32),
+        enc_depths=(2, 2, 2, 6, 2),
+        enc_channels=(36, 72, 144, 252, 504),
+        enc_num_head=(2, 4, 8, 14, 28),
         enc_patch_size=(patch_size, patch_size, patch_size, patch_size, patch_size),
         enc_conv=(True, True, True, False, False),
         enc_attn=(False, False, False, True, True),
         enc_rope_freq=(100.0, 100.0, 100.0, 100.0, 100.0),
         dec_depths=(0, 0, 0, 0),
-        dec_channels=(72, 108, 216, 432),
-        dec_num_head=(4, 6, 12, 24),
+        dec_channels=(72, 72, 144, 252),
+        dec_num_head=(4, 4, 8, 14),
         dec_patch_size=(patch_size, patch_size, patch_size, patch_size),
         dec_conv=(False, False, False, False),
         dec_attn=(False, False, False, False),
@@ -135,12 +136,9 @@ model = dict(
 
 optimizer = dict(type="AdamW", lr=lr, weight_decay=0.005)
 scheduler = dict(
-    type="OneCycleLR",
-    max_lr=[lr, lr / 10],
-    pct_start=0.05,
-    anneal_strategy="cos",
-    div_factor=10.0,
-    final_div_factor=1000.0,
+    type="LinearLR",
+    start_factor=1 / 10,
+    total_iters=warmup_iters,
 )
 param_dicts = [dict(keyword="block", lr=lr / 10)]
 
@@ -158,6 +156,11 @@ train_multitask_keys, val_multitask_keys, multitask_index_valid_keys = (
 )
 
 del FLAIR3D_COLLECT_PREFIX_LITEPT, init_multitask_collect_keys
+
+# Keep abs_z aligned through GridSample / SphereCrop.
+# abs_z = local coord_z + coord_translation[2] (ExtractAbsZ, before CenterShift / Z_MinShift).
+multitask_index_valid_keys = list(multitask_index_valid_keys) + ["abs_z"]
+feat_scales = dict(coord=coord_feat_scale, abs_z=coord_feat_scale)
 
 data = dict(
     num_classes=num_classes,
@@ -180,6 +183,7 @@ data = dict(
                 type="Update",
                 keys_dict={"index_valid_keys": list(multitask_index_valid_keys)},
             ),
+            dict(type="ExtractAbsZ"),
             dict(type="CenterShift", apply_z=True),
             dict(type="Z_MinShift"),
             dict(type="Z_RandomOffset"),
@@ -211,7 +215,7 @@ data = dict(
                 type="Collect",
                 keys=train_multitask_keys,
                 feat_keys=feat_keys,
-                feat_scales=dict(coord=coord_feat_scale),
+                feat_scales=feat_scales,
                 key_scales=elevation_key_scales,
             ),
         ],
@@ -232,6 +236,7 @@ data = dict(
                 type="Update",
                 keys_dict={"index_valid_keys": list(multitask_index_valid_keys)},
             ),
+            dict(type="ExtractAbsZ"),
             dict(type="CenterShift", apply_z=True),
             dict(type="Z_MinShift"),
             dict(
@@ -258,7 +263,7 @@ data = dict(
                 type="Collect",
                 keys=val_multitask_keys,
                 feat_keys=feat_keys,
-                feat_scales=dict(coord=coord_feat_scale),
+                feat_scales=feat_scales,
                 key_scales=elevation_key_scales,
             ),
         ],
@@ -274,6 +279,11 @@ data = dict(
         target_keys=list(target_keys),
         primary_target_key=main_task,
         transform=[
+            dict(
+                type="Update",
+                keys_dict={"index_valid_keys": list(multitask_index_valid_keys)},
+            ),
+            dict(type="ExtractAbsZ"),
             dict(type="CenterShift", apply_z=True),
             dict(type="Z_MinShift"),
             dict(type="NormalizeColor"),
@@ -297,7 +307,7 @@ data = dict(
                     keys=("coord", "grid_coord", "index"),
                     optional_keys=("inverse",),
                     feat_keys=feat_keys,
-                    feat_scales=dict(coord=coord_feat_scale),
+                    feat_scales=feat_scales,
                 ),
             ],
             aug_transform=[

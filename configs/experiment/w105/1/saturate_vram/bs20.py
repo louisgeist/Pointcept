@@ -1,9 +1,9 @@
 """
-LitePT-v1 Base multi-task: segment (v18) + forest + elevation + tile natural_habitat_multilabel.
+LitePT-v1 Base multi-task: segment (v19) + forest + elevation + tile natural_habitat_multilabel.
 
 LitePT-Base backbone (official dims): deeper/wider than Small used in 11.1–11.10.
 natural_habitat_multilabel uses mean scene pooling.
-On-disk segment labels: preprocess --segment_definition v18.
+On-disk segment labels: preprocess --segment_definition v19.
 natural_habitat_multilabel.npy from assign_flair3d_natural_habitat_multilabel.py.
 """
 
@@ -64,7 +64,7 @@ elevation_key_scales = dict(elevation=elevation_target_scale)
 target_scales = get_regression_target_scales(target_keys)
 
 label_definitions = dict(
-    segment="v18",
+    segment="v19",
 )
 
 task_configs = init_task_configs(target_keys, definitions=label_definitions)
