@@ -1151,6 +1151,13 @@ class MultiTaskTester(TesterBase):
                                 .numpy()
                                 .astype(np.int64)
                             )
+                            np.save(
+                                os.path.join(
+                                    save_path,
+                                    f"{batch_data_names[b_idx]}_pred_{task_name}.npy",
+                                ),
+                                scene_cls_np[task_name],
+                            )
                     batch_pred_scene_cls_np.append(scene_cls_np)
                         
             # Compute metrics for each scene in the batch
