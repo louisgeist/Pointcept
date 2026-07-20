@@ -44,7 +44,7 @@ sh scripts/train.sh -g 1 -d s3dis -c ptv3_nonormal -n ptv3_nonormal
 #### Preprocessing
 
 Label remaps are defined in ``pointcept/datasets/preprocessing/flair3d_plus/flair3d_label_remap.py``.
-Use ``--{task}_definition`` flags to override defaults (segment=v18, land_use=default,
+Use ``--{task}_definition`` flags to override defaults (segment=v19, land_use=default,
 natural_habitat=by_habitat_x_domain, forest=default). ``climatic_domain.npy`` is written
 by default when ``--natural_habitat_definition default``; pass
 ``--no-write-climatic-domain-category`` to skip. Re-run with ``--force`` when
@@ -178,7 +178,7 @@ sh scripts/train.sh -g 1 -d flair3d -c experiment/w101/5/climatic_domain_cls/lit
 Train multi-task natural_habitat + climatic_domain:
 
 ```bash
-sh scripts/train.sh -g 1 -d flair3d -c experiment/w101/5/climatic_domain_cls/litept-v1m0-flair3d_2 -n litept_nh_climatic_domain
+sh scripts/train.sh -g 1 -d flair3d -c experiment/w105/5/saturate_vram/bs20 -n checkflair3d_bs20
 ```
 
 

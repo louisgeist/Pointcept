@@ -90,6 +90,26 @@ _SEGMENT_V18_NAMES: Tuple[str, ...] = (
     "Void",
 )
 
+# Flair3D-build label=v19 (finer12): single Building class, no land-use split.
+_SEGMENT_V19_NAMES: Tuple[str, ...] = (
+    "Building",
+    "Greenhouse",
+    "Impervious surface",
+    "Other soil",
+    "Herbaceous",
+    "Vineyard",
+    "Brushwood",
+    "Other infrastructures",
+    "Swimming pool",
+    "Water",
+    "Deciduous",
+    "Coniferous",
+    "Bridge",
+    "Agricultural soil",
+    "Soil under vegetation",
+    "Void",
+)
+
 _FOREST_NAMES: Tuple[str, ...] = ("Not Forest", "Forest", "Void")
 
 _LAND_USE_NAMES: Tuple[str, ...] = (
@@ -387,6 +407,13 @@ def _build_segment_v18_lut(num_raw: int = 256, void_train_id: int = 17) -> np.nd
   return lut
 
 
+def _build_segment_v19_lut(num_raw: int = 256, void_train_id: int = 15) -> np.ndarray:
+  """Identity for 0..15 (Flair3D-build finer12); overflow maps to void."""
+  lut = np.full(num_raw, void_train_id, dtype=np.int32)
+  lut[: void_train_id + 1] = np.arange(void_train_id + 1, dtype=np.int32)
+  return lut
+
+
 def _build_natural_habitat_default_lut() -> np.ndarray:
   """CarHab raw 42=N/A -> train void (43); raw 43=Autre/routes -> train 42."""
   lut = np.arange(44, dtype=np.int32)
@@ -523,7 +550,25 @@ def _register_segment_definitions() -> Dict[str, LabelDefinition]:
     missing_fill_raw_id=segment_v18_void,
     source_field="semantic",
   )
-  return {"default": base, "inter_finerall10": inter_finerall10, "v17": v17, "v18": v18}
+  segment_v19_lut = _build_segment_v19_lut()
+  segment_v19_void = 15
+  v19 = _make_definition(
+    "segment",
+    "v19",
+    num_raw_classes=segment_v19_lut.shape[0],
+    lut=segment_v19_lut,
+    names=_SEGMENT_V19_NAMES,
+    ignore_index=segment_v19_void,
+    missing_fill_raw_id=segment_v19_void,
+    source_field="semantic",
+  )
+  return {
+    "default": base,
+    "inter_finerall10": inter_finerall10,
+    "v17": v17,
+    "v18": v18,
+    "v19": v19,
+  }
 
 
 def _register_forest_definitions() -> Dict[str, LabelDefinition]:
@@ -726,7 +771,7 @@ LABEL_DEFINITIONS: Dict[str, Dict[str, LabelDefinition]] = {
 
 # Default definition per task (preprocess v2 CLI + training when not overridden).
 DEFAULT_LABEL_DEFINITION_NAMES: Dict[str, str] = {
-  "segment": "v18",
+  "segment": "v19",
   "forest": "default",
   "land_use": "default",
   "natural_habitat": "by_habitat_x_domain",
