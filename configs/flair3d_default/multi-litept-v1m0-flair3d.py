@@ -76,7 +76,11 @@ elevation_key_scales = dict(elevation=elevation_target_scale)
 target_scales = get_regression_target_scales(target_keys)
 main_task = "segment"
 
-task_configs = init_task_configs(target_keys)
+label_definitions = dict(
+    segment="v19",
+)
+
+task_configs = init_task_configs(target_keys, definitions=label_definitions)
 task_criteria = init_task_criteria(task_configs)
 task_weights = {task_name: 1.0 for task_name in task_configs.keys()}
 
