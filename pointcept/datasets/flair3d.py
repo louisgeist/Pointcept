@@ -30,6 +30,7 @@ FLAIR3D_SPECIFIC_ASSETS = (
     "elevation",
     "climatic_domain",
     "natural_habitat_multilabel",
+    "coord_translation",
 )
 FLAIR3D_SEMANTIC_TARGETS = ("segment", "forest", "land_use", "natural_habitat")
 FLAIR3D_CLASSIFICATION_TARGETS = FLAIR3D_CLASSIFICATION_TARGET_KEYS

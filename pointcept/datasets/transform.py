@@ -341,11 +341,18 @@ class CenterShift(object):
 
 @TRANSFORMS.register_module()
 class ExtractAbsZ(object):
-    """Save absolute altitude (coord z) before geometric shifts normalize it away."""
+    """Save absolute altitude before geometric shifts normalize it away.
+
+    If ``coord_translation`` is present (Flair3D+ preprocessing offset), reconstruct
+    absolute Z as ``coord_z + translation_z``. Otherwise fall back to ``coord[:, 2]``.
+    """
 
     def __call__(self, data_dict):
         if "coord" in data_dict.keys():
-            data_dict["abs_z"] = data_dict["coord"][:, 2].copy()
+            abs_z = data_dict["coord"][:, 2].astype(np.float32, copy=True)
+            if "coord_translation" in data_dict:
+                abs_z = abs_z + np.float32(data_dict["coord_translation"][2])
+            data_dict["abs_z"] = abs_z
         return data_dict
 
 
