@@ -63,7 +63,7 @@ verify_paths() {
         echo "ERROR: ${CODE_DIR}/tools/test.py not found" >&2
         ok=false
     fi
-    if ! grep -q 'voxel_repr="centroid"' "${CONFIG}"; then
+    if ! grep -qE 'voxel_repr\s*=\s*["'\'']centroid["'\'']' "${CONFIG}"; then
         echo "ERROR: config does not set voxel_repr=centroid: ${CONFIG}" >&2
         ok=false
     fi

@@ -290,6 +290,7 @@ data = dict(
                 mode="test",
                 return_grid_coord=True,
                 test_single_fragment=test_single_fragment,
+                voxel_repr="centroid",
             ),
             crop=None,
             post_transform=[
