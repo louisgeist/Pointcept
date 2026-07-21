@@ -39,8 +39,7 @@ patch_size = 1024
 
 # Optimization parameters
 lr = 1e-3
-total_iters = 10_000
-warmup_iters = 5000
+total_iters = 30_000
 
 # Features
 learned_masked_feat = True
@@ -167,9 +166,12 @@ model = dict(
 # -----------------------------------------------------------------------------
 optimizer = dict(type="AdamW", lr=lr, weight_decay=0.05)
 scheduler = dict(
-    type="LinearLR",
-    start_factor=1 / 10,
-    total_iters=warmup_iters,
+    type="OneCycleLR",
+    max_lr=[lr, lr / 10],
+    pct_start=0.05,
+    anneal_strategy="cos",
+    div_factor=10.0,
+    final_div_factor=1000.0,
 )
 param_dicts = [dict(keyword="block", lr=lr / 10)]
 
@@ -181,6 +183,7 @@ data_root = "data/flair3d_plus"
 csv_manifest = "data/flair3d_plus/raw/scene_split_manifest.csv"
 missing_tiles_manifest = "data/flair3d_plus/missing_ply_preflight.txt"
 too_small_tiles_manifest = "data/flair3d_plus/too_small_tiles.csv"
+val_stratified_subset_manifest = "data/flair3d_plus/manifests/val_dev_subset_2000.csv"
 
 train_multitask_keys, val_multitask_keys, multitask_index_valid_keys = (
     init_multitask_collect_keys(
@@ -255,6 +258,7 @@ data = dict(
         csv_manifest=csv_manifest,
         missing_tiles_manifest=missing_tiles_manifest,
         too_small_tiles_manifest=too_small_tiles_manifest,
+        stratified_subset_manifest=val_stratified_subset_manifest,
         target_keys=list(target_keys),
         primary_target_key=main_task,
         transform=[
