@@ -407,6 +407,17 @@ def setup_file_logger(log_file_path: str) -> logging.Logger:
     return logger
 
 
+def log_run_configuration(logger: logging.Logger, args: argparse.Namespace) -> None:
+    """Log the resolved CLI configuration as a readable block."""
+    logger.info("=" * 72)
+    logger.info("Preprocess configuration")
+    logger.info("=" * 72)
+    for key in sorted(vars(args)):
+        value = getattr(args, key)
+        logger.info("  %s: %s", key, value)
+    logger.info("=" * 72)
+
+
 def write_missing_ply_preflight_report(
     output_path: str,
     missing_ply: List[Dict[str, str]],
@@ -992,6 +1003,7 @@ def main_process():
     os.makedirs(args.output_root, exist_ok=True)
     log_file_path = args.log_file or os.path.join(args.output_root, "preprocess_flair3d.log")
     logger = setup_file_logger(log_file_path)
+    log_run_configuration(logger, args)
 
     splits = args.split if isinstance(args.split, list) else [args.split]
     logger.info("Using split manifest CSV: %s", args.split_manifest_csv)
@@ -1025,6 +1037,7 @@ def main_process():
             num_workers=args.num_workers,
             logger=logger,
         )
+        log_run_configuration(logger, args)
         logger.info("Detailed logs saved to: %s", log_file_path)
         return
 
@@ -1220,6 +1233,7 @@ def main_process():
                 logger=logger,
             )
 
+    log_run_configuration(logger, args)
     logger.info("Detailed logs saved to: %s", log_file_path)
 
 
