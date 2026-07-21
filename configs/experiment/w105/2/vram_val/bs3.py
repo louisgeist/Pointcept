@@ -49,6 +49,7 @@ patch_size = 1024
 # Optimization parameters
 lr = 1e-3
 total_iters = 1
+iter_per_epoch = 1
 
 # Features
 learned_masked_feat = True
