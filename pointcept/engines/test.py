@@ -933,6 +933,7 @@ class MultiTaskTester(TesterBase):
             batch_reg_cnt = []
             batch_sem_cache_paths = []
             batch_reg_cache_paths = []
+            batch_ml_cache_paths = []
             batch_all_cached = []
             batch_cls_logits_sum = []
             batch_cls_logits_cnt = []
@@ -971,12 +972,22 @@ class MultiTaskTester(TesterBase):
                     t: os.path.join(save_path, f"{data_name}_reg_{t}.npy")
                     for t in regression_tasks
                 }
+                ml_cache_paths = {
+                    t: os.path.join(save_path, f"{data_name}_pred_{t}.npy")
+                    for t in multilabel_tasks
+                }
                 batch_sem_cache_paths.append(sem_cache_paths)
                 batch_reg_cache_paths.append(reg_cache_paths)
+                batch_ml_cache_paths.append(ml_cache_paths)
                 
                 all_sem_cached = all(os.path.isfile(p) for p in sem_cache_paths.values())
                 all_reg_cached = all(os.path.isfile(p) for p in reg_cache_paths.values())
-                batch_all_cached.append(all_sem_cached and (len(regression_tasks) == 0 or all_reg_cached))
+                all_ml_cached = all(os.path.isfile(p) for p in ml_cache_paths.values())
+                batch_all_cached.append(
+                    all_sem_cached
+                    and (len(regression_tasks) == 0 or all_reg_cached)
+                    and (len(multilabel_tasks) == 0 or all_ml_cached)
+                )
                 
                 batch_pred_sem.append({
                     t: torch.zeros((n_ref, int(task_configs[t]["num_classes"])), device="cuda")
@@ -997,22 +1008,25 @@ class MultiTaskTester(TesterBase):
                 })
                 batch_cls_logits_cnt.append({t: 0 for t in scene_level_cls_tasks})
 
-            # Check if we need to run the model at all
-            # Scene-level cls/multilabel preds are not cached; always run the model when needed.
-            if all(batch_all_cached) and not scene_level_cls_tasks:
+            # Skip model forward when sem/reg/multilabel caches are present.
+            # Mono-label classification is not cached and still forces a forward.
+            if all(batch_all_cached) and not classification_tasks:
                 batch_pred_cls_np = []
                 batch_pred_reg_np = []
                 batch_pred_scene_cls_np = []
                 for b_idx in range(len(batch)):
                     pred_cls_np = {}
                     pred_reg_np = {}
+                    pred_scene_cls_np = {}
                     for t in semantic_tasks:
                         pred_cls_np[t] = np.load(batch_sem_cache_paths[b_idx][t])
                     for t in regression_tasks:
                         pred_reg_np[t] = np.load(batch_reg_cache_paths[b_idx][t])
+                    for t in multilabel_tasks:
+                        pred_scene_cls_np[t] = np.load(batch_ml_cache_paths[b_idx][t])
                     batch_pred_cls_np.append(pred_cls_np)
                     batch_pred_reg_np.append(pred_reg_np)
-                    batch_pred_scene_cls_np.append({})
+                    batch_pred_scene_cls_np.append(pred_scene_cls_np)
             else:
                 # Extract the single fragment from each scene
                 fragments = [d.pop("fragment_list")[0] for d in batch]
@@ -1152,10 +1166,7 @@ class MultiTaskTester(TesterBase):
                                 .astype(np.int64)
                             )
                             np.save(
-                                os.path.join(
-                                    save_path,
-                                    f"{batch_data_names[b_idx]}_pred_{task_name}.npy",
-                                ),
+                                batch_ml_cache_paths[b_idx][task_name],
                                 scene_cls_np[task_name],
                             )
                     batch_pred_scene_cls_np.append(scene_cls_np)
