@@ -1123,10 +1123,17 @@ class GridSample(object):
         return_displacement=False,
         project_displacement=False,
         test_single_fragment=False,
+        voxel_repr="point",
     ):
+        # voxel_repr (test mode only):
+        # - "point": keep one real point per voxel (i-th after hash sort; first if
+        #   test_single_fragment=True).
+        # - "centroid": replace coord/color/strength by their per-voxel mean
+        #   (requires test_single_fragment=True).
         self.grid_size = grid_size
         self.hash = self.fnv_hash_vec if hash_type == "fnv" else self.ravel_hash_vec
         assert mode in ["train", "test"]
+        assert voxel_repr in ["point", "centroid"]
         self.mode = mode
         self.return_inverse = return_inverse
         self.return_grid_coord = return_grid_coord
@@ -1134,6 +1141,7 @@ class GridSample(object):
         self.return_displacement = return_displacement
         self.project_displacement = project_displacement
         self.test_single_fragment = test_single_fragment
+        self.voxel_repr = voxel_repr
 
     def __call__(self, data_dict):
         assert "coord" in data_dict.keys()
@@ -1199,13 +1207,40 @@ class GridSample(object):
         elif self.mode == "test":  # test mode
             # When test_single_fragment=True: one point per voxel, one fragment; inverse
             # maps each full-scene point to its voxel id so test can broadcast label.
+            if self.voxel_repr == "centroid" and not self.test_single_fragment:
+                raise ValueError(
+                    "voxel_repr='centroid' requires test_single_fragment=True "
+                    "(centroid is a single representative per voxel)."
+                )
             num_fragments = 1 if self.test_single_fragment else count.max()
             data_part_list = []
+            starts = np.cumsum(np.insert(count, 0, 0)[0:-1])
+            mean_feats = None
+            if self.voxel_repr == "centroid":
+                # Mean continuous features per voxel (coord, color, strength).
+                count_f = count.astype(np.float64)
+                mean_feats = {}
+                for key in ("coord", "color", "strength"):
+                    if key not in data_dict:
+                        continue
+                    vals = data_dict[key][idx_sort]
+                    if vals.ndim == 1:
+                        mean_feats[key] = (
+                            np.add.reduceat(vals, starts) / count_f
+                        ).astype(vals.dtype, copy=False)
+                    else:
+                        mean_feats[key] = (
+                            np.add.reduceat(vals, starts, axis=0)
+                            / count_f[:, None]
+                        ).astype(vals.dtype, copy=False)
             for i in range(num_fragments):
-                idx_select = np.cumsum(np.insert(count, 0, 0)[0:-1]) + i % count
+                idx_select = starts + i % count
                 idx_part = idx_sort[idx_select]
                 data_part = index_operator(data_dict, idx_part, duplicate=True)
                 data_part["index"] = idx_part
+                if mean_feats is not None:
+                    for key, mean_val in mean_feats.items():
+                        data_part[key] = mean_val.copy()
                 if "frame_pcd_offset" in data_dict:
                     data_part["frame_pcd_offset"] = self._recompute_offsets(
                         data_dict["frame_pcd_offset"], idx_part
