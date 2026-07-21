@@ -98,6 +98,10 @@ def _grad_norm_with_amp_probe(loss, params, probe_scale=1.0):
     """
     if not params:
         return 0.0
+    # Detached / constant losses (e.g. all-ignore batch → new_zeros) have no
+    # grad_fn; skip so GradNormLiteEMA keeps the previous scale for this task.
+    if not isinstance(loss, torch.Tensor) or not loss.requires_grad:
+        return 0.0
     scale = float(probe_scale)
     if scale != 1.0 and math.isfinite(scale) and scale > 0.0:
         grads = torch.autograd.grad(
@@ -128,6 +132,10 @@ def compute_task_gradient_norms(
     scale = float(probe_scale)
     use_probe = scale != 1.0 and math.isfinite(scale) and scale > 0.0
     for task_name, task_loss in loss_by_task.items():
+        if not isinstance(task_loss, torch.Tensor) or not task_loss.requires_grad:
+            norms[task_name] = {"backbone": 0.0, "head": 0.0}
+            backbone_grads_by_task[task_name] = None
+            continue
         w = float(task_weights.get(task_name, 1.0))
         scaled_loss = (task_loss * w) / accum_steps
         head_params = model.task_head_parameters(task_name)
