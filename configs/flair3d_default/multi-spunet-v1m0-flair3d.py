@@ -1,13 +1,10 @@
 """
-SpUNet on Flair3D+ with semantic multitask plus point-wise elevation regression.
-
-Mirrors litept_multitask_semantic_elevation.py but uses SpUNet-v1m1 as the
-backbone. Adds `elevation` to `target_keys` and a regression task in
-`task_configs` (`task_type: regression`).
+SpUNet on Flair3D+ multitask: segment (v19) + forest + elevation + tile
+natural_habitat_multilabel (mean pooling), aligned with w105 Flair3D experiments.
 
 This config is intentionally self-contained: it inherits only from
-default_runtime and duplicates everything it needs from `spunet.py` so it can
-be read top-to-bottom without cross-referencing other Flair3D+ configs.
+default_runtime and duplicates everything it needs so it can be read
+top-to-bottom without cross-referencing other Flair3D+ configs.
 """
 
 # -----------------------------------------------------------------------------
@@ -23,6 +20,11 @@ _base_ = ["../_base_/default_runtime.py"]
 grp_exp = 1
 num_exp = 1
 
+log_task_gradient_norms = False
+grad_norm_lite = True
+grad_norm_lite_interval = 100
+grad_norm_lite_ema_alpha = 0.1
+grad_norm_lite_eps = 1e-3
 
 # Hardware parameters
 num_gpu = 1
@@ -49,7 +51,7 @@ coord_feat_scale = 0.01
 
 # Wandb parameters
 wandb_run_name = (
-    f"Flair3D+ SpUNet multitask + elevation {grp_exp}.{num_exp}) lr={lr}"
+    f"Flair3D+ SpUNet multitask + NH multilabel {grp_exp}.{num_exp}) lr={lr}"
 )
 wandb_project = "flair3d_multi"
 
@@ -65,19 +67,20 @@ from pointcept.datasets.flair3d_config_utils import (
     get_regression_target_scales,
 )
 
-semantic_target_keys = ("segment", "forest", "land_use", "natural_habitat")
-target_keys = semantic_target_keys + ("elevation",)
+main_task = "segment"
+semantic_target_keys = (main_task, "forest")
+target_keys = semantic_target_keys + ("elevation", "natural_habitat_multilabel")
 
 elevation_target_scale = ELEVATION_TARGET_SCALE
 elevation_key_scales = dict(elevation=elevation_target_scale)
 target_scales = get_regression_target_scales(target_keys)
-main_task = "segment"
 
 label_definitions = dict(
     segment="v19",
 )
 
 task_configs = init_task_configs(target_keys, definitions=label_definitions)
+task_configs["natural_habitat_multilabel"]["pooling"] = "mean"
 task_criteria = init_task_criteria(task_configs)
 task_weights = {task_name: 1.0 for task_name in task_configs.keys()}
 
@@ -252,8 +255,6 @@ data = dict(
                 keys_dict={
                     "segment": "origin_segment",
                     "forest": "origin_forest",
-                    "land_use": "origin_land_use",
-                    "natural_habitat": "origin_natural_habitat",
                     "elevation": "origin_elevation",
                 },
             ),
