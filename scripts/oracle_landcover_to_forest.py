@@ -6,8 +6,9 @@ Evaluates how well vegetation-type segment classes predict the FOREST modality
 (forest.npy), without running a model.
 
 Settings (segment class names -> Forest; everything else including Void -> Not Forest):
-  - trees_brushwood: Brushwood, Deciduous, Coniferous
-  - all_vegetation:  Herbaceous, Vineyard, Brushwood, Deciduous, Coniferous
+  - deciduous_coniferous: Deciduous, Coniferous
+  - trees_brushwood:      Brushwood, Deciduous, Coniferous
+  - all_vegetation:       Herbaceous, Vineyard, Brushwood, Deciduous, Coniferous
 
 Oracle never predicts Void. Forest GT Void (ignore_index) is excluded from metrics.
 
@@ -16,7 +17,7 @@ python scripts/oracle_landcover_to_forest.py \\
   --data_root data/flair3d_plus \\
   --csv_manifest data/flair3d_plus/raw/scene_split_manifest.csv \\
   --splits test \\
-  --settings trees_brushwood,all_vegetation \\
+  --settings deciduous_coniferous,trees_brushwood,all_vegetation \\
   --num_workers 16 \\
   --output_dir stats/flair3d/oracle_landcover_to_forest
 """
@@ -44,6 +45,7 @@ if REPO_ROOT not in sys.path:
 # Oracle settings: segment class names that map to Forest (1)
 # ---------------------------------------------------------------------------
 ORACLE_SETTING_CLASS_NAMES: Dict[str, Tuple[str, ...]] = {
+    "deciduous_coniferous": ("Deciduous", "Coniferous"),
     "trees_brushwood": ("Brushwood", "Deciduous", "Coniferous"),
     "all_vegetation": (
         "Herbaceous",
@@ -510,10 +512,10 @@ def main() -> None:
     )
     parser.add_argument(
         "--settings",
-        default="trees_brushwood,all_vegetation",
+        default="deciduous_coniferous,trees_brushwood,all_vegetation",
         help=(
             "Comma-separated oracle settings "
-            f"(default: trees_brushwood,all_vegetation). "
+            "(default: deciduous_coniferous,trees_brushwood,all_vegetation). "
             f"Supported: {', '.join(sorted(ORACLE_SETTING_CLASS_NAMES))}"
         ),
     )
