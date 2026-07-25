@@ -10,9 +10,15 @@ Uses the same patch_id convention as scripts/convert_flair3d_splits_to_json.py:
 The GeoPackage table date_per_patch_with_lidar has no split column; splits come
 only from the CSV files.
 
+After preprocess, enrich the manifest with n_points / n_voxels via
+scripts/analyze_flair3d_test_point_voxel_counts.py --write_manifest (needed for
+val/test VoxelBudgetBatchSampler). This builder does not compute those columns
+(raw GPKG stage has no coord.npy).
+
 Example:
-  python scripts/build_csv_manifest.py \\
-    --dataset_root data/flair3d_plus/raw
+python scripts/flai3d_build_csv_manifest.py \
+--dataset_root data/flair3d_plus/raw \
+--require_ply
 
 ``SPLIT/`` (CSVs), ``scene_split_manifest.csv`` (output), and the GeoPackage are
 resolved relative to ``dataset_root`` (see ``_REL_*`` constants in the script).

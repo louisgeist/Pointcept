@@ -20,6 +20,7 @@ import torch.utils.data
 from .defaults import create_ddp_model
 import pointcept.utils.comm as comm
 from pointcept.datasets import build_dataset, collate_fn
+from pointcept.datasets.utils import build_voxel_budget_batch_sampler
 from pointcept.models import build_model
 from pointcept.utils.logger import get_root_logger
 from pointcept.utils.registry import Registry
@@ -113,6 +114,39 @@ class TesterBase:
 
     def build_test_loader(self):
         test_dataset = build_dataset(self.cfg.data.test)
+        voxel_budget = getattr(self.cfg, "test_voxel_budget", None)
+        num_workers = self.cfg.batch_size_test_per_gpu
+
+        if voxel_budget is not None:
+            size_csv = getattr(self.cfg, "test_voxel_size_csv", None)
+            max_batch_size = int(self.cfg.batch_size_test_per_gpu)
+            batch_sampler, sizes, missing_csv = build_voxel_budget_batch_sampler(
+                dataset=test_dataset,
+                voxel_budget=int(voxel_budget),
+                max_batch_size=max_batch_size,
+                size_csv=size_csv,
+                rank=comm.get_rank(),
+                world_size=comm.get_world_size(),
+            )
+            self.logger.info(
+                "Test VoxelBudgetBatchSampler: budget=%d max_bs=%d "
+                "batches_this_rank=%d dataset=%d missing_csv=%d csv=%s",
+                int(voxel_budget),
+                max_batch_size,
+                len(batch_sampler),
+                len(sizes),
+                missing_csv,
+                size_csv or "<n_points mmap fallback>",
+            )
+            test_loader = torch.utils.data.DataLoader(
+                test_dataset,
+                batch_sampler=batch_sampler,
+                num_workers=num_workers,
+                pin_memory=True,
+                collate_fn=self.__class__.collate_fn,
+            )
+            return test_loader
+
         if comm.get_world_size() > 1:
             test_sampler = torch.utils.data.distributed.DistributedSampler(test_dataset)
         else:
@@ -121,7 +155,7 @@ class TesterBase:
             test_dataset,
             batch_size=self.cfg.batch_size_test_per_gpu,
             shuffle=False,
-            num_workers=self.cfg.batch_size_test_per_gpu,
+            num_workers=num_workers,
             pin_memory=True,
             sampler=test_sampler,
             collate_fn=self.__class__.collate_fn,
@@ -164,7 +198,7 @@ class TesterBase:
 @TESTERS.register_module()
 class SemSegTester(TesterBase):
     def test(self):
-        assert self.test_loader.batch_size == 1
+        assert self.test_loader.batch_size in (1, None)
         logger = get_root_logger()
         logger.info(">>>>>>>>>>>>>>>> Start Evaluation >>>>>>>>>>>>>>>>")
         self.begin_test_timing()
@@ -1504,7 +1538,7 @@ class MultiTaskTester(TesterBase):
 @TESTERS.register_module()
 class DINOSemSegTester(TesterBase):
     def test(self):
-        assert self.test_loader.batch_size == 1
+        assert self.test_loader.batch_size in (1, None)
         logger = get_root_logger()
         logger.info(">>>>>>>>>>>>>>>> Start Evaluation >>>>>>>>>>>>>>>>")
         self.begin_test_timing()
@@ -2415,7 +2449,7 @@ class InsSegTester(TesterBase):
         self.distance_confs = -float("inf")
 
     def test(self):
-        assert self.test_loader.batch_size == 1
+        assert self.test_loader.batch_size in (1, None)
         logger = get_root_logger()
         logger.info(">>>>>>>>>>>>>>>> Start Evaluation >>>>>>>>>>>>>>>>")
         self.begin_test_timing()

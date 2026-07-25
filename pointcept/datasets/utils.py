@@ -16,6 +16,142 @@ from torch_scatter import scatter_min
 from pointcept.models.utils import offset2batch
 
 
+def load_voxel_size_csv(path):
+    """Load patch_id -> n_voxels (fallback n_points) from an audit CSV.
+
+    Expected columns: patch_id, and n_voxels and/or n_points.
+    Rows with errors or non-positive sizes are skipped.
+    """
+    import csv
+
+    sizes = {}
+    with open(path, "r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        if reader.fieldnames is None:
+            raise ValueError(f"Empty voxel size CSV: {path}")
+        required = {"patch_id"}
+        missing = required - set(reader.fieldnames)
+        if missing:
+            raise KeyError(f"Missing columns in {path}: {sorted(missing)}")
+        for row in reader:
+            error = (row.get("error") or "").strip()
+            if error:
+                continue
+            patch_id = (row.get("patch_id") or "").strip()
+            if not patch_id:
+                continue
+            n_voxels = row.get("n_voxels")
+            n_points = row.get("n_points")
+            size = None
+            if n_voxels not in (None, ""):
+                size = int(float(n_voxels))
+            elif n_points not in (None, ""):
+                size = int(float(n_points))
+            if size is None or size <= 0:
+                continue
+            sizes[patch_id] = size
+    return sizes
+
+
+def resolve_dataset_voxel_sizes(dataset, size_csv=None):
+    """Return per-index sizes for packing (prefer CSV n_voxels, else n_points via mmap)."""
+    import os
+
+    import numpy as np
+
+    csv_sizes = load_voxel_size_csv(size_csv) if size_csv else {}
+    data_list = getattr(dataset, "data_list", None)
+    if data_list is None:
+        raise AttributeError("Dataset has no data_list; cannot resolve voxel sizes")
+
+    sizes = []
+    missing_csv = 0
+    for path in data_list:
+        patch_id = os.path.basename(path.rstrip("/"))
+        if patch_id in csv_sizes:
+            sizes.append(int(csv_sizes[patch_id]))
+            continue
+        missing_csv += 1
+        coord_path = os.path.join(path, "coord.npy")
+        if not os.path.isfile(coord_path):
+            # Force singleton batch if unknown / missing.
+            sizes.append(2**31 - 1)
+            continue
+        n_points = int(np.load(coord_path, mmap_mode="r").shape[0])
+        sizes.append(max(n_points, 1))
+    return sizes, missing_csv
+
+
+def pack_indices_by_voxel_budget(sizes, voxel_budget, max_batch_size):
+    """Greedy pack after ascending sort by size. Oversized scenes become singleton batches."""
+    if voxel_budget <= 0:
+        raise ValueError(f"voxel_budget must be > 0, got {voxel_budget}")
+    if max_batch_size <= 0:
+        raise ValueError(f"max_batch_size must be > 0, got {max_batch_size}")
+
+    indexed = sorted(enumerate(sizes), key=lambda item: (item[1], item[0]))
+    batches = []
+    current = []
+    current_sum = 0
+    for index, size in indexed:
+        size = int(size)
+        if size > voxel_budget:
+            if current:
+                batches.append(current)
+                current = []
+                current_sum = 0
+            batches.append([index])
+            continue
+        if current and (
+            current_sum + size > voxel_budget or len(current) >= max_batch_size
+        ):
+            batches.append(current)
+            current = []
+            current_sum = 0
+        current.append(index)
+        current_sum += size
+    if current:
+        batches.append(current)
+    return batches
+
+
+class VoxelBudgetBatchSampler(torch.utils.data.Sampler):
+    """BatchSampler packing dataset indices by a voxel (or point) budget.
+
+    Scenes are sorted ascending by size then packed greedily. Batches are
+    deterministically sharded across distributed ranks (stride by world_size).
+    """
+
+    def __init__(
+        self,
+        sizes,
+        voxel_budget,
+        max_batch_size=8,
+        rank=0,
+        world_size=1,
+    ):
+        self.sizes = [int(s) for s in sizes]
+        self.voxel_budget = int(voxel_budget)
+        self.max_batch_size = int(max_batch_size)
+        self.rank = int(rank)
+        self.world_size = int(world_size)
+        if self.world_size <= 0:
+            raise ValueError(f"world_size must be > 0, got {self.world_size}")
+        if not (0 <= self.rank < self.world_size):
+            raise ValueError(f"rank must be in [0, {self.world_size}), got {self.rank}")
+
+        all_batches = pack_indices_by_voxel_budget(
+            self.sizes, self.voxel_budget, self.max_batch_size
+        )
+        self.batches = all_batches[self.rank :: self.world_size]
+
+    def __iter__(self):
+        return iter(self.batches)
+
+    def __len__(self):
+        return len(self.batches)
+
+
 def collate_fn(batch):
     """
     collate function for point cloud which support dict and list,

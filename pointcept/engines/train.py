@@ -28,6 +28,7 @@ from .defaults import create_ddp_model, worker_init_fn
 from .hooks import HookBase, build_hooks
 import pointcept.utils.comm as comm
 from pointcept.datasets import build_dataset, point_collate_fn, collate_fn
+from pointcept.datasets.utils import build_voxel_budget_batch_sampler
 from pointcept.models import build_model
 from pointcept.utils.logger import get_root_logger
 from pointcept.utils.optimizer import build_optimizer
@@ -570,19 +571,51 @@ class Trainer(TrainerBase):
         val_loader = None
         if self.cfg.evaluate:
             val_data = build_dataset(self.cfg.data.val)
-            if comm.get_world_size() > 1:
-                val_sampler = torch.utils.data.distributed.DistributedSampler(val_data)
+            voxel_budget = getattr(self.cfg, "val_voxel_budget", None)
+            if voxel_budget is not None:
+                size_csv = getattr(self.cfg, "val_voxel_size_csv", None)
+                max_batch_size = int(self.cfg.batch_size_val_per_gpu)
+                batch_sampler, sizes, missing_csv = build_voxel_budget_batch_sampler(
+                    dataset=val_data,
+                    voxel_budget=int(voxel_budget),
+                    max_batch_size=max_batch_size,
+                    size_csv=size_csv,
+                    rank=comm.get_rank(),
+                    world_size=comm.get_world_size(),
+                )
+                self.logger.info(
+                    "Val VoxelBudgetBatchSampler: budget=%d max_bs=%d "
+                    "batches_this_rank=%d dataset=%d missing_csv=%d csv=%s",
+                    int(voxel_budget),
+                    max_batch_size,
+                    len(batch_sampler),
+                    len(sizes),
+                    missing_csv,
+                    size_csv or "<n_points mmap fallback>",
+                )
+                val_loader = torch.utils.data.DataLoader(
+                    val_data,
+                    batch_sampler=batch_sampler,
+                    num_workers=self.cfg.num_worker_per_gpu,
+                    pin_memory=True,
+                    collate_fn=collate_fn,
+                )
             else:
-                val_sampler = None
-            val_loader = torch.utils.data.DataLoader(
-                val_data,
-                batch_size=self.cfg.batch_size_val_per_gpu,
-                shuffle=False,
-                num_workers=self.cfg.num_worker_per_gpu,
-                pin_memory=True,
-                sampler=val_sampler,
-                collate_fn=collate_fn,
-            )
+                if comm.get_world_size() > 1:
+                    val_sampler = torch.utils.data.distributed.DistributedSampler(
+                        val_data
+                    )
+                else:
+                    val_sampler = None
+                val_loader = torch.utils.data.DataLoader(
+                    val_data,
+                    batch_size=self.cfg.batch_size_val_per_gpu,
+                    shuffle=False,
+                    num_workers=self.cfg.num_worker_per_gpu,
+                    pin_memory=True,
+                    sampler=val_sampler,
+                    collate_fn=collate_fn,
+                )
         return val_loader
 
     def build_optimizer(self):
