@@ -573,25 +573,24 @@ class Trainer(TrainerBase):
             val_data = build_dataset(self.cfg.data.val)
             voxel_budget = getattr(self.cfg, "val_voxel_budget", None)
             if voxel_budget is not None:
-                size_csv = getattr(self.cfg, "val_voxel_size_csv", None)
                 max_batch_size = int(self.cfg.batch_size_val_per_gpu)
                 batch_sampler, sizes, missing_csv = build_voxel_budget_batch_sampler(
                     dataset=val_data,
                     voxel_budget=int(voxel_budget),
                     max_batch_size=max_batch_size,
-                    size_csv=size_csv,
                     rank=comm.get_rank(),
                     world_size=comm.get_world_size(),
                 )
+                size_source = getattr(val_data, "csv_manifest", None) or "<mmap fallback>"
                 self.logger.info(
                     "Val VoxelBudgetBatchSampler: budget=%d max_bs=%d "
-                    "batches_this_rank=%d dataset=%d missing_csv=%d csv=%s",
+                    "batches_this_rank=%d dataset=%d missing_sizes=%d source=%s",
                     int(voxel_budget),
                     max_batch_size,
                     len(batch_sampler),
                     len(sizes),
                     missing_csv,
-                    size_csv or "<n_points mmap fallback>",
+                    size_source,
                 )
                 val_loader = torch.utils.data.DataLoader(
                     val_data,

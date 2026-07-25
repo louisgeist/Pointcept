@@ -17,10 +17,9 @@ from pointcept.models.utils import offset2batch
 
 
 def load_voxel_size_csv(path):
-    """Load patch_id -> n_voxels (fallback n_points) from an audit CSV.
+    """Load patch_id -> n_voxels from an enriched scene_split_manifest CSV.
 
-    Expected columns: patch_id, and n_voxels and/or n_points.
-    Rows with errors or non-positive sizes are skipped.
+    Rows with missing/non-positive n_voxels are skipped.
     """
     import csv
 
@@ -29,7 +28,7 @@ def load_voxel_size_csv(path):
         reader = csv.DictReader(handle)
         if reader.fieldnames is None:
             raise ValueError(f"Empty voxel size CSV: {path}")
-        required = {"patch_id"}
+        required = {"patch_id", "n_voxels"}
         missing = required - set(reader.fieldnames)
         if missing:
             raise KeyError(f"Missing columns in {path}: {sorted(missing)}")
@@ -41,45 +40,77 @@ def load_voxel_size_csv(path):
             if not patch_id:
                 continue
             n_voxels = row.get("n_voxels")
-            n_points = row.get("n_points")
-            size = None
-            if n_voxels not in (None, ""):
-                size = int(float(n_voxels))
-            elif n_points not in (None, ""):
-                size = int(float(n_points))
-            if size is None or size <= 0:
+            if n_voxels in (None, ""):
+                continue
+            size = int(float(n_voxels))
+            if size <= 0:
                 continue
             sizes[patch_id] = size
     return sizes
 
 
-def resolve_dataset_voxel_sizes(dataset, size_csv=None):
-    """Return per-index sizes for packing (prefer CSV n_voxels, else n_points via mmap)."""
+def resolve_dataset_voxel_sizes(dataset):
+    """Return per-index n_voxels for packing from dataset.csv_manifest.
+
+    Requires csv_manifest column n_voxels for every sample.
+    Raises ValueError with a clear message if the column or values are missing.
+    """
     import os
 
-    import numpy as np
+    manifest_path = getattr(dataset, "csv_manifest", None)
+    if not manifest_path:
+        raise ValueError(
+            "Voxel-budget packing requires dataset.csv_manifest with an n_voxels "
+            "column. Set data.*.csv_manifest, then enrich it with:\n"
+            "  python scripts/analyze_flair3d_test_point_voxel_counts.py "
+            "--write_manifest <manifest.csv> ..."
+        )
+    if not os.path.isfile(manifest_path):
+        raise FileNotFoundError(
+            f"Voxel-budget packing: csv_manifest not found: {manifest_path}"
+        )
 
-    csv_sizes = load_voxel_size_csv(size_csv) if size_csv else {}
+    with open(manifest_path, "r", encoding="utf-8", newline="") as handle:
+        import csv
+
+        reader = csv.DictReader(handle)
+        fields = set(reader.fieldnames or [])
+    if "n_voxels" not in fields:
+        raise ValueError(
+            f"Voxel-budget packing requires column 'n_voxels' in csv_manifest, "
+            f"but it was not found in:\n  {manifest_path}\n"
+            "Enrich the manifest after preprocess, e.g.:\n"
+            "  python scripts/analyze_flair3d_test_point_voxel_counts.py \\\n"
+            f"    --csv_manifest {manifest_path} \\\n"
+            f"    --write_manifest {manifest_path} \\\n"
+            "    --splits val,test --grid_size 0.1"
+        )
+
+    csv_sizes = load_voxel_size_csv(manifest_path)
     data_list = getattr(dataset, "data_list", None)
     if data_list is None:
         raise AttributeError("Dataset has no data_list; cannot resolve voxel sizes")
 
     sizes = []
-    missing_csv = 0
+    missing_ids = []
     for path in data_list:
         patch_id = os.path.basename(path.rstrip("/"))
         if patch_id in csv_sizes:
             sizes.append(int(csv_sizes[patch_id]))
             continue
-        missing_csv += 1
-        coord_path = os.path.join(path, "coord.npy")
-        if not os.path.isfile(coord_path):
-            # Force singleton batch if unknown / missing.
-            sizes.append(2**31 - 1)
-            continue
-        n_points = int(np.load(coord_path, mmap_mode="r").shape[0])
-        sizes.append(max(n_points, 1))
-    return sizes, missing_csv
+        missing_ids.append(patch_id)
+
+    if missing_ids:
+        examples = ", ".join(missing_ids[:5])
+        more = f" (+{len(missing_ids) - 5} more)" if len(missing_ids) > 5 else ""
+        raise ValueError(
+            f"Voxel-budget packing: {len(missing_ids)}/{len(data_list)} scenes have "
+            f"no positive n_voxels in csv_manifest:\n  {manifest_path}\n"
+            f"Examples: {examples}{more}\n"
+            "Re-run analyze_flair3d_test_point_voxel_counts.py --write_manifest "
+            "for the missing splits/scenes."
+        )
+    return sizes, 0
 
 
 def pack_indices_by_voxel_budget(sizes, voxel_budget, max_batch_size):
@@ -150,6 +181,33 @@ class VoxelBudgetBatchSampler(torch.utils.data.Sampler):
 
     def __len__(self):
         return len(self.batches)
+
+
+def build_voxel_budget_batch_sampler(
+    dataset,
+    voxel_budget,
+    max_batch_size,
+    rank=0,
+    world_size=1,
+):
+    """Resolve per-sample n_voxels from dataset.csv_manifest and build a sampler.
+
+    Requires n_voxels in csv_manifest for every sample.
+
+    Returns:
+        sampler: VoxelBudgetBatchSampler for this rank
+        sizes: list of per-index n_voxels used for packing
+        missing_csv: always 0 (missing sizes raise ValueError instead)
+    """
+    sizes, missing_csv = resolve_dataset_voxel_sizes(dataset)
+    sampler = VoxelBudgetBatchSampler(
+        sizes=sizes,
+        voxel_budget=int(voxel_budget),
+        max_batch_size=int(max_batch_size),
+        rank=int(rank),
+        world_size=int(world_size),
+    )
+    return sampler, sizes, missing_csv
 
 
 def collate_fn(batch):

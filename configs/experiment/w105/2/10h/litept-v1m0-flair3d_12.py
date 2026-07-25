@@ -25,11 +25,19 @@ num_worker = 8 * num_gpu
 enable_amp = True
 
 batch_size = 6 * num_gpu
-batch_size_val = 2 * num_gpu
-batch_size_test = 2 * num_gpu
+# Cap scenes/batch; actual batching uses *_voxel_budget packing when set.
+batch_size_val = 8 * num_gpu
+batch_size_test = 8 * num_gpu
 
 grid_size = 0.1
 point_max = 102400
+# Packing budgets in voxels (independent of train point_max / SphereCrop).
+# Sizes from csv_manifest n_voxels (enrich after preprocess with
+# analyze_flair3d_test_point_voxel_counts.py --write_manifest).
+# Audit (local D068/D075 test, grid_size=0.1): median n_voxels≈149k, max≈1.20M.
+# ~8× median; scenes above budget run as bs=1.
+test_voxel_budget = 1_200_000
+val_voxel_budget = 1_200_000
 mix_prob = 0.8
 patch_size = 1024
 
