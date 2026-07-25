@@ -2,9 +2,12 @@
 """
 Audit per-subtile point and voxel counts for Flair3D+ (test/val/train).
 
-Uses the same scene filters as Flair3DDataset (CSV manifest, LIDARHD=True,
-missing / too_small / hardcoded exclusions). Voxel count matches GridSample
-(grid floor + FNV unique keys) at the given grid_size.
+Uses all LIDARHD=True rows from the CSV manifest for the requested splits.
+Dataset exclusions (missing / too_small / hardcoded) are NOT applied by default:
+those tiles stay in the manifest and should still get n_points / n_voxels.
+Pass --apply_dataset_exclusions only if you want Flair3DDataset-matched audit stats.
+
+Voxel count matches GridSample (grid floor + FNV unique keys) at the given grid_size.
 
 Optionally enrich the scene_split_manifest CSV in place with n_points / n_voxels
 columns (--write_manifest). Preferred source for VoxelBudgetBatchSampler.
@@ -428,9 +431,14 @@ def main() -> None:
         "--too_small_tiles_manifest",
         default="data/flair3d_plus/too_small_tiles.csv",
     )
-    parser.add_argument("--no_exclude_hardcoded", action="store_true")
-    parser.add_argument("--no_exclude_missing_manifest", action="store_true")
-    parser.add_argument("--no_exclude_too_small", action="store_true")
+    parser.add_argument(
+        "--apply_dataset_exclusions",
+        action="store_true",
+        help=(
+            "Exclude missing / too_small / hardcoded tiles like Flair3DDataset. "
+            "Default is off so all LIDARHD manifest rows can be enriched."
+        ),
+    )
     parser.add_argument("--num_workers", type=int, default=8)
     parser.add_argument("--no_progress", action="store_true")
     parser.add_argument("--max_scenes", type=int, default=0, help="Debug: limit scenes (0=all)")
@@ -461,13 +469,11 @@ def main() -> None:
     os.makedirs(output_dir, exist_ok=True)
 
     excluded: set[tuple[str, str]] = set()
-    if not args.no_exclude_hardcoded:
+    if args.apply_dataset_exclusions:
         excluded |= load_hardcoded_excluded_tiles()
-    if not args.no_exclude_missing_manifest:
         excluded |= load_missing_tiles_manifest(
             resolve_repo_path(args.missing_tiles_manifest)
         )
-    if not args.no_exclude_too_small:
         excluded |= load_too_small_tiles_manifest(
             resolve_repo_path(args.too_small_tiles_manifest)
         )
@@ -493,6 +499,7 @@ def main() -> None:
     print(f"csv_manifest={csv_manifest}")
     print(f"splits={sorted(target_splits)}")
     print(f"grid_size={args.grid_size}")
+    print(f"apply_dataset_exclusions={args.apply_dataset_exclusions}")
     print(f"excluded tiles: {len(excluded)}")
     print(f"tiles to scan: {len(scenes)}")
 
