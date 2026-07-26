@@ -6,6 +6,7 @@ Please cite our work if the code is helpful to you.
 """
 
 import random
+from collections import Counter
 from collections.abc import Mapping, Sequence
 import numpy as np
 import torch
@@ -15,6 +16,45 @@ import torch.nn.functional as F
 from torch_scatter import scatter_min
 from pointcept.models.utils import offset2batch
 from pointcept.utils.logger import get_root_logger
+
+
+def _fmt_count(n):
+    """Compact integer: 1234 -> 1.2k, 2_000_000 -> 2.0M."""
+    n = int(n)
+    abs_n = abs(n)
+    if abs_n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M"
+    if abs_n >= 1_000:
+        return f"{n / 1_000:.1f}k"
+    return str(n)
+
+
+def _fmt_hist(values):
+    """Compact ascending histogram: '2x3, 3x7, 16x33'."""
+    counts = Counter(int(v) for v in values)
+    return ", ".join(f"{k}x{counts[k]}" for k in sorted(counts))
+
+
+def _summarize_pack_batches(batches, sizes, voxel_budget):
+    """Return human-readable packing stats for logging."""
+    if not batches:
+        return "n_batches=0 (empty)"
+    samples = [len(b) for b in batches]
+    voxels = [sum(sizes[i] for i in b) for b in batches]
+    util = [100.0 * v / voxel_budget for v in voxels]
+    return (
+        f"n_batches={len(batches)} | "
+        f"scenes/batch min/mean/max={min(samples)}/"
+        f"{sum(samples) / len(samples):.1f}/{max(samples)} "
+        f"[{_fmt_hist(samples)}] | "
+        f"voxels/batch min/mean/max="
+        f"{_fmt_count(min(voxels))}/"
+        f"{_fmt_count(sum(voxels) / len(voxels))}/"
+        f"{_fmt_count(max(voxels))} | "
+        f"budget util mean/p50="
+        f"{sum(util) / len(util):.0f}%/"
+        f"{float(np.median(util)):.0f}%"
+    )
 
 
 def load_voxel_size_csv(path):
@@ -184,24 +224,24 @@ class VoxelBudgetBatchSampler(torch.utils.data.Sampler):
             self.sizes, self.voxel_budget, self.max_batch_size
         )
         self.batches = all_batches[self.rank :: self.world_size]
-        # TEMP: effective scenes and total voxels per packed batch
-        # (root logger is silent on non-zero ranks → dump all shards from rank 0)
+        # Root logger is silent on non-zero ranks → summarize all shards from rank 0.
         if self.rank == 0:
             logger = get_root_logger()
+            logger.info(
+                "[VoxelBudgetBatchSampler] budget=%s max_bs=%d world_size=%d",
+                _fmt_count(self.voxel_budget),
+                self.max_batch_size,
+                self.world_size,
+            )
             for r in range(self.world_size):
                 batches_r = all_batches[r :: self.world_size]
-                samples_per_batch = [len(b) for b in batches_r]
-                voxels_per_batch = [
-                    sum(self.sizes[i] for i in b) for b in batches_r
-                ]
                 logger.info(
-                    "[VoxelBudgetBatchSampler] rank=%d/%d n_batches=%d "
-                    "samples_per_batch=%s voxels_per_batch=%s",
+                    "[VoxelBudgetBatchSampler] rank %d/%d | %s",
                     r,
                     self.world_size,
-                    len(batches_r),
-                    samples_per_batch,
-                    voxels_per_batch,
+                    _summarize_pack_batches(
+                        batches_r, self.sizes, self.voxel_budget
+                    ),
                 )
 
     def __iter__(self):
