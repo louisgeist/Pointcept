@@ -175,6 +175,16 @@ class VoxelBudgetBatchSampler(torch.utils.data.Sampler):
             self.sizes, self.voxel_budget, self.max_batch_size
         )
         self.batches = all_batches[self.rank :: self.world_size]
+        # TEMP: effective scenes and total voxels per packed batch on this rank
+        samples_per_batch = [len(b) for b in self.batches]
+        voxels_per_batch = [sum(self.sizes[i] for i in b) for b in self.batches]
+        print(
+            f"[VoxelBudgetBatchSampler] rank={self.rank}/{self.world_size} "
+            f"n_batches={len(self.batches)} "
+            f"samples_per_batch={samples_per_batch} "
+            f"voxels_per_batch={voxels_per_batch}",
+            flush=True,
+        )
 
     def __iter__(self):
         return iter(self.batches)
