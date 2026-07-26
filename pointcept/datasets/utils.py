@@ -115,43 +115,51 @@ def resolve_dataset_voxel_sizes(dataset):
 
 
 def pack_indices_by_voxel_budget(sizes, voxel_budget, max_batch_size):
-    """Greedy pack after ascending sort by size. Oversized scenes become singleton batches."""
+    """First Fit Decreasing pack by size. Oversized scenes become singleton batches.
+
+    See: https://en.wikipedia.org/wiki/First-fit-decreasing_bin_packing
+    """
     if voxel_budget <= 0:
         raise ValueError(f"voxel_budget must be > 0, got {voxel_budget}")
     if max_batch_size <= 0:
         raise ValueError(f"max_batch_size must be > 0, got {max_batch_size}")
 
-    indexed = sorted(enumerate(sizes), key=lambda item: (item[1], item[0]))
+    # Descending size; ascending index tie-break for determinism.
+    indexed = sorted(
+        enumerate(sizes), key=lambda item: (-int(item[1]), item[0])
+    )
     batches = []
-    current = []
-    current_sum = 0
+    batch_sums = []
     for index, size in indexed:
         size = int(size)
         if size > voxel_budget:
-            if current:
-                batches.append(current)
-                current = []
-                current_sum = 0
             batches.append([index])
+            batch_sums.append(size)
             continue
-        if current and (
-            current_sum + size > voxel_budget or len(current) >= max_batch_size
-        ):
-            batches.append(current)
-            current = []
-            current_sum = 0
-        current.append(index)
-        current_sum += size
-    if current:
-        batches.append(current)
+        placed = False
+        for b, (batch, batch_sum) in enumerate(zip(batches, batch_sums)):
+            if len(batch) >= max_batch_size:
+                continue
+            if batch_sum + size > voxel_budget:
+                continue
+            batch.append(index)
+            batch_sums[b] = batch_sum + size
+            placed = True
+            break
+        if not placed:
+            batches.append([index])
+            batch_sums.append(size)
     return batches
 
 
 class VoxelBudgetBatchSampler(torch.utils.data.Sampler):
     """BatchSampler packing dataset indices by a voxel (or point) budget.
 
-    Scenes are sorted ascending by size then packed greedily. Batches are
-    deterministically sharded across distributed ranks (stride by world_size).
+    Scenes are packed with First Fit Decreasing (sort by size descending, place
+    each scene in the first batch that fits). See
+    https://en.wikipedia.org/wiki/First-fit-decreasing_bin_packing
+    Batches are deterministically sharded across distributed ranks
+    (stride by world_size).
     """
 
     def __init__(

@@ -161,6 +161,15 @@ class TesterBase:
         )
         return test_loader
 
+    def _uses_multi_scene_batches(self):
+        """True when the loader packs multiple scenes per step.
+
+        With a batch_sampler (e.g. VoxelBudgetBatchSampler), DataLoader.batch_size
+        is None; treat that as multi-scene batching.
+        """
+        bs = self.test_loader.batch_size
+        return bs is None or bs > 1
+
     def begin_test_timing(self):
         if torch.cuda.is_available():
             torch.cuda.synchronize()
@@ -539,7 +548,7 @@ class RegressionTester(TesterBase):
         )
 
     def test(self):
-        if self.test_loader.batch_size > 1:
+        if self._uses_multi_scene_batches():
             logger = get_root_logger()
             logger.info(
                 "Batch size > 1 detected. Assuming test_single_fragment=True "
@@ -561,7 +570,7 @@ class RegressionTester(TesterBase):
         n_batches = len(self.test_loader)
 
         def _process_one_regression_batch(batch, loader_idx, prog):
-            if self.test_loader.batch_size > 1:
+            if self._uses_multi_scene_batches():
                 assert all(len(d["fragment_list"]) == 1 for d in batch), (
                     "Batch size > 1 is only supported with test_single_fragment=True "
                     "(1 fragment per scene)."
@@ -591,7 +600,7 @@ class RegressionTester(TesterBase):
 
             if all(batch_all_cached):
                 batch_pred_np = [np.load(p) for p in batch_pred_paths]
-            elif self.test_loader.batch_size > 1:
+            elif self._uses_multi_scene_batches():
                 fragments = [fl[0] for fl in batch_fragment_lists]
                 use_voxel_broadcast = "inverse" in fragments[0]
 
@@ -919,7 +928,7 @@ class MultiTaskTester(TesterBase):
         )
 
     def test(self):
-        if self.test_loader.batch_size > 1:
+        if self._uses_multi_scene_batches():
             logger = get_root_logger()
             logger.info("Batch size > 1 detected. Assuming test_single_fragment=True for MultiTaskTester.")
         
@@ -953,7 +962,7 @@ class MultiTaskTester(TesterBase):
         n_batches = len(self.test_loader)
 
         def _process_one_multitask_batch(batch, prog):
-            if self.test_loader.batch_size > 1:
+            if self._uses_multi_scene_batches():
                 assert all(len(d["fragment_list"]) == 1 for d in batch), "Batch size > 1 is only supported with test_single_fragment=True (1 fragment per scene)."
             
             # Initialize per-scene data structures
