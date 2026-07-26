@@ -14,6 +14,7 @@ import torch.nn.functional as F
 
 from torch_scatter import scatter_min
 from pointcept.models.utils import offset2batch
+from pointcept.utils.logger import get_root_logger
 
 
 def load_voxel_size_csv(path):
@@ -175,16 +176,25 @@ class VoxelBudgetBatchSampler(torch.utils.data.Sampler):
             self.sizes, self.voxel_budget, self.max_batch_size
         )
         self.batches = all_batches[self.rank :: self.world_size]
-        # TEMP: effective scenes and total voxels per packed batch on this rank
-        samples_per_batch = [len(b) for b in self.batches]
-        voxels_per_batch = [sum(self.sizes[i] for i in b) for b in self.batches]
-        print(
-            f"[VoxelBudgetBatchSampler] rank={self.rank}/{self.world_size} "
-            f"n_batches={len(self.batches)} "
-            f"samples_per_batch={samples_per_batch} "
-            f"voxels_per_batch={voxels_per_batch}",
-            flush=True,
-        )
+        # TEMP: effective scenes and total voxels per packed batch
+        # (root logger is silent on non-zero ranks → dump all shards from rank 0)
+        if self.rank == 0:
+            logger = get_root_logger()
+            for r in range(self.world_size):
+                batches_r = all_batches[r :: self.world_size]
+                samples_per_batch = [len(b) for b in batches_r]
+                voxels_per_batch = [
+                    sum(self.sizes[i] for i in b) for b in batches_r
+                ]
+                logger.info(
+                    "[VoxelBudgetBatchSampler] rank=%d/%d n_batches=%d "
+                    "samples_per_batch=%s voxels_per_batch=%s",
+                    r,
+                    self.world_size,
+                    len(batches_r),
+                    samples_per_batch,
+                    voxels_per_batch,
+                )
 
     def __iter__(self):
         return iter(self.batches)
