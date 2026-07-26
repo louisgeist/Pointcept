@@ -79,11 +79,16 @@ class LearnedMaskedFeatMixin:
                 f"Missing learned parameter '{feat_key}_mask_value'."
             )
             learned_mask_value = getattr(self, f"{feat_key}_mask_value").to(feat.dtype)
-            feat[:, start:end] = torch.where(
+            filled = torch.where(
                 mask,
                 learned_mask_value,
                 feat[:, start:end],
             )
+            # When the batch mask is all-False, torch.where gives no grad to the
+            # learned value; add a zero term so DDP still marks it as used.
+            if self.training:
+                filled = filled + learned_mask_value.sum() * 0.0
+            feat[:, start:end] = filled
             
     def _print_learned_masked_feat(self):
         if not self.enable_learned_masked_feat:
@@ -508,7 +513,9 @@ class MultiTaskSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
                     )
                 valid = target != ignore_index
                 if not valid.any():
-                    task_loss = logits.new_zeros(())
+                    # Keep logits in the graph so DDP always sees cls head grads
+                    # (zero) even when every scene in the batch is ignore.
+                    task_loss = logits.sum() * 0.0
                 else:
                     task_loss = self.criteria_by_task[task_name](
                         logits[valid].float(), target[valid]
@@ -532,7 +539,10 @@ class MultiTaskSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
                     ignore_index = int(ignore_index)
                     valid = (target != ignore_index).any(dim=-1)
                     if not valid.any():
-                        task_loss = logits.new_zeros(())
+                        # Keep logits in the graph so DDP always sees cls head grads
+                        # (zero) even when every scene in the batch is ignore
+                        # (e.g. missing natural_habitat_multilabel.npy).
+                        task_loss = logits.sum() * 0.0
                     else:
                         task_loss = self.criteria_by_task[task_name](
                             logits[valid], target[valid]
