@@ -110,6 +110,68 @@ def finalize_val_epoch_timing(trainer, start_time, current_epoch, wandb_dict=Non
     )
 
 
+def sync_confusion_hist_totals(intersection, union, target):
+    """All-reduce local confusion-histogram totals once after the val loop.
+
+    Per-batch all_reduce deadlocks when ranks have unequal loader lengths
+    (e.g. VoxelBudgetBatchSampler stride sharding). Summing locally then
+    reducing once is mathematically equivalent.
+    """
+    intersection = np.asarray(intersection, dtype=np.float64).reshape(-1)
+    union = np.asarray(union, dtype=np.float64).reshape(-1)
+    target = np.asarray(target, dtype=np.float64).reshape(-1)
+    if intersection.shape != union.shape or intersection.shape != target.shape:
+        raise ValueError(
+            "intersection/union/target must share the same shape, got "
+            f"{intersection.shape}, {union.shape}, {target.shape}"
+        )
+    if comm.get_world_size() <= 1:
+        return intersection, union, target
+    flat = np.concatenate([intersection, union, target])
+    buf = torch.tensor(flat, dtype=torch.float64, device="cuda")
+    dist.all_reduce(buf)
+    flat = buf.cpu().numpy()
+    c = intersection.size
+    return flat[0:c], flat[c : 2 * c], flat[2 * c : 3 * c]
+
+
+def local_task_confusion_hist_totals(storage, task_name, num_classes):
+    """Local val_intersection|union|target totals for a named task (or zeros)."""
+    histories = storage.histories()
+    zeros = np.zeros(int(num_classes), dtype=np.float64)
+    ik = f"val_intersection/{task_name}"
+    uk = f"val_union/{task_name}"
+    tk = f"val_target/{task_name}"
+    intersection = histories[ik].total if ik in histories else zeros.copy()
+    union = histories[uk].total if uk in histories else zeros.copy()
+    target = histories[tk].total if tk in histories else zeros.copy()
+    return (
+        np.asarray(intersection, dtype=np.float64).reshape(-1),
+        np.asarray(union, dtype=np.float64).reshape(-1),
+        np.asarray(target, dtype=np.float64).reshape(-1),
+    )
+
+
+def local_semseg_confusion_hist_totals(storage, num_classes):
+    """Local val_intersection|union|target totals for SemSegEvaluator (or zeros)."""
+    histories = storage.histories()
+    zeros = np.zeros(int(num_classes), dtype=np.float64)
+    intersection = (
+        histories["val_intersection"].total
+        if "val_intersection" in histories
+        else zeros.copy()
+    )
+    union = histories["val_union"].total if "val_union" in histories else zeros.copy()
+    target = (
+        histories["val_target"].total if "val_target" in histories else zeros.copy()
+    )
+    return (
+        np.asarray(intersection, dtype=np.float64).reshape(-1),
+        np.asarray(union, dtype=np.float64).reshape(-1),
+        np.asarray(target, dtype=np.float64).reshape(-1),
+    )
+
+
 @HOOKS.register_module()
 class ClsEvaluator(HookBase):
     _METRICS = ("mIoU", "mAcc", "allAcc")
@@ -257,7 +319,10 @@ class SemSegEvaluator(HookBase):
 
     def eval(self):
         val_start = begin_val_epoch_timing()
-        self.trainer.logger.info(">>>>>>>>>>>>>>>> Start Evaluation >>>>>>>>>>>>>>>>")
+        if comm.is_main_process():
+            self.trainer.logger.info(
+                ">>>>>>>>>>>>>>>> Start Evaluation >>>>>>>>>>>>>>>>"
+            )
         self.trainer.model.eval()
         for i, input_dict in enumerate(self.trainer.val_loader):
             for key in input_dict.keys():
@@ -284,55 +349,61 @@ class SemSegEvaluator(HookBase):
                 self.trainer.cfg.data.num_classes,
                 self.trainer.cfg.data.ignore_index,
             )
-            if comm.get_world_size() > 1:
-                dist.all_reduce(intersection), dist.all_reduce(union), dist.all_reduce(
-                    target
-                )
+            # Accumulate locally; all_reduce once after the loop.
             intersection, union, target = (
                 intersection.cpu().numpy(),
                 union.cpu().numpy(),
                 target.cpu().numpy(),
             )
-            # Here there is no need to sync since sync happened in dist.all_reduce
             self.trainer.storage.put_scalar("val_intersection", intersection)
             self.trainer.storage.put_scalar("val_union", union)
             self.trainer.storage.put_scalar("val_target", target)
             self.trainer.storage.put_scalar("val_loss", loss.item())
-            info = "Test: [{iter}/{max_iter}] ".format(
-                iter=i + 1, max_iter=len(self.trainer.val_loader)
-            )
-            if "origin_coord" in input_dict.keys():
-                info = "Interp. " + info
-            self.trainer.logger.info(
-                info
-                + "Loss {loss:.4f} ".format(
-                    iter=i + 1, max_iter=len(self.trainer.val_loader), loss=loss.item()
+            if comm.is_main_process():
+                info = "Test: [{iter}/{max_iter}] ".format(
+                    iter=i + 1, max_iter=len(self.trainer.val_loader)
                 )
-            )
-        loss_avg = self.trainer.storage.history("val_loss").avg
-        intersection = self.trainer.storage.history("val_intersection").total
-        union = self.trainer.storage.history("val_union").total
-        target = self.trainer.storage.history("val_target").total
+                if "origin_coord" in input_dict.keys():
+                    info = "Interp. " + info
+                self.trainer.logger.info(
+                    info
+                    + "Loss {loss:.4f} ".format(
+                        iter=i + 1,
+                        max_iter=len(self.trainer.val_loader),
+                        loss=loss.item(),
+                    )
+                )
+        val_histories = self.trainer.storage.histories()
+        loss_avg = (
+            val_histories["val_loss"].avg if "val_loss" in val_histories else 0.0
+        )
+        intersection, union, target = local_semseg_confusion_hist_totals(
+            self.trainer.storage, self.trainer.cfg.data.num_classes
+        )
+        intersection, union, target = sync_confusion_hist_totals(
+            intersection, union, target
+        )
         iou_class = intersection / (union + 1e-10)
         acc_class = intersection / (target + 1e-10)
         m_iou = mean_iou_from_hist(intersection, union)
         valid = union != 0
         m_acc = float(np.mean(acc_class[valid])) if valid.any() else 0.0
         all_acc = sum(intersection) / (sum(target) + 1e-10)
-        self.trainer.logger.info(
-            "Val result: mIoU/mAcc/allAcc {:.4f}/{:.4f}/{:.4f}.".format(
-                m_iou, m_acc, all_acc
-            )
-        )
-        for i in range(self.trainer.cfg.data.num_classes):
+        if comm.is_main_process():
             self.trainer.logger.info(
-                "Class_{idx}-{name} Result: iou/accuracy {iou:.4f}/{accuracy:.4f}".format(
-                    idx=i,
-                    name=self.trainer.cfg.data.names[i],
-                    iou=iou_class[i],
-                    accuracy=acc_class[i],
+                "Val result: mIoU/mAcc/allAcc {:.4f}/{:.4f}/{:.4f}.".format(
+                    m_iou, m_acc, all_acc
                 )
             )
+            for i in range(self.trainer.cfg.data.num_classes):
+                self.trainer.logger.info(
+                    "Class_{idx}-{name} Result: iou/accuracy {iou:.4f}/{accuracy:.4f}".format(
+                        idx=i,
+                        name=self.trainer.cfg.data.names[i],
+                        iou=iou_class[i],
+                        accuracy=acc_class[i],
+                    )
+                )
         current_epoch = self.trainer.epoch + 1
         m_iou_best = max(self.trainer.best_metric_value, m_iou)
         if self.trainer.writer is not None:
@@ -375,7 +446,10 @@ class SemSegEvaluator(HookBase):
                         )
         else:
             finalize_val_epoch_timing(self.trainer, val_start, current_epoch)
-        self.trainer.logger.info("<<<<<<<<<<<<<<<<< End Evaluation <<<<<<<<<<<<<<<<<")
+        if comm.is_main_process():
+            self.trainer.logger.info(
+                "<<<<<<<<<<<<<<<<< End Evaluation <<<<<<<<<<<<<<<<<"
+            )
         self.trainer.comm_info["current_metric_value"] = m_iou  # save for saver
         self.trainer.comm_info["current_metric_name"] = "mIoU"  # save for saver
 
@@ -726,7 +800,10 @@ class MultiTaskEvaluator(HookBase):
 
     def eval(self):
         val_start = begin_val_epoch_timing()
-        self.trainer.logger.info(">>>>>>>>>>>>>>>> Start Evaluation >>>>>>>>>>>>>>>>")
+        if comm.is_main_process():
+            self.trainer.logger.info(
+                ">>>>>>>>>>>>>>>> Start Evaluation >>>>>>>>>>>>>>>>"
+            )
         self.trainer.model.eval()
         task_configs = self._get_task_configs()
         main_task = self._main_task_name(task_configs)
@@ -802,10 +879,8 @@ class MultiTaskEvaluator(HookBase):
                         int(task_config["num_classes"]),
                         int(task_config["ignore_index"]),
                     )
-                    if comm.get_world_size() > 1:
-                        dist.all_reduce(intersection)
-                        dist.all_reduce(union)
-                        dist.all_reduce(target)
+                    # Accumulate locally; all_reduce once after the loop (avoids
+                    # NCCL deadlock when ranks have unequal val batch counts).
                     intersection, union, target = (
                         intersection.cpu().numpy(),
                         union.cpu().numpy(),
@@ -830,10 +905,6 @@ class MultiTaskEvaluator(HookBase):
                         int(task_config["num_classes"]),
                         int(task_config["ignore_index"]),
                     )
-                    if comm.get_world_size() > 1:
-                        dist.all_reduce(intersection)
-                        dist.all_reduce(union)
-                        dist.all_reduce(target)
                     intersection, union, target = (
                         intersection.cpu().numpy(),
                         union.cpu().numpy(),
@@ -913,7 +984,10 @@ class MultiTaskEvaluator(HookBase):
                 if "origin_coord" in input_dict.keys():
                     postfix["interp"] = True
                 prog.step(**postfix)
-        loss_avg = self.trainer.storage.history("val_loss").avg
+        val_histories = self.trainer.storage.histories()
+        loss_avg = (
+            val_histories["val_loss"].avg if "val_loss" in val_histories else 0.0
+        )
         if comm.get_world_size() > 1 and regression_tasks:
             flat = []
             for task_name in regression_tasks:
@@ -932,11 +1006,13 @@ class MultiTaskEvaluator(HookBase):
         metric_task_names = semantic_tasks + classification_tasks
         for task_name in metric_task_names:
             task_config = task_configs[task_name]
-            intersection = self.trainer.storage.history(
-                f"val_intersection/{task_name}"
-            ).total
-            union = self.trainer.storage.history(f"val_union/{task_name}").total
-            target = self.trainer.storage.history(f"val_target/{task_name}").total
+            num_classes = int(task_config["num_classes"])
+            intersection, union, target = local_task_confusion_hist_totals(
+                self.trainer.storage, task_name, num_classes
+            )
+            intersection, union, target = sync_confusion_hist_totals(
+                intersection, union, target
+            )
             iou_class = intersection / (union + 1e-10)
             acc_class = intersection / (target + 1e-10)
             m_iou = mean_iou_from_hist(intersection, union)
@@ -950,22 +1026,23 @@ class MultiTaskEvaluator(HookBase):
                 all_acc=all_acc,
                 names=list(task_config["names"]),
             )
-            self.trainer.logger.info(
-                "[task={}] Val result: mIoU/mAcc/allAcc {:.4f}/{:.4f}/{:.4f}.".format(
-                    task_name, m_iou, m_acc, all_acc
-                )
-            )
-            for class_idx in range(int(task_config["num_classes"])):
-                class_name = per_task_metrics[task_name]["names"][class_idx]
+            if comm.is_main_process():
                 self.trainer.logger.info(
-                    "[task={}] Class_{}-{} Result: iou/accuracy {:.4f}/{:.4f}".format(
-                        task_name,
-                        class_idx,
-                        class_name,
-                        iou_class[class_idx],
-                        acc_class[class_idx],
+                    "[task={}] Val result: mIoU/mAcc/allAcc {:.4f}/{:.4f}/{:.4f}.".format(
+                        task_name, m_iou, m_acc, all_acc
                     )
                 )
+                for class_idx in range(num_classes):
+                    class_name = per_task_metrics[task_name]["names"][class_idx]
+                    self.trainer.logger.info(
+                        "[task={}] Class_{}-{} Result: iou/accuracy {:.4f}/{:.4f}".format(
+                            task_name,
+                            class_idx,
+                            class_name,
+                            iou_class[class_idx],
+                            acc_class[class_idx],
+                        )
+                    )
 
         multilabel_metrics_by_task = {}
         for task_name in multilabel_tasks:
@@ -1085,11 +1162,12 @@ class MultiTaskEvaluator(HookBase):
             mae = s["mae"] / cnt
             rmse = (s["mse"] / cnt) ** 0.5
             best_neg_rmse_epoch = max(best_neg_rmse_epoch, -rmse)
-            self.trainer.logger.info(
-                "[task={}] Val regression: MAE {:.6f} RMSE {:.6f} (n={:.0f}).".format(
-                    task_name, mae, rmse, cnt
+            if comm.is_main_process():
+                self.trainer.logger.info(
+                    "[task={}] Val regression: MAE {:.6f} RMSE {:.6f} (n={:.0f}).".format(
+                        task_name, mae, rmse, cnt
+                    )
                 )
-            )
             if writer is not None:
                 writer.add_scalar(
                     f"val/reg/{task_name}/mae", mae, current_epoch
@@ -1118,7 +1196,10 @@ class MultiTaskEvaluator(HookBase):
         else:
             finalize_val_epoch_timing(self.trainer, val_start, current_epoch)
 
-        self.trainer.logger.info("<<<<<<<<<<<<<<<<< End Evaluation <<<<<<<<<<<<<<<<<")
+        if comm.is_main_process():
+            self.trainer.logger.info(
+                "<<<<<<<<<<<<<<<<< End Evaluation <<<<<<<<<<<<<<<<<"
+            )
         self.trainer.comm_info["current_metric_value"] = main_m_iou
         self.trainer.comm_info["current_metric_name"] = f"mIoU/{main_task}"
 
