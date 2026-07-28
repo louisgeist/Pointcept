@@ -98,6 +98,7 @@ fi
 export POINTCEPT_SLURM_REQUEUE=1
 
 EXP_DIR=${JOB_DIR}
+export POINTCEPT_SAVE_PATH="${EXP_DIR}"
 MODEL_DIR=${EXP_DIR}/model
 CODE_DIR=${EXP_DIR}/code
 CONFIG_DIR=configs/experiment/${CONFIG}
@@ -145,6 +146,8 @@ if [ -n "${SLURM_JOB_ID:-}" ]; then
   trap '_pointcept_slurm_requeue_on_usr1' USR1
 fi
 ulimit -n 65536
+# Désactive la génération des core dumps (NCCL... multi-GPU)
+ulimit -c 0
 # Extra options for Python (e.g. eval_epoch=1 epoch=34 for smoke test)
 OPTS="save_path=$EXP_DIR"
 [ -n "${EXTRA_OPTIONS-}" ] && OPTS="$OPTS $EXTRA_OPTIONS"
