@@ -64,7 +64,7 @@ target_keys = (main_task,)
 origin_main_task = f"origin_{main_task}"
 
 label_definitions = dict(
-    segment="v19",
+    segment="v20",
 )
 
 task_configs = init_task_configs(target_keys, definitions=label_definitions)

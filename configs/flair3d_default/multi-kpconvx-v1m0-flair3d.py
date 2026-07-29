@@ -1,5 +1,5 @@
 """
-KPConvX on Flair3D+ multitask: segment (v19) + forest + elevation + tile
+KPConvX on Flair3D+ multitask: segment (v20) + forest + elevation + tile
 natural_habitat_multilabel (mean pooling), aligned with w105 Flair3D experiments.
 
 Follows the KPConvX data path (GridSample return_min_coord, point_max) and
@@ -77,7 +77,7 @@ elevation_key_scales = dict(elevation=elevation_target_scale)
 target_scales = get_regression_target_scales(target_keys)
 
 label_definitions = dict(
-    segment="v19",
+    segment="v20",
 )
 
 task_configs = init_task_configs(target_keys, definitions=label_definitions)
