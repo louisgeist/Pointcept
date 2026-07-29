@@ -521,8 +521,8 @@ def main() -> None:
     )
     parser.add_argument(
         "--segment_definition",
-        default="v19",
-        help="Segment label definition name (default: v19)",
+        default="v20",
+        help="Segment label definition name (default: v20)",
     )
     parser.add_argument(
         "--forest_definition",

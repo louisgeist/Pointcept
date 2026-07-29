@@ -44,10 +44,11 @@ sh scripts/train.sh -g 1 -d s3dis -c ptv3_nonormal -n ptv3_nonormal
 #### Preprocessing
 
 Label remaps are defined in ``pointcept/datasets/preprocessing/flair3d_plus/flair3d_label_remap.py``.
-Use ``--{task}_definition`` flags to override defaults (segment=v19, land_use=default,
-natural_habitat=by_habitat_x_domain, forest=default). ``climatic_domain.npy`` is written
-by default when ``--natural_habitat_definition default``; pass
-``--no-write-climatic-domain-category`` to skip. Re-run with ``--force`` when
+Use ``--{task}_definition`` flags to override defaults (segment=v20, land_use=default,
+natural_habitat=by_habitat_x_domain, forest=default). ``segment=v20`` matches Flair3D-build
+label v20 (same finer12 taxonomy as v19; upstream other-infra filter only).
+``climatic_domain.npy`` is written by default when ``--natural_habitat_definition default``;
+pass ``--no-write-climatic-domain-category`` to skip. Re-run with ``--force`` when
 definitions change.
 
 **On-the-fly label remapping (e.g. natural_habitat `by_moisture`):** preprocess once with
@@ -75,7 +76,7 @@ python pointcept/datasets/preprocessing/flair3d_plus/preprocess_flair3d_v2.py \
  --ply_root /data/geist/Flair3D-build/data/flair3d_label_enhanced \
  --dataset_root /data/geist/Pointcept/data/flair3d_plus/raw \
  --output_root data/flair3d_plus \
- --split_manifest_csv data/flair3d_plus/raw/scene_split_manifest_D067.csv \
+ --split_manifest_csv data/flair3d_plus/raw/scene_split_manifest_D075.csv \
  --natural_habitat_definition default \
  --num_workers 24 \
  --force
@@ -143,6 +144,35 @@ python scripts/assign_flair3d_climatic_domain_labels.py \
   --output_root data/flair3d_plus \
   --split_manifest_csv data/flair3d_plus/raw/scene_split_manifest.csv \
   --splits train,val,test
+```
+
+**Add network labels** (from Flair3D-build exported graphs):
+
+First enrich the split manifest with ``ROADS`` / ``RAILROADS`` / ``TRANSMISSION_LINES``
+via Flair3D-build repo (look at its README.md) (``True`` only when usable segments remain after export filters).
+
+The networks are represented as graphs. To train for this task, we convert them to binary masks.
+That is rasterize per-tile masks (hard-fails if a ``True`` flag has no ``*_graph.gpkg``,
+or if a manifest ``LIDARHD=True`` patch is missing ``coord.npy`` on disk).
+Densifies each ROI once, then slices cells into patches; empty tiles store
+``meta.network`` only (no ``network.npy``)::
+
+On Hecate (D067)
+```bash
+python pointcept/datasets/preprocessing/flair3d_plus/preprocess_network_masks.py \
+  --data_root data/flair3d_plus \
+  --network_graphs_root /data/geist/Flair3D-build/data/network_graphs \
+  --split_manifest_csv data/flair3d_plus/raw/scene_split_manifest_D067.csv \
+  --num_workers 12
+```
+
+On Jean Zay :
+```bash
+python pointcept/datasets/preprocessing/flair3d_plus/preprocess_network_masks.py \
+  --data_root data/flair3d_plus \
+  --network_graphs_root /lustre/fsn1/projects/rech/unv/usi32yh/data_flair3d_build/data/network_graphs \
+  --split_manifest_csv data/flair3d_plus/raw/scene_split_manifest.csv \
+  --num_workers 24
 ```
 
 **Per-subtile natural habitat multi-label (`natural_habitat_multilabel.npy`):** length-15 int8
@@ -357,16 +387,16 @@ Class names and ``num_classes`` / ``ignore_index`` per semantic target are defin
 python tools/train.py --config-file configs/flair3d_plus/litept_target_forest.py --num-gpus 1
 ```
 
-Train directement une config dans experiment:
+Train directement une config dans experiment (sur JeanZay, JZ):
 ```bash
-cd /lustre/fswork/projects/rech/unv/usi32yh/Pointcept
+cdpt
 python -m tools.train \
-  --config-file configs/experiment/w88/1/check_scheduler/1_ptv3_harmonized-transforms.py \
+  --config-file configs/experiment/w105/2/10h/litept-v1m0-flair3d_12.py \
   --num-gpus 1 \
   --num-machines 1 \
   --machine-rank 0 \
   --dist-url auto \
-  --options save_path=logs/local/test
+  --options save_path=outputs/vram
 ```
 
 ### Other datasets

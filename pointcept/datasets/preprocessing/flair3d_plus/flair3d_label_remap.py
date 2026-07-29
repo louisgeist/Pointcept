@@ -90,7 +90,8 @@ _SEGMENT_V18_NAMES: Tuple[str, ...] = (
     "Void",
 )
 
-# Flair3D-build label=v19 (finer12): single Building class, no land-use split.
+# Flair3D-build label=v19/v20 (finer12): single Building class, no land-use split.
+# v20 differs from v19 only upstream (other_infrastructure_filter v3); same train taxonomy.
 _SEGMENT_V19_NAMES: Tuple[str, ...] = (
     "Building",
     "Greenhouse",
@@ -562,12 +563,24 @@ def _register_segment_definitions() -> Dict[str, LabelDefinition]:
     missing_fill_raw_id=segment_v19_void,
     source_field="semantic",
   )
+  # Same LUT/names as v19; name tracks Flair3D-build label=v20 for meta.json cleanliness.
+  v20 = _make_definition(
+    "segment",
+    "v20",
+    num_raw_classes=segment_v19_lut.shape[0],
+    lut=segment_v19_lut.copy(),
+    names=_SEGMENT_V19_NAMES,
+    ignore_index=segment_v19_void,
+    missing_fill_raw_id=segment_v19_void,
+    source_field="semantic",
+  )
   return {
     "default": base,
     "inter_finerall10": inter_finerall10,
     "v17": v17,
     "v18": v18,
     "v19": v19,
+    "v20": v20,
   }
 
 
@@ -771,7 +784,7 @@ LABEL_DEFINITIONS: Dict[str, Dict[str, LabelDefinition]] = {
 
 # Default definition per task (preprocess v2 CLI + training when not overridden).
 DEFAULT_LABEL_DEFINITION_NAMES: Dict[str, str] = {
-  "segment": "v19",
+  "segment": "v20",
   "forest": "default",
   "land_use": "default",
   "natural_habitat": "by_habitat_x_domain",

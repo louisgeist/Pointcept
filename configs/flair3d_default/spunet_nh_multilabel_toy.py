@@ -1,7 +1,7 @@
 """
 Toy SpUNet config for debugging on hecate (D067 subset).
 
-Multi-task: segment (v19) + forest + elevation + tile natural_habitat_multilabel.
+Multi-task: segment (v18 local) + forest + elevation + tile natural_habitat_multilabel.
 natural_habitat_multilabel uses max scene pooling (vs default mean).
 Requires natural_habitat_multilabel.npy on disk.
 """
