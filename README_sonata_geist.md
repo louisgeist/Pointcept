@@ -52,7 +52,7 @@ python scripts/build_stratified_subset.py \
 - Split: **`train` only** (no val/test leakage into SSL)
 - Features: **coord + color + strength** (`in_channels=7`)
 - Schedule: iter-limited — `total_iters=100_000` (placeholder), `iter_per_epoch=1000`
-- Hardware template: **4 GPUs**, `batch_size_per_gpu=3`
+- Hardware template: **8× A100**, `batch_size_per_gpu=2` (`batch_size=16`)
 - Checkpoints: `CheckpointSaver(save_freq=5)` → `epoch_5.pth`, `epoch_10.pth`, …
 - `LinProbeSbatchHook` (after saver): submits `scripts/sonata/sbatch_lin_probe.sh` per epoch ckpt
 ¬- W&B project: `flair3d_sonata`
@@ -65,7 +65,7 @@ python scripts/build_stratified_subset.py \
 - Labels: segment **v20** (15 classes, `ignore_index=15`)
 - Train: full train split; Val: stratified `val_dev_subset_2000.csv`; **no test**
 - Schedule: **`total_iters=1000`**, **`iter_per_epoch=100`** (10 mini-epochs)
-- Hardware template: **1 GPU**, `batch_size_per_gpu=2`
+- Hardware template: **1× A100**, `batch_size_per_gpu=4`
 - No `RandomDropColor` / `RandomDropStrength`
 - Hook `MetricsJsonWriter` writes `save_path/metrics.json` at end of run
 - End of sbatch: [`scripts/sonata/append_lin_probe_result.py`](scripts/sonata/append_lin_probe_result.py) appends CSV on the pretrain dir
@@ -74,8 +74,8 @@ python scripts/build_stratified_subset.py \
 
 All launchers live under [`scripts/sonata/`](scripts/sonata/):
 
-- [`scripts/sonata/sbatch_pretrain.sh`](scripts/sonata/sbatch_pretrain.sh) — 4× H100, `WANDB_MODE=offline` (+ hook submits probes)
-- [`scripts/sonata/sbatch_lin_probe.sh`](scripts/sonata/sbatch_lin_probe.sh) — 1× H100, short walltime
+- [`scripts/sonata/sbatch_pretrain.sh`](scripts/sonata/sbatch_pretrain.sh) — 8× A100, `WANDB_MODE=offline` (+ hook submits probes)
+- [`scripts/sonata/sbatch_lin_probe.sh`](scripts/sonata/sbatch_lin_probe.sh) — 1× A100, short walltime
 - [`scripts/sonata/periodic_lin_probe.py`](scripts/sonata/periodic_lin_probe.py) — **optional** watcher (local / replay only)
 - [`scripts/sonata/append_lin_probe_result.py`](scripts/sonata/append_lin_probe_result.py) — CSV append at end of probe job
 
@@ -106,7 +106,7 @@ WEIGHT=/path/to/epoch_10.pth EXP_NAME=sonata_lin_ep10 \
 `LinProbeSbatchHook` is a no-op without `sbatch`. Use the watcher in local mode:
 
 ```bash
-sh scripts/train.sh -g 4 -d flair3d_default -c pretrain-sonata-v1m2-flair3d \
+sh scripts/train.sh -g 8 -d flair3d_default -c pretrain-sonata-v1m2-flair3d \
   -n sonata_pretrain_flair3dplus
 
 python scripts/sonata/periodic_lin_probe.py \
@@ -160,7 +160,7 @@ CONFIG=configs/flair3d_default/pretrain-sonata-v1m2-flair3d.py \
 
 Write the confirmed `batch_size_per_gpu` into
 [`configs/flair3d_default/pretrain-sonata-v1m2-flair3d.py`](configs/flair3d_default/pretrain-sonata-v1m2-flair3d.py)
-and set `batch_size = batch_size_per_gpu * 4`.
+and set `batch_size = batch_size_per_gpu * 8`.
 
 ### B — Linear probe (1× H100)
 
