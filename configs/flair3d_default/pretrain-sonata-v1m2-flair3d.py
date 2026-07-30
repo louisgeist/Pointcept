@@ -12,7 +12,7 @@ _base_ = ["../_base_/default_runtime.py"]
 # Run-level settings
 # -----------------------------------------------------------------------------
 num_gpu = 4
-batch_size_per_gpu = 3  # placeholder; scale with VRAM
+batch_size_per_gpu = 2
 batch_size = batch_size_per_gpu * num_gpu
 num_worker = 8 * num_gpu
 mix_prob = 0
@@ -101,7 +101,7 @@ model = dict(
 # -----------------------------------------------------------------------------
 # Optimizer / scheduler
 # -----------------------------------------------------------------------------
-base_lr = 0.004
+base_lr = 0.001 # Divided by 4, because we train on 8 GPUs instead of 32
 lr_decay = 0.9  # layer-wise lr decay
 
 base_wd = 0.04
