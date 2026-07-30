@@ -15,6 +15,11 @@ scripts/analyze_flair3d_test_point_voxel_counts.py --write_manifest (needed for
 val/test VoxelBudgetBatchSampler). This builder does not compute those columns
 (raw GPKG stage has no coord.npy).
 
+Network availability columns ``ROADS`` / ``RAILROADS`` / ``TRANSMISSION_LINES``
+are **not** written here: they are added by Flair3D-build
+``scripts/export_network_graphs.py`` (``split_manifest_csv=...``), with
+``True`` only when usable segments remain after export filters.
+
 Example:
 python scripts/flai3d_build_csv_manifest.py \
 --dataset_root data/flair3d_plus/raw \

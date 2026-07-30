@@ -13,7 +13,7 @@ LUT logic as Flair3DLabelRemap.
 natural_habitat_multilabel.npy is counted as scene presence over its 15 binary labels
 (no remap): percent = scenes_with_label / scenes_with_file.
 
-Example (on-disk default NH):
+Example (launch on A100 -> way faster):
 python scripts/count_flair3d_train_label_distribution.py \
 --data_root data/flair3d_plus \
 --csv_manifest data/flair3d_plus/raw/scene_split_manifest.csv \
