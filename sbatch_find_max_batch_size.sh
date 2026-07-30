@@ -11,7 +11,23 @@
 #   CONFIG=configs/experiment/w105/2/10h/litept-v1m0-flair3d_12.py \
 #     MIN_BS_TRAIN=2 MAX_BS_TRAIN=24 sbatch sbatch_find_max_batch_size.sh
 #
+# Sonata Flair3D+ (align MIX_PROB with the real config):
+#   # Pretrain SSL — no Mix3D
+#   CONFIG=configs/flair3d_default/pretrain-sonata-v1m2-flair3d.py \
+#     MODE=train MIX_PROB=0 \
+#     MIN_BS_TRAIN=1 MAX_BS_TRAIN=8 \
+#     PROBE_STEPS=32 SOAK_STEPS_TRAIN=200 \
+#     sbatch sbatch_find_max_batch_size.sh
+#
+#   # Linear probe — Mix3D as in *-lin config
+#   CONFIG=configs/flair3d_default/segment/sonata-v1m2-flair3d-lin.py \
+#     MODE=train MIX_PROB=0.8 \
+#     MIN_BS_TRAIN=1 MAX_BS_TRAIN=8 \
+#     PROBE_STEPS=32 SOAK_STEPS_TRAIN=200 \
+#     sbatch sbatch_find_max_batch_size.sh
+#
 # Defaults match the recommended local commands (H100, 1 GPU).
+# Probe overlays replace hooks (LinProbeSbatchHook disabled during search).
 
 #SBATCH --output=/lustre/fswork/projects/rech/unv/usi32yh/Pointcept/logs/slurm/%j/slurm.out
 #SBATCH --error=/lustre/fswork/projects/rech/unv/usi32yh/Pointcept/logs/slurm/%j/slurm.err

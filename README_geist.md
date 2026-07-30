@@ -399,6 +399,10 @@ python -m tools.train \
   --options save_path=outputs/vram
 ```
 
+### Sonata pretrain + periodic linear probe (Flair3D+)
+
+See [`README_sonata_geist.md`](README_sonata_geist.md).
+
 ### Other datasets
 
 #### Dales

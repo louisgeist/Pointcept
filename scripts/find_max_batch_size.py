@@ -5,14 +5,32 @@ Two phases (see plan max_batch_size_probe):
   1) Short dichotomie probe
   2) Optional longer soak on the candidate (train only by default)
 
-Train probes force mix_prob=1 (worst-case Mix3D). Prefer even batch sizes.
+Train probes default to mix_prob=1 (worst-case Mix3D). Prefer even batch sizes.
+Align --mix-prob with the real training config:
+  - supervised / lin-probe with Mix3D: keep 0.8 or 1.0
+  - Sonata SSL pretrain (no Mix3D): pass --mix-prob 0
+
+Probe overlays replace ``hooks`` entirely (see ``build_hooks``), so side-effect
+hooks such as ``LinProbeSbatchHook`` from the source config are never run.
 
 Examples (JeanZay / local GPU)::
 
-  # Train
+  # Train (supervised, Mix3D worst-case)
   python scripts/find_max_batch_size.py \\
     --config-file configs/experiment/w105/2/10h/litept-v1m0-flair3d_13.py \\
     --mode train --min-bs 2 --max-bs 32 --probe-steps 64 --soak-steps 500
+
+  # Sonata SSL pretrain (no Mix3D)
+  python scripts/find_max_batch_size.py \\
+    --config-file configs/flair3d_default/pretrain-sonata-v1m2-flair3d.py \\
+    --mode train --min-bs 1 --max-bs 8 --probe-steps 32 --soak-steps 200 \\
+    --mix-prob 0 --num-gpus 1
+
+  # Sonata linear probe (Mix3D as in config)
+  python scripts/find_max_batch_size.py \\
+    --config-file configs/flair3d_default/segment/sonata-v1m2-flair3d-lin.py \\
+    --mode train --min-bs 1 --max-bs 8 --probe-steps 32 --soak-steps 200 \\
+    --mix-prob 0.8 --num-gpus 1
 
   # Val (capped samples, no Mix3D)
   python scripts/find_max_batch_size.py \\
@@ -84,6 +102,11 @@ def build_hooks(
     *,
     save_checkpoint: bool = False,
 ) -> list[dict]:
+    """Minimal hook list for VRAM probes.
+
+    Fully replaces the source config ``hooks`` in the overlay, so side-effect
+    hooks (e.g. ``LinProbeSbatchHook``) are disabled during the search.
+    """
     hooks: list[dict] = [
         dict(type="CheckpointLoader"),
         dict(type="ModelHook"),
@@ -98,8 +121,13 @@ def build_hooks(
             hooks.append(dict(type=evaluator_type))
     if save_checkpoint:
         hooks.append(dict(type="CheckpointSaver", save_freq=None))
-    # PreciseEvaluator intentionally omitted: it would run a full test after train.
+    # PreciseEvaluator / LinProbeSbatchHook intentionally omitted.
     return hooks
+
+
+def source_has_lin_probe_sbatch_hook(config_file: Path) -> bool:
+    text = config_file.read_text(encoding="utf-8")
+    return "LinProbeSbatchHook" in text
 
 
 def write_probe_config(
@@ -746,7 +774,11 @@ def main() -> int:
             return 2
 
     if args.mode == "train" and args.mix_prob <= 0:
-        log("WARNING: mix_prob<=0 makes train VRAM probe optimistic (no Mix3D).")
+        log(
+            "NOTE: mix_prob<=0 disables Mix3D in this probe. Use only if the real "
+            "training config also has mix_prob=0 (e.g. Sonata SSL); otherwise VRAM "
+            "will be underestimated vs Mix3D training."
+        )
 
     stamp = time.strftime("%Y%m%d_%H%M%S")
     cfg_stem = config_file.stem
@@ -758,6 +790,11 @@ def main() -> int:
     log(f"Work dir: {work_dir}")
     log(f"Config: {config_file}")
     log(f"GPU: {_gpu_name()}")
+    if source_has_lin_probe_sbatch_hook(config_file):
+        log(
+            "NOTE: source config has LinProbeSbatchHook; probe overlays replace "
+            "hooks entirely, so sbatch lin-probe submits are disabled during VRAM search."
+        )
 
     try:
         result = binary_search(args, work_dir)

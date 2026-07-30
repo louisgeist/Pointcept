@@ -7,15 +7,20 @@ Please cite our work if the code is helpful to you.
 
 import sys
 import glob
+import json
 import os
 import math
+import re
 import shutil
+import subprocess
 import time
 import gc
 import wandb
 import torch
 import torch.utils.data
 from collections import OrderedDict
+from datetime import datetime, timezone
+from pathlib import Path
 
 if sys.version_info >= (3, 10):
     from collections.abc import Sequence
@@ -1016,3 +1021,205 @@ class GarbageHandler(HookBase):
     def after_train(self):
         gc.collect()
         torch.cuda.empty_cache()
+
+
+@HOOKS.register_module()
+class MetricsJsonWriter(HookBase):
+    """Write best validation metrics to ``save_path/metrics.json`` after training.
+
+    Intended for evaluate=True runs (e.g. linear probes). The periodic Sonata
+    probe watcher reads this file as the primary mIoU source.
+    """
+
+    def __init__(self, filename="metrics.json"):
+        self.filename = filename
+
+    def after_train(self):
+        if not is_main_process():
+            return
+        if not getattr(self.trainer.cfg, "evaluate", False):
+            return
+
+        metric_name = self.trainer.comm_info.get("current_metric_name", "mIoU")
+        best_value = float(self.trainer.best_metric_value)
+        payload = {
+            "metric_name": str(metric_name),
+            "best_metric_value": best_value,
+            "epoch": int(self.trainer.epoch + 1),
+        }
+        if str(metric_name) == "mIoU":
+            payload["best_val_mIoU"] = best_value
+
+        out_path = os.path.join(self.trainer.cfg.save_path, self.filename)
+        tmp_path = out_path + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2, sort_keys=True)
+            f.write("\n")
+        os.replace(tmp_path, out_path)
+        self.trainer.logger.info("Wrote metrics to: %s", out_path)
+
+
+@HOOKS.register_module()
+class LinProbeSbatchHook(HookBase):
+    """Submit a Slurm linear-probe job after each periodic ``epoch_N.pth`` save.
+
+    Non-blocking: failures to submit are logged and training continues.
+    Place this hook **after** ``CheckpointSaver`` so the epoch checkpoint exists.
+    Outside Slurm (no ``sbatch``), the hook is a no-op after a one-time warning.
+    """
+
+    def __init__(
+        self,
+        enable=True,
+        save_freq=5,
+        sbatch_script="scripts/sonata/sbatch_lin_probe.sh",
+        iter_per_epoch=1000,
+        state_filename="lin_probe_state.json",
+    ):
+        self.enable = bool(enable)
+        self.save_freq = int(save_freq) if save_freq else 0
+        self.sbatch_script = sbatch_script
+        self.iter_per_epoch = int(iter_per_epoch)
+        self.state_filename = state_filename
+        self._warned_no_sbatch = False
+
+    @staticmethod
+    def _utc_now():
+        return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def _state_path(self):
+        return os.path.join(self.trainer.cfg.save_path, self.state_filename)
+
+    def _load_state(self):
+        path = self._state_path()
+        if not os.path.isfile(path):
+            return {"completed": {}, "in_flight": {}}
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            return {"completed": {}, "in_flight": {}}
+        data.setdefault("completed", {})
+        data.setdefault("in_flight", {})
+        return data
+
+    def _save_state(self, state):
+        path = self._state_path()
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(state, f, indent=2, sort_keys=True)
+            f.write("\n")
+        os.replace(tmp, path)
+
+    def _resolve_sbatch_script(self):
+        script = Path(self.sbatch_script)
+        if script.is_file():
+            return script.resolve()
+        # Prefer repo root (cwd is usually the Pointcept root under train.sh).
+        cand = Path.cwd() / self.sbatch_script
+        if cand.is_file():
+            return cand.resolve()
+        return None
+
+    def after_epoch(self):
+        if not is_main_process():
+            return
+        if not self.enable or self.save_freq <= 0:
+            return
+
+        epoch_1based = int(self.trainer.epoch) + 1
+        if epoch_1based % self.save_freq != 0:
+            return
+
+        save_path = Path(self.trainer.cfg.save_path).resolve()
+        ckpt_name = f"epoch_{epoch_1based}.pth"
+        ckpt_path = save_path / "model" / ckpt_name
+        if not ckpt_path.is_file():
+            self.trainer.logger.warning(
+                "LinProbeSbatchHook: expected checkpoint missing: %s", ckpt_path
+            )
+            return
+
+        state = self._load_state()
+        if ckpt_name in state["completed"] or ckpt_name in state["in_flight"]:
+            self.trainer.logger.info(
+                "LinProbeSbatchHook: skip %s (already submitted/completed)", ckpt_name
+            )
+            return
+
+        if shutil.which("sbatch") is None:
+            if not self._warned_no_sbatch:
+                self.trainer.logger.warning(
+                    "LinProbeSbatchHook: sbatch not found; linear-probe submit disabled "
+                    "(use scripts/sonata/periodic_lin_probe.py --mode local for offline probing)."
+                )
+                self._warned_no_sbatch = True
+            return
+
+        script = self._resolve_sbatch_script()
+        if script is None:
+            self.trainer.logger.warning(
+                "LinProbeSbatchHook: sbatch script not found: %s", self.sbatch_script
+            )
+            return
+
+        exp_name = f"sonata_lin_ep{epoch_1based}"
+        pretrain_iters = epoch_1based * self.iter_per_epoch
+        env = os.environ.copy()
+        env["WEIGHT"] = str(ckpt_path)
+        env["EXP_NAME"] = exp_name
+        env["PRETRAIN_JOB_DIR"] = str(save_path)
+        env["PRETRAIN_EPOCH"] = str(epoch_1based)
+        env["PRETRAIN_ITERS"] = str(pretrain_iters)
+
+        cmd = [
+            "sbatch",
+            "--export=ALL,WEIGHT,EXP_NAME,PRETRAIN_JOB_DIR,PRETRAIN_EPOCH,PRETRAIN_ITERS",
+            str(script),
+        ]
+        try:
+            proc = subprocess.run(
+                cmd,
+                env=env,
+                cwd=str(Path.cwd()),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except OSError as exc:
+            self.trainer.logger.warning(
+                "LinProbeSbatchHook: failed to run sbatch for %s: %s", ckpt_name, exc
+            )
+            return
+
+        if proc.returncode != 0:
+            self.trainer.logger.warning(
+                "LinProbeSbatchHook: sbatch failed for %s (rc=%s): %s%s",
+                ckpt_name,
+                proc.returncode,
+                proc.stdout.strip(),
+                (" | " + proc.stderr.strip()) if proc.stderr else "",
+            )
+            return
+
+        job_id = None
+        m = re.search(r"(\d+)", (proc.stdout or "").strip())
+        if m:
+            job_id = m.group(1)
+
+        state["in_flight"][ckpt_name] = {
+            "job_id": job_id or "",
+            "ckpt": str(ckpt_path),
+            "pretrain_epoch": epoch_1based,
+            "pretrain_iters": pretrain_iters,
+            "status": "submitted",
+            "submitted_at": self._utc_now(),
+            "exp_name": exp_name,
+        }
+        self._save_state(state)
+        self.trainer.logger.info(
+            "LinProbeSbatchHook: submitted %s -> job_id=%s exp=%s",
+            ckpt_name,
+            job_id,
+            exp_name,
+        )
