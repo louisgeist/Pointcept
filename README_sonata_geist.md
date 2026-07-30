@@ -92,6 +92,14 @@ wandb sync logs/slurm/<PRETRAIN_JOB_ID>/wandb
 # Probe job ids / wandb dirs: column probe_job_dir in the CSV
 ```
 
+Jean-Zay IMAGINE [compute-accounting](https://github.com/Archiel19/compute-accounting)
+tags are baked into the Slurm scripts (`#SBATCH --comment=...`) so the
+`sbatch` wrapper never prompts interactively — required for hook-submitted
+lin-probe jobs:
+
+- pretrain: `flair3d,explore,pre-train`
+- lin-probe: `flair3d,explore,evaluate`
+
 ### Manual single probe
 
 ```bash

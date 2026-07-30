@@ -2,9 +2,14 @@
 
 # Sonata-v1m2 pretrain on Flair3D+ (8× A100).
 # Usage: sbatch scripts/sonata/sbatch_pretrain.sh [exp_name]
+#
+# Jean-Zay compute-accounting tags (IMAGINE wrapper):
+#   https://github.com/Archiel19/compute-accounting
+# Keep --comment set so non-interactive sbatch never prompts.
 
 #SBATCH -A uhn@a100
 #SBATCH -C a100
+#SBATCH --comment=flair3d,baseline,pre-train
 #SBATCH --output=/lustre/fswork/projects/rech/unv/usi32yh/Pointcept/logs/slurm/%j/slurm.out
 #SBATCH --error=/lustre/fswork/projects/rech/unv/usi32yh/Pointcept/logs/slurm/%j/slurm.err
 

@@ -1174,6 +1174,9 @@ class LinProbeSbatchHook(HookBase):
 
         cmd = [
             "sbatch",
+            # Native Slurm --comment (also satisfies IMAGINE compute-accounting wrapper).
+            # Keep this so auto-submits never fall back to interactive prompts.
+            "--comment=flair3d,baseline,post-train",
             "--export=ALL,WEIGHT,EXP_NAME,PRETRAIN_JOB_DIR,PRETRAIN_EPOCH,PRETRAIN_ITERS",
             str(script),
         ]

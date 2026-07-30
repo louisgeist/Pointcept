@@ -1,14 +1,19 @@
 #!/bin/bash
 
-# Short Sonata linear probe on Flair3D+ segment (1× H100).
+# Short Sonata linear probe on Flair3D+ segment (1× A100).
 # Usage:
 #   sbatch scripts/sonata/sbatch_lin_probe.sh <weight.pth> [exp_name]
 # Or with env vars (LinProbeSbatchHook / watcher):
 #   WEIGHT=... EXP_NAME=... PRETRAIN_JOB_DIR=... PRETRAIN_EPOCH=... PRETRAIN_ITERS=... \
 #     sbatch scripts/sonata/sbatch_lin_probe.sh
+#
+# Jean-Zay compute-accounting tags (IMAGINE wrapper):
+#   https://github.com/Archiel19/compute-accounting
+# --comment is required so LinProbeSbatchHook auto-submits never hang on interactive prompts.
 
 #SBATCH -A uhn@a100
 #SBATCH -C a100
+#SBATCH --comment=flair3d,explore,evaluate
 #SBATCH --output=/lustre/fswork/projects/rech/unv/usi32yh/Pointcept/logs/slurm/%j/slurm.out
 #SBATCH --error=/lustre/fswork/projects/rech/unv/usi32yh/Pointcept/logs/slurm/%j/slurm.err
 
@@ -46,7 +51,7 @@ cp $0 ${JOB_DIR}/script.slurm
 } > ${JOB_DIR}/job_info.log
 
 module purge
-module load arch/h100
+module load arch/a100
 module load cuda/12.1.0
 module load miniforge/24.9.0
 

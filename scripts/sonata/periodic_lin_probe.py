@@ -174,7 +174,12 @@ def _launch_sbatch(
     env = os.environ.copy()
     env["WEIGHT"] = str(ckpt.resolve())
     env["EXP_NAME"] = exp_name
-    cmd = ["sbatch", "--export=ALL,WEIGHT,EXP_NAME", str(sbatch_script)]
+    cmd = [
+        "sbatch",
+        "--comment=flair3d,explore,evaluate",
+        "--export=ALL,WEIGHT,EXP_NAME",
+        str(sbatch_script),
+    ]
     print(f"[sbatch] launching: WEIGHT={env['WEIGHT']} EXP_NAME={exp_name}", flush=True)
     out = subprocess.check_output(cmd, cwd=str(_repo_root()), env=env, text=True)
     # "Submitted batch job 123456"
