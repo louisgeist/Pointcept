@@ -133,4 +133,7 @@ def _distributed_worker(
     # See: https://github.com/facebookresearch/maskrcnn-benchmark/issues/172
     comm.synchronize()
 
-    main_func(*cfg)
+    try:
+        main_func(*cfg)
+    finally:
+        dist.destroy_process_group()
