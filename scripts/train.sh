@@ -137,11 +137,13 @@ then
     --dist-url ${DIST_URL} \
     --options $OPTS
 else
+    OPTS="save_path=$EXP_DIR resume=$RESUME weight=$WEIGHT"
+    [ -n "${EXTRA_OPTIONS-}" ] && OPTS="$OPTS $EXTRA_OPTIONS"
     $PYTHON "$CODE_DIR"/tools/$TRAIN_CODE \
     --config-file "$CONFIG_DIR" \
     --num-gpus "$NUM_GPU" \
     --num-machines "$NUM_MACHINE" \
     --machine-rank ${SLURM_NODEID:-0} \
     --dist-url ${DIST_URL} \
-    --options save_path="$EXP_DIR" resume="$RESUME" weight="$WEIGHT"
+    --options $OPTS
 fi
