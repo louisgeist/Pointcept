@@ -13,7 +13,7 @@
 #SBATCH --output=/lustre/fswork/projects/rech/unv/usi32yh/Pointcept/logs/slurm/%j/slurm.out
 #SBATCH --error=/lustre/fswork/projects/rech/unv/usi32yh/Pointcept/logs/slurm/%j/slurm.err
 
-#SBATCH --time=20:00:00
+#SBATCH --time=19:50:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:8
@@ -47,7 +47,7 @@ module load cuda/12.1.0
 module load miniforge/24.9.0
 
 conda deactivate && while [ ! -z "$CONDA_DEFAULT_ENV" ]; do conda deactivate; done
-conda activate pointcept
+conda activate pointcept_124
 
 conda list > ${JOB_DIR}/conda_env.txt
 
