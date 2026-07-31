@@ -61,7 +61,12 @@ conda activate pointcept_124
 conda list > ${JOB_DIR}/conda_env.txt
 
 export WANDB_MODE=offline
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 cd ${REPO_ROOT}
+
+# Pointops built for A100 (train.sh prepends CODE_DIR but does not override an existing PYTHONPATH)
+POINTOPS_PATH=/lustre/fswork/projects/rech/unv/usi32yh/Pointcept/pointops_build_a100/lib/python3.10/site-packages/pointops-1.0-py3.10-linux-x86_64.egg
+export PYTHONPATH="${POINTOPS_PATH}${PYTHONPATH:+:$PYTHONPATH}"
 
 START_TIME=$(date +%s)
 
