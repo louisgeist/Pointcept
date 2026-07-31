@@ -1172,14 +1172,11 @@ class LinProbeSbatchHook(HookBase):
         env["PRETRAIN_EPOCH"] = str(epoch_1based)
         env["PRETRAIN_ITERS"] = str(pretrain_iters)
 
-        cmd = [
-            "sbatch",
-            # Native Slurm --comment (also satisfies IMAGINE compute-accounting wrapper).
-            # Keep this so auto-submits never fall back to interactive prompts.
-            "--comment=flair3d,baseline,post-train",
-            "--export=ALL,WEIGHT,EXP_NAME,PRETRAIN_JOB_DIR,PRETRAIN_EPOCH,PRETRAIN_ITERS",
-            str(script),
-        ]
+        # IMAGINE compute-accounting wraps `sbatch` with a narrow argparse CLI
+        # (script path only; no native Slurm flags like --comment/--export).
+        # Tags come from the script's `#SBATCH --comment=...`; WEIGHT/EXP_NAME/…
+        # are already in `env` and Slurm's default --export=ALL propagates them.
+        cmd = ["sbatch", str(script)]
         try:
             proc = subprocess.run(
                 cmd,
