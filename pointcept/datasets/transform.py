@@ -43,22 +43,26 @@ def record_data_pipeline(name):
     return record_function(name)
 
 
+DEFAULT_INDEX_VALID_KEYS = [
+    "coord",
+    "color",
+    "normal",
+    "color_mask",
+    "normal_mask",
+    "superpoint",
+    "strength",
+    "strength_mask",
+    "segment",
+    "instance",
+    "elevation",
+]
+
+
 def index_operator(data_dict, index, duplicate=False):
     # index selection operator for keys in "index_valid_keys"
     # custom these keys by "Update" transform in config
     if "index_valid_keys" not in data_dict:
-        data_dict["index_valid_keys"] = [
-            "coord",
-            "color",
-            "normal",
-            "color_mask",
-            "normal_mask",
-            "superpoint",
-            "strength",
-            "strength_mask",
-            "segment",
-            "instance",
-        ]
+        data_dict["index_valid_keys"] = list(DEFAULT_INDEX_VALID_KEYS)
     if not duplicate:
         for key in data_dict["index_valid_keys"]:
             if key in data_dict:
@@ -354,6 +358,39 @@ class ExtractAbsZ(object):
                 abs_z = abs_z + np.float32(data_dict["coord_translation"][2])
             data_dict["abs_z"] = abs_z
         return data_dict
+
+
+@TRANSFORMS.register_module()
+class ExtractAbsXY(object):
+    """Save absolute Lambert XY before geometric shifts normalize them away.
+
+    Reconstructs absolute XY in **float64** as ``coord.astype(f64) + coord_translation``
+    (Flair3D+ stores ``coord_translation`` as float64 and local ``coord`` as float32).
+    Do **not** cast the translation to float32 — that loses ~0.5–1 m at Lambert Y
+    and breaks 1 m network cell binning.
+
+    This is a pre-augmentation buffer for network raster lookup; prefer converting
+    to integer cell indices via ``NetworkRasterToPointLabels`` before Collect.
+    Automatically appends ``abs_xy`` to ``index_valid_keys`` so GridSample
+    (including test voxelize) subsets it with the points.
+    """
+
+    def __call__(self, data_dict):
+        if "coord" in data_dict.keys():
+            abs_xy = data_dict["coord"][:, :2].astype(np.float64, copy=True)
+            if "coord_translation" in data_dict:
+                transl = np.asarray(data_dict["coord_translation"], dtype=np.float64)
+                abs_xy = abs_xy + transl[:2]
+            data_dict["abs_xy"] = abs_xy
+            # Ensure GridSample (train or test voxelize) subsets abs_xy with points.
+            if "index_valid_keys" not in data_dict:
+                data_dict["index_valid_keys"] = list(DEFAULT_INDEX_VALID_KEYS)
+            if "abs_xy" not in data_dict["index_valid_keys"]:
+                data_dict["index_valid_keys"] = list(data_dict["index_valid_keys"])
+                data_dict["index_valid_keys"].append("abs_xy")
+        return data_dict
+
+
 
 
 @TRANSFORMS.register_module()
