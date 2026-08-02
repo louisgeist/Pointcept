@@ -1166,6 +1166,11 @@ class LinProbeSbatchHook(HookBase):
         exp_name = f"sonata_lin_ep{epoch_1based}"
         pretrain_iters = epoch_1based * self.iter_per_epoch
         env = os.environ.copy()
+        # Drop the pretrain job's wandb service token: --export=ALL would
+        # otherwise leak it into the probe job, which then tries to reuse a
+        # Unix socket that only lives inside the pretrain job's allocation
+        # (WandbServiceConnectionError: FileNotFoundError on the stale socket).
+        env.pop("WANDB_SERVICE", None)
         env["WEIGHT"] = str(ckpt_path)
         env["EXP_NAME"] = exp_name
         env["PRETRAIN_JOB_DIR"] = str(save_path)
