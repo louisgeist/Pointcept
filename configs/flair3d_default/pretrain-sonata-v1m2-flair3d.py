@@ -23,6 +23,8 @@ enable_amp = True
 amp_dtype = "bfloat16"
 find_unused_parameters = False
 grid_size = 0.1
+max_size = 65536  # points-per-view budget (MultiViewGenerator); calibrate via
+                  # scripts/find_max_view_size.py when batch_size_per_gpu changes
 
 # Iter-limited schedule (1 trainer epoch = 1000 optimizer steps)
 total_iters = 50_000  # placeholder → 100 trainer epochs
@@ -201,7 +203,7 @@ transform = [
             dict(type="ChromaticTranslation", p=0.95, ratio=0.05),
             dict(type="NormalizeColor"),
         ],
-        max_size=65536,
+        max_size=max_size,
     ),
     dict(type="ToTensor"),
     dict(type="Update", keys_dict={"grid_size": grid_size}),
