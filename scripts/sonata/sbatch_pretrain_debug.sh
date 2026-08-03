@@ -18,6 +18,7 @@
 #SBATCH --error=/lustre/fswork/projects/rech/unv/usi32yh/Pointcept/logs/slurm/%j/slurm.err
 
 #SBATCH --time=00:20:00
+#SBATCH --signal=B:USR1@120
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --ntasks-per-node=1
@@ -68,6 +69,15 @@ export PYTHONPATH="${POINTOPS_PATH}${PYTHONPATH:+:$PYTHONPATH}"
 START_TIME=$(date +%s)
 
 export JOB_DIR
+export POINTCEPT_SLURM_REQUEUE=1
+
+# Auto-requeue near walltime end (Slurm sends SIGUSR1 120s before kill via --signal=B:USR1@120 above):
+# - slurm_requeue_trap.sh: batch-script-level trap, requeues immediately on SIGUSR1.
+# - slurm_requeue_watchdog.sh: background poll of squeue time-left, in case the signal is missed.
+# - tools/train.py additionally installs an in-process poll/signal handler (pointcept/utils/slurm_requeue.py),
+#   gated by POINTCEPT_SLURM_REQUEUE=1 above, which flushes wandb/runtime state before requeuing.
+. scripts/slurm_requeue_trap.sh
+sh scripts/slurm_requeue_watchdog.sh &
 
 # Batch script runs on node 0 only; srun starts one task per node so every node runs train.sh.
 # train.sh uses SLURM_NODEID for --machine-rank and SLURM_NODELIST for the dist URL.
@@ -82,6 +92,7 @@ export JOB_DIR=\"${JOB_DIR}\"
 export PYTHONPATH=\"${PYTHONPATH}\"
 export WANDB_MODE=\"${WANDB_MODE}\"
 export PYTORCH_CUDA_ALLOC_CONF=\"${PYTORCH_CUDA_ALLOC_CONF}\"
+export POINTCEPT_SLURM_REQUEUE=\"${POINTCEPT_SLURM_REQUEUE}\"
 sh scripts/train.sh \
   -g ${NUM_GPUS} \
   -m ${SLURM_NNODES} \
