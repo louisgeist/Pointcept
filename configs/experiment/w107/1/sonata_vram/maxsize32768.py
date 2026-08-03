@@ -6,9 +6,11 @@ Job 546886 crashed with CUDA OOM at iter ~4634 (sinkhorn_knopp) — GPU 3 was at
 78.21/79.25 GiB before the failing 1.14 GiB alloc, so any batch with an
 unusually large tile (MultiViewGenerator view size scales with per-tile point
 count, uncapped by batch composition) can tip a rank over. Two complementary
-mitigations are being A/B'd for VRAM headroom; this is variant B: cap
-MultiViewGenerator.max_size (65536 -> 32768), leaving batch_size_per_gpu=2
-untouched. See also: bs1.py (variant A, halves batch size instead).
+mitigations are being A/B'd for VRAM headroom, both restarted from scratch
+(not resumed from job 546886) at a reduced total_iters=30_000 budget; this is
+variant B: cap MultiViewGenerator.max_size (65536 -> 32768), leaving
+batch_size_per_gpu=2 untouched. See also: bs1.py (variant A, halves batch size
+instead).
 
 Features: coord + color + strength (in_channels=7).
 Schedule: iter-limited (total_iters / iter_per_epoch=1000).
@@ -37,12 +39,12 @@ find_unused_parameters = False
 grid_size = 0.1
 
 # Iter-limited schedule (1 trainer epoch = 1000 optimizer steps)
-total_iters = 50_000  # placeholder → 100 trainer epochs
+total_iters = 30_000  # 30 trainer epochs
 iter_per_epoch = 1000
 
 # Regular evaluation is replaced by linear-probe jobs
 evaluate = False
-eval_every = 1
+eval_every = 3
 
 wandb_project = "flair3d_sonata"
 wandb_run_name = (

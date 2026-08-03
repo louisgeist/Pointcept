@@ -21,15 +21,16 @@ clip_grad = 3.0
 empty_cache = False
 enable_amp = True
 amp_dtype = "bfloat16"
-evaluate = False
 find_unused_parameters = False
 grid_size = 0.1
 
 # Iter-limited schedule (1 trainer epoch = 1000 optimizer steps)
 total_iters = 50_000  # placeholder → 100 trainer epochs
 iter_per_epoch = 1000
-# evaluate=False: eval_every unused, but set for clarity if evaluate is enabled later
-eval_every = 5
+
+# Regular evaluation is replaced by linear-probe jobs
+evaluate = False 
+eval_every = 1
 
 wandb_project = "flair3d_sonata"
 wandb_run_name = (
@@ -246,12 +247,12 @@ hooks = [
     dict(type="WeightDecaySchedular", base_value=base_wd, final_value=final_wd),
     dict(type="IterationTimer", warmup_iter=2),
     dict(type="InformationWriter"),
-    dict(type="CheckpointSaver", save_freq=5),
+    dict(type="CheckpointSaver", save_freq=eval_every),
     # After CheckpointSaver so epoch_N.pth exists; submits non-blocking sbatch probes.
     dict(
         type="LinProbeSbatchHook",
         enable=True,
-        save_freq=5,
+        save_freq=eval_every,
         sbatch_script="scripts/sonata/sbatch_lin_probe.sh",
         iter_per_epoch=iter_per_epoch,
     ),
