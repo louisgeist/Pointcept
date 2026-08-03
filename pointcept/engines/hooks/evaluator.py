@@ -16,8 +16,10 @@ import pointcept.utils.comm as comm
 from pointcept.utils.misc import (
     accumulate_regression_errors,
     intersection_and_union_gpu,
+    kl_divergence_rows,
     mean_acc_from_hist,
     mean_iou_from_hist,
+    pool_axis_distribution_from_probs,
 )
 from pointcept.utils.regression import (
     denorm_regression_prediction,
@@ -623,6 +625,7 @@ class MultiTaskEvaluator(HookBase):
         self.write_cls_iou = write_cls_iou
         self._best_neg_rmse = float("-inf")
         self._best_miou_by_task = {}
+        self._best_neg_kl_by_task = {}
 
     def after_epoch(self):
         if self.should_evaluate():
@@ -685,6 +688,14 @@ class MultiTaskEvaluator(HookBase):
         ]
 
     @staticmethod
+    def _pixel_semantic_task_names(task_configs):
+        return [
+            k
+            for k, task_config in task_configs.items()
+            if task_config.get("task_type") == "pixel_semantic"
+        ]
+
+    @staticmethod
     def _regression_task_names(task_configs):
         return [
             k
@@ -706,6 +717,14 @@ class MultiTaskEvaluator(HookBase):
             k
             for k, task_config in task_configs.items()
             if task_config.get("task_type") == "multilabel_classification"
+        ]
+
+    @staticmethod
+    def _tile_distribution_task_names(task_configs):
+        return [
+            k
+            for k, task_config in task_configs.items()
+            if task_config.get("task_type") == "tile_distribution"
         ]
 
     @staticmethod
@@ -808,12 +827,17 @@ class MultiTaskEvaluator(HookBase):
         task_configs = self._get_task_configs()
         main_task = self._main_task_name(task_configs)
         semantic_tasks = self._semantic_task_names(task_configs)
+        pixel_semantic_tasks = self._pixel_semantic_task_names(task_configs)
         regression_tasks = self._regression_task_names(task_configs)
         classification_tasks = self._classification_task_names(task_configs)
         multilabel_tasks = self._multilabel_classification_task_names(task_configs)
+        tile_distribution_tasks = self._tile_distribution_task_names(task_configs)
 
         reg_sums = {
             t: {"mae": 0.0, "mse": 0.0, "count": 0.0} for t in regression_tasks
+        }
+        td_sums = {
+            t: {"kl_weighted": 0.0, "weight": 0.0} for t in tile_distribution_tasks
         }
         target_scales = self._cfg_get(self.trainer.cfg.data, "target_scales", {}) or {}
         multilabel_stats = {t: MultilabelStats() for t in multilabel_tasks}
@@ -892,6 +916,72 @@ class MultiTaskEvaluator(HookBase):
                     self.trainer.storage.put_scalar(f"val_union/{task_name}", union)
                     self.trainer.storage.put_scalar(f"val_target/{task_name}", target)
 
+                # --------- Evaluate Pixel-Semantic Tasks (network 2D) ---------
+                pixel_logits_by_task = output_dict.get("pixel_seg_logits_by_task") or {}
+                pixel_targets_by_task = output_dict.get("pixel_seg_target_by_task") or {}
+                for task_name in pixel_semantic_tasks:
+                    task_config = task_configs[task_name]
+                    if (
+                        task_name not in pixel_logits_by_task
+                        or task_name not in pixel_targets_by_task
+                    ):
+                        continue
+                    logits = pixel_logits_by_task[task_name]  # (P, r, C)
+                    targets = pixel_targets_by_task[task_name]  # (P, r)
+                    num_classes = int(task_config["num_classes"])
+                    ignore_index = int(task_config["ignore_index"])
+                    num_networks = int(task_config.get("num_networks", logits.shape[1]))
+                    # Aggregate confusion over all network channels (binary like forest).
+                    inter_sum = None
+                    union_sum = None
+                    target_sum = None
+                    for c in range(num_networks):
+                        pred_c = logits[:, c, :].max(1)[1]
+                        target_c = targets[:, c]
+                        intersection, union, target = intersection_and_union_gpu(
+                            pred_c,
+                            target_c,
+                            num_classes,
+                            ignore_index,
+                        )
+                        intersection = intersection.cpu().numpy()
+                        union = union.cpu().numpy()
+                        target = target.cpu().numpy()
+                        if inter_sum is None:
+                            inter_sum, union_sum, target_sum = (
+                                intersection,
+                                union,
+                                target,
+                            )
+                        else:
+                            inter_sum = inter_sum + intersection
+                            union_sum = union_sum + union
+                            target_sum = target_sum + target
+                        # Per-channel foreground IoU storage for logging.
+                        channel_names = task_config.get("channel_names") or [
+                            f"ch{c}" for c in range(num_networks)
+                        ]
+                        ch_name = channel_names[c] if c < len(channel_names) else f"ch{c}"
+                        self.trainer.storage.put_scalar(
+                            f"val_intersection/{task_name}/{ch_name}", intersection
+                        )
+                        self.trainer.storage.put_scalar(
+                            f"val_union/{task_name}/{ch_name}", union
+                        )
+                        self.trainer.storage.put_scalar(
+                            f"val_target/{task_name}/{ch_name}", target
+                        )
+                    if inter_sum is not None:
+                        self.trainer.storage.put_scalar(
+                            f"val_intersection/{task_name}", inter_sum
+                        )
+                        self.trainer.storage.put_scalar(
+                            f"val_union/{task_name}", union_sum
+                        )
+                        self.trainer.storage.put_scalar(
+                            f"val_target/{task_name}", target_sum
+                        )
+
                 cls_logits_by_task = output_dict.get("cls_logits_by_task") or {}
                 for task_name in classification_tasks:
                     task_config = task_configs[task_name]
@@ -933,6 +1023,27 @@ class MultiTaskEvaluator(HookBase):
                         multilabel_stats[task_name],
                         ignore_index=task_config.get("ignore_index"),
                     )
+
+                # --------- Evaluate Tile-Distribution Tasks (nathab axes) ---------
+                for task_name in tile_distribution_tasks:
+                    task_config = task_configs[task_name]
+                    if task_name not in input_dict or task_name not in logits_by_task:
+                        continue
+                    target_tensor = input_dict[task_name].reshape(-1).long()
+                    num_classes = int(task_config["num_classes"])
+                    ignore_index = int(task_config["ignore_index"])
+                    probs = torch.softmax(logits_by_task[task_name].float(), dim=-1)
+                    indptr = torch.nn.functional.pad(input_dict["offset"], (1, 0))
+                    pi_hat, q_t, n_t = pool_axis_distribution_from_probs(
+                        probs, target_tensor, indptr, ignore_index, num_classes
+                    )
+                    keep = n_t > 0
+                    if keep.any():
+                        kl = kl_divergence_rows(q_t[keep], pi_hat[keep])
+                        td_sums[task_name]["kl_weighted"] += float(
+                            (n_t[keep] * kl).sum().item()
+                        )
+                        td_sums[task_name]["weight"] += float(n_t[keep].sum().item())
 
                 self.trainer.storage.put_scalar("val_loss", loss.item())
                 # Skip when only one task: scalar "loss" already logged
@@ -1002,8 +1113,27 @@ class MultiTaskEvaluator(HookBase):
                 reg_sums[task_name]["mse"] = flat[base + 1]
                 reg_sums[task_name]["count"] = flat[base + 2]
 
+        if comm.get_world_size() > 1 and tile_distribution_tasks:
+            flat = []
+            for task_name in tile_distribution_tasks:
+                s = td_sums[task_name]
+                flat.extend([s["kl_weighted"], s["weight"]])
+            buf = torch.tensor(flat, dtype=torch.float64, device="cuda")
+            dist.all_reduce(buf)
+            flat = buf.cpu().tolist()
+            for task_index, task_name in enumerate(tile_distribution_tasks):
+                base = task_index * 2
+                td_sums[task_name]["kl_weighted"] = flat[base]
+                td_sums[task_name]["weight"] = flat[base + 1]
+
+        final_kl_by_task = {}
+        for task_name in tile_distribution_tasks:
+            s = td_sums[task_name]
+            if s["weight"] > 1e-8:
+                final_kl_by_task[task_name] = s["kl_weighted"] / s["weight"]
+
         per_task_metrics = {}
-        metric_task_names = semantic_tasks + classification_tasks
+        metric_task_names = semantic_tasks + classification_tasks + pixel_semantic_tasks
         for task_name in metric_task_names:
             task_config = task_configs[task_name]
             num_classes = int(task_config["num_classes"])
@@ -1052,7 +1182,16 @@ class MultiTaskEvaluator(HookBase):
             )
 
         current_epoch = self.trainer.epoch + 1
-        main_m_iou = per_task_metrics[main_task]["m_iou"]
+        main_task_type = task_configs[main_task].get("task_type")
+        main_m_iou = per_task_metrics[main_task]["m_iou"] if main_task in per_task_metrics else None
+        neg_kl_best_by_task = {}
+        for task_name, kl in final_kl_by_task.items():
+            prev_best = self._best_neg_kl_by_task.get(task_name, float("-inf"))
+            if task_name == main_task:
+                prev_best = max(prev_best, self.trainer.best_metric_value)
+            best = max(prev_best, -kl)
+            self._best_neg_kl_by_task[task_name] = best
+            neg_kl_best_by_task[task_name] = best
         miou_best_by_task = {}
         for task_name, metric in per_task_metrics.items():
             task_m_iou = metric["m_iou"]
@@ -1187,6 +1326,38 @@ class MultiTaskEvaluator(HookBase):
             if wandb_log is not None:
                 wandb_log["val/reg/rmse_best_neg"] = float(self._best_neg_rmse)
 
+        if tile_distribution_tasks:
+            for task_name in tile_distribution_tasks:
+                kl = final_kl_by_task.get(task_name)
+                if kl is None:
+                    continue
+                if comm.is_main_process():
+                    self.trainer.logger.info(
+                        "[task={}] Val tile-distribution: weighted KL {:.6f} (N={:.0f}).".format(
+                            task_name, kl, td_sums[task_name]["weight"]
+                        )
+                    )
+                if writer is not None:
+                    writer.add_scalar(f"val/weighted_kl/{task_name}", kl, current_epoch)
+                    writer.add_scalar(
+                        f"val/weighted_kl_best_neg/{task_name}",
+                        neg_kl_best_by_task[task_name],
+                        current_epoch,
+                    )
+                if wandb_log is not None:
+                    wandb_log[f"val/weighted_kl/{task_name}"] = float(kl)
+                    wandb_log[f"val/weighted_kl_best_neg/{task_name}"] = float(
+                        neg_kl_best_by_task[task_name]
+                    )
+            if final_kl_by_task:
+                kl_total = sum(final_kl_by_task.values())
+                if writer is not None:
+                    writer.add_scalar(
+                        "val/weighted_kl/nathab_total", kl_total, current_epoch
+                    )
+                if wandb_log is not None:
+                    wandb_log["val/weighted_kl/nathab_total"] = float(kl_total)
+
         if comm.is_main_process():
             finalize_val_epoch_timing(
                 self.trainer, val_start, current_epoch, wandb_dict=wandb_log
@@ -1200,8 +1371,14 @@ class MultiTaskEvaluator(HookBase):
             self.trainer.logger.info(
                 "<<<<<<<<<<<<<<<<< End Evaluation <<<<<<<<<<<<<<<<<"
             )
-        self.trainer.comm_info["current_metric_value"] = main_m_iou
-        self.trainer.comm_info["current_metric_name"] = f"mIoU/{main_task}"
+        if main_task_type == "tile_distribution":
+            main_kl = final_kl_by_task.get(main_task)
+            if main_kl is not None:
+                self.trainer.comm_info["current_metric_value"] = -main_kl
+                self.trainer.comm_info["current_metric_name"] = f"-weighted_kl/{main_task}"
+        else:
+            self.trainer.comm_info["current_metric_value"] = main_m_iou
+            self.trainer.comm_info["current_metric_name"] = f"mIoU/{main_task}"
 
     def after_train(self):
         self.trainer.logger.info(

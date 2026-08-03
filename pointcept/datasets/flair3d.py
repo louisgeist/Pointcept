@@ -19,6 +19,8 @@ from .transform import record_data_pipeline
 from .flair3d_config_utils import (
     FLAIR3D_CLASSIFICATION_TARGET_KEYS,
     FLAIR3D_MULTILABEL_CLASSIFICATION_TARGET_KEYS,
+    FLAIR3D_PIXEL_SEMANTIC_TARGET_KEYS,
+    FLAIR3D_TILE_DISTRIBUTION_TARGET_KEYS,
     get_missing_target_fill_value,
 )
 from pointcept.utils.logger import get_root_logger
@@ -31,15 +33,20 @@ FLAIR3D_SPECIFIC_ASSETS = (
     "climatic_domain",
     "natural_habitat_multilabel",
     "coord_translation",
+    "network",
 )
 FLAIR3D_SEMANTIC_TARGETS = ("segment", "forest", "land_use", "natural_habitat")
 FLAIR3D_CLASSIFICATION_TARGETS = FLAIR3D_CLASSIFICATION_TARGET_KEYS
 FLAIR3D_MULTILABEL_CLASSIFICATION_TARGETS = FLAIR3D_MULTILABEL_CLASSIFICATION_TARGET_KEYS
+FLAIR3D_PIXEL_SEMANTIC_TARGETS = FLAIR3D_PIXEL_SEMANTIC_TARGET_KEYS
+FLAIR3D_TILE_DISTRIBUTION_TARGETS = FLAIR3D_TILE_DISTRIBUTION_TARGET_KEYS
 FLAIR3D_REGRESSION_TARGETS = ("elevation",)
 FLAIR3D_ALLOWED_TARGETS = (
     FLAIR3D_SEMANTIC_TARGETS
     + FLAIR3D_CLASSIFICATION_TARGETS
     + FLAIR3D_MULTILABEL_CLASSIFICATION_TARGETS
+    + FLAIR3D_PIXEL_SEMANTIC_TARGETS
+    + FLAIR3D_TILE_DISTRIBUTION_TARGETS
     + FLAIR3D_REGRESSION_TARGETS
 )
 
@@ -103,6 +110,7 @@ class Flair3DDataset(DefaultDataset):
         "elevation",
         "climatic_domain",
         "natural_habitat_multilabel",
+        "network",
     )
     #TODO@Geist : elevation should be complete, but I noticed some missing part in D049
     # e.g.: UU-S1-15
@@ -160,6 +168,10 @@ class Flair3DDataset(DefaultDataset):
                     "primary_target_key cannot be a classification target when "
                     "semantic targets are also requested."
                 )
+        if primary_target_key in FLAIR3D_PIXEL_SEMANTIC_TARGETS:
+            if any(tk in FLAIR3D_SEMANTIC_TARGETS for tk in self.target_keys):
+                # Allowed later for multitask; keep mono-task simple for now.
+                pass
         if "elevation" in self.target_keys and len(self.target_keys) > 1:
             if self.primary_target_key not in FLAIR3D_SEMANTIC_TARGETS:
                 raise ValueError(
@@ -301,11 +313,75 @@ class Flair3DDataset(DefaultDataset):
             return np.array([int(fill_value)], dtype=np.int64)
         if target_key in FLAIR3D_MULTILABEL_CLASSIFICATION_TARGETS:
             return np.asarray(fill_value, dtype=np.float32).reshape(1, -1)
+        if target_key in FLAIR3D_PIXEL_SEMANTIC_TARGETS:
+            return np.asarray(fill_value, dtype=np.uint8)
         if target_key in FLAIR3D_SEMANTIC_TARGETS:
             return np.full(n, int(fill_value), dtype=np.int32)
         if target_key in FLAIR3D_REGRESSION_TARGETS:
             return np.full(n, float(fill_value), dtype=np.float32)
         raise KeyError(f"Unsupported target key: {target_key}")
+
+    def _load_network_label(self, data_dict, scene):
+        """Load ``network.npy`` (3, H, W) and grid meta for pixel semantic task.
+
+        Empty tiles may omit ``network.npy`` and only store ``meta.network``
+        (``empty: true`` + width/height); those are synthesized as zeros.
+        """
+        import json
+
+        from pointcept.datasets.flair3d_config_utils import get_pixel_semantic_config
+
+        cfg = get_pixel_semantic_config("network")
+        r = int(cfg["num_networks"])
+
+        origin_x = 0.0
+        origin_y = 0.0
+        pixel_m = 1.0
+        net_meta = {}
+        meta_path = os.path.join(scene, "meta.json")
+        if os.path.isfile(meta_path):
+            with open(meta_path, "r", encoding="utf-8") as f:
+                meta = json.load(f)
+            maybe = meta.get("network") or {}
+            if isinstance(maybe, dict):
+                net_meta = maybe
+                origin_x = float(net_meta.get("origin_x", 0.0))
+                origin_y = float(net_meta.get("origin_y", 0.0))
+                pixel_m = float(net_meta.get("pixel_m", 1.0))
+
+        if "network" in data_dict:
+            network = np.asarray(data_dict["network"])
+            if network.ndim != 3 or network.shape[0] != r:
+                raise ValueError(
+                    f"network.npy expected shape ({r}, H, W), got {network.shape} "
+                    f"under scene: {scene}"
+                )
+            network = network.astype(np.uint8, copy=False)
+        elif net_meta:
+            # Preprocess wrote meta only (empty mask) or optional missing fill path.
+            h = int(net_meta.get("height", 1))
+            w = int(net_meta.get("width", 1))
+            network = np.zeros((r, max(h, 1), max(w, 1)), dtype=np.uint8)
+        elif self._is_optional_target("network"):
+            network = self._missing_target_array("network", 0)
+        else:
+            raise FileNotFoundError(
+                f"target key 'network' but network.npy missing under scene: {scene}"
+            )
+
+        # Align tiny optional fill (1,1) to meta grid when present.
+        if network.shape[1] == 1 and network.shape[2] == 1 and net_meta:
+            h = int(net_meta.get("height", 1))
+            w = int(net_meta.get("width", 1))
+            if h > 1 or w > 1:
+                network = np.zeros((r, h, w), dtype=np.uint8)
+
+        data_dict["network"] = network
+        # Keep origins in float64 for precise cell binning in NetworkRasterToPointLabels.
+        data_dict["network_origin_x"] = np.asarray([origin_x], dtype=np.float64)
+        data_dict["network_origin_y"] = np.asarray([origin_y], dtype=np.float64)
+        data_dict["network_pixel_m"] = np.asarray([pixel_m], dtype=np.float64)
+        return data_dict
 
     def _load_classification_label(self, data_dict, target_key, scene):
         if target_key in data_dict:
@@ -364,6 +440,8 @@ class Flair3DDataset(DefaultDataset):
             for tk in self.target_keys
             if tk not in FLAIR3D_CLASSIFICATION_TARGETS
             and tk not in FLAIR3D_MULTILABEL_CLASSIFICATION_TARGETS
+            and tk not in FLAIR3D_PIXEL_SEMANTIC_TARGETS
+            and tk not in FLAIR3D_TILE_DISTRIBUTION_TARGETS
             and tk != "elevation"
         ]
         classification_keys = [
@@ -373,6 +451,9 @@ class Flair3DDataset(DefaultDataset):
             tk
             for tk in self.target_keys
             if tk in FLAIR3D_MULTILABEL_CLASSIFICATION_TARGETS
+        ]
+        pixel_semantic_keys = [
+            tk for tk in self.target_keys if tk in FLAIR3D_PIXEL_SEMANTIC_TARGETS
         ]
         semantic_labels = {}
         for tk in pointwise_keys:
@@ -405,6 +486,9 @@ class Flair3DDataset(DefaultDataset):
                 data_dict, tk, scene
             )
 
+        if "network" in pixel_semantic_keys:
+            data_dict = self._load_network_label(data_dict, scene)
+
         if "elevation" in self.target_keys:
             if "elevation" not in data_dict:
                 if self._is_optional_target("elevation"):
@@ -434,7 +518,13 @@ class Flair3DDataset(DefaultDataset):
         data_dict = self.transform(data_dict)
         result_dict = dict(name=data_dict.pop("name"))
         for key in self.target_keys:
-            if key in data_dict:
+            if key not in data_dict:
+                continue
+            if key in FLAIR3D_PIXEL_SEMANTIC_TARGETS:
+                # Keep raster in data_dict so fragments still carry it for the
+                # pixel_semantic head; also expose GT at scene level for metrics.
+                result_dict[key] = deepcopy(data_dict[key])
+            else:
                 result_dict[key] = data_dict.pop(key)
         origin_keys = [
             k for k in list(data_dict.keys()) if k.startswith("origin_")

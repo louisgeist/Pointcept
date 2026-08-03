@@ -7,7 +7,7 @@ from collections import OrderedDict
 from collections.abc import Mapping
 from pointcept.utils.logger import get_root_logger
 from pointcept.models.losses import build_criteria
-from pointcept.utils.misc import intersection_and_union_gpu
+from pointcept.utils.misc import intersection_and_union_gpu, pool_axis_distribution_from_probs
 from pointcept.models.utils.structure import Point
 from pointcept.models.utils import offset2batch
 from .builder import MODELS, build_model
@@ -324,7 +324,14 @@ class MultiTaskSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
     """
 
     _TASK_TYPES = frozenset(
-        ("semantic", "regression", "classification", "multilabel_classification")
+        (
+            "semantic",
+            "regression",
+            "classification",
+            "multilabel_classification",
+            "pixel_semantic",
+            "tile_distribution",
+        )
     )
 
     def __init__(
@@ -347,14 +354,16 @@ class MultiTaskSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
         self.main_task = str(main_task or self.tasks[0])
         if self.main_task not in self.task_configs:
             raise ValueError("main_task must be one of task_configs keys.")
-        if self._task_type(self.task_configs[self.main_task]) != "semantic":
+        main_type = self._task_type(self.task_configs[self.main_task])
+        if main_type not in ("semantic", "pixel_semantic", "tile_distribution"):
             raise ValueError(
-                "main_task must be a semantic task (task_type='semantic'), "
-                "not regression or classification."
+                "main_task must be a semantic, pixel_semantic, or tile_distribution "
+                f"task (got task_type={main_type!r})."
             )
 
         self.backbone = build_model(backbone)
         self.seg_heads = nn.ModuleDict()
+        self.pixel_seg_heads = nn.ModuleDict()
         self.reg_heads = nn.ModuleDict()
         self.cls_heads = nn.ModuleDict()
         self.cls_attn_pools = nn.ModuleDict()
@@ -374,11 +383,23 @@ class MultiTaskSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
             self.criteria_by_task[task_name] = build_criteria(task_criteria_cfg)
             self.task_weights[task_name] = float(task_weights.get(task_name, default_weight))
 
-            if task_type == "semantic":
+            if task_type in ("semantic", "tile_distribution"):
                 num_classes = int(task_config["num_classes"])
                 if num_classes <= 0:
                     raise ValueError(f"num_classes must be > 0 for semantic task '{task_name}'.")
                 self.seg_heads[task_name] = nn.Linear(backbone_out_channels, num_classes)
+            elif task_type == "pixel_semantic":
+                num_classes = int(task_config["num_classes"])
+                num_networks = int(task_config.get("num_networks", 1))
+                if num_classes <= 0 or num_networks <= 0:
+                    raise ValueError(
+                        f"num_classes and num_networks must be > 0 for "
+                        f"pixel_semantic task '{task_name}'."
+                    )
+                # One Linear(C -> 2*r), reshaped to (P, r, 2) at forward time.
+                self.pixel_seg_heads[task_name] = nn.Linear(
+                    backbone_out_channels, num_classes * num_networks
+                )
             elif task_type == "regression":
                 self.reg_heads[task_name] = nn.Linear(backbone_out_channels, 1)
             elif task_type in ("classification", "multilabel_classification"):
@@ -416,6 +437,8 @@ class MultiTaskSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
         params = []
         if task_name in self.seg_heads:
             params.extend(self.seg_heads[task_name].parameters())
+        if task_name in self.pixel_seg_heads:
+            params.extend(self.pixel_seg_heads[task_name].parameters())
         if task_name in self.reg_heads:
             params.extend(self.reg_heads[task_name].parameters())
         if task_name in self.cls_heads:
@@ -430,7 +453,8 @@ class MultiTaskSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
         if tt not in cls._TASK_TYPES:
             raise ValueError(
                 "Each task_configs entry must set task_type to 'semantic', "
-                "'regression', 'classification', or 'multilabel_classification' "
+                "'pixel_semantic', 'regression', 'classification', "
+                "'multilabel_classification', or 'tile_distribution' "
                 f"(got {tt!r})."
             )
         return tt
@@ -447,6 +471,191 @@ class MultiTaskSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
     def _multilabel_pred_from_logits(self, logits, task_name):
         threshold = float(self.task_configs[task_name].get("threshold", 0.5))
         return (torch.sigmoid(logits) >= threshold).long()
+
+    @staticmethod
+    def _as_scalar_tensor(value, device, dtype=torch.float32):
+        if torch.is_tensor(value):
+            return value.to(device=device, dtype=dtype).reshape(-1)
+        return torch.tensor([float(value)], device=device, dtype=dtype)
+
+    def _pixel_pool_and_gather(
+        self,
+        feat,
+        network_cell,
+        network_pix,
+        offset,
+        point_labels,
+        num_networks,
+        height=None,
+        width=None,
+        ignore_index=2,
+    ):
+        """Max-pool point features into 1 m Lambert pixels; gather point-wise GT.
+
+        Point labels are ``(N, r)`` (from ``NetworkRasterToPointLabels``).
+        ``network_cell`` ``(N, 2)`` absolute ``(iy, ix)`` — Mix3D-safe unique keys.
+        ``network_pix`` ``(N, 2)`` relative ``(iy, ix)`` — dense scatter on GT grid.
+        Dense meta is only filled when per-scene ``H,W`` length matches ``offset``
+        (skip under Mix3D).
+
+        Returns
+        -------
+        pooled_feat : (P, C)
+        targets : (P, r) long
+        meta_parts : list of None or (n_pix, iy_u, ix_u, height, width, in_grid)
+        """
+        device = feat.device
+        if not torch.is_tensor(point_labels):
+            point_labels = torch.as_tensor(point_labels, device=device)
+        else:
+            point_labels = point_labels.to(device=device)
+        if point_labels.ndim != 2 or point_labels.shape[0] != feat.shape[0]:
+            raise ValueError(
+                f"point-wise network labels expected (N={feat.shape[0]}, r), "
+                f"got {tuple(point_labels.shape)}"
+            )
+        if point_labels.shape[1] != num_networks:
+            raise ValueError(
+                f"network labels expected r={num_networks} channels, "
+                f"got {point_labels.shape[1]}"
+            )
+        if not torch.is_tensor(network_cell):
+            network_cell = torch.as_tensor(network_cell, device=device)
+        else:
+            network_cell = network_cell.to(device=device)
+        if not torch.is_tensor(network_pix):
+            network_pix = torch.as_tensor(network_pix, device=device)
+        else:
+            network_pix = network_pix.to(device=device)
+        if network_cell.ndim != 2 or network_cell.shape[0] != feat.shape[0] or network_cell.shape[1] < 2:
+            raise ValueError(
+                f"network_cell expected (N={feat.shape[0]}, 2), got {tuple(network_cell.shape)}"
+            )
+        if network_pix.ndim != 2 or network_pix.shape[0] != feat.shape[0] or network_pix.shape[1] < 2:
+            raise ValueError(
+                f"network_pix expected (N={feat.shape[0]}, 2), got {tuple(network_pix.shape)}"
+            )
+
+        heights = widths = None
+        can_dense = False
+        if height is not None and width is not None:
+            heights = self._as_scalar_tensor(height, device, dtype=torch.float32)
+            widths = self._as_scalar_tensor(width, device, dtype=torch.float32)
+            if heights.numel() == 1 and offset.numel() > 1:
+                heights = heights.expand(offset.numel())
+                widths = widths.expand(offset.numel())
+            can_dense = (
+                heights.numel() == offset.numel() and widths.numel() == offset.numel()
+            )
+
+        batch_idx = offset2batch(offset)
+        pooled_parts = []
+        target_parts = []
+        meta_parts = []
+        n_scenes = int(offset.numel())
+        for b in range(n_scenes):
+            point_mask = batch_idx == b
+            if not point_mask.any():
+                meta_parts.append(None)
+                continue
+            cells = network_cell[point_mask][:, :2].long()
+            pix = network_pix[point_mask][:, :2].long()
+            f = feat[point_mask]
+            labels_pt = point_labels[point_mask]
+
+            _, inv = torch.unique(cells, dim=0, return_inverse=True)
+            pooled = torch_scatter.scatter_max(f, inv, dim=0)[0]
+            idx = torch.arange(inv.numel(), device=device)
+            first = torch_scatter.scatter_min(idx, inv, dim=0)[0]
+            labels = labels_pt[first].long()
+
+            pooled_parts.append(pooled)
+            target_parts.append(labels)
+
+            n_pix = int(pooled.shape[0])
+            if can_dense:
+                h = int(heights[b].item())
+                w = int(widths[b].item())
+                iy_u = pix[first, 0]
+                ix_u = pix[first, 1]
+                in_grid = (ix_u >= 0) & (iy_u >= 0) & (ix_u < w) & (iy_u < h)
+                meta_parts.append((n_pix, iy_u, ix_u, h, w, in_grid))
+            else:
+                meta_parts.append((n_pix, None, None, None, None, None))
+
+        if not pooled_parts:
+            c = feat.shape[1]
+            return (
+                feat.new_zeros((0, c)),
+                feat.new_zeros((0, num_networks), dtype=torch.long),
+                meta_parts,
+            )
+        return (
+            torch.cat(pooled_parts, dim=0),
+            torch.cat(target_parts, dim=0),
+            meta_parts,
+        )
+
+    def _compute_pixel_logits(self, feat, input_dict):
+        logits_by_task = {}
+        targets_by_task = {}
+        dense_by_task = {}
+        for task_name, head in self.pixel_seg_heads.items():
+            task_config = self.task_configs[task_name]
+            num_networks = int(task_config["num_networks"])
+            num_classes = int(task_config["num_classes"])
+            if task_name not in input_dict:
+                continue
+            if "network_cell" not in input_dict or "network_pix" not in input_dict:
+                raise KeyError(
+                    f"pixel_semantic task '{task_name}' requires 'network_cell' and "
+                    "'network_pix' in input_dict (add NetworkRasterToPointLabels)."
+                )
+            pooled, targets, meta_parts = self._pixel_pool_and_gather(
+                feat,
+                input_dict["network_cell"],
+                input_dict["network_pix"],
+                input_dict["offset"],
+                input_dict[task_name],
+                num_networks,
+                height=input_dict.get("network_height"),
+                width=input_dict.get("network_width"),
+                ignore_index=int(task_config.get("ignore_index", 2)),
+            )
+            raw = head(pooled)  # (P, r * C)
+            logits = raw.view(-1, num_networks, num_classes)
+            logits_by_task[task_name] = logits
+            targets_by_task[task_name] = targets
+
+            # Dense soft foreground probs (r, H, W) aligned on the GT Lambert grid.
+            # Observed pixels (at least one point in the 1 m cell): softmax class-1
+            # probability in [0, 1]. Unobserved pixels (no point in that cell): NaN.
+            # Built only when grid meta matches offset (skipped under Mix3D).
+            dense_list = []
+            cursor = 0
+            for meta in meta_parts:
+                if meta is None:
+                    dense_list.append(None)
+                    continue
+                n_pix, iy_u, ix_u, height, width, in_grid = meta
+                part = logits[cursor : cursor + n_pix]
+                cursor += n_pix
+                if in_grid is None or height is None:
+                    dense_list.append(None)
+                    continue
+                # float32: under AMP, softmax promotes to fp32 while part may be Half.
+                dense = torch.full(
+                    (num_networks, int(height), int(width)),
+                    float("nan"),
+                    device=part.device,
+                    dtype=torch.float32,
+                )
+                if in_grid.any():
+                    probs_fg = torch.softmax(part[in_grid].float(), dim=-1)[..., 1]
+                    dense[:, iy_u[in_grid], ix_u[in_grid]] = probs_fg.transpose(0, 1)
+                dense_list.append(dense)
+            dense_by_task[task_name] = dense_list
+        return logits_by_task, targets_by_task, dense_by_task
 
     def _forward_backbone(self, input_dict):
         point = Point(input_dict)
@@ -484,9 +693,19 @@ class MultiTaskSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
                 return True
         return False
 
-    def _compute_loss(self, logits_by_task, reg_pred_by_task, cls_logits_by_task, input_dict):
+    def _compute_loss(
+        self,
+        logits_by_task,
+        reg_pred_by_task,
+        cls_logits_by_task,
+        input_dict,
+        pixel_logits_by_task=None,
+        pixel_targets_by_task=None,
+    ):
         total_loss = None
         loss_by_task = {}
+        pixel_logits_by_task = pixel_logits_by_task or {}
+        pixel_targets_by_task = pixel_targets_by_task or {}
         for task_name in self.tasks:
             task_config = self.task_configs[task_name]
             tt = self._task_type(task_config)
@@ -498,6 +717,43 @@ class MultiTaskSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
                     continue
                 logits = logits_by_task[task_name]
                 task_loss = self.criteria_by_task[task_name](logits, input_dict[task_name])
+            elif tt == "tile_distribution":
+                if task_name not in logits_by_task:
+                    continue
+                if task_name not in input_dict:
+                    continue
+                logits = logits_by_task[task_name]
+                target = input_dict[task_name].reshape(-1).long()
+                num_classes = int(task_config["num_classes"])
+                ignore_index = int(task_config["ignore_index"])
+                offset = input_dict["offset"]
+                indptr = nn.functional.pad(offset, (1, 0))
+                probs = torch.softmax(logits.float(), dim=-1)
+                pi_hat, q_t, n_t = pool_axis_distribution_from_probs(
+                    probs, target, indptr, ignore_index, num_classes
+                )
+                keep = n_t > 0
+                if not keep.any():
+                    # Keep logits in the graph so DDP always sees this head's grads
+                    # (zero) even when no tile in the batch has a valid point for
+                    # this axis — same idiom as the classification/multilabel branches.
+                    task_loss = logits.sum() * 0.0
+                else:
+                    task_loss = self.criteria_by_task[task_name](
+                        pi_hat[keep], q_t[keep], weight=n_t[keep]
+                    )
+            elif tt == "pixel_semantic":
+                if task_name not in pixel_logits_by_task:
+                    continue
+                logits = pixel_logits_by_task[task_name]  # (P, r, C)
+                targets = pixel_targets_by_task[task_name]  # (P, r)
+                num_networks = int(task_config["num_networks"])
+                channel_losses = []
+                for c in range(num_networks):
+                    channel_losses.append(
+                        self.criteria_by_task[task_name](logits[:, c, :], targets[:, c])
+                    )
+                task_loss = sum(channel_losses) / float(num_networks)
             elif tt == "classification":
                 if task_name not in cls_logits_by_task:
                     continue
@@ -571,13 +827,32 @@ class MultiTaskSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
         self._fill_masked_feat_with_learned_value(input_dict)
         feat, point = self._forward_backbone(input_dict)
         logits_by_task = self._compute_logits(feat)
+        pixel_logits_by_task, pixel_targets_by_task, pixel_dense_by_task = (
+            self._compute_pixel_logits(feat, input_dict)
+        )
         reg_pred_by_task = self._compute_reg_preds(feat)
         offset = input_dict["offset"]
         cls_logits_by_task = self._compute_cls_logits(feat, offset)
-        main_logits = logits_by_task[self.main_task]
+
+        if self.main_task in logits_by_task:
+            main_logits = logits_by_task[self.main_task]
+        elif self.main_task in pixel_logits_by_task:
+            # Compatibility: expose first-network logits as seg_logits.
+            main_logits = pixel_logits_by_task[self.main_task][:, 0, :]
+        else:
+            # Fallback for configs where main_task has no batch target this step.
+            main_logits = next(iter(logits_by_task.values()), None)
+            if main_logits is None and pixel_logits_by_task:
+                main_logits = next(iter(pixel_logits_by_task.values()))[:, 0, :]
+            if main_logits is None:
+                main_logits = feat.new_zeros((feat.shape[0], 1))
+
         return_dict = {
             "seg_logits": main_logits,
             "seg_logits_by_task": logits_by_task,
+            "pixel_seg_logits_by_task": pixel_logits_by_task,
+            "pixel_seg_target_by_task": pixel_targets_by_task,
+            "pixel_seg_logits_dense_by_task": pixel_dense_by_task,
             "reg_pred_by_task": reg_pred_by_task,
             "cls_logits_by_task": cls_logits_by_task,
         }
@@ -586,7 +861,12 @@ class MultiTaskSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
 
         if self.training or self._has_any_target(input_dict):
             total_loss, loss_by_task = self._compute_loss(
-                logits_by_task, reg_pred_by_task, cls_logits_by_task, input_dict
+                logits_by_task,
+                reg_pred_by_task,
+                cls_logits_by_task,
+                input_dict,
+                pixel_logits_by_task=pixel_logits_by_task,
+                pixel_targets_by_task=pixel_targets_by_task,
             )
             return_dict["loss"] = total_loss
             return_dict["loss_by_task"] = loss_by_task
@@ -598,6 +878,8 @@ class MultiTaskSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
                     task_name: logits.argmax(dim=1)
                     for task_name, logits in logits_by_task.items()
                 }
+                for task_name, logits in pixel_logits_by_task.items():
+                    return_dict["pred_by_task"][task_name] = logits.argmax(dim=-1)
                 return_dict["pred_cls_by_task"] = {
                     task_name: (
                         self._multilabel_pred_from_logits(logits, task_name)

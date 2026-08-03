@@ -17,28 +17,38 @@ _base_ = ["../../_base_/default_runtime.py"]
 grp_exp = 1
 num_exp = 1
 
+# Reproducibility
+seed = 14028665
 
 # Hardware parameters
 num_gpu = 1
-num_worker = 8 * num_gpu
+num_worker= 20 * num_gpu
 enable_amp = True
 
 # Data parameters
 batch_size = 20 * num_gpu  # total batch size across all gpus
 batch_size_val = batch_size // 2
 batch_size_test = batch_size // 2
-train_max_sample = 100
-val_max_sample = 100
-test_max_sample = val_max_sample
+
+# One unique scene; train `loop` repeats it so DataLoader can form full batches
+# (each index maps to the same tile via idx % len(data_list)).
+overfit_unique_samples = 1
+overfit_train_loop = batch_size
+
+train_max_sample = overfit_unique_samples
+val_max_sample = overfit_unique_samples
+test_max_sample = overfit_unique_samples
 
 grid_size = 0.1
 point_max = 100000
 mix_prob = 0.8
 
 # Optimization parameters
-lr = 5e-3
-total_iters = 10_000
-warmup_iters = 2500
+lr = 1e-3
+total_iters = 1_000
+iter_per_epoch = 10
+eval_every = 1
+warmup_iters = 500
 
 # Features
 learned_masked_feat = True
@@ -47,7 +57,7 @@ coord_feat_scale = 0.01
 
 # Wandb parameters
 wandb_run_name = (
-    f"Flair3D+ SpUNet toy elevation {grp_exp}.{num_exp}) lr={lr}"
+    f"SpUNet elevation overfit | lr={lr}, mix_prob={mix_prob}"
 )
 wandb_project = "flair3d_elevation"
 
@@ -147,6 +157,7 @@ data = dict(
         target_keys=list(target_keys),
         primary_target_key=target_key,
         max_sample=train_max_sample,
+        loop=overfit_train_loop,
         transform=[
             dict(
                 type="Update",

@@ -229,6 +229,18 @@ class Flair3DLabelRemap(object):
         return mod
 
     def __init__(self, remaps, storage_definitions=None):
+        """
+        :param remaps: Dict mapping an output key to either:
+            - a bare definition-name string (existing, in-place behavior): the key is
+              both the source (task_key used to look up definitions) and the output
+              key, remapped in place.
+            - a ``(source_key, target_definition_name)`` tuple (fan-out): reads
+              ``data_dict[source_key]`` (task_key = source_key for definition lookup)
+              and writes the remapped result into a NEW key (the dict's own key),
+              leaving ``data_dict[source_key]`` untouched. Lets one on-disk field
+              (e.g. ``natural_habitat``) fan out into several differently-named
+              per-axis targets in a single transform.
+        """
         if not remaps:
             raise ValueError("remaps must be a non-empty dict of task_key -> definition name")
         label_remap = self._load_label_remap_module()
@@ -240,33 +252,52 @@ class Flair3DLabelRemap(object):
         self.remap_keys = tuple(remaps.keys())
         self.luts = {}
         self.fallbacks = {}
-        for task_key, target_name in remaps.items():
+        self.fanout_source_keys = {}
+        for output_key, spec in remaps.items():
+            if isinstance(spec, str):
+                task_key = output_key
+                target_name = spec
+            elif isinstance(spec, (tuple, list)) and len(spec) == 2:
+                task_key, target_name = spec
+                self.fanout_source_keys[output_key] = task_key
+            else:
+                raise ValueError(
+                    f"remaps['{output_key}'] must be a definition-name string or a "
+                    f"(source_key, target_definition_name) tuple, got {spec!r}"
+                )
             target_def = get_definition(task_key, target_name)
             storage_name = storage_definitions.get(
                 task_key, get_default_definition_name(task_key)
             )
-            if storage_name == target_name:
+            if storage_name == target_name and output_key not in self.fanout_source_keys:
                 continue
             storage_def = get_definition(task_key, storage_name)
-            self.luts[task_key] = build_stored_to_train_lut(storage_def, target_def)
-            self.fallbacks[task_key] = int(
+            self.luts[output_key] = build_stored_to_train_lut(storage_def, target_def)
+            self.fallbacks[output_key] = int(
                 target_def.lut[target_def.missing_fill_raw_id]
             )
 
     def __call__(self, data_dict):
-        for key, lut in self.luts.items():
-            if key not in data_dict:
+        # Fan-out entries first, so they always read pristine source values even if
+        # the same source key is also remapped in place elsewhere in this instance.
+        output_keys = sorted(
+            self.luts.keys(), key=lambda k: 0 if k in self.fanout_source_keys else 1
+        )
+        for output_key in output_keys:
+            lut = self.luts[output_key]
+            source_key = self.fanout_source_keys.get(output_key, output_key)
+            if source_key not in data_dict:
                 continue
-            labels = data_dict[key]
+            labels = data_dict[source_key]
             if isinstance(labels, torch.Tensor):
                 labels = labels.numpy()
             idx = labels.astype(np.int64, copy=False)
-            fallback = self.fallbacks[key]
+            fallback = self.fallbacks[output_key]
             remapped = np.full(idx.shape, fallback, dtype=np.int32)
             valid = (idx >= 0) & (idx < lut.shape[0])
             if np.any(valid):
                 remapped[valid] = lut[idx[valid]]
-            data_dict[key] = remapped
+            data_dict[output_key] = remapped
         return data_dict
 
 
@@ -391,6 +422,97 @@ class ExtractAbsXY(object):
         return data_dict
 
 
+@TRANSFORMS.register_module()
+class NetworkRasterToPointLabels(object):
+    """Lookup binary network rasters onto points; emit int cell indices.
+
+    Converts ``network`` from ``(r, H, W)`` to point-wise ``(N, r)`` so Mix3D
+    carries labels with points. Also writes:
+
+    - ``network_cell`` ``(N, 2)`` int64 — absolute Lambert cells ``(iy, ix)``
+      from ``floor(abs_xy / pixel_m)`` (Mix3D-safe pooling keys)
+    - ``network_pix`` ``(N, 2)`` int64 — relative ``(iy, ix)`` on the GT grid
+      for dense test scatter
+
+    Binning uses ``abs_xy`` float64 (from ``ExtractAbsXY``) and float64 origins.
+    Drops ``abs_xy`` afterward so it is not Collect'd to the GPU.
+
+    Run after GridSample / SphereCrop and before ToTensor / Collect.
+    """
+
+    def __init__(self, ignore_index=2, keep_grid_meta=True):
+        self.ignore_index = int(ignore_index)
+        self.keep_grid_meta = bool(keep_grid_meta)
+
+    def __call__(self, data_dict):
+        if "network" not in data_dict or "abs_xy" not in data_dict:
+            return data_dict
+        network = np.asarray(data_dict["network"])
+        if network.ndim != 3:
+            # Already point-wise (N, r) — leave unchanged.
+            return data_dict
+
+        abs_xy = np.asarray(data_dict["abs_xy"], dtype=np.float64)
+        n = int(abs_xy.shape[0])
+        if "coord" in data_dict and int(data_dict["coord"].shape[0]) != n:
+            raise ValueError(
+                f"abs_xy length {n} != coord length {data_dict['coord'].shape[0]}; "
+                "ensure abs_xy is in index_valid_keys before GridSample "
+                "(ExtractAbsXY registers it automatically)."
+            )
+        r, height, width = (
+            int(network.shape[0]),
+            int(network.shape[1]),
+            int(network.shape[2]),
+        )
+
+        origin_x = float(
+            np.asarray(data_dict.get("network_origin_x", 0.0), dtype=np.float64).reshape(
+                -1
+            )[0]
+        )
+        origin_y = float(
+            np.asarray(data_dict.get("network_origin_y", 0.0), dtype=np.float64).reshape(
+                -1
+            )[0]
+        )
+        pixel_m = float(
+            np.asarray(data_dict.get("network_pixel_m", 1.0), dtype=np.float64).reshape(
+                -1
+            )[0]
+        )
+        step = max(pixel_m, 1e-6)
+
+        ix_rel = np.floor((abs_xy[:, 0] - origin_x) / step).astype(np.int64)
+        iy_rel = np.floor((abs_xy[:, 1] - origin_y) / step).astype(np.int64)
+        ix_abs = np.floor(abs_xy[:, 0] / step).astype(np.int64)
+        iy_abs = np.floor(abs_xy[:, 1] / step).astype(np.int64)
+        in_grid = (ix_rel >= 0) & (iy_rel >= 0) & (ix_rel < width) & (iy_rel < height)
+
+        labels = np.full((n, r), self.ignore_index, dtype=np.int64)
+        if in_grid.any():
+            labels[in_grid] = network[:, iy_rel[in_grid], ix_rel[in_grid]].T.astype(
+                np.int64
+            )
+
+        data_dict["network"] = labels
+        # (iy, ix) convention matches dense scatter dense[:, iy, ix].
+        data_dict["network_cell"] = np.stack([iy_abs, ix_abs], axis=1)
+        data_dict["network_pix"] = np.stack([iy_rel, ix_rel], axis=1)
+        if self.keep_grid_meta:
+            data_dict["network_height"] = np.asarray([height], dtype=np.int64)
+            data_dict["network_width"] = np.asarray([width], dtype=np.int64)
+
+        # Absolute float XY no longer needed downstream.
+        data_dict.pop("abs_xy", None)
+
+        if "index_valid_keys" in data_dict:
+            keys = [k for k in data_dict["index_valid_keys"] if k != "abs_xy"]
+            for k in ("network", "network_cell", "network_pix"):
+                if k not in keys:
+                    keys.append(k)
+            data_dict["index_valid_keys"] = keys
+        return data_dict
 
 
 @TRANSFORMS.register_module()

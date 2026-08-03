@@ -8,6 +8,7 @@ Please cite our work if the code is helpful to you.
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from pointcept.utils.misc import kl_divergence_rows
 from .builder import LOSSES
 
 
@@ -116,6 +117,29 @@ class BinaryFocalLoss(nn.Module):
         if self.reduce:
             focal_loss = torch.mean(focal_loss)
         return focal_loss * self.loss_weight
+
+
+@LOSSES.register_module()
+class WeightedKLDivLoss(nn.Module):
+    """Annotation-count-weighted KL(target || pred) over per-tile distributions.
+
+    ``pred``/``target``: (M, C) probabilities (not logits) for M tiles that have
+    at least one non-void point for this axis; ``weight``: (M,) non-void point
+    counts per tile. Returns sum(weight * KL(target||pred)) / sum(weight).
+    """
+
+    def __init__(self, loss_weight=1.0, eps=1e-8):
+        super().__init__()
+        self.loss_weight = loss_weight
+        self.eps = eps
+
+    def forward(self, pred, target, weight=None):
+        if pred.numel() == 0:
+            return pred.new_zeros(())
+        kl = kl_divergence_rows(target, pred, eps=self.eps)
+        if weight is None:
+            weight = torch.ones_like(kl)
+        return (weight * kl).sum() / weight.sum().clamp(min=self.eps) * self.loss_weight
 
 
 @LOSSES.register_module()

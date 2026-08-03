@@ -10,6 +10,8 @@ import warnings
 from collections import abc
 import numpy as np
 import torch
+import torch.nn.functional as F
+import torch_scatter
 from importlib import import_module
 
 
@@ -88,6 +90,44 @@ def accumulate_regression_errors(pred, target):
     mse_sum = float((err**2).sum().item())
     count = float(err.numel())
     return mae_sum, mse_sum, count
+
+
+def pool_axis_distribution_from_probs(probs, target, indptr, ignore_index, num_classes):
+    """Pool per-point class probabilities/targets into per-tile distributions.
+
+    Non-void points (``target != ignore_index``) are averaged per tile (segment
+    boundaries given by ``indptr``, the ``torch_scatter.segment_csr`` convention
+    of a padded, cumulative offset) to give a predicted tile-level distribution,
+    and their one-hot targets are averaged the same way to give the empirical
+    tile-level ground-truth distribution.
+
+    Args:
+        probs: (N, C) softmaxed per-point class probabilities.
+        target: (N,) integer per-point class labels; ``ignore_index`` marks void.
+        indptr: (B + 1,) cumulative per-tile point-count boundaries.
+        ignore_index: label value marking a void (unannotated) point.
+        num_classes: C, the number of real (non-void) classes for this axis.
+
+    Returns:
+        pi_hat: (B, C) predicted tile-level distributions (zero rows where n_t == 0).
+        q_t: (B, C) empirical tile-level ground-truth distributions (same zero rows).
+        n_t: (B,) count of non-void points per tile.
+    """
+    valid = (target != ignore_index).float().unsqueeze(-1)  # (N, 1)
+    sum_probs = torch_scatter.segment_csr(probs.float() * valid, indptr, reduce="sum")
+    n_t = torch_scatter.segment_csr(valid, indptr, reduce="sum").squeeze(-1)
+    clamped_target = target.clamp(min=0, max=num_classes - 1)
+    one_hot = F.one_hot(clamped_target, num_classes=num_classes).float() * valid
+    sum_one_hot = torch_scatter.segment_csr(one_hot, indptr, reduce="sum")
+    denom = n_t.clamp(min=1.0).unsqueeze(-1)
+    pi_hat = sum_probs / denom
+    q_t = sum_one_hot / denom
+    return pi_hat, q_t, n_t
+
+
+def kl_divergence_rows(q, p, eps=1e-8):
+    """Per-row KL(q || p) for (B, C) probability tensors -> (B,)."""
+    return (q * (q.clamp(min=eps).log() - p.clamp(min=eps).log())).sum(-1)
 
 
 def f1_scores_from_hist(intersection, union, target):

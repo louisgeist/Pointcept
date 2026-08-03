@@ -30,9 +30,11 @@ from pointcept.utils.misc import (
     f1_scores_from_hist,
     intersection_and_union,
     intersection_and_union_gpu,
+    kl_divergence_rows,
     make_dirs,
     mean_acc_from_hist,
     mean_iou_from_hist,
+    pool_axis_distribution_from_probs,
 )
 from pointcept.utils.progress import EvaluationProgressBar
 from pointcept.utils.regression import (
@@ -858,6 +860,14 @@ class MultiTaskTester(TesterBase):
         ]
 
     @staticmethod
+    def _pixel_semantic_task_names(task_configs):
+        return [
+            k
+            for k, task_config in task_configs.items()
+            if task_config.get("task_type") == "pixel_semantic"
+        ]
+
+    @staticmethod
     def _regression_task_names(task_configs):
         return [
             k
@@ -880,6 +890,28 @@ class MultiTaskTester(TesterBase):
             for k, task_config in task_configs.items()
             if task_config.get("task_type") == "multilabel_classification"
         ]
+
+    @staticmethod
+    def _tile_distribution_task_names(task_configs):
+        return [
+            k
+            for k, task_config in task_configs.items()
+            if task_config.get("task_type") == "tile_distribution"
+        ]
+
+    @staticmethod
+    def _apply_inverse_origin_probs(pred_probs, scene_extra, task_name):
+        """(N, C) analogue of _apply_inverse_origin_np, for tile_distribution predictions."""
+        origin_key = MultiTaskTester._task_origin_target_key(task_name)
+        if "inverse" not in scene_extra or origin_key not in scene_extra:
+            return pred_probs
+        inv = scene_extra["inverse"]
+        inv = (
+            torch.from_numpy(inv).long().to(pred_probs.device)
+            if isinstance(inv, np.ndarray)
+            else inv.long().to(pred_probs.device)
+        )
+        return pred_probs[inv, :]
 
     @staticmethod
     def _sync_multilabel_stats(stats: MultilabelStats):
@@ -939,9 +971,11 @@ class MultiTaskTester(TesterBase):
         task_configs = self._get_task_configs()
         main_task = self._main_task_name(task_configs)
         semantic_tasks = self._semantic_task_names(task_configs)
+        pixel_semantic_tasks = self._pixel_semantic_task_names(task_configs)
         regression_tasks = self._regression_task_names(task_configs)
         classification_tasks = self._classification_task_names(task_configs)
         multilabel_tasks = self._multilabel_classification_task_names(task_configs)
+        tile_distribution_tasks = self._tile_distribution_task_names(task_configs)
         scene_level_cls_tasks = classification_tasks + multilabel_tasks
 
         self.model.eval()
@@ -954,6 +988,9 @@ class MultiTaskTester(TesterBase):
             t: {"mae": 0.0, "mse": 0.0, "count": 0.0} for t in regression_tasks
         }
         multilabel_stats_global = {t: MultilabelStats() for t in multilabel_tasks}
+        td_sums_global = {
+            t: {"kl_weighted": 0.0, "weight": 0.0} for t in tile_distribution_tasks
+        }
 
         running_iou = {t: AverageMeter() for t in semantic_tasks}
         running_cls_acc = {t: AverageMeter() for t in classification_tasks}
@@ -973,12 +1010,17 @@ class MultiTaskTester(TesterBase):
             batch_pred_sem = []
             batch_reg_sum = []
             batch_reg_cnt = []
+            batch_axis_pred_sum = []
+            batch_axis_pred_cnt = []
             batch_sem_cache_paths = []
             batch_reg_cache_paths = []
             batch_ml_cache_paths = []
+            batch_pixel_logits_cache_paths = []
             batch_all_cached = []
             batch_cls_logits_sum = []
             batch_cls_logits_cnt = []
+            batch_pixel_dense_sum = []
+            batch_pixel_dense_cnt = []
             
             for b_idx, data_dict in enumerate(batch):
                 data_name = data_dict.pop("name")
@@ -994,16 +1036,29 @@ class MultiTaskTester(TesterBase):
                 ref_arr = None
                 for cand in ("segment", main_task, *semantic_tasks):
                     cs = str(cand)
-                    if cs in targets_by_task:
+                    if cs in targets_by_task and task_configs.get(cs, {}).get("task_type") != "pixel_semantic":
                         ref_arr = targets_by_task[cs]
                         break
+                if ref_arr is None:
+                    for cand in semantic_tasks:
+                        if cand in targets_by_task:
+                            ref_arr = targets_by_task[cand]
+                            break
                 if ref_arr is None and targets_by_task:
+                    # Prefer a point-wise target size; fall back to any target.
                     ref_arr = next(iter(targets_by_task.values()))
+                    if (
+                        main_task in targets_by_task
+                        and task_configs.get(main_task, {}).get("task_type")
+                        == "pixel_semantic"
+                    ):
+                        # Use fragment point count later; placeholder size 1.
+                        ref_arr = np.zeros(1, dtype=np.int32)
                 if ref_arr is None:
                     raise RuntimeError(
                         f"Scene {data_name}: no labels found for any task in task_configs."
                     )
-                n_ref = int(np.asarray(ref_arr).size)
+                n_ref = int(np.asarray(ref_arr).reshape(-1).size)
                 batch_n_refs.append(n_ref)
                 
                 sem_cache_paths = {
@@ -1018,17 +1073,28 @@ class MultiTaskTester(TesterBase):
                     t: os.path.join(save_path, f"{data_name}_pred_{t}.npy")
                     for t in multilabel_tasks
                 }
+                pixel_logits_cache_paths = {
+                    # Soft foreground probs (r, H, W) in [0, 1]; NaN where no
+                    # LiDAR point fell in that 1 m Lambert cell (unobserved).
+                    t: os.path.join(save_path, f"{data_name}_logits_{t}.npy")
+                    for t in pixel_semantic_tasks
+                }
                 batch_sem_cache_paths.append(sem_cache_paths)
                 batch_reg_cache_paths.append(reg_cache_paths)
                 batch_ml_cache_paths.append(ml_cache_paths)
+                batch_pixel_logits_cache_paths.append(pixel_logits_cache_paths)
                 
                 all_sem_cached = all(os.path.isfile(p) for p in sem_cache_paths.values())
                 all_reg_cached = all(os.path.isfile(p) for p in reg_cache_paths.values())
                 all_ml_cached = all(os.path.isfile(p) for p in ml_cache_paths.values())
+                all_pixel_cached = all(
+                    os.path.isfile(p) for p in pixel_logits_cache_paths.values()
+                )
                 batch_all_cached.append(
                     all_sem_cached
                     and (len(regression_tasks) == 0 or all_reg_cached)
                     and (len(multilabel_tasks) == 0 or all_ml_cached)
+                    and (len(pixel_semantic_tasks) == 0 or all_pixel_cached)
                 )
                 
                 batch_pred_sem.append({
@@ -1041,6 +1107,13 @@ class MultiTaskTester(TesterBase):
                 batch_reg_cnt.append({
                     t: torch.zeros((n_ref,), device="cuda") for t in regression_tasks
                 })
+                batch_axis_pred_sum.append({
+                    t: torch.zeros((n_ref, int(task_configs[t]["num_classes"])), device="cuda")
+                    for t in tile_distribution_tasks
+                })
+                batch_axis_pred_cnt.append({
+                    t: torch.zeros((n_ref,), device="cuda") for t in tile_distribution_tasks
+                })
                 batch_cls_logits_sum.append({
                     t: torch.zeros(
                         int(task_configs[t]["num_classes"]),
@@ -1049,26 +1122,36 @@ class MultiTaskTester(TesterBase):
                     for t in scene_level_cls_tasks
                 })
                 batch_cls_logits_cnt.append({t: 0 for t in scene_level_cls_tasks})
+                batch_pixel_dense_sum.append({t: None for t in pixel_semantic_tasks})
+                batch_pixel_dense_cnt.append({t: None for t in pixel_semantic_tasks})
 
-            # Skip model forward when sem/reg/multilabel caches are present.
-            # Mono-label classification is not cached and still forces a forward.
-            if all(batch_all_cached) and not classification_tasks:
+            # Skip model forward when sem/reg/multilabel/pixel caches are present.
+            # Mono-label classification and tile_distribution are not cached and
+            # still force a forward.
+            if all(batch_all_cached) and not classification_tasks and not tile_distribution_tasks:
                 batch_pred_cls_np = []
                 batch_pred_reg_np = []
                 batch_pred_scene_cls_np = []
+                batch_pixel_logits_np = []
                 for b_idx in range(len(batch)):
                     pred_cls_np = {}
                     pred_reg_np = {}
                     pred_scene_cls_np = {}
+                    pixel_logits_np = {}
                     for t in semantic_tasks:
                         pred_cls_np[t] = np.load(batch_sem_cache_paths[b_idx][t])
                     for t in regression_tasks:
                         pred_reg_np[t] = np.load(batch_reg_cache_paths[b_idx][t])
                     for t in multilabel_tasks:
                         pred_scene_cls_np[t] = np.load(batch_ml_cache_paths[b_idx][t])
+                    for t in pixel_semantic_tasks:
+                        pixel_logits_np[t] = np.load(
+                            batch_pixel_logits_cache_paths[b_idx][t]
+                        )
                     batch_pred_cls_np.append(pred_cls_np)
                     batch_pred_reg_np.append(pred_reg_np)
                     batch_pred_scene_cls_np.append(pred_scene_cls_np)
+                    batch_pixel_logits_np.append(pixel_logits_np)
             else:
                 # Extract the single fragment from each scene
                 fragments = [d.pop("fragment_list")[0] for d in batch]
@@ -1085,6 +1168,9 @@ class MultiTaskTester(TesterBase):
                     logits_by_task = output_dict.get("seg_logits_by_task") or {}
                     reg_pred_by_task = output_dict.get("reg_pred_by_task") or {}
                     cls_logits_by_task = output_dict.get("cls_logits_by_task") or {}
+                    pixel_dense_by_task = (
+                        output_dict.get("pixel_seg_logits_dense_by_task") or {}
+                    )
 
                     if self.cfg.empty_cache:
                         torch.cuda.empty_cache()
@@ -1142,9 +1228,61 @@ class MultiTaskTester(TesterBase):
                                 batch_reg_cnt[b_idx][task_name][ip] += 1
                             bs = be
 
+                    # Dedicated sum+count accumulator (not the semantic pattern above,
+                    # which sums fragment probabilities with no count tracked — safe
+                    # only for argmax-based mIoU, not for a true KL divergence).
+                    for task_name in tile_distribution_tasks:
+                        if task_name not in logits_by_task:
+                            continue
+                        pred_part_all = F.softmax(logits_by_task[task_name].float(), dim=-1)
+
+                        bs = 0
+                        for b_idx, be in enumerate(input_dict["offset"]):
+                            pred_part = pred_part_all[bs:be]
+                            if use_voxel_broadcast:
+                                inv = fragments[b_idx]["inverse"]
+                                inv = (
+                                    torch.from_numpy(inv).long().cuda()
+                                    if isinstance(inv, np.ndarray)
+                                    else inv.long().cuda()
+                                )
+                                gathered = pred_part[inv, :]
+                                batch_axis_pred_sum[b_idx][task_name] += gathered
+                                batch_axis_pred_cnt[b_idx][task_name] += torch.ones(
+                                    gathered.shape[0], device=gathered.device
+                                )
+                            else:
+                                sl = slice(bs, be)
+                                ip = idx_part[sl]
+                                batch_axis_pred_sum[b_idx][task_name][ip] += pred_part
+                                batch_axis_pred_cnt[b_idx][task_name][ip] += 1
+                            bs = be
+
+                    for task_name in pixel_semantic_tasks:
+                        dense_list = pixel_dense_by_task.get(task_name) or []
+                        for b_idx, dense in enumerate(dense_list):
+                            if dense is None:
+                                continue
+                            dense = dense.float()
+                            if batch_pixel_dense_sum[b_idx][task_name] is None:
+                                batch_pixel_dense_sum[b_idx][task_name] = torch.zeros_like(
+                                    dense
+                                )
+                                batch_pixel_dense_cnt[b_idx][task_name] = torch.zeros_like(
+                                    dense
+                                )
+                            # dense is soft foreground probs (r, H, W); NaN = unobserved.
+                            observed = torch.isfinite(dense)
+                            filled = torch.nan_to_num(dense, nan=0.0)
+                            batch_pixel_dense_sum[b_idx][task_name] += filled * observed
+                            batch_pixel_dense_cnt[b_idx][task_name] += observed.to(
+                                dense.dtype
+                            )
+
                 batch_pred_cls_np = []
                 batch_pred_reg_np = []
                 batch_pred_scene_cls_np = []
+                batch_pixel_logits_np = []
                 for b_idx in range(len(batch)):
                     pred_cls_np = {}
                     pred_reg_np = {}
@@ -1177,9 +1315,37 @@ class MultiTaskTester(TesterBase):
                         pred_np = self._denorm_regression_pred_np(pred_np, task_name)
                         pred_reg_np[task_name] = pred_np
                         np.save(batch_reg_cache_paths[b_idx][task_name], pred_np)
+
+                    pixel_logits_np = {}
+                    for task_name in pixel_semantic_tasks:
+                        dense_sum = batch_pixel_dense_sum[b_idx][task_name]
+                        dense_cnt = batch_pixel_dense_cnt[b_idx][task_name]
+                        if dense_sum is None:
+                            # Fall back to NaN grid from GT mask shape if available.
+                            gt = batch_targets[b_idx].get(task_name)
+                            if gt is None:
+                                continue
+                            gt_arr = np.asarray(gt)
+                            r = int(task_configs[task_name]["num_networks"])
+                            if gt_arr.ndim == 3:
+                                _, h, w = gt_arr.shape
+                            else:
+                                h = w = 1
+                            logits_np = np.full((r, h, w), np.nan, dtype=np.float32)
+                        else:
+                            avg = dense_sum / dense_cnt.clamp(min=1.0)
+                            unobserved = dense_cnt < 0.5
+                            avg = avg.masked_fill(unobserved, float("nan"))
+                            logits_np = avg.detach().cpu().numpy().astype(np.float32)
+                        pixel_logits_np[task_name] = logits_np
+                        np.save(
+                            batch_pixel_logits_cache_paths[b_idx][task_name],
+                            logits_np,
+                        )
                         
                     batch_pred_cls_np.append(pred_cls_np)
                     batch_pred_reg_np.append(pred_reg_np)
+                    batch_pixel_logits_np.append(pixel_logits_np)
                     scene_cls_np = {}
                     for task_name in classification_tasks:
                         if task_name not in batch_targets[b_idx]:
@@ -1319,7 +1485,56 @@ class MultiTaskTester(TesterBase):
                         reg_sums_global[task_name]["mse"] += mse_b
                         reg_sums_global[task_name]["count"] += cnt_b
 
-                record[data_name] = dict(semantic=sem_metrics_scene)
+                td_metrics_scene = {}
+                for task_name in tile_distribution_tasks:
+                    if task_name not in targets_by_task:
+                        logger.warning(
+                            "Scene %s: skip tile_distribution task %s (missing ground truth).",
+                            data_name,
+                            task_name,
+                        )
+                        continue
+                    if task_name not in batch_axis_pred_sum[b_idx]:
+                        continue
+                    tc = task_configs[task_name]
+                    ignore_index = int(tc["ignore_index"])
+                    num_classes = int(tc["num_classes"])
+                    cnt = batch_axis_pred_cnt[b_idx][task_name].clamp(min=1).unsqueeze(-1)
+                    avg_probs = batch_axis_pred_sum[b_idx][task_name] / cnt
+                    avg_probs = self._apply_inverse_origin_probs(
+                        avg_probs, scene_extra, task_name
+                    )
+                    tgt_np = np.asarray(
+                        self._target_for_metrics(task_name, targets_by_task, scene_extra),
+                        dtype=np.int64,
+                    ).reshape(-1)
+                    if tgt_np.shape[0] != avg_probs.shape[0]:
+                        logger.warning(
+                            "Scene %s: tile_distribution task %s pred/target length "
+                            "mismatch (%d vs %d); skipping.",
+                            data_name,
+                            task_name,
+                            avg_probs.shape[0],
+                            tgt_np.shape[0],
+                        )
+                        continue
+                    target_t = torch.from_numpy(tgt_np).long().to(avg_probs.device)
+                    indptr = torch.tensor(
+                        [0, avg_probs.shape[0]], device=avg_probs.device
+                    )
+                    pi_hat, q_t, n_t = pool_axis_distribution_from_probs(
+                        avg_probs, target_t, indptr, ignore_index, num_classes
+                    )
+                    if float(n_t.item()) > 0:
+                        kl = float(kl_divergence_rows(q_t, pi_hat).item())
+                        td_metrics_scene[task_name] = dict(
+                            kl_weighted=float(n_t.item()) * kl,
+                            weight=float(n_t.item()),
+                        )
+
+                record[data_name] = dict(
+                    semantic=sem_metrics_scene, tile_distribution=td_metrics_scene
+                )
 
             all_cached_here = all(batch_all_cached)
             prog.step(cached=all_cached_here)
@@ -1377,6 +1592,11 @@ class MultiTaskTester(TesterBase):
                         per_task_sem[task_name]["intersection"] += meters["intersection"]
                         per_task_sem[task_name]["union"] += meters["union"]
                         per_task_sem[task_name]["target"] += meters["target"]
+                for task_name, meters in payload.get("tile_distribution", {}).items():
+                    if task_name not in td_sums_global:
+                        continue
+                    td_sums_global[task_name]["kl_weighted"] += meters["kl_weighted"]
+                    td_sums_global[task_name]["weight"] += meters["weight"]
 
             per_task_metrics = {}
             for task_name in semantic_tasks:
@@ -1500,6 +1720,29 @@ class MultiTaskTester(TesterBase):
                     log_dict[f"test/{task_name}/{slug}/f1"] = float(
                         label_metrics["f1"]
                     )
+
+            final_kl_by_task = {}
+            for task_name in tile_distribution_tasks:
+                s = td_sums_global[task_name]
+                if s["weight"] <= 1e-8:
+                    logger.warning(
+                        "[task=%s] Test tile-distribution: no samples accumulated; "
+                        "skipping metrics.",
+                        task_name,
+                    )
+                    continue
+                final_kl = s["kl_weighted"] / s["weight"]
+                final_kl_by_task[task_name] = final_kl
+                logger.info(
+                    "[task={}] Test tile-distribution: weighted KL {:.6f} (N={:.0f}).".format(
+                        task_name, final_kl, s["weight"]
+                    )
+                )
+                log_dict[f"test/weighted_kl/{task_name}"] = float(final_kl)
+            if final_kl_by_task:
+                log_dict["test/weighted_kl/nathab_total"] = float(
+                    sum(final_kl_by_task.values())
+                )
 
             log_test_f1 = getattr(self.cfg, "log_test_f1", False)
             if log_test_f1:

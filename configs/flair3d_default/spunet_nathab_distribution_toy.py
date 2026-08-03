@@ -1,5 +1,13 @@
 """
-Toy to run on hecate for debugging - 
+Toy SpUNet config for debugging nathab axis-distribution training on hecate (D067 subset).
+
+Mono-task verification run: the 4 ecological axes (Habitat Type, Moisture Regime,
+Soil Chemistry, Bioclimatic Zone) are each an independent `tile_distribution` task,
+derived on the fly (via Flair3DLabelRemap fan-out) from the raw `natural_habitat`
+CarHab asset (`--natural_habitat_definition default` at preprocess time). Checkpoint
+selection uses `main_task`'s (negated) weighted-KL metric, since this run's purpose
+is confirming the new task type trains and reports correctly, not a full multi-task
+segmentation experiment.
 """
 
 # -----------------------------------------------------------------------------
@@ -15,7 +23,6 @@ _base_ = ["../_base_/default_runtime.py"]
 grp_exp = 1
 num_exp = 1
 
-
 # Hardware parameters
 num_gpu = 1
 num_worker = 8 * num_gpu
@@ -26,7 +33,7 @@ batch_size = 20 * num_gpu  # total batch size across all gpus
 batch_size_val = batch_size // 4
 batch_size_test = batch_size // 4
 train_max_sample = 20
-val_max_sample = 100
+val_max_sample = 20
 test_max_sample = val_max_sample
 
 grid_size = 0.1
@@ -34,10 +41,10 @@ point_max = 100000
 mix_prob = 0.8
 
 # Optimization parameters
-lr = 5e-3
+lr = 1e-3
 total_iters = 15
 iter_per_epoch = 5
-warmup_iters = 2500
+warmup_iters = 5
 
 # Features
 learned_masked_feat = True
@@ -45,47 +52,53 @@ feat_keys = ["coord", "color", "strength"]
 coord_feat_scale = 0.01
 
 # Wandb parameters
-wandb_run_name = (
-    f"Flair3D+ SpUNet multitask + elevation {grp_exp}.{num_exp}) lr={lr}"
-)
-wandb_project = "flair3d_multi"
+wandb_run_name = f"nathab_distribution toy ({grp_exp}.{num_exp}) lr={lr}"
+wandb_project = "flair3d_nathab_distribution"
 
 # -----------------------------------------------------------------------------
-# Multitask configuration : targets configuraiton
+# Mono-task configuration: 4 nathab axes as tile_distribution tasks
 # -----------------------------------------------------------------------------
 from pointcept.datasets.flair3d_config_utils import (
-    ELEVATION_TARGET_SCALE,
+    FLAIR3D_TILE_DISTRIBUTION_TASKS,
     init_task_configs,
     init_task_criteria,
     FLAIR3D_COLLECT_PREFIX_GRID,
     init_multitask_collect_keys,
-    get_regression_target_scales,
 )
 
-semantic_target_keys = ("segment", "forest", "land_use", "natural_habitat")
-target_keys = semantic_target_keys + ("elevation",)
+task_target_keys = tuple(FLAIR3D_TILE_DISTRIBUTION_TASKS.keys())
+main_task = "nathab_habitat_type"
 
-elevation_target_scale = ELEVATION_TARGET_SCALE
-elevation_key_scales = dict(elevation=elevation_target_scale)
-target_scales = get_regression_target_scales(target_keys)
-main_task = "segment"
+# `natural_habitat` is loaded raw (loader-only, not itself a supervised task) so
+# Flair3DLabelRemap's fan-out below has a source field to read from; it is
+# deliberately excluded from task_target_keys.
+dataset_target_keys = ("natural_habitat",) + task_target_keys
 
-label_definitions = dict(
-    segment="v20",
+nathab_axis_remaps = dict(
+    nathab_habitat_type=("natural_habitat", "by_habitat_type_ecological"),
+    nathab_moisture_regime=("natural_habitat", "by_moisture_regime"),
+    nathab_soil_chemistry=("natural_habitat", "by_soil_chemistry"),
+    nathab_bioclimatic_zone=("natural_habitat", "by_climatic_domain"),
+)
+nathab_axis_storage_definitions = dict(natural_habitat="default")
+nathab_axis_remap = dict(
+    type="Flair3DLabelRemap",
+    remaps=nathab_axis_remaps,
+    storage_definitions=nathab_axis_storage_definitions,
 )
 
-task_configs = init_task_configs(target_keys, definitions=label_definitions)
+task_configs = init_task_configs(task_target_keys)
 task_criteria = init_task_criteria(task_configs)
 task_weights = {task_name: 1.0 for task_name in task_configs.keys()}
 
 # Remove the imported helpers from this module's namespace so they do not leak
-# into the Pointcept config dict. The config loader (pointce^t/utils/config.py)
+# into the Pointcept config dict. The config loader (pointcept/utils/config.py)
 # treats every non-dunder module attribute as a config entry, and Config.dump
 # pipes the resulting Python text through yapf. Yapf cannot reformat function
 # objects rendered as "<function ... at 0x...>" and raises a SyntaxError.
-del init_task_configs, init_task_criteria, get_regression_target_scales
+del init_task_configs, init_task_criteria
 
-# main_task drives checkpoint selection / mIoU logging, so its num_classes,
+# main_task drives checkpoint selection / metric logging, so its num_classes,
 # ignore_index and names are exposed at the data root for backward-compat hooks.
 num_classes = task_configs[main_task]["num_classes"]
 ignore_index = task_configs[main_task]["ignore_index"]
@@ -110,10 +123,6 @@ test = dict(type="MultiTaskTester", verbose=True, write_cls_iou=True)
 # -----------------------------------------------------------------------------
 # Model
 # -----------------------------------------------------------------------------
-# Backbone produces per-point features (num_classes=0 disables its final 1x1
-# conv). MultiTaskSegmentorV2 attaches per-task linear heads on top of these
-# features (one nn.Linear(backbone_out_channels, num_classes_task) per
-# semantic task, one nn.Linear(backbone_out_channels, 1) for elevation).
 backbone_channels = (32, 64, 128, 256, 256, 128, 96, 96)
 
 model = dict(
@@ -136,8 +145,6 @@ model = dict(
     task_weights=task_weights,
 )
 
-
-
 # -----------------------------------------------------------------------------
 # Optimizer / scheduler
 # -----------------------------------------------------------------------------
@@ -159,7 +166,7 @@ too_small_tiles_manifest = "data/flair3d_plus/too_small_tiles.csv"
 
 train_multitask_keys, val_multitask_keys, multitask_index_valid_keys = (
     init_multitask_collect_keys(
-        target_keys, collect_prefix_keys=FLAIR3D_COLLECT_PREFIX_GRID
+        task_target_keys, collect_prefix_keys=FLAIR3D_COLLECT_PREFIX_GRID
     )
 )
 
@@ -169,7 +176,6 @@ data = dict(
     num_classes=num_classes,
     ignore_index=ignore_index,
     names=names,
-    target_scales=target_scales,
     task_configs=task_configs,
     main_task=main_task,
     train=dict(
@@ -179,7 +185,7 @@ data = dict(
         csv_manifest=csv_manifest,
         missing_tiles_manifest=missing_tiles_manifest,
         too_small_tiles_manifest=too_small_tiles_manifest,
-        target_keys=list(target_keys),
+        target_keys=list(dataset_target_keys),
         primary_target_key=main_task,
         max_sample=train_max_sample,
         transform=[
@@ -187,6 +193,7 @@ data = dict(
                 type="Update",
                 keys_dict={"index_valid_keys": list(multitask_index_valid_keys)},
             ),
+            nathab_axis_remap,
             dict(type="CenterShift", apply_z=True),
             dict(type="Z_MinShift"),
             dict(type="Z_RandomOffset"),
@@ -219,7 +226,6 @@ data = dict(
                 keys=train_multitask_keys,
                 feat_keys=feat_keys,
                 feat_scales=dict(coord=coord_feat_scale),
-                key_scales=elevation_key_scales,
             ),
         ],
         test_mode=False,
@@ -231,7 +237,7 @@ data = dict(
         csv_manifest=csv_manifest,
         missing_tiles_manifest=missing_tiles_manifest,
         too_small_tiles_manifest=too_small_tiles_manifest,
-        target_keys=list(target_keys),
+        target_keys=list(dataset_target_keys),
         primary_target_key=main_task,
         max_sample=val_max_sample,
         transform=[
@@ -239,17 +245,12 @@ data = dict(
                 type="Update",
                 keys_dict={"index_valid_keys": list(multitask_index_valid_keys)},
             ),
+            nathab_axis_remap,
             dict(type="CenterShift", apply_z=True),
             dict(type="Z_MinShift"),
             dict(
                 type="Copy",
-                keys_dict={
-                    "segment": "origin_segment",
-                    "forest": "origin_forest",
-                    "land_use": "origin_land_use",
-                    "natural_habitat": "origin_natural_habitat",
-                    "elevation": "origin_elevation",
-                },
+                keys_dict={t: f"origin_{t}" for t in task_target_keys},
             ),
             dict(
                 type="GridSample",
@@ -267,7 +268,6 @@ data = dict(
                 keys=val_multitask_keys,
                 feat_keys=feat_keys,
                 feat_scales=dict(coord=coord_feat_scale),
-                key_scales=elevation_key_scales,
             ),
         ],
         test_mode=False,
@@ -279,10 +279,11 @@ data = dict(
         csv_manifest=csv_manifest,
         missing_tiles_manifest=missing_tiles_manifest,
         too_small_tiles_manifest=too_small_tiles_manifest,
-        target_keys=list(target_keys),
+        target_keys=list(dataset_target_keys),
         primary_target_key=main_task,
         max_sample=test_max_sample,
         transform=[
+            nathab_axis_remap,
             dict(type="CenterShift", apply_z=True),
             dict(type="Z_MinShift"),
             dict(type="NormalizeColor"),

@@ -1,0 +1,198 @@
+{
+  "n_scenes_ok": 40,
+  "n_scenes_error": 0,
+  "n_points": {
+    "count": 40,
+    "min": 144542,
+    "median": 170547.0,
+    "mean": 201005.3,
+    "p90": 292322.7,
+    "p95": 304963.3,
+    "p98": 323897.3999999999,
+    "p99": 351322.19999999995,
+    "max": 378747
+  },
+  "n_voxels": {
+    "count": 40,
+    "min": 120981,
+    "median": 153198.0,
+    "mean": 166309.075,
+    "p90": 210260.80000000002,
+    "p95": 226537.5,
+    "p98": 239324.89999999994,
+    "p99": 259719.94999999998,
+    "max": 280115
+  },
+  "top_outliers_by_n_voxels": [
+    {
+      "patch_id": "D036-2020_UU-S1-6_10-10",
+      "split": "test",
+      "n_points": 378747,
+      "n_voxels": 280115,
+      "points_per_voxel": 1.352112525212859,
+      "scene_path": "/data/geist/Pointcept/data/flair3d_plus/test/D036-2020_LIDARHD/UU-S1-6/D036-2020_UU-S1-6_10-10"
+    },
+    {
+      "patch_id": "D036-2020_UU-S1-6_10-9",
+      "split": "test",
+      "n_points": 308427,
+      "n_voxels": 227820,
+      "points_per_voxel": 1.3538188043191994,
+      "scene_path": "/data/geist/Pointcept/data/flair3d_plus/test/D036-2020_LIDARHD/UU-S1-6/D036-2020_UU-S1-6_10-9"
+    },
+    {
+      "patch_id": "D036-2020_UU-S1-6_10-8",
+      "split": "test",
+      "n_points": 304781,
+      "n_voxels": 226470,
+      "points_per_voxel": 1.3457897293239722,
+      "scene_path": "/data/geist/Pointcept/data/flair3d_plus/test/D036-2020_LIDARHD/UU-S1-6/D036-2020_UU-S1-6_10-8"
+    },
+    {
+      "patch_id": "D036-2020_UU-S1-6_10-7",
+      "split": "test",
+      "n_points": 300141,
+      "n_voxels": 225955,
+      "points_per_voxel": 1.3283220110198934,
+      "scene_path": "/data/geist/Pointcept/data/flair3d_plus/test/D036-2020_LIDARHD/UU-S1-6/D036-2020_UU-S1-6_10-7"
+    },
+    {
+      "patch_id": "D036-2020_UU-S1-6_10-3",
+      "split": "test",
+      "n_points": 288098,
+      "n_voxels": 208517,
+      "points_per_voxel": 1.3816523353011985,
+      "scene_path": "/data/geist/Pointcept/data/flair3d_plus/test/D036-2020_LIDARHD/UU-S1-6/D036-2020_UU-S1-6_10-3"
+    },
+    {
+      "patch_id": "D036-2020_UU-S1-6_10-1",
+      "split": "test",
+      "n_points": 282106,
+      "n_voxels": 203469,
+      "points_per_voxel": 1.3864814787510629,
+      "scene_path": "/data/geist/Pointcept/data/flair3d_plus/test/D036-2020_LIDARHD/UU-S1-6/D036-2020_UU-S1-6_10-1"
+    },
+    {
+      "patch_id": "D036-2020_UU-S1-6_10-2",
+      "split": "test",
+      "n_points": 291454,
+      "n_voxels": 202953,
+      "points_per_voxel": 1.4360664784457484,
+      "scene_path": "/data/geist/Pointcept/data/flair3d_plus/test/D036-2020_LIDARHD/UU-S1-6/D036-2020_UU-S1-6_10-2"
+    },
+    {
+      "patch_id": "D036-2020_UU-S1-6_10-6",
+      "split": "test",
+      "n_points": 275169,
+      "n_voxels": 193785,
+      "points_per_voxel": 1.4199705859586655,
+      "scene_path": "/data/geist/Pointcept/data/flair3d_plus/test/D036-2020_LIDARHD/UU-S1-6/D036-2020_UU-S1-6_10-6"
+    },
+    {
+      "patch_id": "D036-2020_UU-S1-6_2-7",
+      "split": "test",
+      "n_points": 206938,
+      "n_voxels": 186060,
+      "points_per_voxel": 1.1122111146941847,
+      "scene_path": "/data/geist/Pointcept/data/flair3d_plus/test/D036-2020_LIDARHD/UU-S1-6/D036-2020_UU-S1-6_2-7"
+    },
+    {
+      "patch_id": "D036-2020_UU-S1-6_1-1",
+      "split": "test",
+      "n_points": 200066,
+      "n_voxels": 182384,
+      "points_per_voxel": 1.0969492937977015,
+      "scene_path": "/data/geist/Pointcept/data/flair3d_plus/test/D036-2020_LIDARHD/UU-S1-6/D036-2020_UU-S1-6_1-1"
+    },
+    {
+      "patch_id": "D036-2020_UU-S1-6_1-2",
+      "split": "test",
+      "n_points": 197441,
+      "n_voxels": 180119,
+      "points_per_voxel": 1.09616975444012,
+      "scene_path": "/data/geist/Pointcept/data/flair3d_plus/test/D036-2020_LIDARHD/UU-S1-6/D036-2020_UU-S1-6_1-2"
+    },
+    {
+      "patch_id": "D036-2020_UU-S1-6_10-4",
+      "split": "test",
+      "n_points": 269138,
+      "n_voxels": 177246,
+      "points_per_voxel": 1.518443293501687,
+      "scene_path": "/data/geist/Pointcept/data/flair3d_plus/test/D036-2020_LIDARHD/UU-S1-6/D036-2020_UU-S1-6_10-4"
+    },
+    {
+      "patch_id": "D036-2020_UU-S1-6_10-5",
+      "split": "test",
+      "n_points": 264623,
+      "n_voxels": 174862,
+      "points_per_voxel": 1.5133247932655465,
+      "scene_path": "/data/geist/Pointcept/data/flair3d_plus/test/D036-2020_LIDARHD/UU-S1-6/D036-2020_UU-S1-6_10-5"
+    },
+    {
+      "patch_id": "D036-2020_UU-S1-6_2-2",
+      "split": "test",
+      "n_points": 181261,
+      "n_voxels": 164757,
+      "points_per_voxel": 1.1001717681191088,
+      "scene_path": "/data/geist/Pointcept/data/flair3d_plus/test/D036-2020_LIDARHD/UU-S1-6/D036-2020_UU-S1-6_2-2"
+    },
+    {
+      "patch_id": "D036-2020_UU-S1-6_2-1",
+      "split": "test",
+      "n_points": 172131,
+      "n_voxels": 160016,
+      "points_per_voxel": 1.0757111788821119,
+      "scene_path": "/data/geist/Pointcept/data/flair3d_plus/test/D036-2020_LIDARHD/UU-S1-6/D036-2020_UU-S1-6_2-1"
+    },
+    {
+      "patch_id": "D036-2020_UU-S1-6_1-3",
+      "split": "test",
+      "n_points": 176336,
+      "n_voxels": 158997,
+      "points_per_voxel": 1.1090523720573344,
+      "scene_path": "/data/geist/Pointcept/data/flair3d_plus/test/D036-2020_LIDARHD/UU-S1-6/D036-2020_UU-S1-6_1-3"
+    },
+    {
+      "patch_id": "D036-2020_UU-S1-6_2-6",
+      "split": "test",
+      "n_points": 177380,
+      "n_voxels": 155864,
+      "points_per_voxel": 1.138043422470872,
+      "scene_path": "/data/geist/Pointcept/data/flair3d_plus/test/D036-2020_LIDARHD/UU-S1-6/D036-2020_UU-S1-6_2-6"
+    },
+    {
+      "patch_id": "D036-2020_UU-S1-6_1-9",
+      "split": "test",
+      "n_points": 168608,
+      "n_voxels": 154267,
+      "points_per_voxel": 1.0929622018967116,
+      "scene_path": "/data/geist/Pointcept/data/flair3d_plus/test/D036-2020_LIDARHD/UU-S1-6/D036-2020_UU-S1-6_1-9"
+    },
+    {
+      "patch_id": "D036-2020_UU-S1-6_2-5",
+      "split": "test",
+      "n_points": 170663,
+      "n_voxels": 153980,
+      "points_per_voxel": 1.1083452396415119,
+      "scene_path": "/data/geist/Pointcept/data/flair3d_plus/test/D036-2020_LIDARHD/UU-S1-6/D036-2020_UU-S1-6_2-5"
+    },
+    {
+      "patch_id": "D036-2020_UU-S1-6_2-9",
+      "split": "test",
+      "n_points": 170431,
+      "n_voxels": 153560,
+      "points_per_voxel": 1.1098658504818963,
+      "scene_path": "/data/geist/Pointcept/data/flair3d_plus/test/D036-2020_LIDARHD/UU-S1-6/D036-2020_UU-S1-6_2-9"
+    }
+  ],
+  "error_examples": [],
+  "grid_size": 0.1,
+  "splits": [
+    "test",
+    "val"
+  ],
+  "output_csv": "/data/geist/Pointcept/stats/flair3d/test_point_voxel_counts_manifest_smoke/point_voxel_counts_test_val.csv",
+  "write_manifest": "/tmp/scene_split_manifest_smoke.csv",
+  "manifest_rows_updated": 40,
+  "manifest_rows_total": 241100
+}

@@ -312,6 +312,36 @@ _NATURAL_HABITAT_BY_CLIMATIC_DOMAIN_NAMES: Tuple[str, ...] = (
     "Void",
 )
 
+_NATURAL_HABITAT_BY_HABITAT_TYPE_ECOLOGICAL_NAMES: Tuple[str, ...] = (
+    "Open",
+    "Forest",
+    "Mineral",
+    "Aquatic",
+    "Void",
+)
+
+_NATURAL_HABITAT_BY_SOIL_CHEMISTRY_NAMES: Tuple[str, ...] = (
+    "Acidic",
+    "Alkaline",
+    "Void",
+)
+
+_NATURAL_HABITAT_BY_MOISTURE_REGIME_NAMES: Tuple[str, ...] = (
+    "Humide",
+    "Mesique",
+    "Sec",
+    "Void",
+)
+
+# Shared open/forest CarHab raw-id groups (domain x habitat_type x substrate x moisture space),
+# reused by both `by_habitat_type` and `by_habitat_type_ecological`.
+_NATURAL_HABITAT_OPEN_IDS: Tuple[int, ...] = tuple(
+    list(range(0, 6)) + list(range(12, 18)) + list(range(24, 30))
+)
+_NATURAL_HABITAT_FOREST_IDS: Tuple[int, ...] = tuple(
+    list(range(6, 12)) + list(range(18, 24)) + list(range(30, 36))
+)
+
 # CarHab raw id -> train id. Raw 42=N/A -> void (11); raw 43=routes -> 10.
 _NATURAL_HABITAT_BY_HABITAT_X_DOMAIN_LUT = np.array(
     [
@@ -477,6 +507,31 @@ def _build_natural_habitat_by_climatic_domain_lut() -> np.ndarray:
   lut[0:12] = 0
   lut[12:24] = 1
   lut[24:36] = 2
+  return lut
+
+
+def _build_natural_habitat_by_soil_chemistry_lut() -> np.ndarray:
+  """CarHab raw ids 0-35 -> substrate parity (acid/basic); 36-39 mineral/aquatic
+  acid/basic; 40-43 (cultivated, built, N/A, routes) -> void."""
+  lut = np.full(44, 2, dtype=np.int32)
+  for raw_id in range(36):
+    lut[raw_id] = 0 if raw_id % 6 < 3 else 1
+  lut[36] = 0  # mineral, acid
+  lut[37] = 1  # mineral, basic
+  lut[38] = 0  # aquatic, acid
+  lut[39] = 1  # aquatic, basic
+  return lut
+
+
+def _build_natural_habitat_by_moisture_regime_lut() -> np.ndarray:
+  """CarHab raw ids 0-35 -> moisture (id % 3); everything else -> void.
+
+  Clean 3-class+void variant of `by_moisture_v3` (that definition's names tuple
+  carries two unreachable "Mineral"/"Aquatic" slots its own LUT never emits).
+  """
+  lut = np.full(44, 3, dtype=np.int32)
+  for raw_id in range(36):
+    lut[raw_id] = raw_id % 3
   return lut
 
 
@@ -667,16 +722,8 @@ def _register_natural_habitat_definitions() -> Dict[str, LabelDefinition]:
     },
     default_train_id=8,
   )
-  open_ids = (
-    list(range(0, 6))
-    + list(range(12, 18))
-    + list(range(24, 30))
-  )
-  forest_ids = (
-    list(range(6, 12))
-    + list(range(18, 24))
-    + list(range(30, 36))
-  )
+  open_ids = list(_NATURAL_HABITAT_OPEN_IDS)
+  forest_ids = list(_NATURAL_HABITAT_FOREST_IDS)
   by_habitat_type_lut = build_lut_from_groups(
     44,
     {
@@ -690,6 +737,16 @@ def _register_natural_habitat_definitions() -> Dict[str, LabelDefinition]:
       7: [42],
     },
     default_train_id=7,
+  )
+  by_habitat_type_ecological_lut = build_lut_from_groups(
+    44,
+    {
+      0: open_ids,
+      1: forest_ids,
+      2: [36, 37],
+      3: [38, 39],
+    },
+    default_train_id=4,
   )
   return {
     "default": _make_definition(
@@ -768,6 +825,36 @@ def _register_natural_habitat_definitions() -> Dict[str, LabelDefinition]:
       num_raw_classes=44,
       lut=_build_natural_habitat_by_climatic_domain_lut(),
       names=_NATURAL_HABITAT_BY_CLIMATIC_DOMAIN_NAMES,
+      ignore_index=3,
+      missing_fill_raw_id=42,
+      source_field="NATURAL_HABITAT",
+    ),
+    "by_habitat_type_ecological": _make_definition(
+      "natural_habitat",
+      "by_habitat_type_ecological",
+      num_raw_classes=44,
+      lut=by_habitat_type_ecological_lut,
+      names=_NATURAL_HABITAT_BY_HABITAT_TYPE_ECOLOGICAL_NAMES,
+      ignore_index=4,
+      missing_fill_raw_id=42,
+      source_field="NATURAL_HABITAT",
+    ),
+    "by_soil_chemistry": _make_definition(
+      "natural_habitat",
+      "by_soil_chemistry",
+      num_raw_classes=44,
+      lut=_build_natural_habitat_by_soil_chemistry_lut(),
+      names=_NATURAL_HABITAT_BY_SOIL_CHEMISTRY_NAMES,
+      ignore_index=2,
+      missing_fill_raw_id=42,
+      source_field="NATURAL_HABITAT",
+    ),
+    "by_moisture_regime": _make_definition(
+      "natural_habitat",
+      "by_moisture_regime",
+      num_raw_classes=44,
+      lut=_build_natural_habitat_by_moisture_regime_lut(),
+      names=_NATURAL_HABITAT_BY_MOISTURE_REGIME_NAMES,
       ignore_index=3,
       missing_fill_raw_id=42,
       source_field="NATURAL_HABITAT",

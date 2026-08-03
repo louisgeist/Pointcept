@@ -31,7 +31,7 @@ from .flair3d_climatic_domain import Flair3DClimaticDomainDataset
 from .dales import DALESDataset
 from .h3d import H3DDataset
 from .pureforest import PureForestDataset
-
+from .sensaturban import SensaturbanDataset
 
 # object
 from .modelnet import ModelNetDataset

@@ -1,0 +1,194 @@
+{
+  "n_scenes_ok": 0,
+  "n_scenes_error": 32,
+  "n_points": {
+    "count": 0,
+    "min": 0,
+    "median": 0.0,
+    "mean": 0.0,
+    "p90": 0.0,
+    "p95": 0.0,
+    "p98": 0.0,
+    "p99": 0.0,
+    "max": 0
+  },
+  "n_voxels": {
+    "count": 0,
+    "min": 0,
+    "median": 0.0,
+    "mean": 0.0,
+    "p90": 0.0,
+    "p95": 0.0,
+    "p98": 0.0,
+    "p99": 0.0,
+    "max": 0
+  },
+  "top_outliers_by_n_voxels": [],
+  "error_examples": [
+    {
+      "patch_id": "D012-2019_AA-S1-12_1-1",
+      "error": "missing_coord",
+      "scene_path": "/data/geist/Pointcept/data/flair3d_plus/test/D012-2019_LIDARHD/AA-S1-12/D012-2019_AA-S1-12_1-1"
+    },
+    {
+      "patch_id": "D012-2019_AA-S1-12_1-10",
+      "error": "missing_coord",
+      "scene_path": "/data/geist/Pointcept/data/flair3d_plus/test/D012-2019_LIDARHD/AA-S1-12/D012-2019_AA-S1-12_1-10"
+    },
+    {
+      "patch_id": "D012-2019_AA-S1-12_1-2",
+      "error": "missing_coord",
+      "scene_path": "/data/geist/Pointcept/data/flair3d_plus/test/D012-2019_LIDARHD/AA-S1-12/D012-2019_AA-S1-12_1-2"
+    },
+    {
+      "patch_id": "D012-2019_AA-S1-12_1-3",
+      "error": "missing_coord",
+      "scene_path": "/data/geist/Pointcept/data/flair3d_plus/test/D012-2019_LIDARHD/AA-S1-12/D012-2019_AA-S1-12_1-3"
+    },
+    {
+      "patch_id": "D012-2019_AA-S1-12_1-4",
+      "error": "missing_coord",
+      "scene_path": "/data/geist/Pointcept/data/flair3d_plus/test/D012-2019_LIDARHD/AA-S1-12/D012-2019_AA-S1-12_1-4"
+    },
+    {
+      "patch_id": "D012-2019_AA-S1-12_1-5",
+      "error": "missing_coord",
+      "scene_path": "/data/geist/Pointcept/data/flair3d_plus/test/D012-2019_LIDARHD/AA-S1-12/D012-2019_AA-S1-12_1-5"
+    },
+    {
+      "patch_id": "D012-2019_AA-S1-12_1-6",
+      "error": "missing_coord",
+      "scene_path": "/data/geist/Pointcept/data/flair3d_plus/test/D012-2019_LIDARHD/AA-S1-12/D012-2019_AA-S1-12_1-6"
+    },
+    {
+      "patch_id": "D012-2019_AA-S1-12_1-7",
+      "error": "missing_coord",
+      "scene_path": "/data/geist/Pointcept/data/flair3d_plus/test/D012-2019_LIDARHD/AA-S1-12/D012-2019_AA-S1-12_1-7"
+    },
+    {
+      "patch_id": "D012-2019_AA-S1-12_1-8",
+      "error": "missing_coord",
+      "scene_path": "/data/geist/Pointcept/data/flair3d_plus/test/D012-2019_LIDARHD/AA-S1-12/D012-2019_AA-S1-12_1-8"
+    },
+    {
+      "patch_id": "D012-2019_AA-S1-12_1-9",
+      "error": "missing_coord",
+      "scene_path": "/data/geist/Pointcept/data/flair3d_plus/test/D012-2019_LIDARHD/AA-S1-12/D012-2019_AA-S1-12_1-9"
+    },
+    {
+      "patch_id": "D012-2019_AA-S1-12_10-1",
+      "error": "missing_coord",
+      "scene_path": "/data/geist/Pointcept/data/flair3d_plus/test/D012-2019_LIDARHD/AA-S1-12/D012-2019_AA-S1-12_10-1"
+    },
+    {
+      "patch_id": "D012-2019_AA-S1-12_10-10",
+      "error": "missing_coord",
+      "scene_path": "/data/geist/Pointcept/data/flair3d_plus/test/D012-2019_LIDARHD/AA-S1-12/D012-2019_AA-S1-12_10-10"
+    },
+    {
+      "patch_id": "D012-2019_AA-S1-12_10-2",
+      "error": "missing_coord",
+      "scene_path": "/data/geist/Pointcept/data/flair3d_plus/test/D012-2019_LIDARHD/AA-S1-12/D012-2019_AA-S1-12_10-2"
+    },
+    {
+      "patch_id": "D012-2019_AA-S1-12_10-3",
+      "error": "missing_coord",
+      "scene_path": "/data/geist/Pointcept/data/flair3d_plus/test/D012-2019_LIDARHD/AA-S1-12/D012-2019_AA-S1-12_10-3"
+    },
+    {
+      "patch_id": "D012-2019_AA-S1-12_10-4",
+      "error": "missing_coord",
+      "scene_path": "/data/geist/Pointcept/data/flair3d_plus/test/D012-2019_LIDARHD/AA-S1-12/D012-2019_AA-S1-12_10-4"
+    },
+    {
+      "patch_id": "D012-2019_AA-S1-12_10-5",
+      "error": "missing_coord",
+      "scene_path": "/data/geist/Pointcept/data/flair3d_plus/test/D012-2019_LIDARHD/AA-S1-12/D012-2019_AA-S1-12_10-5"
+    },
+    {
+      "patch_id": "D012-2019_AA-S1-12_10-6",
+      "error": "missing_coord",
+      "scene_path": "/data/geist/Pointcept/data/flair3d_plus/test/D012-2019_LIDARHD/AA-S1-12/D012-2019_AA-S1-12_10-6"
+    },
+    {
+      "patch_id": "D012-2019_AA-S1-12_10-7",
+      "error": "missing_coord",
+      "scene_path": "/data/geist/Pointcept/data/flair3d_plus/test/D012-2019_LIDARHD/AA-S1-12/D012-2019_AA-S1-12_10-7"
+    },
+    {
+      "patch_id": "D012-2019_AA-S1-12_10-8",
+      "error": "missing_coord",
+      "scene_path": "/data/geist/Pointcept/data/flair3d_plus/test/D012-2019_LIDARHD/AA-S1-12/D012-2019_AA-S1-12_10-8"
+    },
+    {
+      "patch_id": "D012-2019_AA-S1-12_10-9",
+      "error": "missing_coord",
+      "scene_path": "/data/geist/Pointcept/data/flair3d_plus/test/D012-2019_LIDARHD/AA-S1-12/D012-2019_AA-S1-12_10-9"
+    },
+    {
+      "patch_id": "D012-2019_AA-S1-12_2-1",
+      "error": "missing_coord",
+      "scene_path": "/data/geist/Pointcept/data/flair3d_plus/test/D012-2019_LIDARHD/AA-S1-12/D012-2019_AA-S1-12_2-1"
+    },
+    {
+      "patch_id": "D012-2019_AA-S1-12_2-10",
+      "error": "missing_coord",
+      "scene_path": "/data/geist/Pointcept/data/flair3d_plus/test/D012-2019_LIDARHD/AA-S1-12/D012-2019_AA-S1-12_2-10"
+    },
+    {
+      "patch_id": "D012-2019_AA-S1-12_2-2",
+      "error": "missing_coord",
+      "scene_path": "/data/geist/Pointcept/data/flair3d_plus/test/D012-2019_LIDARHD/AA-S1-12/D012-2019_AA-S1-12_2-2"
+    },
+    {
+      "patch_id": "D012-2019_AA-S1-12_2-3",
+      "error": "missing_coord",
+      "scene_path": "/data/geist/Pointcept/data/flair3d_plus/test/D012-2019_LIDARHD/AA-S1-12/D012-2019_AA-S1-12_2-3"
+    },
+    {
+      "patch_id": "D012-2019_AA-S1-12_2-4",
+      "error": "missing_coord",
+      "scene_path": "/data/geist/Pointcept/data/flair3d_plus/test/D012-2019_LIDARHD/AA-S1-12/D012-2019_AA-S1-12_2-4"
+    },
+    {
+      "patch_id": "D012-2019_AA-S1-12_2-5",
+      "error": "missing_coord",
+      "scene_path": "/data/geist/Pointcept/data/flair3d_plus/test/D012-2019_LIDARHD/AA-S1-12/D012-2019_AA-S1-12_2-5"
+    },
+    {
+      "patch_id": "D012-2019_AA-S1-12_2-6",
+      "error": "missing_coord",
+      "scene_path": "/data/geist/Pointcept/data/flair3d_plus/test/D012-2019_LIDARHD/AA-S1-12/D012-2019_AA-S1-12_2-6"
+    },
+    {
+      "patch_id": "D012-2019_AA-S1-12_2-7",
+      "error": "missing_coord",
+      "scene_path": "/data/geist/Pointcept/data/flair3d_plus/test/D012-2019_LIDARHD/AA-S1-12/D012-2019_AA-S1-12_2-7"
+    },
+    {
+      "patch_id": "D012-2019_AA-S1-12_2-8",
+      "error": "missing_coord",
+      "scene_path": "/data/geist/Pointcept/data/flair3d_plus/test/D012-2019_LIDARHD/AA-S1-12/D012-2019_AA-S1-12_2-8"
+    },
+    {
+      "patch_id": "D012-2019_AA-S1-12_2-9",
+      "error": "missing_coord",
+      "scene_path": "/data/geist/Pointcept/data/flair3d_plus/test/D012-2019_LIDARHD/AA-S1-12/D012-2019_AA-S1-12_2-9"
+    },
+    {
+      "patch_id": "D012-2019_AA-S1-12_3-1",
+      "error": "missing_coord",
+      "scene_path": "/data/geist/Pointcept/data/flair3d_plus/test/D012-2019_LIDARHD/AA-S1-12/D012-2019_AA-S1-12_3-1"
+    },
+    {
+      "patch_id": "D012-2019_AA-S1-12_3-10",
+      "error": "missing_coord",
+      "scene_path": "/data/geist/Pointcept/data/flair3d_plus/test/D012-2019_LIDARHD/AA-S1-12/D012-2019_AA-S1-12_3-10"
+    }
+  ],
+  "grid_size": 0.1,
+  "splits": [
+    "test"
+  ],
+  "output_csv": "/data/geist/Pointcept/stats/flair3d/test_point_voxel_counts_smoke/point_voxel_counts_test.csv"
+}

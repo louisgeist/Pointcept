@@ -5,17 +5,28 @@ Reads ``PureForest-patches.csv`` to determine which tiles to process, resolves
 expected LAZ paths as ``lidar/{split}/{TRAIN|VAL|TEST}-{patch_id}.laz``, and
 logs missing files before conversion.
 
-Input layout (``--dataset_root``)::
+Extract dataset:
+
+
+
+Input layout (`--dataset_root`):
 
     dataset_root/
     ├── lidar/train|val|test/*.laz
     └── metadata/PureForest-patches.csv
 
-Output layout (``--output_root``)::
+So `dataset_root` is the root of the extracted dataset.
+
+Output layout (`--output_root`):
 
     output_root/
     ├── train/<patch_id>/coord.npy, color.npy, category.npy
     └── ...
+
+The layout can be built with the following command:
+```bash
+ln -s data/pureforest/extracted/metadata data/pureforest/metadata
+```
 
 Requires: ``pip install laspy lazrs``
 

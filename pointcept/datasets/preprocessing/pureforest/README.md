@@ -28,22 +28,63 @@ data/pureforest/
 
 LAZ files on disk that are **not** in the manifest are ignored.
 
-## Extract archives
-From the Pointcept root (`cd /path/to/your/Pointcept`):
+## Link Hugging Face download
 
-Mono-worker
+Run from the Pointcept repository root. Point `data/pureforest/PureForest` at your local Hugging Face clone (must contain `data/lidar-*.zip` and `metadata/`):
+
+```bash
+mkdir -p data/pureforest
+ln -sfn /path/to/PureForest data/pureforest/PureForest
+
+# Example:
+# ln -sfn /data/geist/datasets/PureForest data/pureforest/PureForest
+
+ls data/pureforest/PureForest/metadata/PureForest-patches.csv
+```
+
+## Extract LAZ archives
+
+From the repository root:
+
+**Sequential** (`-n` skips files already extracted):
+
 ```bash
 REPO=data/pureforest
 mkdir -p "${REPO}/extracted"
 for z in "${REPO}/PureForest/data"/lidar-*.zip; do
+  echo ">>> $(basename "$z")"
   unzip -n "$z" -d "${REPO}/extracted"
 done
-ln -sfn "${REPO}/PureForest/metadata" "${REPO}/extracted/metadata"
+ln -sfn ../PureForest/metadata "${REPO}/extracted/metadata"
 ```
 
-Parallel (TODO@Geist : check the command works)
+**Parallel** (8 jobs at once; use one of the options below):
+
+With GNU `parallel` (if installed):
+
 ```bash
+REPO=data/pureforest
+mkdir -p "${REPO}/extracted"
+
+module load parallel/20210922 # on Jean-Zay
+
 parallel -j 8 'unzip -n {} -d '"${REPO}/extracted"'' ::: "${REPO}/PureForest/data"/lidar-*.zip
+ln -sfn ../PureForest/metadata "${REPO}/extracted/metadata"
+```
+
+Without `parallel` (POSIX `xargs`, usually available on clusters):
+
+```bash
+REPO=data/pureforest
+mkdir -p "${REPO}/extracted"
+ls "${REPO}/PureForest/data"/lidar-*.zip | xargs -P 8 -I {} unzip -n {} -d "${REPO}/extracted"
+ln -sfn ../PureForest/metadata "${REPO}/extracted/metadata"
+```
+
+If neither works, use the **Sequential** loop above (slower but sufficient).
+
+```bash
+find "${REPO}/extracted/lidar" -name '*.laz' | wc -l   # expect ~135569
 ```
 
 ## Preprocess

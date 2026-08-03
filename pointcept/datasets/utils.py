@@ -303,21 +303,10 @@ def collate_fn(batch):
     elif isinstance(batch[0], Mapping):
         if "img_num" in batch[0].keys():
             max_img_num = max([d["img_num"] for d in batch])
-        batch = {
-            key: (
-                (
-                    collate_fn([d[key] for d in batch])
-                    if "offset" not in key
-                    # offset -> bincount -> concat bincount-> concat offset
-                    else torch.cumsum(
-                        collate_fn(
-                            [d[key].diff(prepend=torch.tensor([0])) for d in batch]
-                        ),
-                        dim=0,
-                    )
-                )
-                if "correspondence" not in key
-                else collate_fn(
+        out = {}
+        for key in batch[0]:
+            if "correspondence" in key:
+                out[key] = collate_fn(
                     [
                         F.pad(
                             d[key].permute(0, 2, 1),
@@ -327,10 +316,17 @@ def collate_fn(batch):
                         for d in batch
                     ]
                 )
-            )
-            for key in batch[0]
-        }
-        return batch
+                continue
+            if "offset" in key:
+                out[key] = torch.cumsum(
+                    collate_fn(
+                        [d[key].diff(prepend=torch.tensor([0])) for d in batch]
+                    ),
+                    dim=0,
+                )
+                continue
+            out[key] = collate_fn([d[key] for d in batch])
+        return out
     else:
         return default_collate(batch)
 

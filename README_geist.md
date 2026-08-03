@@ -76,7 +76,7 @@ python pointcept/datasets/preprocessing/flair3d_plus/preprocess_flair3d_v2.py \
  --ply_root /data/geist/Flair3D-build/data/flair3d_label_enhanced \
  --dataset_root /data/geist/Pointcept/data/flair3d_plus/raw \
  --output_root data/flair3d_plus \
- --split_manifest_csv data/flair3d_plus/raw/scene_split_manifest_D075.csv \
+ --split_manifest_csv data/flair3d_plus/raw/scene_split_manifest_D073.csv \
  --natural_habitat_definition default \
  --num_workers 24 \
  --force
@@ -149,17 +149,26 @@ python scripts/assign_flair3d_climatic_domain_labels.py \
 **Add network labels** (from Flair3D-build exported graphs):
 
 First enrich the split manifest with ``ROADS`` / ``RAILROADS`` / ``TRANSMISSION_LINES``
-via Flair3D-build repo (look at its README.md) (``True`` only when usable segments remain after export filters).
+via Flair3D-build (see its ``README_network.md`` §3): ``True`` only when usable
+segments remain after export filters (statuses ``ok`` / ``skipped_exists``).
 
-The networks are represented as graphs. To train for this task, we convert them to binary masks.
-That is rasterize per-tile masks (hard-fails if a ``True`` flag has no ``*_graph.gpkg``,
-or if a manifest ``LIDARHD=True`` patch is missing ``coord.npy`` on disk).
-Densifies each ROI once, then slices cells into patches; empty tiles store
-``meta.network`` only (no ``network.npy``)::
+```bash
+# From Flair3D-build — export GPKGs + enrich CSV (or enrich only if graphs exist)
+python scripts/export_network_graphs.py network=v4          # Hecate
+python scripts/export_network_graphs.py network=v4_jz       # Jean Zay
+# python scripts/export_network_graphs.py network=v4_jz enrich_manifest_only=true
+```
+
+The networks are represented as graphs. To train for this task, we convert them to binary masks
+with ``rasterize_network.py``: densify each ROI once (``sample_step_m=0.25`` along edges,
+``line_width_m=0.2`` → samples at ``± width/2`` on the segment normal, no centerline point),
+then slice 1 m cells into patches (hard-fails if a ``True`` flag has no ``*_graph.gpkg``,
+or if a manifest ``LIDARHD=True`` patch is missing ``coord.npy`` on disk). Empty tiles store
+``meta.network`` only (no ``network.npy``).
 
 On Hecate (D067)
 ```bash
-python pointcept/datasets/preprocessing/flair3d_plus/preprocess_network_masks.py \
+python pointcept/datasets/preprocessing/flair3d_plus/rasterize_network.py \
   --data_root data/flair3d_plus \
   --network_graphs_root /data/geist/Flair3D-build/data/network_graphs \
   --split_manifest_csv data/flair3d_plus/raw/scene_split_manifest_D067.csv \
@@ -168,12 +177,43 @@ python pointcept/datasets/preprocessing/flair3d_plus/preprocess_network_masks.py
 
 On Jean Zay :
 ```bash
-python pointcept/datasets/preprocessing/flair3d_plus/preprocess_network_masks.py \
+python pointcept/datasets/preprocessing/flair3d_plus/rasterize_network.py \
   --data_root data/flair3d_plus \
-  --network_graphs_root /lustre/fsn1/projects/rech/unv/usi32yh/data_flair3d_build/data/network_graphs \
+  --network_graphs_root /lustre/fsn1/projects/rech/unv/usi32yh/data_flair3d_build/network_graphs \
   --split_manifest_csv data/flair3d_plus/raw/scene_split_manifest.csv \
   --num_workers 24
 ```
+
+**Visualize network masks** (GT binary panels + mean-pooled LiDAR RGB on the same 1 m grid).
+With ``--logits``, also shows soft probs and a binarized row (``--threshold``, default 0.2;
+NaN cells = unobserved → background). Pred colormap is fixed ``[0, 1]`` by default;
+``--prob-autoscale`` stretches it to the shared finite min/max across channels:
+
+```bash
+# GT only
+python scripts/visualize_network_mask.py \
+  --tile data/flair3d_plus/train/D067-2021_LIDARHD/AF-S1-22/D067-2021_AF-S1-22_1-1 \
+
+# GT + pred probs + binarized @ 0.2
+python scripts/visualize_network_mask.py \
+  --tile data/flair3d_plus/train/D067-2021_LIDARHD/AF-S1-22/D067-2021_AF-S1-22_1-1 \
+  --logits exp/default/result/D067-2021_AF-S1-22_1-1_logits_network.npy \
+  --threshold 0.2 \
+  --prob-autoscale
+```
+
+**Network test predictions** (`{tile}_logits_network.npy`): shape `(r, H, W)` with
+`r=3` (ROADS / RAILROADS / TRANSMISSION_LINES), same grid as `network.npy` /
+`meta.network`. Values are soft foreground probabilities in `[0, 1]`. Cells with
+**no LiDAR point** in that 1 m Lambert pixel are stored as **`NaN`** (unobserved —
+not background). Use `np.isnan` / `np.nan_to_num` before thresholding.
+
+**Network cell binning (precision):** absolute Lambert XY is reconstructed in
+**float64** from local `coord` (float32) + `coord_translation` (float64) via
+`ExtractAbsXY`, then converted once to integer cell indices
+(`network_cell` absolute, `network_pix` relative to the tile origin) by
+`NetworkRasterToPointLabels`. Do not carry absolute Lambert as float32 — ULP at
+Y ≈ 6–7×10⁶ is ~0.5–1 m and breaks 1 m cell assignment.
 
 **Per-subtile natural habitat multi-label (`natural_habitat_multilabel.npy`):** length-15 int8
 multi-hot per subtile (temperate, mediterranean, alpine, humid, mesic, dry, forest, open,

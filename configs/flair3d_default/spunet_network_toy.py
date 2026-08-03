@@ -1,5 +1,9 @@
 """
-Toy to run on hecate for debugging - 
+Toy SpUNet config for debugging network pixel segmentation on hecate (D067).
+
+Mono-task: ``network`` (binary 1 m Lambert masks for ROADS / RAILROADS /
+TRANSMISSION_LINES). Requires ``network.npy`` (or empty ``meta.network``) from
+``rasterize_network.py`` and ``ExtractAbsXY`` before geometric shifts.
 """
 
 # -----------------------------------------------------------------------------
@@ -15,7 +19,6 @@ _base_ = ["../_base_/default_runtime.py"]
 grp_exp = 1
 num_exp = 1
 
-
 # Hardware parameters
 num_gpu = 1
 num_worker = 8 * num_gpu
@@ -29,15 +32,20 @@ train_max_sample = 20
 val_max_sample = 100
 test_max_sample = val_max_sample
 
+# Stratified fixed val/test subset (see README_geist.md "Fast dev val/test")
+val_stratified_subset_manifest = None
+test_stratified_subset_manifest = None
+
 grid_size = 0.1
 point_max = 100000
+# Mix3D OK: NetworkRasterToPointLabels makes network point-wise before collate.
 mix_prob = 0.8
 
 # Optimization parameters
-lr = 5e-3
+lr = 1e-3
 total_iters = 15
 iter_per_epoch = 5
-warmup_iters = 2500
+warmup_iters = 5
 
 # Features
 learned_masked_feat = True
@@ -45,45 +53,32 @@ feat_keys = ["coord", "color", "strength"]
 coord_feat_scale = 0.01
 
 # Wandb parameters
-wandb_run_name = (
-    f"Flair3D+ SpUNet multitask + elevation {grp_exp}.{num_exp}) lr={lr}"
-)
-wandb_project = "flair3d_multi"
+wandb_run_name = f"SpUNet network toy {grp_exp}.{num_exp} lr={lr}"
+wandb_project = "flair3d_network"
 
 # -----------------------------------------------------------------------------
-# Multitask configuration : targets configuraiton
+# Mono-task configuration : targets configuration
 # -----------------------------------------------------------------------------
 from pointcept.datasets.flair3d_config_utils import (
-    ELEVATION_TARGET_SCALE,
     init_task_configs,
     init_task_criteria,
     FLAIR3D_COLLECT_PREFIX_GRID,
     init_multitask_collect_keys,
-    get_regression_target_scales,
 )
 
-semantic_target_keys = ("segment", "forest", "land_use", "natural_habitat")
-target_keys = semantic_target_keys + ("elevation",)
+main_task = "network"
+target_keys = (main_task,)
 
-elevation_target_scale = ELEVATION_TARGET_SCALE
-elevation_key_scales = dict(elevation=elevation_target_scale)
-target_scales = get_regression_target_scales(target_keys)
-main_task = "segment"
-
-label_definitions = dict(
-    segment="v20",
-)
-
-task_configs = init_task_configs(target_keys, definitions=label_definitions)
+task_configs = init_task_configs(target_keys)
 task_criteria = init_task_criteria(task_configs)
-task_weights = {task_name: 1.0 for task_name in task_configs.keys()}
+task_weights = {main_task: 1.0}
 
 # Remove the imported helpers from this module's namespace so they do not leak
-# into the Pointcept config dict. The config loader (pointce^t/utils/config.py)
+# into the Pointcept config dict. The config loader (pointcept/utils/config.py)
 # treats every non-dunder module attribute as a config entry, and Config.dump
 # pipes the resulting Python text through yapf. Yapf cannot reformat function
 # objects rendered as "<function ... at 0x...>" and raises a SyntaxError.
-del init_task_configs, init_task_criteria, get_regression_target_scales
+del init_task_configs, init_task_criteria
 
 # main_task drives checkpoint selection / mIoU logging, so its num_classes,
 # ignore_index and names are exposed at the data root for backward-compat hooks.
@@ -111,9 +106,7 @@ test = dict(type="MultiTaskTester", verbose=True, write_cls_iou=True)
 # Model
 # -----------------------------------------------------------------------------
 # Backbone produces per-point features (num_classes=0 disables its final 1x1
-# conv). MultiTaskSegmentorV2 attaches per-task linear heads on top of these
-# features (one nn.Linear(backbone_out_channels, num_classes_task) per
-# semantic task, one nn.Linear(backbone_out_channels, 1) for elevation).
+# conv). MultiTaskSegmentorV2 max-pools into 1 m pixels then Linear(C -> 2*r).
 backbone_channels = (32, 64, 128, 256, 256, 128, 96, 96)
 
 model = dict(
@@ -135,8 +128,6 @@ model = dict(
     task_criteria=task_criteria,
     task_weights=task_weights,
 )
-
-
 
 # -----------------------------------------------------------------------------
 # Optimizer / scheduler
@@ -169,7 +160,6 @@ data = dict(
     num_classes=num_classes,
     ignore_index=ignore_index,
     names=names,
-    target_scales=target_scales,
     task_configs=task_configs,
     main_task=main_task,
     train=dict(
@@ -187,6 +177,8 @@ data = dict(
                 type="Update",
                 keys_dict={"index_valid_keys": list(multitask_index_valid_keys)},
             ),
+            # Freeze Lambert XY before geometric augs / recentering.
+            dict(type="ExtractAbsXY"),
             dict(type="CenterShift", apply_z=True),
             dict(type="Z_MinShift"),
             dict(type="Z_RandomOffset"),
@@ -212,6 +204,7 @@ data = dict(
             dict(type="RandomDropColor", drop_ratio=0.1, drop_application_ratio=0.5, keep_mask=True),
             dict(type="RandomDropStrength", drop_ratio=1.0, drop_application_ratio=0.2, keep_mask=True),
             dict(type="RandomDropStrength", drop_ratio=0.1, drop_application_ratio=0.5, keep_mask=True),
+            dict(type="NetworkRasterToPointLabels"),
             dict(type="ShufflePoint"),
             dict(type="ToTensor"),
             dict(
@@ -219,7 +212,6 @@ data = dict(
                 keys=train_multitask_keys,
                 feat_keys=feat_keys,
                 feat_scales=dict(coord=coord_feat_scale),
-                key_scales=elevation_key_scales,
             ),
         ],
         test_mode=False,
@@ -234,23 +226,15 @@ data = dict(
         target_keys=list(target_keys),
         primary_target_key=main_task,
         max_sample=val_max_sample,
+        stratified_subset_manifest=val_stratified_subset_manifest,
         transform=[
             dict(
                 type="Update",
                 keys_dict={"index_valid_keys": list(multitask_index_valid_keys)},
             ),
+            dict(type="ExtractAbsXY"),
             dict(type="CenterShift", apply_z=True),
             dict(type="Z_MinShift"),
-            dict(
-                type="Copy",
-                keys_dict={
-                    "segment": "origin_segment",
-                    "forest": "origin_forest",
-                    "land_use": "origin_land_use",
-                    "natural_habitat": "origin_natural_habitat",
-                    "elevation": "origin_elevation",
-                },
-            ),
             dict(
                 type="GridSample",
                 grid_size=grid_size,
@@ -261,13 +245,13 @@ data = dict(
             ),
             dict(type="CenterShift", apply_z=False),
             dict(type="NormalizeColor"),
+            dict(type="NetworkRasterToPointLabels"),
             dict(type="ToTensor"),
             dict(
                 type="Collect",
                 keys=val_multitask_keys,
                 feat_keys=feat_keys,
                 feat_scales=dict(coord=coord_feat_scale),
-                key_scales=elevation_key_scales,
             ),
         ],
         test_mode=False,
@@ -282,7 +266,13 @@ data = dict(
         target_keys=list(target_keys),
         primary_target_key=main_task,
         max_sample=test_max_sample,
+        stratified_subset_manifest=test_stratified_subset_manifest,
         transform=[
+            dict(
+                type="Update",
+                keys_dict={"index_valid_keys": list(multitask_index_valid_keys)},
+            ),
+            dict(type="ExtractAbsXY"),
             dict(type="CenterShift", apply_z=True),
             dict(type="Z_MinShift"),
             dict(type="NormalizeColor"),
@@ -300,10 +290,23 @@ data = dict(
             crop=None,
             post_transform=[
                 dict(type="CenterShift", apply_z=False),
+                dict(type="NetworkRasterToPointLabels"),
                 dict(type="ToTensor"),
                 dict(
                     type="Collect",
-                    keys=("coord", "grid_coord", "index"),
+                    keys=(
+                        "coord",
+                        "grid_coord",
+                        "index",
+                        "network",
+                        "network_cell",
+                        "network_pix",
+                        "network_origin_x",
+                        "network_origin_y",
+                        "network_pixel_m",
+                        "network_height",
+                        "network_width",
+                    ),
                     optional_keys=("inverse",),
                     feat_keys=feat_keys,
                     feat_scales=dict(coord=coord_feat_scale),

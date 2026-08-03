@@ -38,6 +38,7 @@ dependencies:
   - matplotlib
   - black
   - open3d
+  - geopandas  # Flair3D+ network masks (rasterize_network.py)
   - peft
   - pip:
     - torch-cluster -f https://data.pyg.org/whl/torch-2.5.0+cu124.html
