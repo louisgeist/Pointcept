@@ -216,6 +216,8 @@ data = dict(
 # -----------------------------------------------------------------------------
 # Hooks
 # -----------------------------------------------------------------------------
+# No PreciseEvaluator / test split: periodic probes only need best val mIoU
+# (written by MetricsJsonWriter → metrics.json → pretrain CSV).
 hooks = [
     dict(
         type="CheckpointLoader",

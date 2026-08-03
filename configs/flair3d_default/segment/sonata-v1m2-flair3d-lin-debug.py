@@ -1,8 +1,8 @@
 """
 DEBUG smoke: Sonata-v1m2 linear probe on Flair3D+ segment (v20).
 
-Same model as sonata-v1m2-flair3d-lin.py, but short schedule, max_sample,
-and PreciseEvaluator on a tiny test split (no stratified val subset).
+Same model as sonata-v1m2-flair3d-lin.py, but short schedule and max_sample
+(no stratified val subset, no PreciseEvaluator / test).
 """
 
 _base_ = ["../../_base_/default_runtime.py"]
@@ -268,6 +268,7 @@ data = dict(
 # -----------------------------------------------------------------------------
 # Hooks
 # -----------------------------------------------------------------------------
+# No PreciseEvaluator: debug probes only need best val mIoU via MetricsJsonWriter.
 hooks = [
     dict(
         type="CheckpointLoader",
@@ -278,6 +279,5 @@ hooks = [
     dict(type="InformationWriter"),
     dict(type="SemSegEvaluator"),
     dict(type="CheckpointSaver", save_freq=None),
-    dict(type="PreciseEvaluator", test_last=False),
     dict(type="MetricsJsonWriter"),
 ]
