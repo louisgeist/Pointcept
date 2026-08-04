@@ -32,6 +32,7 @@ from pointcept.utils.epoch_timing import (
 )
 from pointcept.utils.timer import Timer
 from pointcept.utils.comm import is_main_process, synchronize
+from pointcept.utils.network_apls import run_network_apls_eval_if_configured
 from pointcept.utils.cache import shared_dict
 from pointcept.utils.scheduler import CosineScheduler
 import pointcept.utils.comm as comm
@@ -777,6 +778,20 @@ class PreciseEvaluator(HookBase):
                 weight[key] = value
             tester.model.load_state_dict(weight, strict=True)
         tester.test()
+
+
+@HOOKS.register_module()
+class NetworkAPLSEvaluator(HookBase):
+    """After training, score the network-prediction task with APLS (see
+    tools/eval_network_apls.py). Opt-in via cfg.network_apls_eval; no-op otherwise.
+
+    Reuses the `{patch_id}_logits_network.npy` rasters written by `PreciseEvaluator`'s
+    in-process test run -- must be listed *after* `PreciseEvaluator` in `cfg.hooks` so those
+    files already exist on disk by the time this hook's `after_train` runs.
+    """
+
+    def after_train(self):
+        run_network_apls_eval_if_configured(self.trainer.cfg, self.trainer.logger)
 
 
 @HOOKS.register_module()

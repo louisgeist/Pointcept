@@ -366,6 +366,75 @@ def centerline_pixel_mask(
     return mask_from_absolute_cells(cells, grid)
 
 
+def _shift_with_false_pad(mask: np.ndarray, dr: int, dc: int) -> np.ndarray:
+    """Shift a boolean mask by (dr, dc), padding outside-grid with False."""
+    h, w = mask.shape
+    out = np.zeros((h, w), dtype=bool)
+    if dr >= 0:
+        src_r0, src_r1 = 0, h - dr
+        dst_r0, dst_r1 = dr, h
+    else:
+        src_r0, src_r1 = -dr, h
+        dst_r0, dst_r1 = 0, h + dr
+    if dc >= 0:
+        src_c0, src_c1 = 0, w - dc
+        dst_c0, dst_c1 = dc, w
+    else:
+        src_c0, src_c1 = -dc, w
+        dst_c0, dst_c1 = 0, w + dc
+    if src_r0 < src_r1 and src_c0 < src_c1:
+        out[dst_r0:dst_r1, dst_c0:dst_c1] = mask[src_r0:src_r1, src_c0:src_c1]
+    return out
+
+
+def _neighbor_offsets(connectivity: int) -> np.ndarray:
+    if connectivity == 4:
+        return _NEIGH4_OFFSETS
+    if connectivity == 8:
+        return _NEIGH8_OFFSETS
+    raise ValueError(f"connectivity must be 4 or 8, got {connectivity}")
+
+
+def morph_dilate_mask(
+    mask: np.ndarray,
+    iterations: int = 1,
+    connectivity: int = 4,
+) -> np.ndarray:
+    """Binary dilation on a pixel mask over the full grid graph."""
+    m = np.asarray(mask, dtype=bool)
+    it = int(iterations)
+    if it < 0:
+        raise ValueError(f"iterations must be >= 0, got {iterations}")
+    offsets = _neighbor_offsets(int(connectivity))
+    out = m.copy()
+    for _ in range(it):
+        expanded = out.copy()
+        for dr, dc in offsets:
+            expanded |= _shift_with_false_pad(out, int(dr), int(dc))
+        out = expanded
+    return out
+
+
+def morph_erode_mask(
+    mask: np.ndarray,
+    iterations: int = 1,
+    connectivity: int = 4,
+) -> np.ndarray:
+    """Binary erosion on a pixel mask over the full grid graph."""
+    m = np.asarray(mask, dtype=bool)
+    it = int(iterations)
+    if it < 0:
+        raise ValueError(f"iterations must be >= 0, got {iterations}")
+    offsets = _neighbor_offsets(int(connectivity))
+    out = m.copy()
+    for _ in range(it):
+        contracted = out.copy()
+        for dr, dc in offsets:
+            contracted &= _shift_with_false_pad(out, int(dr), int(dc))
+        out = contracted
+    return out
+
+
 @dataclass(frozen=True)
 class PixelGraph:
     """Undirected 8-neighborhood graph over centerline pixels.
@@ -378,6 +447,7 @@ class PixelGraph:
     node_xy: np.ndarray
     edges: np.ndarray
     grid: GridSpec
+    edge_weights: np.ndarray | None = None
 
 
 def pixel_centers_xy(node_rc: np.ndarray, grid: GridSpec) -> np.ndarray:
@@ -420,6 +490,7 @@ def build_pixel_graph(
             node_rc=node_rc,
             node_xy=np.empty((0, 2), dtype=np.float64),
             edges=np.empty((0, 2), dtype=np.int64),
+            edge_weights=np.empty((0,), dtype=np.float64),
             grid=grid,
         )
 
@@ -451,13 +522,16 @@ def build_pixel_graph(
         edges = np.stack(
             [np.concatenate(edge_u), np.concatenate(edge_v)], axis=1
         ).astype(np.int64, copy=False)
+        edge_weights = np.ones((edges.shape[0],), dtype=np.float64)
     else:
         edges = np.empty((0, 2), dtype=np.int64)
+        edge_weights = np.empty((0,), dtype=np.float64)
 
     return PixelGraph(
         node_rc=node_rc,
         node_xy=pixel_centers_xy(node_rc, grid),
         edges=edges,
+        edge_weights=edge_weights,
         grid=grid,
     )
 
@@ -506,6 +580,296 @@ def node_degrees(edges: np.ndarray, n_nodes: int) -> np.ndarray:
         deg[ui] += 1
         deg[vi] += 1
     return deg
+
+
+def connected_components_from_edges(
+    n_nodes: int,
+    edges: np.ndarray,
+) -> list[np.ndarray]:
+    """Connected components from an undirected edge list."""
+    n = int(n_nodes)
+    if n == 0:
+        return []
+    adj = adjacency_list(edges, n)
+    seen = np.zeros(n, dtype=bool)
+    components: list[np.ndarray] = []
+    for root in range(n):
+        if seen[root]:
+            continue
+        stack = [root]
+        seen[root] = True
+        comp: list[int] = []
+        while stack:
+            u = stack.pop()
+            comp.append(u)
+            for v in adj[u]:
+                if not seen[v]:
+                    seen[v] = True
+                    stack.append(v)
+        components.append(np.asarray(comp, dtype=np.int64))
+    return components
+
+
+def connected_components_nodes(graph: PixelGraph) -> list[np.ndarray]:
+    """Connected components as arrays of node indices."""
+    return connected_components_from_edges(
+        int(graph.node_rc.shape[0]),
+        graph.edges,
+    )
+
+
+def select_component_medoid_xy(
+    graph: PixelGraph,
+    component_ids: np.ndarray,
+) -> int:
+    """Node id in ``component_ids`` closest to component XY barycenter."""
+    ids = np.asarray(component_ids, dtype=np.int64)
+    if ids.size == 0:
+        raise ValueError("component_ids must be non-empty")
+    pts = graph.node_xy[ids]
+    center = np.mean(pts, axis=0)
+    d2 = np.sum((pts - center[None, :]) ** 2, axis=1)
+    return int(ids[int(np.argmin(d2))])
+
+
+def merge_neighbor_nodes(
+    graph: PixelGraph,
+    *,
+    weight_threshold: float = 2.5,
+) -> PixelGraph:
+    """Merge only tightly-adjacent node groups using weighted edges.
+
+    Steps:
+    1) Filter edges with ``w < weight_threshold``.
+    2) Compute connected components on this filtered sub-graph.
+    3) Replace each component with its XY medoid representative.
+    4) Rebuild inter-component edges from the full original graph.
+    """
+    n = int(graph.node_rc.shape[0])
+    if n == 0:
+        return graph
+    if graph.edge_weights is None:
+        weights = np.ones((graph.edges.shape[0],), dtype=np.float64)
+    else:
+        weights = np.asarray(graph.edge_weights, dtype=np.float64)
+    if weights.shape[0] != graph.edges.shape[0]:
+        raise ValueError(
+            "edge_weights length must match edges rows, got "
+            f"{weights.shape[0]} vs {graph.edges.shape[0]}"
+        )
+
+    keep_edge = weights < float(weight_threshold)
+    filtered_edges = graph.edges[keep_edge]
+
+    components = connected_components_from_edges(n, filtered_edges)
+    rep_ids = np.asarray(
+        [select_component_medoid_xy(graph, comp) for comp in components],
+        dtype=np.int64,
+    )
+    old_to_comp = np.empty((n,), dtype=np.int64)
+    for comp_id, comp in enumerate(components):
+        old_to_comp[comp] = int(comp_id)
+
+    node_rc = graph.node_rc[rep_ids]
+    node_xy = graph.node_xy[rep_ids]
+
+    merged_weight_map: dict[tuple[int, int], float] = {}
+    for edge_idx, (u, v) in enumerate(np.asarray(graph.edges, dtype=np.int64)):
+        cu = int(old_to_comp[int(u)])
+        cv = int(old_to_comp[int(v)])
+        if cu == cv:
+            continue
+        a, b = (cu, cv) if cu < cv else (cv, cu)
+        merged_weight_map[(a, b)] = merged_weight_map.get((a, b), 0.0) + float(
+            weights[edge_idx]
+        )
+
+    if merged_weight_map:
+        pairs = sorted(merged_weight_map.keys())
+        edges = np.asarray(pairs, dtype=np.int64)
+        edge_weights = np.asarray(
+            [merged_weight_map[p] for p in pairs],
+            dtype=np.float64,
+        )
+    else:
+        edges = np.empty((0, 2), dtype=np.int64)
+        edge_weights = np.empty((0,), dtype=np.float64)
+
+    return PixelGraph(
+        node_rc=node_rc,
+        node_xy=node_xy,
+        edges=edges,
+        edge_weights=edge_weights,
+        grid=graph.grid,
+    )
+
+
+_ISOLATED_DIAGONAL_OFFSETS: tuple[tuple[int, int], ...] = (
+    (-1, -1),  # NW
+    (-1, 1),   # NE
+    (1, -1),   # SW
+    (1, 1),    # SE
+)
+
+
+def repair_degree1_endpoints_diagonal_opposed(
+    graph: PixelGraph,
+    *,
+    added_edge_weight: float = 1.0,
+    include_isolated_nodes: bool = False,
+) -> tuple[PixelGraph, dict[str, int | float | list[int]]]:
+    """Reconnect suspicious degree-1 endpoints using opposite diagonals only.
+
+    For each endpoint (degree=1), the direct neighbor direction must be axial:
+    N, S, E, or W in ``node_rc`` coordinates. We then test only the two
+    diagonals opposite to that direction:
+
+    - neighbor at S -> test NW, NE
+    - neighbor at N -> test SW, SE
+    - neighbor at E -> test NW, SW
+    - neighbor at W -> test NE, SE
+
+    When ``include_isolated_nodes`` is True, also process degree-0 nodes: each
+    isolated node looks at all four diagonal neighbors (NW, NE, SW, SE).
+
+    If a node exists exactly at a tested diagonal cell, add an undirected edge
+    (deduplicated, ``u < v``). Returns the updated graph plus repair stats.
+    """
+    empty_stats: dict[str, int | float | list[int]] = {
+        "n_endpoints_before": 0,
+        "n_endpoints_after": 0,
+        "n_isolated_before": 0,
+        "n_isolated_after": 0,
+        "n_edges_added": 0,
+        "added_edge_weight": float(added_edge_weight),
+        "corrected_node_ids": [],
+        "true_endpoint_node_ids_after": [],
+    }
+    n_nodes = int(graph.node_rc.shape[0])
+    if n_nodes == 0:
+        return graph, empty_stats
+    weight_new = float(added_edge_weight)
+    if weight_new <= 0.0:
+        raise ValueError(
+            f"added_edge_weight must be > 0, got {added_edge_weight}"
+        )
+
+    edges_in = np.asarray(graph.edges, dtype=np.int64)
+    weights_in = (
+        np.asarray(graph.edge_weights, dtype=np.float64)
+        if graph.edge_weights is not None
+        else np.ones((edges_in.shape[0],), dtype=np.float64)
+    )
+    if weights_in.shape[0] != edges_in.shape[0]:
+        raise ValueError(
+            "edge_weights length must match edges rows, got "
+            f"{weights_in.shape[0]} vs {edges_in.shape[0]}"
+        )
+
+    deg_before = node_degrees(edges_in, n_nodes)
+    n_endpoints_before = int(np.count_nonzero(deg_before == 1))
+    n_isolated_before = int(np.count_nonzero(deg_before == 0))
+    process_isolated = bool(include_isolated_nodes) and n_isolated_before > 0
+    if n_endpoints_before == 0 and not process_isolated:
+        return graph, {
+            **empty_stats,
+            "n_endpoints_before": n_endpoints_before,
+            "n_endpoints_after": n_endpoints_before,
+            "n_isolated_before": n_isolated_before,
+            "n_isolated_after": n_isolated_before,
+            "added_edge_weight": float(weight_new),
+        }
+
+    adj = adjacency_list(edges_in, n_nodes)
+    rc = np.asarray(graph.node_rc, dtype=np.int64)
+    rc_to_id = {(int(r), int(c)): i for i, (r, c) in enumerate(rc.tolist())}
+
+    existing_pairs = {(int(u), int(v)) for u, v in edges_in.tolist()}
+    added_pairs: set[tuple[int, int]] = set()
+
+    def _try_add_diagonal_edges(
+        u: int, diag_offsets: tuple[tuple[int, int], ...]
+    ) -> None:
+        ur = int(rc[u, 0])
+        uc = int(rc[u, 1])
+        for ddr, ddc in diag_offsets:
+            candidate = rc_to_id.get((ur + ddr, uc + ddc))
+            if candidate is None or int(candidate) == u:
+                continue
+            a, b = (u, int(candidate)) if u < int(candidate) else (int(candidate), u)
+            pair = (a, b)
+            if pair in existing_pairs or pair in added_pairs:
+                continue
+            added_pairs.add(pair)
+
+    # Neighbor direction (dr, dc) from endpoint to its unique direct neighbor
+    # maps to diagonal offsets to test around the endpoint.
+    diag_lookup: dict[tuple[int, int], tuple[tuple[int, int], tuple[int, int]]] = {
+        (1, 0): ((-1, -1), (-1, 1)),   # neighbor at S -> NW, NE
+        (-1, 0): ((1, -1), (1, 1)),    # neighbor at N -> SW, SE
+        (0, 1): ((-1, -1), (1, -1)),   # neighbor at E -> NW, SW
+        (0, -1): ((-1, 1), (1, 1)),    # neighbor at W -> NE, SE
+    }
+
+    endpoint_ids = np.flatnonzero(deg_before == 1).astype(np.int64)
+    for u in endpoint_ids.tolist():
+        nbrs = adj[u]
+        if len(nbrs) != 1:
+            continue
+        v = int(nbrs[0])
+        dr = int(rc[v, 0] - rc[u, 0])
+        dc = int(rc[v, 1] - rc[u, 1])
+        diag_offsets = diag_lookup.get((dr, dc))
+        if diag_offsets is None:
+            # Strict rule: only axial direct-neighbor directions are handled.
+            continue
+        _try_add_diagonal_edges(u, diag_offsets)
+
+    if process_isolated:
+        isolated_ids = np.flatnonzero(deg_before == 0).astype(np.int64)
+        for u in isolated_ids.tolist():
+            _try_add_diagonal_edges(u, _ISOLATED_DIAGONAL_OFFSETS)
+
+    if not added_pairs:
+        return graph, {
+            "n_endpoints_before": n_endpoints_before,
+            "n_endpoints_after": n_endpoints_before,
+            "n_isolated_before": n_isolated_before,
+            "n_isolated_after": n_isolated_before,
+            "n_edges_added": 0,
+            "added_edge_weight": float(weight_new),
+            "corrected_node_ids": [],
+            "true_endpoint_node_ids_after": endpoint_ids.astype(int).tolist(),
+        }
+
+    pairs_sorted = sorted(added_pairs)
+    edges_add = np.asarray(pairs_sorted, dtype=np.int64)
+    weights_add = np.full((edges_add.shape[0],), weight_new, dtype=np.float64)
+    edges_out = np.concatenate([edges_in, edges_add], axis=0)
+    weights_out = np.concatenate([weights_in, weights_add], axis=0)
+
+    deg_after = node_degrees(edges_out, n_nodes)
+    n_endpoints_after = int(np.count_nonzero(deg_after == 1))
+    n_isolated_after = int(np.count_nonzero(deg_after == 0))
+    corrected_nodes = np.unique(edges_add.reshape(-1)).astype(np.int64)
+    true_endpoints_after = np.flatnonzero(deg_after == 1).astype(np.int64)
+    updated = PixelGraph(
+        node_rc=graph.node_rc,
+        node_xy=graph.node_xy,
+        edges=edges_out,
+        edge_weights=weights_out,
+        grid=graph.grid,
+    )
+    return updated, {
+        "n_endpoints_before": n_endpoints_before,
+        "n_endpoints_after": n_endpoints_after,
+        "n_isolated_before": n_isolated_before,
+        "n_isolated_after": n_isolated_after,
+        "n_edges_added": int(edges_add.shape[0]),
+        "added_edge_weight": float(weight_new),
+        "corrected_node_ids": corrected_nodes.astype(int).tolist(),
+        "true_endpoint_node_ids_after": true_endpoints_after.astype(int).tolist(),
+    }
 
 
 def _walk_polyline(
@@ -657,6 +1021,9 @@ def simplify_pixel_graph_rdp(
 
     Critical nodes (degree != 2) are always retained. Returns a new
     ``PixelGraph`` with reindexed nodes and undirected deduplicated edges.
+
+    When several polylines collapse onto the same undirected edge, the edge
+    weight is the **minimum** hop length among those paths (not the sum).
     """
     n = int(graph.node_rc.shape[0])
     if n == 0:
@@ -664,7 +1031,7 @@ def simplify_pixel_graph_rdp(
 
     polylines = extract_polylines(graph)
     keep_nodes = np.zeros(n, dtype=bool)
-    new_edge_pairs: set[tuple[int, int]] = set()
+    new_edge_weight_map: dict[tuple[int, int], float] = {}
 
     for path in polylines:
         if path.shape[0] == 0:
@@ -684,15 +1051,35 @@ def simplify_pixel_graph_rdp(
         for node_id in kept_idx:
             keep_nodes[int(node_id)] = True
         # Chain edges along simplified vertices.
+        pos_in_path = {int(node_id): i for i, node_id in enumerate(idx.tolist())}
         for a, b in zip(kept_idx[:-1], kept_idx[1:]):
             ua, ub = int(a), int(b)
             if ua == ub:
                 continue
-            new_edge_pairs.add((min(ua, ub), max(ua, ub)))
+            pa = pos_in_path[ua]
+            pb = pos_in_path[ub]
+            w = float(abs(pb - pa))
+            key = (min(ua, ub), max(ua, ub))
+            w_edge = max(w, 1.0)
+            prev = new_edge_weight_map.get(key)
+            new_edge_weight_map[key] = (
+                w_edge if prev is None else min(float(prev), w_edge)
+            )
         if closed and kept_idx.shape[0] >= 2:
             ua, ub = int(kept_idx[-1]), int(kept_idx[0])
             if ua != ub:
-                new_edge_pairs.add((min(ua, ub), max(ua, ub)))
+                m = int(idx.shape[0])
+                pa = pos_in_path[ua]
+                pb = pos_in_path[ub]
+                w_cycle = float((pb - pa) % m)
+                if w_cycle <= 0.0:
+                    w_cycle = float(m)
+                key = (min(ua, ub), max(ua, ub))
+                w_edge = max(w_cycle, 1.0)
+                prev = new_edge_weight_map.get(key)
+                new_edge_weight_map[key] = (
+                    w_edge if prev is None else min(float(prev), w_edge)
+                )
 
     # Always keep isolated / critical leftovers already marked; ensure at least
     # endpoints from empty-path cases.
@@ -702,6 +1089,7 @@ def simplify_pixel_graph_rdp(
             node_rc=np.empty((0, 2), dtype=np.int64),
             node_xy=np.empty((0, 2), dtype=np.float64),
             edges=np.empty((0, 2), dtype=np.int64),
+            edge_weights=np.empty((0,), dtype=np.float64),
             grid=graph.grid,
         )
 
@@ -709,23 +1097,30 @@ def simplify_pixel_graph_rdp(
     remap[old_ids] = np.arange(old_ids.shape[0], dtype=np.int64)
     node_rc = graph.node_rc[old_ids]
     node_xy = graph.node_xy[old_ids]
-    edges_list = [
-        (int(remap[u]), int(remap[v]))
-        for u, v in sorted(new_edge_pairs)
-        if remap[u] >= 0 and remap[v] >= 0 and remap[u] != remap[v]
-    ]
-    if edges_list:
-        edges = np.asarray(edges_list, dtype=np.int64)
-        # Normalize u < v and unique.
-        edges = np.sort(edges, axis=1)
-        edges = np.unique(edges, axis=0)
+    remapped_weight_map: dict[tuple[int, int], float] = {}
+    for (u, v), w in new_edge_weight_map.items():
+        ru = int(remap[u])
+        rv = int(remap[v])
+        if ru < 0 or rv < 0 or ru == rv:
+            continue
+        a, b = (ru, rv) if ru < rv else (rv, ru)
+        remapped_weight_map[(a, b)] = remapped_weight_map.get((a, b), 0.0) + float(w)
+    if remapped_weight_map:
+        pairs = sorted(remapped_weight_map.keys())
+        edges = np.asarray(pairs, dtype=np.int64)
+        edge_weights = np.asarray(
+            [remapped_weight_map[p] for p in pairs],
+            dtype=np.float64,
+        )
     else:
         edges = np.empty((0, 2), dtype=np.int64)
+        edge_weights = np.empty((0,), dtype=np.float64)
 
     return PixelGraph(
         node_rc=node_rc,
         node_xy=node_xy,
         edges=edges,
+        edge_weights=edge_weights,
         grid=graph.grid,
     )
 

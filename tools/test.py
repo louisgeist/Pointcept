@@ -12,6 +12,7 @@ from pointcept.engines.defaults import (
 )
 from pointcept.engines.test import TESTERS
 from pointcept.engines.launch import launch
+from pointcept.utils.network_apls import run_network_apls_eval_if_configured
 
 
 def main_worker(cfg):
@@ -19,6 +20,7 @@ def main_worker(cfg):
     test_cfg = dict(cfg=cfg, **cfg.test)
     tester = TESTERS.build(test_cfg)
     tester.test()
+    run_network_apls_eval_if_configured(cfg, tester.logger)
 
 
 def main():

@@ -160,7 +160,7 @@ def _load_known_missing_tiles(
     return out
 
 
-def _load_manifest_patches(
+def load_manifest_patches(
     split_manifest_csv: Path,
     *,
     splits: Optional[Sequence[str]] = None,
@@ -220,7 +220,7 @@ def _load_manifest_patches(
     return patches, n_skipped
 
 
-def _group_by_roi(
+def group_by_roi(
     patches: List[ManifestPatch], data_root: Path
 ) -> List[Tuple[Path, Dict[str, bool], List[Path]]]:
     """Group manifest patches by ROI dir; resolve paths and hard-fail if missing.
@@ -512,13 +512,13 @@ def run(
             "unexpected absences will hard-fail."
         )
 
-    patches, n_skipped = _load_manifest_patches(
+    patches, n_skipped = load_manifest_patches(
         split_manifest_csv,
         splits=splits,
         network_types=NETWORK_TYPES,
         known_missing=known_missing,
     )
-    roi_items = _group_by_roi(patches, data_root)
+    roi_items = group_by_roi(patches, data_root)
     if max_rois is not None:
         roi_items = roi_items[: max(0, int(max_rois))]
 

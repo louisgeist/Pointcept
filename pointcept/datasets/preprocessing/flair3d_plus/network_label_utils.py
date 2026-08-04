@@ -9,6 +9,7 @@ with layers ``nodes`` / ``edges`` / ``metadata`` (EPSG:2154).
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Optional, Sequence
 
@@ -189,6 +190,99 @@ def load_roi_network_flags_from_manifest(
 
     raise ValueError(
         f"No manifest row for ROI dept={dept!r} zone={zone!r} in {csv_path}"
+    )
+
+
+@dataclass(frozen=True)
+class LoadedNetworkGraph:
+    """True graph topology of an exported GPKG (not flattened to raw segments).
+
+    Unlike ``load_graph_edge_segments`` (which discards node identity and just
+    returns raw LineString endpoints), this preserves the actual node-shared
+    topology written by Flair3D-build's ``write_pixel_graph_gpkg`` -- this IS the
+    ground-truth graph for APLS, no re-derivation/re-rasterization needed.
+    """
+
+    node_xy: np.ndarray        # (N, 2) float64, row order of the `nodes` layer
+    node_id: np.ndarray        # (N,) int64 -- original gpkg node_id (debugging/export)
+    edges: np.ndarray          # (E, 2) int64 -- array-index pairs into node_xy, u < v
+    edge_length_m: np.ndarray  # (E,) float64 -- from the `distance` field (NOT `weight`,
+                                # which is a hop-count used only for the merge threshold)
+
+
+def load_roi_exported_network_graph(gpkg_path: Path | str) -> LoadedNetworkGraph:
+    """Read the `nodes` + `edges` layers of an exported GPKG and reconstruct topology.
+
+    Empty node/edge layers (or a missing file) return a 0-node/0-edge graph rather
+    than raising -- callers decide whether an empty GT graph is meaningful for their
+    ROI/network_type combination.
+    """
+    path = Path(gpkg_path)
+    empty = LoadedNetworkGraph(
+        node_xy=np.empty((0, 2), dtype=np.float64),
+        node_id=np.empty((0,), dtype=np.int64),
+        edges=np.empty((0, 2), dtype=np.int64),
+        edge_length_m=np.empty((0,), dtype=np.float64),
+    )
+    if not path.is_file():
+        return empty
+
+    try:
+        nodes = gpd.read_file(path, layer="nodes")
+    except Exception:  # noqa: BLE001 -- missing layer / corrupt file
+        return empty
+    if nodes.empty or "node_id" not in nodes.columns:
+        return empty
+
+    node_id = nodes["node_id"].to_numpy(dtype=np.int64, copy=False)
+    node_xy = np.stack(
+        [
+            nodes["x"].to_numpy(dtype=np.float64, copy=False),
+            nodes["y"].to_numpy(dtype=np.float64, copy=False),
+        ],
+        axis=1,
+    )
+    id_to_idx = {int(nid): i for i, nid in enumerate(node_id.tolist())}
+
+    try:
+        edges_df = gpd.read_file(path, layer="edges")
+    except Exception:  # noqa: BLE001
+        edges_df = None
+    if edges_df is None or edges_df.empty or "u" not in edges_df.columns:
+        return LoadedNetworkGraph(
+            node_xy=node_xy,
+            node_id=node_id,
+            edges=np.empty((0, 2), dtype=np.int64),
+            edge_length_m=np.empty((0,), dtype=np.float64),
+        )
+
+    u_raw = edges_df["u"].to_numpy(dtype=np.int64, copy=False)
+    v_raw = edges_df["v"].to_numpy(dtype=np.int64, copy=False)
+    distance = edges_df["distance"].to_numpy(dtype=np.float64, copy=False)
+
+    pairs: dict[tuple[int, int], float] = {}
+    for u_id, v_id, dist in zip(u_raw.tolist(), v_raw.tolist(), distance.tolist()):
+        ui = id_to_idx.get(int(u_id))
+        vi = id_to_idx.get(int(v_id))
+        if ui is None or vi is None or ui == vi:
+            continue
+        key = (ui, vi) if ui < vi else (vi, ui)
+        # Defensive de-dup: keep the first occurrence's distance.
+        pairs.setdefault(key, float(dist))
+
+    if pairs:
+        sorted_keys = sorted(pairs.keys())
+        edges = np.asarray(sorted_keys, dtype=np.int64)
+        edge_length_m = np.asarray([pairs[k] for k in sorted_keys], dtype=np.float64)
+    else:
+        edges = np.empty((0, 2), dtype=np.int64)
+        edge_length_m = np.empty((0,), dtype=np.float64)
+
+    return LoadedNetworkGraph(
+        node_xy=node_xy,
+        node_id=node_id,
+        edges=edges,
+        edge_length_m=edge_length_m,
     )
 
 
