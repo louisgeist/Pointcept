@@ -574,8 +574,8 @@ def apply_subset_selection(
 
     if stratified_subset_manifest:
         sidecar_keys = load_sidecar_keys(stratified_subset_manifest)
-        filtered = filter_paths_by_sidecar(data_list, split_name, sidecar_keys)
-        missing = len(sidecar_keys) - len(filtered)
+        data_list = filter_paths_by_sidecar(data_list, split_name, sidecar_keys)
+        missing = len(sidecar_keys) - len(data_list)
         if missing > 0:
             logger.warning(
                 "Stratified subset sidecar: %d/%d entries not found in current data_list "
@@ -588,18 +588,19 @@ def apply_subset_selection(
         logger.info(
             "Stratified subset sidecar applied: %d -> %d scenes (split=%s, manifest=%s)",
             original_len,
-            len(filtered),
+            len(data_list),
             split_name,
             stratified_subset_manifest,
         )
-        return filtered
+    else:
+        data_list = list(data_list)
 
-    if max_sample is None or max_sample >= original_len:
-        return list(data_list)
+    if max_sample is None or max_sample >= len(data_list):
+        return data_list
 
     logger.info(
         "max_sample head slice: %d -> %d scenes (split=%s)",
-        original_len,
+        len(data_list),
         max_sample,
         split_name,
     )
