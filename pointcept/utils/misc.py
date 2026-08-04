@@ -130,6 +130,16 @@ def kl_divergence_rows(q, p, eps=1e-8):
     return (q * (q.clamp(min=eps).log() - p.clamp(min=eps).log())).sum(-1)
 
 
+def abs_freq_error_rows(pi_hat, q_t):
+    """Per-row absolute frequency error ``|pi_hat - q_t|`` for (B, C) -> (B, C)."""
+    return (pi_hat.float() - q_t.float()).abs()
+
+
+def tv_from_abs_errors(abs_err):
+    """Per-row total variation (L1) ``sum_c |pi - q|`` for (B, C) -> (B,)."""
+    return abs_err.float().sum(dim=-1)
+
+
 def f1_scores_from_hist(intersection, union, target):
     """Per-class F1 and macro-F1 from aggregated intersection/union/target counts.
 

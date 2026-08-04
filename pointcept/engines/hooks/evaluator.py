@@ -14,6 +14,7 @@ from uuid import uuid4
 
 import pointcept.utils.comm as comm
 from pointcept.utils.misc import (
+    abs_freq_error_rows,
     accumulate_regression_errors,
     intersection_and_union_gpu,
     kl_divergence_rows,
@@ -837,7 +838,14 @@ class MultiTaskEvaluator(HookBase):
             t: {"mae": 0.0, "mse": 0.0, "count": 0.0} for t in regression_tasks
         }
         td_sums = {
-            t: {"kl_weighted": 0.0, "weight": 0.0} for t in tile_distribution_tasks
+            t: {
+                "kl_weighted": 0.0,
+                "weight": 0.0,
+                "abs_weighted": np.zeros(
+                    int(task_configs[t]["num_classes"]), dtype=np.float64
+                ),
+            }
+            for t in tile_distribution_tasks
         }
         target_scales = self._cfg_get(self.trainer.cfg.data, "target_scales", {}) or {}
         multilabel_stats = {t: MultilabelStats() for t in multilabel_tasks}
@@ -1044,6 +1052,15 @@ class MultiTaskEvaluator(HookBase):
                             (n_t[keep] * kl).sum().item()
                         )
                         td_sums[task_name]["weight"] += float(n_t[keep].sum().item())
+                        abs_err = abs_freq_error_rows(pi_hat[keep], q_t[keep])
+                        td_sums[task_name]["abs_weighted"] += (
+                            (n_t[keep].unsqueeze(-1) * abs_err)
+                            .sum(0)
+                            .detach()
+                            .cpu()
+                            .numpy()
+                            .astype(np.float64)
+                        )
 
                 self.trainer.storage.put_scalar("val_loss", loss.item())
                 # Skip when only one task: scalar "loss" already logged
@@ -1118,19 +1135,30 @@ class MultiTaskEvaluator(HookBase):
             for task_name in tile_distribution_tasks:
                 s = td_sums[task_name]
                 flat.extend([s["kl_weighted"], s["weight"]])
+                flat.extend(s["abs_weighted"].tolist())
             buf = torch.tensor(flat, dtype=torch.float64, device="cuda")
             dist.all_reduce(buf)
             flat = buf.cpu().tolist()
-            for task_index, task_name in enumerate(tile_distribution_tasks):
-                base = task_index * 2
-                td_sums[task_name]["kl_weighted"] = flat[base]
-                td_sums[task_name]["weight"] = flat[base + 1]
+            offset = 0
+            for task_name in tile_distribution_tasks:
+                C = len(td_sums[task_name]["abs_weighted"])
+                td_sums[task_name]["kl_weighted"] = flat[offset]
+                td_sums[task_name]["weight"] = flat[offset + 1]
+                td_sums[task_name]["abs_weighted"] = np.asarray(
+                    flat[offset + 2 : offset + 2 + C], dtype=np.float64
+                )
+                offset += 2 + C
 
         final_kl_by_task = {}
+        final_mae_by_task = {}
+        final_tv_by_task = {}
         for task_name in tile_distribution_tasks:
             s = td_sums[task_name]
             if s["weight"] > 1e-8:
                 final_kl_by_task[task_name] = s["kl_weighted"] / s["weight"]
+                mae = s["abs_weighted"] / s["weight"]
+                final_mae_by_task[task_name] = mae
+                final_tv_by_task[task_name] = float(mae.sum())
 
         per_task_metrics = {}
         metric_task_names = semantic_tasks + classification_tasks + pixel_semantic_tasks
@@ -1331,12 +1359,26 @@ class MultiTaskEvaluator(HookBase):
                 kl = final_kl_by_task.get(task_name)
                 if kl is None:
                     continue
+                tv = final_tv_by_task[task_name]
+                mae = final_mae_by_task[task_name]
+                task_config = task_configs[task_name]
                 if comm.is_main_process():
                     self.trainer.logger.info(
-                        "[task={}] Val tile-distribution: weighted KL {:.6f} (N={:.0f}).".format(
-                            task_name, kl, td_sums[task_name]["weight"]
+                        "[task={}] Val tile-distribution: weighted KL {:.6f} "
+                        "TV {:.6f} (N={:.0f}).".format(
+                            task_name, kl, tv, td_sums[task_name]["weight"]
                         )
                     )
+                    for class_idx in range(int(task_config["num_classes"])):
+                        class_name = task_config["names"][class_idx]
+                        self.trainer.logger.info(
+                            "[task={}] Class_{}-{} Result: mae {:.6f}".format(
+                                task_name,
+                                class_idx,
+                                class_name,
+                                float(mae[class_idx]),
+                            )
+                        )
                 if writer is not None:
                     writer.add_scalar(f"val/weighted_kl/{task_name}", kl, current_epoch)
                     writer.add_scalar(
@@ -1344,11 +1386,25 @@ class MultiTaskEvaluator(HookBase):
                         neg_kl_best_by_task[task_name],
                         current_epoch,
                     )
+                    writer.add_scalar(f"val/tv/{task_name}", tv, current_epoch)
+                    for class_idx in range(int(task_config["num_classes"])):
+                        slug = class_name_slug(task_config["names"][class_idx])
+                        writer.add_scalar(
+                            f"val/mae/{task_name}/{slug}",
+                            float(mae[class_idx]),
+                            current_epoch,
+                        )
                 if wandb_log is not None:
                     wandb_log[f"val/weighted_kl/{task_name}"] = float(kl)
                     wandb_log[f"val/weighted_kl_best_neg/{task_name}"] = float(
                         neg_kl_best_by_task[task_name]
                     )
+                    wandb_log[f"val/tv/{task_name}"] = float(tv)
+                    for class_idx in range(int(task_config["num_classes"])):
+                        slug = class_name_slug(task_config["names"][class_idx])
+                        wandb_log[f"val/mae/{task_name}/{slug}"] = float(
+                            mae[class_idx]
+                        )
             if final_kl_by_task:
                 kl_total = sum(final_kl_by_task.values())
                 if writer is not None:

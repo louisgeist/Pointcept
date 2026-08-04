@@ -26,6 +26,7 @@ from pointcept.utils.logger import get_root_logger
 from pointcept.utils.registry import Registry
 from pointcept.utils.misc import (
     AverageMeter,
+    abs_freq_error_rows,
     accumulate_regression_errors,
     f1_scores_from_hist,
     intersection_and_union,
@@ -989,7 +990,14 @@ class MultiTaskTester(TesterBase):
         }
         multilabel_stats_global = {t: MultilabelStats() for t in multilabel_tasks}
         td_sums_global = {
-            t: {"kl_weighted": 0.0, "weight": 0.0} for t in tile_distribution_tasks
+            t: {
+                "kl_weighted": 0.0,
+                "weight": 0.0,
+                "abs_weighted": np.zeros(
+                    int(task_configs[t]["num_classes"]), dtype=np.float64
+                ),
+            }
+            for t in tile_distribution_tasks
         }
 
         running_iou = {t: AverageMeter() for t in semantic_tasks}
@@ -1527,9 +1535,15 @@ class MultiTaskTester(TesterBase):
                     )
                     if float(n_t.item()) > 0:
                         kl = float(kl_divergence_rows(q_t, pi_hat).item())
+                        abs_err = abs_freq_error_rows(pi_hat, q_t)
+                        n_val = float(n_t.item())
                         td_metrics_scene[task_name] = dict(
-                            kl_weighted=float(n_t.item()) * kl,
-                            weight=float(n_t.item()),
+                            kl_weighted=n_val * kl,
+                            weight=n_val,
+                            abs_weighted=(
+                                n_val
+                                * abs_err.squeeze(0).detach().cpu().numpy()
+                            ).astype(np.float64),
                         )
 
                 record[data_name] = dict(
@@ -1597,6 +1611,9 @@ class MultiTaskTester(TesterBase):
                         continue
                     td_sums_global[task_name]["kl_weighted"] += meters["kl_weighted"]
                     td_sums_global[task_name]["weight"] += meters["weight"]
+                    td_sums_global[task_name]["abs_weighted"] += np.asarray(
+                        meters["abs_weighted"], dtype=np.float64
+                    )
 
             per_task_metrics = {}
             for task_name in semantic_tasks:
@@ -1732,13 +1749,31 @@ class MultiTaskTester(TesterBase):
                     )
                     continue
                 final_kl = s["kl_weighted"] / s["weight"]
+                mae = s["abs_weighted"] / s["weight"]
+                tv = float(mae.sum())
                 final_kl_by_task[task_name] = final_kl
+                task_config = task_configs[task_name]
                 logger.info(
-                    "[task={}] Test tile-distribution: weighted KL {:.6f} (N={:.0f}).".format(
-                        task_name, final_kl, s["weight"]
+                    "[task={}] Test tile-distribution: weighted KL {:.6f} "
+                    "TV {:.6f} (N={:.0f}).".format(
+                        task_name, final_kl, tv, s["weight"]
                     )
                 )
+                for class_idx in range(int(task_config["num_classes"])):
+                    class_name = task_config["names"][class_idx]
+                    logger.info(
+                        "[task={}] Class_{}-{} Result: mae {:.6f}".format(
+                            task_name,
+                            class_idx,
+                            class_name,
+                            float(mae[class_idx]),
+                        )
+                    )
                 log_dict[f"test/weighted_kl/{task_name}"] = float(final_kl)
+                log_dict[f"test/tv/{task_name}"] = tv
+                for class_idx in range(int(task_config["num_classes"])):
+                    slug = class_name_slug(task_config["names"][class_idx])
+                    log_dict[f"test/mae/{task_name}/{slug}"] = float(mae[class_idx])
             if final_kl_by_task:
                 log_dict["test/weighted_kl/nathab_total"] = float(
                     sum(final_kl_by_task.values())

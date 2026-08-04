@@ -1,8 +1,8 @@
 """
-Tests for the tile_distribution task's shared pooling/KL utilities
-(pointcept.utils.misc.pool_axis_distribution_from_probs / kl_divergence_rows),
-the WeightedKLDivLoss criterion, and MultiTaskSegmentorV2's tile_distribution
-loss branch.
+Tests for the tile_distribution task's shared pooling/KL/MAE/TV utilities
+(pointcept.utils.misc.pool_axis_distribution_from_probs / kl_divergence_rows /
+abs_freq_error_rows / tv_from_abs_errors), the WeightedKLDivLoss criterion, and
+MultiTaskSegmentorV2's tile_distribution loss branch.
 
 Run with: PYTHONPATH=./ pytest tests/test_tile_distribution_pooling.py
 """
@@ -11,7 +11,12 @@ import unittest
 
 import torch
 
-from pointcept.utils.misc import kl_divergence_rows, pool_axis_distribution_from_probs
+from pointcept.utils.misc import (
+    abs_freq_error_rows,
+    kl_divergence_rows,
+    pool_axis_distribution_from_probs,
+    tv_from_abs_errors,
+)
 from pointcept.models.losses import build_criteria
 from pointcept.models.default import MultiTaskSegmentorV2
 
@@ -66,6 +71,29 @@ class TestKlDivergenceRows(unittest.TestCase):
         p = torch.tensor([[0.5, 0.5]])
         kl = kl_divergence_rows(q, p)
         self.assertGreater(float(kl.item()), 0.0)
+
+
+class TestAbsFreqErrorAndTv(unittest.TestCase):
+    def test_zero_when_distributions_match(self):
+        pi_hat = torch.tensor([[0.5, 0.3, 0.2]])
+        q_t = torch.tensor([[0.5, 0.3, 0.2]])
+        abs_err = abs_freq_error_rows(pi_hat, q_t)
+        torch.testing.assert_close(abs_err, torch.zeros_like(abs_err))
+        self.assertAlmostEqual(float(tv_from_abs_errors(abs_err).item()), 0.0)
+
+    def test_known_simplexes_mae_and_tv(self):
+        # |[0.7,0.2,0.1] - [0.5,0.5,0.0]| = [0.2, 0.3, 0.1]; TV = 0.6
+        pi_hat = torch.tensor([[0.7, 0.2, 0.1], [0.0, 1.0, 0.0]])
+        q_t = torch.tensor([[0.5, 0.5, 0.0], [0.0, 1.0, 0.0]])
+        abs_err = abs_freq_error_rows(pi_hat, q_t)
+        torch.testing.assert_close(
+            abs_err, torch.tensor([[0.2, 0.3, 0.1], [0.0, 0.0, 0.0]])
+        )
+        tv = tv_from_abs_errors(abs_err)
+        torch.testing.assert_close(tv, torch.tensor([0.6, 0.0]))
+        # Set-level MAE (unweighted mean over rows) sums to set-level TV mean
+        mae = abs_err.mean(dim=0)
+        self.assertAlmostEqual(float(mae.sum().item()), float(tv.mean().item()), places=5)
 
 
 class TestWeightedKLDivLoss(unittest.TestCase):
