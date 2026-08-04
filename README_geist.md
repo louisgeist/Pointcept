@@ -181,26 +181,52 @@ python pointcept/datasets/preprocessing/flair3d_plus/rasterize_network.py \
   --data_root data/flair3d_plus \
   --network_graphs_root /lustre/fsn1/projects/rech/unv/usi32yh/data_flair3d_build/network_graphs \
   --split_manifest_csv data/flair3d_plus/raw/scene_split_manifest.csv \
-  --num_workers 24
+  --num_workers 16
 ```
 
 **Visualize network masks** (GT binary panels + mean-pooled LiDAR RGB on the same 1 m grid).
-With ``--logits``, also shows soft probs and a binarized row (``--threshold``, default 0.2;
-NaN cells = unobserved → background). Pred colormap is fixed ``[0, 1]`` by default;
-``--prob-autoscale`` stretches it to the shared finite min/max across channels:
+Mutually exclusive modes: ``--tile`` (one subtile) or ``--roi`` (all subtiles stitched).
+With predictions (``--logits`` / ``--result-dir``), also shows soft probs, a binarized row
+(``--threshold``, default 0.2; NaN cells = unobserved → background), and predicted-graph
+panels. Pred colormap is fixed ``[0, 1]`` by default; ``--prob-autoscale`` stretches it to
+the shared finite min/max across channels:
 
 ```bash
-# GT only
+# GT only (subtile)
 python scripts/visualize_network_mask.py \
   --tile data/flair3d_plus/train/D067-2021_LIDARHD/AF-S1-22/D067-2021_AF-S1-22_1-1 \
 
-# GT + pred probs + binarized @ 0.2
+# GT + pred probs + binarized @ 0.5 (subtile)
 python scripts/visualize_network_mask.py \
   --tile data/flair3d_plus/train/D067-2021_LIDARHD/AF-S1-22/D067-2021_AF-S1-22_1-1 \
-  --logits exp/default/result/D067-2021_AF-S1-22_1-1_logits_network.npy \
-  --threshold 0.2 \
+  --logits exp/flair3d/spunet_network_overfit_long/result/D067-2021_AF-S1-22_1-1_logits_network.npy \
+  --threshold 0.5 \
   --prob-autoscale
+
+# + predicted graph row (mask -> graph pipeline, same as APLS eval) with GT graph overlay
+python scripts/visualize_network_mask.py \
+  --tile data/flair3d_plus/train/D067-2021_LIDARHD/AF-S1-22/D067-2021_AF-S1-22_1-1 \
+  --logits exp/flair3d/spunet_network_overfit_long/result/D067-2021_AF-S1-22_1-1_logits_network.npy \
+  --threshold 0.5 \
+  --network-graphs-root /data/geist/Flair3D-build/data/network_graphs
+
+# Full ROI (stitched GT + RGB + logits; official per-ROI APLS when --network-graphs-root is set)
+python scripts/visualize_network_mask.py \
+  --roi data/flair3d_plus/train/D067-2021_LIDARHD/AF-S1-22 \
+  --result-dir exp/flair3d/spunet_network_overfit_ROI/result \
+  --threshold 0.5 \
+  --prob-autoscale \
+  --network-graphs-root /data/geist/Flair3D-build/data/network_graphs \
+  --out /tmp/AF-S1-22_network_roi.png
 ```
+
+Graph row colors: predicted edges/nodes = yellow/orange, GT overlay (with `--network-graphs-root`)
+= cyan/white. In ``--tile`` mode the graph is built **per subtile** for quick visual QA only —
+real APLS numbers (`tools/eval_network_apls.py`) stitch all subtiles of a ROI first, so a
+subtile-local graph here can show extra truncated/disconnected branches near tile edges that
+won't appear in the real per-ROI prediction. With `--network-graphs-root` in tile mode, a
+per-channel APLS score (GT clipped to the subtile) is a **local sanity-check only**. In
+``--roi`` mode, stitching + APLS match the official per-ROI metric.
 
 **Network test predictions** (`{tile}_logits_network.npy`): shape `(r, H, W)` with
 `r=3` (ROADS / RAILROADS / TRANSMISSION_LINES), same grid as `network.npy` /
