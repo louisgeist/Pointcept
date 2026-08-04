@@ -19,3 +19,4 @@ Dockerfile
 jz_utils/
 .cursor/
 local/
+.claude/
