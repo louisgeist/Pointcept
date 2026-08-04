@@ -8,6 +8,15 @@ per-sample VRAM lever, independent of grid_size. Unlike batch_size, it is set
 inline inside the transform list (data.train.transform[i]["max_size"]), not
 as a top-level config key.
 
+Two phases, both binary search:
+  1) Short probe (``--probe-steps``) over ``[--min-max-size, --max-max-size]``
+     → ``candidate_max_size``.
+  2) Optional longer soak (``--soak-steps``) re-searching
+     ``[--min-max-size, candidate]`` → ``confirmed_max_size``. Soak is also a
+     dichotomie (not a linear decrement): short probes can pass at the VRAM
+     edge while longer runs OOM, and a -1 walk over tens of thousands of
+     values is prohibitively slow. Set ``--soak-steps 0`` to skip Phase 2.
+
 Config._file2dict (the `_base_ = [...]` merge path, pointcept/utils/config.py)
 does not pass allow_list_keys=True, so a generated overlay `_base_` config
 cannot override a list element by index. Only Config.merge_from_dict (used by
@@ -49,10 +58,16 @@ Examples::
     --min-max-size 32768 --max-max-size 65536 --probe-steps 16 --soak-steps 0 \\
     --batch-size-per-gpu 3
 
-  # Full search with soak, matching the target batch_size=96 (32 GPU x 3)
+  # Full search with binary soak, matching the target batch_size=96 (32 GPU x 3)
   python scripts/find_max_view_size.py \\
     --config-file configs/flair3d_default/pretrain-sonata-v1m2-flair3d.py \\
     --min-max-size 8192 --max-max-size 49152 \\
+    --batch-size-per-gpu 3 --probe-steps 16 --soak-steps 300
+
+  # Single-point soak verification at max_size=40000
+  python scripts/find_max_view_size.py \\
+    --config-file configs/flair3d_default/pretrain-sonata-v1m2-flair3d.py \\
+    --min-max-size 40000 --max-max-size 40000 \\
     --batch-size-per-gpu 3 --probe-steps 16 --soak-steps 300
 """
 
@@ -308,15 +323,27 @@ def binary_search(args: argparse.Namespace, work_dir: Path, transform_idx: int) 
     confirmed = best
     confirmed_peak = best_peak
     if args.soak_steps > 0:
-        log(f"\nPhase 2: soak up to {args.soak_steps} steps")
-        while confirmed is not None and confirmed >= int(args.min_max_size):
-            name = f"soak_ms{confirmed}"
-            log(f"\n=== Soak {name} ===")
+        # Second binary search with longer soak: short probes can pass at the
+        # VRAM edge while longer runs OOM, so re-search [min, candidate] rather
+        # than decrementing by 1 (which can take thousands of trials).
+        lo, hi = int(args.min_max_size), int(best)
+        confirmed = None
+        confirmed_peak = None
+        soak_i = 0
+        log(
+            f"\nPhase 2: soak binary search max_size in [{lo}, {hi}] "
+            f"({args.soak_steps} steps)"
+        )
+        while lo <= hi:
+            mid = (lo + hi) // 2
+            soak_i += 1
+            name = f"soak_{soak_i:02d}_ms{mid}"
+            log(f"\n=== Soak {name} (lo={lo} hi={hi}) ===")
             ok, peak, status = probe_max_size(
                 args=args,
                 work_dir=work_dir,
                 trial_name=name,
-                max_size=confirmed,
+                max_size=mid,
                 steps=args.soak_steps,
                 transform_idx=transform_idx,
             )
@@ -324,20 +351,26 @@ def binary_search(args: argparse.Namespace, work_dir: Path, transform_idx: int) 
                 dict(
                     phase="soak",
                     trial=name,
-                    max_size=confirmed,
+                    max_size=mid,
                     ok=ok,
                     status=status,
                     peak_mem_mb=peak,
                 )
             )
             if status.startswith("error_exit") or status == "timeout":
-                raise RuntimeError(f"Non-OOM failure during soak max_size={confirmed} status={status}")
+                raise RuntimeError(
+                    f"Non-OOM failure during soak max_size={mid} status={status}"
+                )
             if ok:
+                confirmed = mid
                 confirmed_peak = peak if peak is not None else confirmed_peak
-                break
-            confirmed = confirmed - 1 if confirmed - 1 >= int(args.min_max_size) else None
+                lo = mid + 1
+            else:
+                hi = mid - 1
         if confirmed is None:
             log("Soak failed for all candidates.")
+        else:
+            log(f"\nPhase 2 confirmed: max_size={confirmed} peak_mem={confirmed_peak}")
 
     return dict(
         candidate_max_size=best,
@@ -494,7 +527,8 @@ def parse_args() -> argparse.Namespace:
         "--soak-steps",
         type=int,
         default=300,
-        help="Longer re-verification of the candidate max_size (0 to skip)",
+        help="Longer re-verification via a second binary search over "
+        "[min_max_size, candidate] (0 to skip)",
     )
     p.add_argument("--num-gpus", type=int, default=1)
     p.add_argument("--num-worker", type=int, default=None, help="Override num_worker")
