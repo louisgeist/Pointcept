@@ -1,8 +1,9 @@
 """
 SpUNet longer toy overfit for network pixel segmentation on Hecate (D067).
 
-Same recipe as ``spunet_toy.py`` (1 tile, Mix3D off), but a longer schedule so
-pixel logits can move away from ~0.5 before evaluating collapse-to-background.
+Same recipe as ``spunet_toy.py`` (1 tile, Mix3D off, no crop), but a longer
+schedule so pixel logits can move away from ~0.5 before evaluating
+collapse-to-background.
 
 Example::
 
@@ -28,7 +29,9 @@ num_gpu = 1
 num_worker = 8 * num_gpu
 enable_amp = True
 
-batch_size = 4 * num_gpu
+# batch_size=1: SphereCrop is removed below (see train transform) so each replica
+# is the full ~287k-point tile at grid_size=0.1 -- too big to batch at 4x.
+batch_size = 1 * num_gpu
 batch_size_val = batch_size
 batch_size_test = 1
 
@@ -42,7 +45,6 @@ val_max_sample = overfit_unique_samples
 test_max_sample = overfit_unique_samples
 
 grid_size = 0.1
-point_max = 100000
 # Single-tile overfit: no Mix3D (would only pair copies of the same scene).
 mix_prob = 0.0
 
@@ -185,7 +187,9 @@ data = dict(
                 mode="train",
                 return_grid_coord=True,
             ),
-            dict(type="SphereCrop", point_max=point_max, mode="center"),
+            # No crop: single-tile overfit, train on the whole tile every step
+            # (SphereCrop(mode="center") always anchored the same fixed point --
+            # ~38% of the tile was never seen across any training iteration).
             dict(type="CenterShift", apply_z=False),
             dict(type="NormalizeColor"),
             dict(type="NetworkRasterToPointLabels"),
