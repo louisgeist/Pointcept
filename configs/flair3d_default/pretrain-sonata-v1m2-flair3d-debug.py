@@ -13,7 +13,7 @@ _base_ = ["../_base_/default_runtime.py"]
 # -----------------------------------------------------------------------------
 # Hardware template: 2× A100 (Jean-Zay); see scripts/sonata/sbatch_pretrain_debug.sh
 num_gpu = 2
-batch_size_per_gpu = 2
+batch_size_per_gpu = 3
 batch_size = batch_size_per_gpu * num_gpu
 num_worker = 4 * num_gpu
 mix_prob = 0
@@ -199,7 +199,7 @@ transform = [
             dict(type="ChromaticTranslation", p=0.95, ratio=0.05),
             dict(type="NormalizeColor"),
         ],
-        max_size=65536,
+        max_size=40_000,
     ),
     dict(type="ToTensor"),
     dict(type="Update", keys_dict={"grid_size": grid_size}),

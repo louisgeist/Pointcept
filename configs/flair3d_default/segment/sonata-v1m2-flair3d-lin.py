@@ -2,7 +2,8 @@
 Sonata-v1m2 linear probing on Flair3D+ semantic segmentation (v20).
 
 Frozen PT-v3m2 encoder (enc_mode); short iter-limited schedule for periodic probes.
-Val uses stratified subset (val_dev_subset_2000.csv). No test split.
+Val uses stratified subset (val_dev_subset_2000.csv) capped to max_sample=20;
+eval_every=2. No test split.
 """
 
 _base_ = ["../../_base_/default_runtime.py"]
@@ -27,7 +28,7 @@ point_max = 102400
 # Short probe: 1000 steps / 100 per epoch → 10 trainer epochs
 total_iters = 1000
 iter_per_epoch = 100
-eval_every = 1
+eval_every = 2
 
 feat_keys = ["coord", "color", "strength"]
 
@@ -186,6 +187,7 @@ data = dict(
         missing_tiles_manifest=missing_tiles_manifest,
         too_small_tiles_manifest=too_small_tiles_manifest,
         stratified_subset_manifest=val_stratified_subset_manifest,
+        max_sample=20,
         target_keys=["segment"],
         primary_target_key="segment",
         transform=[
@@ -226,7 +228,7 @@ hooks = [
     ),
     dict(type="IterationTimer", warmup_iter=2),
     dict(type="InformationWriter"),
-    dict(type="SemSegEvaluator"),
+    dict(type="SemSegEvaluator", write_cls_iou=True),
     dict(type="CheckpointSaver", save_freq=None),
     dict(type="MetricsJsonWriter"),
 ]

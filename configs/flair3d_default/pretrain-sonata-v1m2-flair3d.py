@@ -13,7 +13,7 @@ _base_ = ["../_base_/default_runtime.py"]
 # -----------------------------------------------------------------------------
 # Hardware template: 8× A100 (Jean-Zay); see scripts/sonata/sbatch_pretrain.sh
 num_gpu = 8
-batch_size_per_gpu = 2
+batch_size_per_gpu = 3
 batch_size = batch_size_per_gpu * num_gpu
 num_worker = 8 * num_gpu
 mix_prob = 0
@@ -23,11 +23,11 @@ enable_amp = True
 amp_dtype = "bfloat16"
 find_unused_parameters = False
 grid_size = 0.1
-max_size = 65536  # points-per-view budget (MultiViewGenerator); calibrate via
-                  # scripts/find_max_view_size.py when batch_size_per_gpu changes
+max_size = 40_000  # points-per-view budget (MultiViewGenerator); calibrate via
+                   # scripts/find_max_view_size.py when batch_size_per_gpu changes
 
 # Iter-limited schedule (1 trainer epoch = 1000 optimizer steps)
-total_iters = 50_000  # placeholder → 100 trainer epochs
+total_iters = 30_000  # → 30 trainer epochs
 iter_per_epoch = 1000
 
 # Regular evaluation is replaced by linear-probe jobs
@@ -248,7 +248,7 @@ hooks = [
     dict(type="ModelHook"),
     dict(type="WeightDecaySchedular", base_value=base_wd, final_value=final_wd),
     dict(type="IterationTimer", warmup_iter=2),
-    dict(type="InformationWriter"),
+    dict(type="InformationWriter", log_interval=100),
     dict(type="CheckpointSaver", save_freq=eval_every),
     # After CheckpointSaver so epoch_N.pth exists; submits non-blocking sbatch probes.
     dict(
