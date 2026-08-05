@@ -61,6 +61,10 @@ fi
 # Train search
 MIN_BS_TRAIN="${MIN_BS_TRAIN:-2}"
 MAX_BS_TRAIN="${MAX_BS_TRAIN:-32}"
+# Space-separated explicit list (e.g. "4 8 12 16 20 24 32") — if set, sweeps
+# exactly these values (ascending, stop at first OOM) instead of bisecting
+# [MIN_BS_TRAIN, MAX_BS_TRAIN].
+CANDIDATES_TRAIN="${CANDIDATES_TRAIN:-}"
 PROBE_STEPS="${PROBE_STEPS:-64}"
 SOAK_STEPS_TRAIN="${SOAK_STEPS_TRAIN:-500}"
 MIX_PROB="${MIX_PROB:-1.0}"
@@ -83,7 +87,11 @@ cp "$0" "${JOB_DIR}/script.slurm"
   echo "CONFIG: ${CONFIG}"
   echo "CODE_DIR: ${CODE_DIR}"
   echo "MODES: ${MODES}"
-  echo "MIN/MAX train: ${MIN_BS_TRAIN}/${MAX_BS_TRAIN}"
+  if [ -n "${CANDIDATES_TRAIN}" ]; then
+    echo "CANDIDATES_TRAIN: ${CANDIDATES_TRAIN}"
+  else
+    echo "MIN/MAX train: ${MIN_BS_TRAIN}/${MAX_BS_TRAIN}"
+  fi
   echo "MIN/MAX eval:  ${MIN_BS_EVAL}/${MAX_BS_EVAL}"
   echo "PROBE_STEPS=${PROBE_STEPS} SOAK_STEPS_TRAIN=${SOAK_STEPS_TRAIN} MIX_PROB=${MIX_PROB}"
   echo "MAX_SAMPLE=${MAX_SAMPLE} SOAK_STEPS_EVAL=${SOAK_STEPS_EVAL}"
@@ -143,12 +151,17 @@ run_mode() {
 
   if [ "${mode}" = "train" ]; then
     cmd+=(
-      --min-bs "${MIN_BS_TRAIN}"
-      --max-bs "${MAX_BS_TRAIN}"
       --probe-steps "${PROBE_STEPS}"
       --soak-steps "${SOAK_STEPS_TRAIN}"
       --mix-prob "${MIX_PROB}"
     )
+    if [ -n "${CANDIDATES_TRAIN}" ]; then
+      # shellcheck disable=SC2206
+      local -a candidates=( ${CANDIDATES_TRAIN} )
+      cmd+=(--candidates "${candidates[@]}")
+    else
+      cmd+=(--min-bs "${MIN_BS_TRAIN}" --max-bs "${MAX_BS_TRAIN}")
+    fi
   else
     cmd+=(
       --min-bs "${MIN_BS_EVAL}"
