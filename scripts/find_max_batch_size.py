@@ -32,6 +32,12 @@ Examples (JeanZay / local GPU)::
     --mode train --min-bs 1 --max-bs 8 --probe-steps 32 --soak-steps 200 \\
     --mix-prob 0.8 --num-gpus 1
 
+  # Sonata linear probe, only reasonable batch sizes (4..32), not a bisection
+  python scripts/find_max_batch_size.py \\
+    --config-file configs/flair3d_default/segment/sonata-v1m2-flair3d-lin.py \\
+    --mode train --candidates 4 8 12 16 20 24 32 \\
+    --probe-steps 32 --soak-steps 200 --mix-prob 0.8 --num-gpus 1
+
   # Val (capped samples, no Mix3D)
   python scripts/find_max_batch_size.py \\
     --config-file configs/experiment/w105/2/10h/litept-v1m0-flair3d_13.py \\
@@ -438,6 +444,133 @@ def run_trial(
     )
 
 
+def run_soak(
+    *,
+    args: argparse.Namespace,
+    work_dir: Path,
+    trial_name: str,
+    bs: int,
+    evaluator_type: str | None,
+    seed_weight: Path | None,
+) -> tuple[bool, float | None, str]:
+    """One soak trial at a fixed bs: more train steps, or a larger eval sample floor."""
+    if args.mode == "train":
+        return run_trial(
+            args=args,
+            work_dir=work_dir,
+            trial_name=trial_name,
+            bs=bs,
+            steps=args.soak_steps,
+            evaluator_type=evaluator_type,
+            seed_weight=seed_weight,
+        )
+    soak_samples = max(int(args.max_sample), int(args.soak_steps))
+    if args.mode == "val":
+        return probe_train(
+            args=args,
+            work_dir=work_dir,
+            trial_name=trial_name,
+            batch_size=args.val_train_batch_size,
+            steps=1,
+            evaluate=True,
+            batch_size_val=bs,
+            max_sample_val=soak_samples,
+            evaluator_type=evaluator_type,
+        )
+    assert args.mode == "test"
+    return probe_test(
+        args=args,
+        work_dir=work_dir,
+        trial_name=trial_name,
+        batch_size_test=bs,
+        weight=seed_weight,
+        max_sample_test=soak_samples,
+    )
+
+
+def candidate_search(args: argparse.Namespace, work_dir: Path) -> dict:
+    """Sweep a fixed, explicit list of batch sizes instead of bisecting a range.
+
+    Ascending order, probe each candidate, stop at the first probe OOM (VRAM
+    grows monotonically with batch_size, so larger candidates are assumed
+    worse). Then soak-verify from the largest probe-passing candidate
+    downward through the same list (not arbitrary -2 decrements) until one
+    survives.
+    """
+    even = bool(args.even_bs and args.mode == "train")
+    candidates = sorted({align_bs(c, even=even) for c in args.candidates})
+
+    evaluator_type = detect_evaluator_type(Path(args.config_file))
+    seed_weight = None
+    if args.mode == "test":
+        seed_weight = ensure_seed_checkpoint(args, work_dir)
+
+    trials: list[dict] = []
+    passing: list[tuple[int, float | None]] = []
+
+    log(f"Phase 1: candidate probe sweep mode={args.mode} candidates={candidates}")
+    for i, bs in enumerate(candidates, start=1):
+        name = f"probe_{i:02d}_bs{bs}"
+        log(f"\n=== Probe {name} ===")
+        ok, peak, status = run_trial(
+            args=args,
+            work_dir=work_dir,
+            trial_name=name,
+            bs=bs,
+            steps=args.probe_steps,
+            evaluator_type=evaluator_type,
+            seed_weight=seed_weight,
+        )
+        trials.append(
+            dict(phase="probe", trial=name, batch_size=bs, ok=ok, status=status, peak_mem_mb=peak)
+        )
+        if status.startswith("error_exit") or status == "timeout":
+            raise RuntimeError(
+                f"Non-OOM failure at bs={bs} status={status}. "
+                f"Inspect {work_dir / 'logs' / (name + '.log')}"
+            )
+        if not ok:
+            log(f"bs={bs} OOM on probe — stopping sweep (larger candidates assumed worse).")
+            break
+        passing.append((bs, peak))
+
+    if not passing:
+        log("No candidate batch size succeeded.")
+        return dict(candidate_bs=None, confirmed_bs=None, peak_mem_mb=None, trials=trials)
+
+    best, best_peak = passing[-1]
+    log(f"\nPhase 1 candidate: batch_size={best} peak_mem={best_peak}")
+
+    confirmed, confirmed_peak = best, best_peak
+    if args.soak_steps > 0:
+        log(f"\nPhase 2: soak-verify candidates (largest first, soak_steps={args.soak_steps})")
+        confirmed, confirmed_peak = None, None
+        for bs, _ in reversed(passing):
+            name = f"soak_bs{bs}"
+            log(f"\n=== Soak {name} ===")
+            ok, peak, status = run_soak(
+                args=args,
+                work_dir=work_dir,
+                trial_name=name,
+                bs=bs,
+                evaluator_type=evaluator_type,
+                seed_weight=seed_weight,
+            )
+            trials.append(
+                dict(phase="soak", trial=name, batch_size=bs, ok=ok, status=status, peak_mem_mb=peak)
+            )
+            if status.startswith("error_exit") or status == "timeout":
+                raise RuntimeError(f"Non-OOM failure during soak bs={bs} status={status}")
+            if ok:
+                confirmed, confirmed_peak = bs, peak
+                break
+            log(f"bs={bs} OOM on soak, falling back to next smaller candidate")
+        if confirmed is None:
+            log("Soak failed for all probed candidates.")
+
+    return dict(candidate_bs=best, confirmed_bs=confirmed, peak_mem_mb=confirmed_peak, trials=trials)
+
+
 def binary_search(args: argparse.Namespace, work_dir: Path) -> dict:
     even = bool(args.even_bs and args.mode == "train")
     lo = align_bs(args.min_bs, even=even)
@@ -695,6 +828,17 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--min-bs", type=int, default=2)
     p.add_argument("--max-bs", type=int, default=32)
     p.add_argument(
+        "--candidates",
+        type=int,
+        nargs="+",
+        default=None,
+        help="Explicit list of batch sizes to sweep instead of bisecting "
+        "[--min-bs, --max-bs] (e.g. --candidates 4 8 12 16 20 24 32). "
+        "Ascending sweep, stops at the first probe OOM, then soak-verifies "
+        "from the largest probe-passing candidate downward through the "
+        "same list. --min-bs/--max-bs are ignored when this is set.",
+    )
+    p.add_argument(
         "--probe-steps",
         type=int,
         default=64,
@@ -797,7 +941,10 @@ def main() -> int:
         )
 
     try:
-        result = binary_search(args, work_dir)
+        if args.candidates:
+            result = candidate_search(args, work_dir)
+        else:
+            result = binary_search(args, work_dir)
     except Exception as exc:
         log(f"ERROR: {exc}")
         return 1
