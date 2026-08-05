@@ -199,7 +199,7 @@ transform = [
             dict(type="ChromaticTranslation", p=0.95, ratio=0.05),
             dict(type="NormalizeColor"),
         ],
-        max_size=40_000,
+        max_size=65_536,
     ),
     dict(type="ToTensor"),
     dict(type="Update", keys_dict={"grid_size": grid_size}),
