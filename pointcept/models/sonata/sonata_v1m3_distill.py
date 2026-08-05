@@ -560,6 +560,15 @@ class Sonata(PointModel):
         result_dict["loss"] = sum(result_dict["loss"])
 
         if get_world_size() > 1:
-            for loss in result_dict.values():
-                dist.all_reduce(loss, op=dist.ReduceOp.AVG)
+            # Sync logging scalars on detached copies so all_reduce is not part of
+            # the autograd graph (avoids c10d::allreduce_ UserWarning on backward).
+            # For "loss", keep local grads while exposing the cross-rank average value.
+            local_loss = result_dict["loss"]
+            for key, val in list(result_dict.items()):
+                reduced = val.detach().clone()
+                dist.all_reduce(reduced, op=dist.ReduceOp.AVG)
+                if key == "loss":
+                    result_dict[key] = local_loss + (reduced - local_loss.detach())
+                else:
+                    result_dict[key] = reduced
         return result_dict
