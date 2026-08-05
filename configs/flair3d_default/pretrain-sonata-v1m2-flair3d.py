@@ -11,10 +11,10 @@ _base_ = ["../_base_/default_runtime.py"]
 # -----------------------------------------------------------------------------
 # Run-level settings
 # -----------------------------------------------------------------------------
-# Hardware template: 8× A100 (Jean-Zay); see scripts/sonata/sbatch_pretrain.sh
-num_gpu = 8
+# Hardware template: 4×8 A100 (Jean-Zay); see scripts/sonata/sbatch_pretrain.sh
+num_gpu = 32
 batch_size_per_gpu = 3
-batch_size = batch_size_per_gpu * num_gpu
+batch_size = batch_size_per_gpu * num_gpu  # → 96
 num_worker = 8 * num_gpu
 mix_prob = 0
 clip_grad = 3.0
@@ -49,7 +49,7 @@ model = dict(
         type="PT-v3m2",
         in_channels=7,  # coord(3) + color(3) + strength(1)
         order=("z", "z-trans", "hilbert", "hilbert-trans"),
-        stride=(2, 2, 2, 2),
+        stride=(2, 3, 3, 3),
         enc_depths=(3, 3, 3, 12, 3),
         enc_channels=(48, 96, 192, 384, 512),
         enc_num_head=(3, 6, 12, 24, 32),
@@ -105,7 +105,7 @@ model = dict(
 # -----------------------------------------------------------------------------
 # Optimizer / scheduler
 # -----------------------------------------------------------------------------
-base_lr = 0.001 # Divided by 4, because we train on 8 GPUs instead of 32
+base_lr = 0.004  # Sonata default; matched to 32-GPU global batch (bs=96)
 lr_decay = 0.9  # layer-wise lr decay
 
 base_wd = 0.04

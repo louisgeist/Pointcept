@@ -43,8 +43,8 @@
 
 #SBATCH --time=19:50:00
 #SBATCH --signal=B:USR1@120
-#SBATCH --nodes=1
-#SBATCH --ntasks=1
+#SBATCH --nodes=4
+#SBATCH --ntasks=4
 #SBATCH --ntasks-per-node=1
 #SBATCH --gres=gpu:8
 #SBATCH --cpus-per-task=64
@@ -55,7 +55,7 @@
 EXP_NAME="${1:?usage: sbatch sbatch_pretrain_resume.sh <exp_name> <config_rel_no_ext> <resume_ckpt_abs_path>}"
 CONFIG_REL="${2:?usage: sbatch sbatch_pretrain_resume.sh <exp_name> <config_rel_no_ext> <resume_ckpt_abs_path>}"
 RESUME_CKPT="${3:?usage: sbatch sbatch_pretrain_resume.sh <exp_name> <config_rel_no_ext> <resume_ckpt_abs_path>}"
-NUM_GPUS=8  # must match --gres=gpu:N (per node)
+NUM_GPUS=8  # must match --gres=gpu:N (per node); total GPUs = nodes × NUM_GPUS
 
 REPO_ROOT=/lustre/fswork/projects/rech/unv/usi32yh/Pointcept
 JOB_DIR=${REPO_ROOT}/logs/slurm/${SLURM_JOB_ID}
