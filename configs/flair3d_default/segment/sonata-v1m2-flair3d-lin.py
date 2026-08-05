@@ -12,7 +12,7 @@ _base_ = ["../../_base_/default_runtime.py"]
 # Run-level settings
 # -----------------------------------------------------------------------------
 num_gpu = 1
-batch_size_per_gpu = 4
+batch_size_per_gpu = 24
 batch_size = batch_size_per_gpu * num_gpu
 batch_size_val = max(1, batch_size // 2)
 num_worker = 8 * num_gpu
