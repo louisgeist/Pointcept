@@ -47,29 +47,30 @@ except ImportError:  # pragma: no cover
 
 
 def group_by_roi_complete_only(
-    patches: Sequence["ManifestPatch"], data_root: Path
-) -> Tuple[List[Tuple[Path, dict, List[Path]]], List[dict]]:
-    """Group manifest patches by ROI, keeping only ROIs fully mirrored on disk locally.
+    patches: Sequence["ManifestPatch"],
+    data_root: Path,
+    *,
+    drop_incomplete: bool = False,
+) -> Tuple[List[Tuple[Path, dict, List[Path], dict]], List[dict]]:
+    """Group manifest patches by ROI for APLS / stitch eval.
 
-    A ROI stitched from a *partial* set of subtiles has structural holes exactly where
-    the missing subtiles would be -- while the GT graph (derived from vector BDTOPO
-    data, independent of local LiDAR mirroring) stays complete for the whole ROI.
-    Scoring that partial raster against the full GT graph would silently bias APLS
-    downward for reasons that have nothing to do with model quality, purely due to
-    which subtiles happen to be mirrored on this machine (see CLAUDE.md's
-    Hecate-vs-Jean-Zay data availability note). So a ROI with even one subtile missing
-    on disk is dropped ENTIRELY -- never partially included -- and returned separately
-    as ``excluded`` so callers can report it plainly instead of it silently
-    contaminating the metric. This does NOT reuse ``rasterize_network.py``'s
-    ``group_by_roi`` (which hard-fails the whole run on any manifest/disk mismatch --
-    correct for preprocessing, where disk state must match the manifest exactly, but
-    impractical for an eval run against a partially-mirrored local manifest).
+    For each ROI, only subtiles that exist locally (``coord.npy`` present) are
+    kept in ``patch_dirs``. Coverage metadata is attached so callers can log
+    ``N`` missing of ``X`` subtiles.
+
+    By default (``drop_incomplete=False``), incomplete ROIs are **kept** and
+    scored on the available subtiles (holes stay NaN in the stitch -- GT is
+    still the full-ROI graph, so the score can be pessimistic; the log/JSON
+    make that explicit). Set ``drop_incomplete=True`` to restore the old
+    Jean-Zay-strict behaviour (drop any ROI with a missing local subtile).
+
+    ROIs with **zero** local subtiles are always excluded.
     """
     grouped: Dict[Path, List["ManifestPatch"]] = defaultdict(list)
     for patch in patches:
         grouped[patch.roi_dir(data_root)].append(patch)
 
-    kept: List[Tuple[Path, dict, List[Path]]] = []
+    kept: List[Tuple[Path, dict, List[Path], dict]] = []
     excluded: List[dict] = []
     for roi_dir in sorted(grouped.keys(), key=str):
         roi_patches = sorted(grouped[roi_dir], key=lambda p: p.patch_id)
@@ -85,19 +86,36 @@ def group_by_roi_complete_only(
             for p in roi_patches
             if not (p.patch_dir(data_root) / "coord.npy").is_file()
         ]
-        if missing_patch_ids:
+        present = [
+            p for p in roi_patches if (p.patch_dir(data_root) / "coord.npy").is_file()
+        ]
+        coverage = {
+            "n_subtiles_total": len(roi_patches),
+            "n_subtiles_present": len(present),
+            "n_subtiles_missing": len(missing_patch_ids),
+            "missing_patch_ids": missing_patch_ids,
+            "incomplete_local_mirror": bool(missing_patch_ids),
+        }
+        if not present:
+            excluded.append(
+                {
+                    "roi": roi_dir.name,
+                    "reason": "no_local_subtiles",
+                    **coverage,
+                }
+            )
+            continue
+        if missing_patch_ids and drop_incomplete:
             excluded.append(
                 {
                     "roi": roi_dir.name,
                     "reason": "incomplete_local_mirror",
-                    "n_subtiles_total": len(roi_patches),
-                    "n_subtiles_missing": len(missing_patch_ids),
-                    "missing_patch_ids": missing_patch_ids,
+                    **coverage,
                 }
             )
             continue
-        patch_dirs = [p.patch_dir(data_root) for p in roi_patches]
-        kept.append((roi_dir, flags, patch_dirs))
+        patch_dirs = [p.patch_dir(data_root) for p in present]
+        kept.append((roi_dir, flags, patch_dirs, coverage))
     return kept, excluded
 
 
@@ -125,23 +143,21 @@ def stitch_roi_predictions(
     *,
     pixel_m: float = 1.0,
     combine: str = "nanmean",
+    allow_missing_predictions: bool = False,
 ) -> Tuple[np.ndarray, GridSpec]:
-    """Place each subtile's predicted (3,H,W) raster onto one shared ROI raster.
+    """Place each subtile's predicted ``(C,H,W)`` raster onto one shared ROI raster.
 
     Returns ``(roi_probs, roi_grid)``: ``roi_probs`` is ``(C, H_roi, W_roi)`` float32
     with NaN for cells no subtile *observed by LiDAR* (a real, model-independent gap --
     both GT and prediction are blind there, so treating it as unobserved is fair).
-    ``C`` is inferred from the first ``{patch_id}_logits_network.npy`` (typically 2 for
-    ROADS+RAILROADS training heads, or 3 for legacy three-channel dumps).
+    ``C`` is inferred from the first available ``{patch_id}_logits_network.npy``.
     Overlapping subtile cells are combined per ``combine`` (``"nanmean"`` default;
     ``"max"``/``"first"`` for sensitivity checks).
 
-    Requires ALL of ``patch_dirs`` to have a ``{patch_id}_logits_network.npy`` under
-    ``save_path`` -- raises ``FileNotFoundError`` listing every missing one otherwise,
-    rather than silently stitching a partial ROI (which would bias APLS the same way an
-    incomplete local subtile mirror would; see ``group_by_roi_complete_only``). Callers
-    should treat this exception as "exclude the whole ROI from evaluation", not retry
-    with a subset.
+    By default, **all** ``patch_dirs`` must have a logits file (raises
+    ``FileNotFoundError`` listing missing ones). With
+    ``allow_missing_predictions=True``, missing logits are skipped (those cells
+    stay NaN); still raises if **no** logits file is present.
     """
     if combine not in ("nanmean", "max", "first"):
         raise ValueError(f"combine must be one of nanmean/max/first, got {combine!r}")
@@ -151,16 +167,30 @@ def stitch_roi_predictions(
         for patch_dir in patch_dirs
         if not (save_path / f"{patch_dir.name}_logits_network.npy").is_file()
     ]
-    if missing_pred_files:
+    if missing_pred_files and not allow_missing_predictions:
         preview = ", ".join(missing_pred_files[:10])
-        more = f", ... and {len(missing_pred_files) - 10} more" if len(missing_pred_files) > 10 else ""
+        more = (
+            f", ... and {len(missing_pred_files) - 10} more"
+            if len(missing_pred_files) > 10
+            else ""
+        )
         raise FileNotFoundError(
             f"{len(missing_pred_files)}/{len(patch_dirs)} subtile(s) missing "
             f"{{patch_id}}_logits_network.npy under {save_path}: {preview}{more}"
         )
 
+    kept_patch_dirs: List[Path] = [
+        patch_dir
+        for patch_dir in patch_dirs
+        if (save_path / f"{patch_dir.name}_logits_network.npy").is_file()
+    ]
+    if not kept_patch_dirs:
+        raise FileNotFoundError(
+            f"0/{len(patch_dirs)} subtile(s) have {{patch_id}}_logits_network.npy "
+            f"under {save_path}"
+        )
+
     grids: List[GridSpec] = []
-    kept_patch_dirs: List[Path] = list(patch_dirs)
     for patch_dir in kept_patch_dirs:
         grid = _read_patch_grid(patch_dir)
         if abs(grid.pixel_m - pixel_m) > 1e-9:
