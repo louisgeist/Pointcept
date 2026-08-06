@@ -872,6 +872,133 @@ def repair_degree1_endpoints_diagonal_opposed(
     }
 
 
+def repair_degree1_endpoints_within_radius(
+    graph: PixelGraph,
+    *,
+    radius_m: float,
+    added_edge_weight: float = 1.0,
+    include_isolated_nodes: bool = True,
+) -> tuple[PixelGraph, dict[str, int | float | list[int]]]:
+    """Reconnect endpoints (and, optionally, isolated nodes) to every other endpoint/
+    isolated node within ``radius_m`` straight-line XY distance.
+
+    Radius-based sibling of ``repair_degree1_endpoints_diagonal_opposed`` (which only
+    tests the two diagonal-opposed pixel neighbors, i.e. a single-pixel gap): this one
+    works in real XY meters, so it can bridge larger prediction gaps -- meant to run
+    later in the pipeline (after RDP/merge) than the diagonal fix. Every unordered pair
+    of candidate nodes within ``radius_m`` of each other gets a new edge (deduplicated
+    against edges already present), not just each node's single nearest candidate.
+    """
+    empty_stats: dict[str, int | float | list[int]] = {
+        "n_endpoints_before": 0,
+        "n_endpoints_after": 0,
+        "n_isolated_before": 0,
+        "n_isolated_after": 0,
+        "n_edges_added": 0,
+        "added_edge_weight": float(added_edge_weight),
+        "radius_m": float(radius_m),
+        "corrected_node_ids": [],
+    }
+    n_nodes = int(graph.node_rc.shape[0])
+    if n_nodes == 0:
+        return graph, empty_stats
+    if radius_m <= 0:
+        raise ValueError(f"radius_m must be > 0, got {radius_m}")
+    weight_new = float(added_edge_weight)
+    if weight_new <= 0.0:
+        raise ValueError(f"added_edge_weight must be > 0, got {added_edge_weight}")
+
+    edges_in = np.asarray(graph.edges, dtype=np.int64)
+    weights_in = (
+        np.asarray(graph.edge_weights, dtype=np.float64)
+        if graph.edge_weights is not None
+        else np.ones((edges_in.shape[0],), dtype=np.float64)
+    )
+    if weights_in.shape[0] != edges_in.shape[0]:
+        raise ValueError(
+            "edge_weights length must match edges rows, got "
+            f"{weights_in.shape[0]} vs {edges_in.shape[0]}"
+        )
+
+    deg_before = node_degrees(edges_in, n_nodes)
+    n_endpoints_before = int(np.count_nonzero(deg_before == 1))
+    n_isolated_before = int(np.count_nonzero(deg_before == 0))
+
+    candidate_mask = deg_before == 1
+    if include_isolated_nodes:
+        candidate_mask = candidate_mask | (deg_before == 0)
+    candidate_ids = np.flatnonzero(candidate_mask).astype(np.int64)
+
+    if candidate_ids.shape[0] < 2:
+        return graph, {
+            **empty_stats,
+            "n_endpoints_before": n_endpoints_before,
+            "n_endpoints_after": n_endpoints_before,
+            "n_isolated_before": n_isolated_before,
+            "n_isolated_after": n_isolated_before,
+        }
+
+    # Standalone module (numpy + Pillow only, no scipy) -- candidate counts are small
+    # (a subset of endpoints/isolated nodes after RDP+merge), so a plain vectorized
+    # all-pairs distance matrix is simpler than a KDTree and plenty fast here.
+    xy = graph.node_xy[candidate_ids]  # (C, 2)
+    diff = xy[:, None, :] - xy[None, :, :]
+    dist = np.sqrt(np.einsum("ijk,ijk->ij", diff, diff))
+    ci, cj = np.triu_indices(candidate_ids.shape[0], k=1)
+    within = dist[ci, cj] <= float(radius_m)
+
+    existing_pairs = {(int(u), int(v)) for u, v in edges_in.tolist()}
+    added_pairs: set[tuple[int, int]] = set()
+    for li, lj in zip(ci[within].tolist(), cj[within].tolist()):
+        u = int(candidate_ids[li])
+        v = int(candidate_ids[lj])
+        pair = (u, v) if u < v else (v, u)
+        if pair in existing_pairs:
+            continue
+        added_pairs.add(pair)
+
+    if not added_pairs:
+        return graph, {
+            "n_endpoints_before": n_endpoints_before,
+            "n_endpoints_after": n_endpoints_before,
+            "n_isolated_before": n_isolated_before,
+            "n_isolated_after": n_isolated_before,
+            "n_edges_added": 0,
+            "added_edge_weight": float(weight_new),
+            "radius_m": float(radius_m),
+            "corrected_node_ids": [],
+        }
+
+    pairs_sorted = sorted(added_pairs)
+    edges_add = np.asarray(pairs_sorted, dtype=np.int64)
+    weights_add = np.full((edges_add.shape[0],), weight_new, dtype=np.float64)
+    edges_out = np.concatenate([edges_in, edges_add], axis=0)
+    weights_out = np.concatenate([weights_in, weights_add], axis=0)
+
+    deg_after = node_degrees(edges_out, n_nodes)
+    n_endpoints_after = int(np.count_nonzero(deg_after == 1))
+    n_isolated_after = int(np.count_nonzero(deg_after == 0))
+    corrected_nodes = np.unique(edges_add.reshape(-1)).astype(np.int64)
+
+    updated = PixelGraph(
+        node_rc=graph.node_rc,
+        node_xy=graph.node_xy,
+        edges=edges_out,
+        edge_weights=weights_out,
+        grid=graph.grid,
+    )
+    return updated, {
+        "n_endpoints_before": n_endpoints_before,
+        "n_endpoints_after": n_endpoints_after,
+        "n_isolated_before": n_isolated_before,
+        "n_isolated_after": n_isolated_after,
+        "n_edges_added": int(edges_add.shape[0]),
+        "added_edge_weight": float(weight_new),
+        "radius_m": float(radius_m),
+        "corrected_node_ids": corrected_nodes.astype(int).tolist(),
+    }
+
+
 def _walk_polyline(
     start: int,
     nxt: int,

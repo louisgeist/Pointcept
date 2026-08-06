@@ -791,7 +791,17 @@ class NetworkAPLSEvaluator(HookBase):
     """
 
     def after_train(self):
+        t0 = time.time()
         run_network_apls_eval_if_configured(self.trainer.cfg, self.trainer.logger)
+        elapsed_s = time.time() - t0
+        self.trainer.logger.info(f"Network APLS eval took {elapsed_s:.1f}s")
+
+        current_epoch = self.trainer.epoch + 1
+        tag = metric_tag("test", "network_apls_eval_time_s")
+        if self.trainer.writer is not None:
+            self.trainer.writer.add_scalar(tag, elapsed_s, current_epoch)
+        if self.trainer.cfg.enable_wandb:
+            wandb.log({"Epoch": current_epoch, tag: elapsed_s})
 
 
 @HOOKS.register_module()

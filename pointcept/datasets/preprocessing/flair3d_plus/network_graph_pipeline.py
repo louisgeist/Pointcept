@@ -41,9 +41,11 @@ class ProcessedNetworkGraph:
     graph_rdp_only: xy_rast.PixelGraph
     graph_pre_rdp_fix: xy_rast.PixelGraph | None
     graph_after_endpoint_fix: xy_rast.PixelGraph
+    graph_after_radius_fix: xy_rast.PixelGraph | None
     graph_final: xy_rast.PixelGraph
     endpoint_fix_info: dict[str, Any] | None
     merged_info: dict[str, int] | None
+    radius_fix_info: dict[str, Any] | None
     n_centerline_pixels_raw: int
     n_centerline_pixels: int
 
@@ -64,6 +66,10 @@ def _build_processed_network_graph_from_line_mask(
     endpoint_fix_include_isolated_nodes: bool,
     merge_enabled: bool,
     merge_weight_threshold: float,
+    radius_fix_enabled: bool,
+    radius_fix_radius_m: float,
+    radius_fix_added_edge_weight: float,
+    radius_fix_include_isolated_nodes: bool,
 ) -> ProcessedNetworkGraph:
     """Shared body: optional morphology -> pixel graph -> endpoint-fix -> RDP -> merge."""
     if connectivity not in (4, 8):
@@ -162,6 +168,22 @@ def _build_processed_network_graph_from_line_mask(
             "n_edges_weight_filtered": n_edges_filtered,
         }
 
+    # Radius-based extension of endpoint-fix: runs last (after merge), in real XY
+    # meters rather than raw pixel-diagonal adjacency, to bridge larger prediction gaps
+    # between dangling ends that survived RDP simplification + merge.
+    radius_fix_info: dict[str, Any] | None = None
+    graph_after_radius_fix: xy_rast.PixelGraph | None = None
+    if radius_fix_enabled:
+        graph_after_radius_fix, radius_fix_info = (
+            xy_rast.repair_degree1_endpoints_within_radius(
+                graph_final,
+                radius_m=radius_fix_radius_m,
+                added_edge_weight=radius_fix_added_edge_weight,
+                include_isolated_nodes=radius_fix_include_isolated_nodes,
+            )
+        )
+        graph_final = graph_after_radius_fix
+
     return ProcessedNetworkGraph(
         grid=grid,
         line_mask=line_mask,
@@ -169,9 +191,11 @@ def _build_processed_network_graph_from_line_mask(
         graph_rdp_only=simplified_rdp_only,
         graph_pre_rdp_fix=graph_pre_rdp_fix,
         graph_after_endpoint_fix=graph_after_endpoint_fix,
+        graph_after_radius_fix=graph_after_radius_fix,
         graph_final=graph_final,
         endpoint_fix_info=endpoint_fix_info,
         merged_info=merged_info,
+        radius_fix_info=radius_fix_info,
         n_centerline_pixels_raw=n_line_raw,
         n_centerline_pixels=n_line,
     )
@@ -193,6 +217,10 @@ def build_processed_network_graph_from_mask(
     endpoint_fix_include_isolated_nodes: bool = True,
     merge_enabled: bool = True,
     merge_weight_threshold: float = 2.5,
+    radius_fix_enabled: bool = False,
+    radius_fix_radius_m: float = 5.0,
+    radius_fix_added_edge_weight: float = 1.0,
+    radius_fix_include_isolated_nodes: bool = True,
 ) -> ProcessedNetworkGraph:
     """Build the final pixel graph from an already-thresholded boolean mask.
 
@@ -204,6 +232,13 @@ def build_processed_network_graph_from_mask(
     ``network=v5`` (``connectivity=4``, ``rdp_epsilon_m=2.0``, endpoint-fix enabled
     pre-RDP incl. isolated nodes, merge enabled post-RDP at ``weight_threshold=2.5``,
     morphology disabled) for an apples-to-apples topological comparison.
+
+    ``radius_fix_*`` (disabled by default -- opt in explicitly, it changes the graph and
+    therefore any APLS numbers derived from it): radius-based extension of endpoint-fix,
+    applied last (after merge) -- connects every endpoint/isolated node to every other
+    endpoint/isolated node within ``radius_fix_radius_m`` straight-line meters, not just
+    the diagonal-pixel-adjacent case the earlier endpoint-fix stage handles. See
+    ``network_xy_raster_utils.repair_degree1_endpoints_within_radius``.
     """
     line_mask = np.asarray(mask, dtype=bool)
     if line_mask.shape != (grid.height, grid.width):
@@ -225,6 +260,10 @@ def build_processed_network_graph_from_mask(
         endpoint_fix_include_isolated_nodes=endpoint_fix_include_isolated_nodes,
         merge_enabled=merge_enabled,
         merge_weight_threshold=merge_weight_threshold,
+        radius_fix_enabled=radius_fix_enabled,
+        radius_fix_radius_m=radius_fix_radius_m,
+        radius_fix_added_edge_weight=radius_fix_added_edge_weight,
+        radius_fix_include_isolated_nodes=radius_fix_include_isolated_nodes,
     )
 
 
