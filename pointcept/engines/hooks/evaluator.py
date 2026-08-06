@@ -44,7 +44,10 @@ from pointcept.utils.wandb_metrics import (
     iou_class_tag,
     metric_tag,
 )
-from pointcept.utils.gradient_norm import combine_weighted_task_losses
+from pointcept.utils.gradient_norm import (
+    combine_weighted_task_losses,
+    resolve_grad_norm_lite_scales,
+)
 
 from .default import HookBase
 from .builder import HOOKS
@@ -875,8 +878,15 @@ class MultiTaskEvaluator(HookBase):
                     if hasattr(model, "module"):
                         model = model.module
                     ema = getattr(self.trainer, "_grad_norm_lite_ema", None)
+                    task_groups = getattr(
+                        self.trainer.cfg, "grad_norm_lite_task_groups", None
+                    )
                     scales = (
-                        ema.scales(loss_by_task.keys()) if ema is not None else None
+                        resolve_grad_norm_lite_scales(
+                            ema, loss_by_task.keys(), task_groups
+                        )
+                        if ema is not None
+                        else None
                     )
                     loss, _ = combine_weighted_task_losses(
                         loss_by_task,
@@ -1407,12 +1417,15 @@ class MultiTaskEvaluator(HookBase):
                         )
             if final_kl_by_task:
                 kl_total = sum(final_kl_by_task.values())
+                tv_total = sum(final_tv_by_task.values())
                 if writer is not None:
                     writer.add_scalar(
                         "val/weighted_kl/nathab_total", kl_total, current_epoch
                     )
+                    writer.add_scalar("val/tv/nathab_total", tv_total, current_epoch)
                 if wandb_log is not None:
                     wandb_log["val/weighted_kl/nathab_total"] = float(kl_total)
+                    wandb_log["val/tv/nathab_total"] = float(tv_total)
 
         if comm.is_main_process():
             finalize_val_epoch_timing(

@@ -1739,6 +1739,7 @@ class MultiTaskTester(TesterBase):
                     )
 
             final_kl_by_task = {}
+            final_tv_by_task = {}
             for task_name in tile_distribution_tasks:
                 s = td_sums_global[task_name]
                 if s["weight"] <= 1e-8:
@@ -1752,6 +1753,7 @@ class MultiTaskTester(TesterBase):
                 mae = s["abs_weighted"] / s["weight"]
                 tv = float(mae.sum())
                 final_kl_by_task[task_name] = final_kl
+                final_tv_by_task[task_name] = tv
                 task_config = task_configs[task_name]
                 logger.info(
                     "[task={}] Test tile-distribution: weighted KL {:.6f} "
@@ -1777,6 +1779,9 @@ class MultiTaskTester(TesterBase):
             if final_kl_by_task:
                 log_dict["test/weighted_kl/nathab_total"] = float(
                     sum(final_kl_by_task.values())
+                )
+                log_dict["test/tv/nathab_total"] = float(
+                    sum(final_tv_by_task.values())
                 )
 
             log_test_f1 = getattr(self.cfg, "log_test_f1", False)
