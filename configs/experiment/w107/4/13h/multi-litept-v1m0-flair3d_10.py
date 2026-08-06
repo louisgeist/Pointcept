@@ -1,10 +1,17 @@
 """
-LitePT-Small on Flair3D+ multitask with pooling-stride ablation.
+LitePT-Small on Flair3D+ multitask, follow-up on the stride ablation (_1/_2/_3):
+the _1 baseline (stride=(2, 2, 2, 2)) came back surprisingly low, so _4-_10
+vary one axis at a time against that same baseline to find the culprit.
 
-Tasks: segment (v20) + forest + elevation + 4 nathab tile_distribution axes
-(Habitat Type / Moisture Regime / Soil Chemistry / Bioclimatic Zone), derived
-on the fly from raw natural_habitat via Flair3DLabelRemap (storage definition
-default / CarHab ids 0-43). Checkpoint selection uses main_task=segment.
+_10: drop the 4 nathab tile_distribution tasks entirely (segment + forest +
+elevation only, like the pre-nathab w101/7/moisture_multi-era 3/4-task setup,
+minus the natural_habitat classification task itself). Isolates whether the
+nathab axes are hurting segment purely by diluting shared-backbone gradient
+budget across more tasks - independent of _5's GradNormLite-grouping fix,
+which keeps all 4 nathab axes but changes how they're weighted.
+
+Tasks: segment (v20) + forest + elevation. Checkpoint selection uses
+main_task=segment.
 
 stride=(2, 2, 2, 2), batch_size=12, num_gpu=1.
 """
@@ -20,7 +27,7 @@ _base_ = ["../../../../_base_/default_runtime.py"]
 
 # Logging parameters
 grp_exp = 1
-num_exp = 1
+num_exp = 10
 
 log_task_gradient_norms = False
 grad_norm_lite = True
@@ -60,8 +67,8 @@ stride = (2, 2, 2, 2)
 
 # Wandb parameters
 wandb_run_name = (
-    f"Flair3D+ LitePT-S multi + nathab_distribution "
-    f"{grp_exp}.{num_exp} stride={stride} lr={lr}"
+    f"Flair3D+ LitePT-S multi "
+    f"{grp_exp}.{num_exp} stride={stride} lr={lr} nathab_distribution=disabled"
 )
 wandb_project = "flair3d_multi"
 
@@ -70,7 +77,6 @@ wandb_project = "flair3d_multi"
 # -----------------------------------------------------------------------------
 from pointcept.datasets.flair3d_config_utils import (
     ELEVATION_TARGET_SCALE,
-    FLAIR3D_TILE_DISTRIBUTION_TASKS,
     init_task_configs,
     init_task_criteria,
     FLAIR3D_COLLECT_PREFIX_LITEPT,
@@ -79,23 +85,10 @@ from pointcept.datasets.flair3d_config_utils import (
 )
 
 main_task = "segment"
-nathab_keys = tuple(FLAIR3D_TILE_DISTRIBUTION_TASKS.keys())
-target_keys = (main_task, "forest", "elevation") + nathab_keys
-# natural_habitat is loader-only (remap source), not a supervised task.
-dataset_target_keys = ("natural_habitat",) + target_keys
-
-nathab_axis_remaps = dict(
-    nathab_habitat_type=("natural_habitat", "by_habitat_type_ecological"),
-    nathab_moisture_regime=("natural_habitat", "by_moisture_regime"),
-    nathab_soil_chemistry=("natural_habitat", "by_soil_chemistry"),
-    nathab_bioclimatic_zone=("natural_habitat", "by_climatic_domain"),
-)
-nathab_axis_storage_definitions = dict(natural_habitat="default")
-nathab_axis_remap = dict(
-    type="Flair3DLabelRemap",
-    remaps=nathab_axis_remaps,
-    storage_definitions=nathab_axis_storage_definitions,
-)
+# No nathab_keys: segment + forest + elevation only, natural_habitat is not
+# loaded at all (unlike _1-_9, which load it as the nathab remap source).
+target_keys = (main_task, "forest", "elevation")
+dataset_target_keys = target_keys
 
 elevation_target_scale = ELEVATION_TARGET_SCALE
 elevation_key_scales = dict(elevation=elevation_target_scale)
@@ -118,7 +111,6 @@ del (
     init_task_configs,
     init_task_criteria,
     get_regression_target_scales,
-    FLAIR3D_TILE_DISTRIBUTION_TASKS,
 )
 
 # main_task drives checkpoint selection / mIoU logging, so its num_classes,
@@ -147,8 +139,7 @@ test = dict(type="MultiTaskTester", verbose=True, write_cls_iou=True)
 # Model
 # -----------------------------------------------------------------------------
 # MultiTaskSegmentorV2 attaches per-task heads on top of backbone features
-# (semantic: nn.Linear(backbone_out_channels, num_classes_task); elevation: 1;
-# tile_distribution: WeightedKLDivLoss on pooled softmax).
+# (semantic: nn.Linear(backbone_out_channels, num_classes_task); elevation: 1).
 model = dict(
     type="MultiTaskSegmentorV2",
     backbone_out_channels=72,
@@ -245,7 +236,6 @@ data = dict(
                 type="Update",
                 keys_dict={"index_valid_keys": list(multitask_index_valid_keys)},
             ),
-            nathab_axis_remap,
             dict(type="CenterShift", apply_z=True),
             dict(type="Z_MinShift"),
             dict(type="Z_RandomOffset"),
@@ -299,7 +289,6 @@ data = dict(
                 type="Update",
                 keys_dict={"index_valid_keys": list(multitask_index_valid_keys)},
             ),
-            nathab_axis_remap,
             dict(type="CenterShift", apply_z=True),
             dict(type="Z_MinShift"),
             dict(
@@ -338,7 +327,6 @@ data = dict(
         target_keys=list(dataset_target_keys),
         primary_target_key=main_task,
         transform=[
-            nathab_axis_remap,
             dict(type="CenterShift", apply_z=True),
             dict(type="Z_MinShift"),
             dict(type="NormalizeColor"),

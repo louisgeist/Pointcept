@@ -1,5 +1,11 @@
 """
-LitePT-Small on Flair3D+ multitask with pooling-stride ablation.
+LitePT-Small on Flair3D+ multitask, follow-up on the stride ablation (_1/_2/_3):
+the _1 baseline (stride=(2, 2, 2, 2)) came back surprisingly low, so _4-_10 vary
+one axis at a time against that same baseline to find the culprit.
+
+_9: total_iters=50_000 (vs. 30_000 in _1, 40_000 in _8). Same rationale as
+_8, one step further - OneCycleLR's schedule stretches accordingly, so this
+probes whether the baseline just needs a longer anneal.
 
 Tasks: segment (v20) + forest + elevation + 4 nathab tile_distribution axes
 (Habitat Type / Moisture Regime / Soil Chemistry / Bioclimatic Zone), derived
@@ -20,7 +26,7 @@ _base_ = ["../../../../_base_/default_runtime.py"]
 
 # Logging parameters
 grp_exp = 1
-num_exp = 1
+num_exp = 9
 
 log_task_gradient_norms = False
 grad_norm_lite = True
@@ -48,7 +54,7 @@ patch_size = 1024
 
 # Optimization parameters
 lr = 1e-3
-total_iters = 30_000
+total_iters = 50_000
 
 # Features
 learned_masked_feat = True
@@ -61,7 +67,7 @@ stride = (2, 2, 2, 2)
 # Wandb parameters
 wandb_run_name = (
     f"Flair3D+ LitePT-S multi + nathab_distribution "
-    f"{grp_exp}.{num_exp} stride={stride} lr={lr}"
+    f"{grp_exp}.{num_exp} stride={stride} lr={lr} total_iters={total_iters}"
 )
 wandb_project = "flair3d_multi"
 

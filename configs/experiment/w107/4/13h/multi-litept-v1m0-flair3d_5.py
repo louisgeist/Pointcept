@@ -1,5 +1,18 @@
 """
-LitePT-Small on Flair3D+ multitask with pooling-stride ablation.
+LitePT-Small on Flair3D+ multitask, follow-up on the stride ablation (_1/_2/_3):
+the _1 baseline (stride=(2, 2, 2, 2)) came back surprisingly low, so _4-_10 vary
+one axis at a time against that same baseline to find the culprit.
+
+_5: pool GradNormLite over the 4 nathab tile_distribution axes instead of
+scaling each independently. grad_norm_lite_task_groups maps all 4 nathab_keys
+to a single "nathab" group: their last-layer grad norm is probed once on the
+summed nathab loss, one shared EMA scale is learned, and that single scale is
+applied to each of the 4 nathab losses (segment/forest/elevation still get
+their own independent scale, unaffected). Rationale: with 4 independent
+GradNormLite scales, each nathab axis gets pushed to contribute a "fair
+share" of backbone gradient on its own, so the 4 axes together end up
+out-weighing segment's single share ~4:1 in gradient budget; pooling them
+into one group targets a single fair share for "nathab as a whole" instead.
 
 Tasks: segment (v20) + forest + elevation + 4 nathab tile_distribution axes
 (Habitat Type / Moisture Regime / Soil Chemistry / Bioclimatic Zone), derived
@@ -20,7 +33,7 @@ _base_ = ["../../../../_base_/default_runtime.py"]
 
 # Logging parameters
 grp_exp = 1
-num_exp = 1
+num_exp = 5
 
 log_task_gradient_norms = False
 grad_norm_lite = True
@@ -35,7 +48,7 @@ enable_amp = True
 
 # Data parameters
 batch_size = 12 * num_gpu  # total batch size across all gpus
-# Fixed (not batch_size-derived): keeps val VRAM stable across the _1-_10
+# Fixed (not batch_size-derived): keeps val VRAM stable across the _4-_10
 # sweep; has no bearing on the metric being investigated.
 batch_size_val = 5
 batch_size_test = batch_size // 4
@@ -61,7 +74,7 @@ stride = (2, 2, 2, 2)
 # Wandb parameters
 wandb_run_name = (
     f"Flair3D+ LitePT-S multi + nathab_distribution "
-    f"{grp_exp}.{num_exp} stride={stride} lr={lr}"
+    f"{grp_exp}.{num_exp} stride={stride} lr={lr} grad_norm_lite=pooled_nathab"
 )
 wandb_project = "flair3d_multi"
 
@@ -83,6 +96,11 @@ nathab_keys = tuple(FLAIR3D_TILE_DISTRIBUTION_TASKS.keys())
 target_keys = (main_task, "forest", "elevation") + nathab_keys
 # natural_habitat is loader-only (remap source), not a supervised task.
 dataset_target_keys = ("natural_habitat",) + target_keys
+
+# GradNormLite: pool the 4 nathab axes into one "nathab" group instead of
+# scaling each independently (see module docstring). segment/forest/elevation
+# are left ungrouped (each keeps its own scale, keyed by its own task name).
+grad_norm_lite_task_groups = {task_name: "nathab" for task_name in nathab_keys}
 
 nathab_axis_remaps = dict(
     nathab_habitat_type=("natural_habitat", "by_habitat_type_ecological"),

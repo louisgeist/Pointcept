@@ -1,5 +1,13 @@
 """
-LitePT-Small on Flair3D+ multitask with pooling-stride ablation.
+LitePT-Small on Flair3D+ multitask, follow-up on the stride ablation (_1/_2/_3):
+the _1 baseline (stride=(2, 2, 2, 2)) came back surprisingly low, so _4-_10 vary
+one axis at a time against that same baseline to find the culprit.
+
+_7: lr linearly scaled down from the last known-good multitask run's lr=1e-3
+at batch_size=20 (w101/7/moisture_multi) to the batch_size=12 used here:
+lr = 1e-3 * 12 / 20 = 6e-4. Complements _6 (brute-force 1e-4): this is the
+"principled" lr for batch_size=12 if the _1 baseline's lr=1e-3 (carried over
+unscaled from the batch_size=20 run) is the culprit.
 
 Tasks: segment (v20) + forest + elevation + 4 nathab tile_distribution axes
 (Habitat Type / Moisture Regime / Soil Chemistry / Bioclimatic Zone), derived
@@ -20,7 +28,7 @@ _base_ = ["../../../../_base_/default_runtime.py"]
 
 # Logging parameters
 grp_exp = 1
-num_exp = 1
+num_exp = 7
 
 log_task_gradient_norms = False
 grad_norm_lite = True
@@ -35,7 +43,7 @@ enable_amp = True
 
 # Data parameters
 batch_size = 12 * num_gpu  # total batch size across all gpus
-# Fixed (not batch_size-derived): keeps val VRAM stable across the _1-_10
+# Fixed (not batch_size-derived): keeps val VRAM stable across the _4-_10
 # sweep; has no bearing on the metric being investigated.
 batch_size_val = 5
 batch_size_test = batch_size // 4
@@ -47,7 +55,7 @@ mix_prob = 0.8
 patch_size = 1024
 
 # Optimization parameters
-lr = 1e-3
+lr = 1e-3 * 12 / 20  # linear scale with bs, vs. lr=1e-3 @ bs=20 upstream
 total_iters = 30_000
 
 # Features

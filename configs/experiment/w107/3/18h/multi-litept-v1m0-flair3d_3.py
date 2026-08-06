@@ -35,7 +35,9 @@ enable_amp = True
 
 # Data parameters
 batch_size = 12 * num_gpu  # total batch size across all gpus
-batch_size_val = batch_size // 2
+# Fixed (not batch_size-derived): keeps val VRAM stable across the _1-_10
+# sweep; has no bearing on the metric being investigated.
+batch_size_val = 5
 batch_size_test = batch_size // 4
 
 grid_size = 0.1
