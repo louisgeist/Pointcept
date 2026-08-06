@@ -6,24 +6,32 @@ Uses the same scene list as Flair3DDataset (CSV manifest, LIDARHD=True, excluded
 Aggregates segment, forest, land_use, and natural_habitat (point-level) plus
 natural_habitat_multilabel (scene-level multi-hot presence) in one pass per scene.
 
+Also emits point-level histograms for the four nathab tile-distribution axes
+(FLAIR3D_TILE_DISTRIBUTION_TASKS), fan-out remapped from natural_habitat.npy with the
+same LUTs as Flair3DLabelRemap in training (storage natural_habitat=default required).
+
 Label definitions match training: on-disk storage defs (e.g. natural_habitat=default from
 preprocess) can be remapped on the fly to a target def (e.g. by_moisture_v3) via the same
-LUT logic as Flair3DLabelRemap.
+LUT logic as Flair3DLabelRemap. Axis histograms always use storage natural_habitat and the
+fixed axis definitions; they do not follow --label_definitions for natural_habitat.
 
 natural_habitat_multilabel.npy is counted as scene presence over its 15 binary labels
 (no remap): percent = scenes_with_label / scenes_with_file.
+
+With multiple splits (e.g. train,val,test), one pass writes per-split subdirs plus
+an aggregated ``all/`` total under ``--output_dir``. A single split keeps a flat
+layout in ``--output_dir`` (backward compatible).
 
 Example (launch on A100 -> way faster):
 python scripts/count_flair3d_train_label_distribution.py \
 --data_root data/flair3d_plus \
 --csv_manifest data/flair3d_plus/raw/scene_split_manifest.csv \
---split train \
+--split train,val,test \
 --missing_tiles_manifest data/flair3d_plus/missing_ply_preflight.txt \
 --too_small_tiles_manifest data/flair3d_plus/too_small_tiles.csv \
---label_definitions natural_habitat=default \
 --storage_definitions natural_habitat=default \
---num_workers 8 \
---output_dir stats/flair3d/label_distribution_train
+--num_workers 24 \
+--output_dir stats/flair3d/label_distribution
 """
 
 from __future__ import annotations
@@ -56,11 +64,14 @@ def _load_flair3d_config_utils():
 
 _flair3d_cfg = _load_flair3d_config_utils()
 FLAIR3D_SEMANTIC_TARGET_KEYS = _flair3d_cfg.FLAIR3D_SEMANTIC_TARGET_KEYS
+FLAIR3D_TILE_DISTRIBUTION_TASKS = _flair3d_cfg.FLAIR3D_TILE_DISTRIBUTION_TASKS
 get_missing_target_fill_value = _flair3d_cfg.get_missing_target_fill_value
 get_semantic_config = _flair3d_cfg.get_semantic_config
 get_multilabel_classification_config = _flair3d_cfg.get_multilabel_classification_config
 
 SEMANTIC_TASKS = tuple(FLAIR3D_SEMANTIC_TARGET_KEYS)
+NATHAB_AXIS_TASKS = tuple(FLAIR3D_TILE_DISTRIBUTION_TASKS.keys())
+NATHAB_AXIS_SOURCE_TASK = "natural_habitat"
 
 MULTILABEL_TASK = "natural_habitat_multilabel"
 _MULTILABEL_CFG = get_multilabel_classification_config(MULTILABEL_TASK)
@@ -70,6 +81,7 @@ MULTILABEL_FILENAME = f"{MULTILABEL_TASK}.npy"
 
 # Set in main() before workers start; read by _process_scene in child processes.
 _TASK_REMAP_STATE: Dict[str, "TaskRemapState"] = {}
+_NATHAB_AXIS_REMAP_STATE: Dict[str, "TaskRemapState"] = {}
 
 
 def _load_label_remap_module():
@@ -93,6 +105,7 @@ def _load_label_remap_module():
 
 @dataclass(frozen=True)
 class TaskRemapState:
+    registry_task: str
     target_definition: str
     storage_definition: str
     stored_to_train_lut: np.ndarray | None
@@ -123,6 +136,32 @@ def parse_definition_mapping(spec: str, *, arg_name: str) -> Dict[str, str]:
     return result
 
 
+def _make_remap_state(
+    label_remap: Any,
+    *,
+    registry_task: str,
+    target_name: str,
+    storage_name: str,
+) -> TaskRemapState:
+    get_definition = label_remap.get_definition
+    build_stored_to_train_lut = label_remap.build_stored_to_train_lut
+    target_def = get_definition(registry_task, target_name)
+    stored_to_train_lut = None
+    if storage_name != target_name:
+        storage_def = get_definition(registry_task, storage_name)
+        stored_to_train_lut = build_stored_to_train_lut(storage_def, target_def)
+    cfg = label_remap.definition_to_task_config(target_def)
+    return TaskRemapState(
+        registry_task=registry_task,
+        target_definition=target_name,
+        storage_definition=storage_name,
+        stored_to_train_lut=stored_to_train_lut,
+        missing_fill_after_remap=int(target_def.lut[target_def.missing_fill_raw_id]),
+        num_classes=int(cfg["num_classes"]),
+        ignore_index=cfg["ignore_index"],
+    )
+
+
 def build_task_remap_state(
     target_definitions: Dict[str, str],
     storage_definitions: Dict[str, str],
@@ -130,28 +169,46 @@ def build_task_remap_state(
     """Mirror Flair3DLabelRemap: storage on-disk defs -> target training defs."""
     label_remap = _load_label_remap_module()
     get_default_definition_name = label_remap.get_default_definition_name
-    get_definition = label_remap.get_definition
-    build_stored_to_train_lut = label_remap.build_stored_to_train_lut
 
     state: Dict[str, TaskRemapState] = {}
     for task in SEMANTIC_TASKS:
         target_name = target_definitions.get(task, get_default_definition_name(task))
         storage_name = storage_definitions.get(task, get_default_definition_name(task))
-        target_def = get_definition(task, target_name)
-        stored_to_train_lut = None
-        if storage_name != target_name:
-            storage_def = get_definition(task, storage_name)
-            stored_to_train_lut = build_stored_to_train_lut(storage_def, target_def)
-        cfg = label_remap.definition_to_task_config(target_def)
-        state[task] = TaskRemapState(
-            target_definition=target_name,
-            storage_definition=storage_name,
-            stored_to_train_lut=stored_to_train_lut,
-            missing_fill_after_remap=int(target_def.lut[target_def.missing_fill_raw_id]),
-            num_classes=int(cfg["num_classes"]),
-            ignore_index=cfg["ignore_index"],
+        state[task] = _make_remap_state(
+            label_remap,
+            registry_task=task,
+            target_name=target_name,
+            storage_name=storage_name,
         )
     return state
+
+
+def build_nathab_axis_remap_state(
+    storage_definitions: Dict[str, str],
+) -> Dict[str, TaskRemapState]:
+    """Fan-out remaps for nathab tile-distribution axes (from natural_habitat storage)."""
+    label_remap = _load_label_remap_module()
+    get_default_definition_name = label_remap.get_default_definition_name
+    storage_name = storage_definitions.get(
+        NATHAB_AXIS_SOURCE_TASK,
+        get_default_definition_name(NATHAB_AXIS_SOURCE_TASK),
+    )
+
+    state: Dict[str, TaskRemapState] = {}
+    for axis, target_name in FLAIR3D_TILE_DISTRIBUTION_TASKS.items():
+        state[axis] = _make_remap_state(
+            label_remap,
+            registry_task=NATHAB_AXIS_SOURCE_TASK,
+            target_name=target_name,
+            storage_name=storage_name,
+        )
+    return state
+
+
+def _remap_state_for(task: str) -> TaskRemapState:
+    if task in _TASK_REMAP_STATE:
+        return _TASK_REMAP_STATE[task]
+    return _NATHAB_AXIS_REMAP_STATE[task]
 
 
 @dataclass(frozen=True)
@@ -287,8 +344,17 @@ def _init_task_counts() -> Dict[str, np.ndarray]:
     }
 
 
+def _init_nathab_axis_counts() -> Dict[str, np.ndarray]:
+    return {
+        axis: np.zeros(
+            _count_array_length(_NATHAB_AXIS_REMAP_STATE[axis]), dtype=np.int64
+        )
+        for axis in NATHAB_AXIS_TASKS
+    }
+
+
 def _apply_stored_to_train(labels: np.ndarray, task: str) -> np.ndarray:
-    task_state = _TASK_REMAP_STATE[task]
+    task_state = _remap_state_for(task)
     labels = labels.reshape(-1)
     lut = task_state.stored_to_train_lut
     if lut is None:
@@ -364,66 +430,109 @@ def _load_multilabel_vector(
 
 def _process_scene(
     task: tuple[SceneRecord, bool],
-) -> tuple[Dict[str, np.ndarray], np.ndarray, Dict[str, int], str | None]:
+) -> tuple[
+    str,
+    Dict[str, np.ndarray],
+    Dict[str, np.ndarray],
+    np.ndarray,
+    Dict[str, int],
+    str | None,
+]:
     scene, use_fill_for_missing = task
+    split = scene.split
     partial = _init_task_counts()
+    axis_partial = _init_nathab_axis_counts()
     ml_counts = _empty_multilabel_counts()
     meta = {f"{t}_from_file": 0 for t in SEMANTIC_TASKS}
     meta[f"{MULTILABEL_TASK}_from_file"] = 0
     meta[f"{MULTILABEL_TASK}_all_zero"] = 0
     meta[f"{MULTILABEL_TASK}_missing"] = 0
+    # Axes share natural_habitat.npy; mirror source-file presence for summary.
+    for axis in NATHAB_AXIS_TASKS:
+        meta[f"{axis}_from_file"] = 0
 
     coord_path = os.path.join(scene.scene_path, "coord.npy")
     if not os.path.isfile(coord_path):
-        return partial, ml_counts, meta, f"missing coord.npy: {scene.scene_path}"
+        return (
+            split,
+            partial,
+            axis_partial,
+            ml_counts,
+            meta,
+            f"missing coord.npy: {scene.scene_path}",
+        )
 
     n_points = int(np.load(coord_path, mmap_mode="r").shape[0])
+    stored_natural_habitat: np.ndarray | None = None
 
-    for task in SEMANTIC_TASKS:
-        file_path = os.path.join(scene.scene_path, f"{task}.npy")
+    for task_name in SEMANTIC_TASKS:
+        file_path = os.path.join(scene.scene_path, f"{task_name}.npy")
         has_file = os.path.isfile(file_path)
         if not has_file:
-            if task == "segment":
+            if task_name == "segment":
                 return (
+                    split,
                     partial,
+                    axis_partial,
                     ml_counts,
                     meta,
-                    f"missing {task}.npy: {scene.scene_path}",
+                    f"missing {task_name}.npy: {scene.scene_path}",
                 )
             if not use_fill_for_missing:
                 continue
 
-        labels = _load_task_labels(scene.scene_path, task, n_points)
+        labels = _load_task_labels(scene.scene_path, task_name, n_points)
         if labels is None:
             return (
+                split,
                 partial,
+                axis_partial,
                 ml_counts,
                 meta,
-                f"missing {task}.npy: {scene.scene_path}",
+                f"missing {task_name}.npy: {scene.scene_path}",
             )
         if labels.shape[0] != n_points:
             return (
+                split,
                 partial,
+                axis_partial,
                 ml_counts,
                 meta,
-                f"{task} length {labels.shape[0]} != coord {n_points}: {scene.scene_path}",
+                f"{task_name} length {labels.shape[0]} != coord {n_points}: "
+                f"{scene.scene_path}",
             )
 
         if has_file:
-            meta[f"{task}_from_file"] = 1
+            meta[f"{task_name}_from_file"] = 1
 
-        labels = _apply_stored_to_train(labels, task)
-        task_state = _TASK_REMAP_STATE[task]
+        # Keep storage ids for nathab axis fan-out (independent of NH target def).
+        if task_name == NATHAB_AXIS_SOURCE_TASK:
+            stored_natural_habitat = labels
+
+        remapped = _apply_stored_to_train(labels, task_name)
+        task_state = _TASK_REMAP_STATE[task_name]
         _accumulate_labels(
-            partial[task],
-            labels,
+            partial[task_name],
+            remapped,
             num_classes=task_state.num_classes,
             ignore_index=task_state.ignore_index,
         )
 
+    if stored_natural_habitat is not None:
+        for axis in NATHAB_AXIS_TASKS:
+            axis_labels = _apply_stored_to_train(stored_natural_habitat, axis)
+            axis_state = _NATHAB_AXIS_REMAP_STATE[axis]
+            _accumulate_labels(
+                axis_partial[axis],
+                axis_labels,
+                num_classes=axis_state.num_classes,
+                ignore_index=axis_state.ignore_index,
+            )
+            meta[f"{axis}_from_file"] = meta[f"{NATHAB_AXIS_SOURCE_TASK}_from_file"]
+
     ml_vector, ml_error = _load_multilabel_vector(scene.scene_path)
     if ml_error is not None:
-        return partial, ml_counts, meta, ml_error
+        return split, partial, axis_partial, ml_counts, meta, ml_error
     if ml_vector is None:
         meta[f"{MULTILABEL_TASK}_missing"] = 1
     else:
@@ -432,12 +541,62 @@ def _process_scene(
         if not np.any(ml_vector):
             meta[f"{MULTILABEL_TASK}_all_zero"] = 1
 
-    return partial, ml_counts, meta, None
+    return split, partial, axis_partial, ml_counts, meta, None
 
 
 def _merge_counts(total: Dict[str, np.ndarray], partial: Dict[str, np.ndarray]) -> None:
-    for task in SEMANTIC_TASKS:
-        total[task] += partial[task]
+    for task_name, counts in partial.items():
+        total[task_name] += counts
+
+
+@dataclass
+class SplitAccumulator:
+    """Per-split (or all-splits) running totals."""
+
+    semantic_counts: Dict[str, np.ndarray]
+    axis_counts: Dict[str, np.ndarray]
+    multilabel_counts: np.ndarray
+    scenes_with_file: Dict[str, int]
+    axis_scenes_with_file: Dict[str, int]
+    multilabel_scenes_with_file: int = 0
+    multilabel_scenes_all_zero: int = 0
+    multilabel_scenes_missing: int = 0
+    processed: int = 0
+    errors: List[str] | None = None
+
+    @classmethod
+    def create(cls) -> "SplitAccumulator":
+        return cls(
+            semantic_counts=_init_task_counts(),
+            axis_counts=_init_nathab_axis_counts(),
+            multilabel_counts=_empty_multilabel_counts(),
+            scenes_with_file={task: 0 for task in SEMANTIC_TASKS},
+            axis_scenes_with_file={axis: 0 for axis in NATHAB_AXIS_TASKS},
+            errors=[],
+        )
+
+    def add_success(
+        self,
+        partial: Dict[str, np.ndarray],
+        axis_partial: Dict[str, np.ndarray],
+        ml_partial: np.ndarray,
+        meta: Dict[str, int],
+    ) -> None:
+        _merge_counts(self.semantic_counts, partial)
+        _merge_counts(self.axis_counts, axis_partial)
+        self.multilabel_counts += ml_partial
+        for task_name in SEMANTIC_TASKS:
+            self.scenes_with_file[task_name] += meta[f"{task_name}_from_file"]
+        for axis in NATHAB_AXIS_TASKS:
+            self.axis_scenes_with_file[axis] += meta[f"{axis}_from_file"]
+        self.multilabel_scenes_with_file += meta[f"{MULTILABEL_TASK}_from_file"]
+        self.multilabel_scenes_all_zero += meta[f"{MULTILABEL_TASK}_all_zero"]
+        self.multilabel_scenes_missing += meta[f"{MULTILABEL_TASK}_missing"]
+        self.processed += 1
+
+    def add_error(self, err: str) -> None:
+        assert self.errors is not None
+        self.errors.append(err)
 
 
 def _format_count(n: int) -> str:
@@ -470,10 +629,12 @@ def _build_task_distribution(
     scenes_with_file: int,
     scenes_total: int,
 ) -> TaskDistribution:
-    task_state = _TASK_REMAP_STATE[task]
+    task_state = _remap_state_for(task)
     label_remap = _load_label_remap_module()
     cfg = label_remap.definition_to_task_config(
-        label_remap.get_definition(task, task_state.target_definition)
+        label_remap.get_definition(
+            task_state.registry_task, task_state.target_definition
+        )
     )
     class_names = cfg["names"]
     num_classes = int(cfg["num_classes"])
@@ -614,10 +775,21 @@ def _format_distribution_row(row: DistributionRow) -> str:
 
 
 def _format_distribution_text(dist: TaskDistribution) -> str:
-    lines = [
-        f"=== {dist.task} ===",
-        f"Scenes with on-disk {dist.task}.npy: {dist.scenes_with_file}/{dist.scenes_total}",
-    ]
+    lines = [f"=== {dist.task} ==="]
+    if dist.task in NATHAB_AXIS_TASKS:
+        lines.append(
+            f"Scenes with on-disk {NATHAB_AXIS_SOURCE_TASK}.npy "
+            f"(fan-out source): {dist.scenes_with_file}/{dist.scenes_total}"
+        )
+        lines.append(
+            f"Axis remap: {NATHAB_AXIS_SOURCE_TASK} -> "
+            f"{_NATHAB_AXIS_REMAP_STATE[dist.task].target_definition}"
+        )
+    else:
+        lines.append(
+            f"Scenes with on-disk {dist.task}.npy: "
+            f"{dist.scenes_with_file}/{dist.scenes_total}"
+        )
     if dist.task == MULTILABEL_TASK:
         lines.append("Unit: scene presence (multi-hot)")
         lines.append(
@@ -704,6 +876,84 @@ def _save_run_summary(
     return summary_path
 
 
+def _emit_bucket_outputs(
+    *,
+    bucket: str,
+    acc: SplitAccumulator,
+    output_dir: str,
+    shared_meta: Dict[str, Any],
+    quiet: bool = False,
+) -> List[str]:
+    """Write CSV/txt/summary for one split bucket (or ``all``). Returns saved paths."""
+    if not quiet:
+        print(f"\n######## bucket={bucket} (processed={acc.processed}) ########")
+
+    distributions: Dict[str, TaskDistribution] = {}
+    saved_paths: List[str] = []
+    for task_name in SEMANTIC_TASKS:
+        dist = _build_task_distribution(
+            task_name,
+            acc.semantic_counts[task_name],
+            acc.scenes_with_file[task_name],
+            acc.processed,
+        )
+        distributions[task_name] = dist
+        if not quiet:
+            _print_task_distribution(dist)
+        csv_path, txt_path = _save_task_distribution(dist, output_dir)
+        saved_paths.extend([csv_path, txt_path])
+
+    for axis in NATHAB_AXIS_TASKS:
+        dist = _build_task_distribution(
+            axis,
+            acc.axis_counts[axis],
+            acc.axis_scenes_with_file[axis],
+            acc.processed,
+        )
+        distributions[axis] = dist
+        if not quiet:
+            _print_task_distribution(dist)
+        csv_path, txt_path = _save_task_distribution(dist, output_dir)
+        saved_paths.extend([csv_path, txt_path])
+
+    multilabel_dist = _build_multilabel_distribution(
+        acc.multilabel_counts,
+        scenes_with_file=acc.multilabel_scenes_with_file,
+        scenes_total=acc.processed,
+        scenes_all_zero=acc.multilabel_scenes_all_zero,
+        scenes_missing=acc.multilabel_scenes_missing,
+    )
+    distributions[MULTILABEL_TASK] = multilabel_dist
+    if not quiet:
+        _print_task_distribution(multilabel_dist)
+    csv_path, txt_path = _save_task_distribution(multilabel_dist, output_dir)
+    saved_paths.extend([csv_path, txt_path])
+
+    errors = acc.errors or []
+    summary_path = _save_run_summary(
+        output_dir,
+        meta={
+            **shared_meta,
+            "bucket": bucket,
+            "scenes_processed": acc.processed,
+            f"{MULTILABEL_TASK}_missing": acc.multilabel_scenes_missing,
+            f"{MULTILABEL_TASK}_all_zero": acc.multilabel_scenes_all_zero,
+        },
+        distributions=distributions,
+        errors=errors,
+    )
+    saved_paths.append(summary_path)
+    if errors:
+        saved_paths.append(os.path.join(output_dir, "errors.txt"))
+
+    if not quiet:
+        print(f"Saved outputs under: {output_dir}")
+        for path in saved_paths:
+            print(f"  - {os.path.relpath(path, output_dir)}")
+
+    return saved_paths
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data_root", default="data/flair3d_plus")
@@ -711,7 +961,7 @@ def main() -> None:
         "--csv_manifest",
         default="data/flair3d_plus/raw/scene_split_manifest.csv",
     )
-    parser.add_argument("--split", default="train", help="Comma-separated splits (default: train)")
+    parser.add_argument("--split", default="train,val,test", help="Comma-separated splits (default: train,val,test)")
     parser.add_argument(
         "--missing_tiles_manifest",
         default="data/flair3d_plus/missing_ply_preflight.txt",
@@ -751,7 +1001,9 @@ def main() -> None:
         "--storage_definitions",
         default="",
         help="Comma-separated task=definition for on-disk label defs "
-        "(e.g. natural_habitat=default). Defaults match flair3d_label_remap defaults.",
+        "(e.g. natural_habitat=default). Also used as storage for nathab axis "
+        "fan-out; use natural_habitat=default to match training. "
+        "Defaults match flair3d_label_remap defaults.",
     )
     parser.add_argument("--num_workers", type=int, default=1)
     parser.add_argument(
@@ -762,13 +1014,14 @@ def main() -> None:
     parser.add_argument("--max_scenes", type=int, default=0, help="Debug: limit number of scenes (0=all)")
     parser.add_argument(
         "--output_dir",
-        default="stats/flair3d/label_distribution_train",
-        help="Directory to write per-task CSV/txt and summary.json "
-        "(default: data/flair3d_plus/stats/label_distribution_<split>).",
+        default="stats/flair3d/label_distribution",
+        help="Directory to write per-task CSV/txt and summary.json. "
+        "With multiple --split values, writes <output_dir>/<split>/ and "
+        "<output_dir>/all/ ; with a single split, writes flat into --output_dir.",
     )
     args = parser.parse_args()
 
-    global _TASK_REMAP_STATE
+    global _TASK_REMAP_STATE, _NATHAB_AXIS_REMAP_STATE
     target_definitions = parse_definition_mapping(
         args.label_definitions,
         arg_name="--label_definitions",
@@ -778,10 +1031,15 @@ def main() -> None:
         arg_name="--storage_definitions",
     )
     _TASK_REMAP_STATE = build_task_remap_state(target_definitions, storage_definitions)
+    _NATHAB_AXIS_REMAP_STATE = build_nathab_axis_remap_state(storage_definitions)
 
     data_root = resolve_repo_path(args.data_root)
     csv_manifest = resolve_repo_path(args.csv_manifest)
     target_splits = parse_splits(args.split)
+    split_order = [s for s in ("train", "val", "test") if s in target_splits]
+    for split in sorted(target_splits):
+        if split not in split_order:
+            split_order.append(split)
 
     excluded: set[tuple[str, str]] = set()
     if not args.no_exclude_hardcoded:
@@ -804,58 +1062,49 @@ def main() -> None:
 
     print(f"data_root={data_root}")
     print(f"csv_manifest={csv_manifest}")
-    print(f"splits={sorted(target_splits)}")
+    print(f"splits={split_order}")
     print(f"excluded tiles: {len(excluded)}")
     print(f"scenes to scan: {len(scenes)}")
     print(f"use_fill_for_missing={not args.skip_missing_optional}")
-    for task in SEMANTIC_TASKS:
-        state = _TASK_REMAP_STATE[task]
+    for task_name in SEMANTIC_TASKS:
+        state = _TASK_REMAP_STATE[task_name]
         remap_note = (
             " (on-the-fly remap)"
             if state.stored_to_train_lut is not None
             else ""
         )
         print(
-            f"{task}: storage={state.storage_definition} -> "
+            f"{task_name}: storage={state.storage_definition} -> "
             f"target={state.target_definition}{remap_note}"
+        )
+    for axis in NATHAB_AXIS_TASKS:
+        state = _NATHAB_AXIS_REMAP_STATE[axis]
+        print(
+            f"{axis}: storage={NATHAB_AXIS_SOURCE_TASK}/{state.storage_definition} -> "
+            f"target={state.target_definition} (fan-out)"
         )
     print(
         f"{MULTILABEL_TASK}: scene multi-hot presence "
         f"({NUM_MULTILABEL_CLASSES} labels, no remap)"
     )
 
-    total_counts = _init_task_counts()
-    multilabel_counts = _empty_multilabel_counts()
-    scenes_with_file = {task: 0 for task in SEMANTIC_TASKS}
-    multilabel_scenes_with_file = 0
-    multilabel_scenes_all_zero = 0
-    multilabel_scenes_missing = 0
-    errors: list[str] = []
+    per_split = {split: SplitAccumulator.create() for split in split_order}
+    all_acc = SplitAccumulator.create()
 
     use_fill = not args.skip_missing_optional
     tasks = [(scene, use_fill) for scene in scenes]
     show_progress = not args.no_progress and len(tasks) > 0
 
-    processed = 0
-
     def _consume_results(result_iter):
-        nonlocal processed
-        nonlocal multilabel_counts
-        nonlocal multilabel_scenes_with_file
-        nonlocal multilabel_scenes_all_zero
-        nonlocal multilabel_scenes_missing
-        for partial, ml_partial, meta, err in result_iter:
+        for split, partial, axis_partial, ml_partial, meta, err in result_iter:
+            if split not in per_split:
+                per_split[split] = SplitAccumulator.create()
             if err:
-                errors.append(err)
+                per_split[split].add_error(err)
+                all_acc.add_error(err)
                 continue
-            _merge_counts(total_counts, partial)
-            multilabel_counts += ml_partial
-            for task in SEMANTIC_TASKS:
-                scenes_with_file[task] += meta[f"{task}_from_file"]
-            multilabel_scenes_with_file += meta[f"{MULTILABEL_TASK}_from_file"]
-            multilabel_scenes_all_zero += meta[f"{MULTILABEL_TASK}_all_zero"]
-            multilabel_scenes_missing += meta[f"{MULTILABEL_TASK}_missing"]
-            processed += 1
+            per_split[split].add_success(partial, axis_partial, ml_partial, meta)
+            all_acc.add_success(partial, axis_partial, ml_partial, meta)
 
     if args.num_workers <= 1:
         iterator = (_process_scene(t) for t in tasks)
@@ -869,74 +1118,84 @@ def main() -> None:
                 mapped = tqdm(mapped, total=len(tasks), desc="Scenes", unit="scene")
             _consume_results(mapped)
 
-    print(f"\nProcessed scenes: {processed}/{len(scenes)}")
-    if errors:
-        print(f"Skipped scenes with errors: {len(errors)}")
-        for line in errors[:10]:
+    print(f"\nProcessed scenes: {all_acc.processed}/{len(scenes)}")
+    for split in split_order:
+        acc = per_split[split]
+        n_err = len(acc.errors or [])
+        print(f"  {split}: processed={acc.processed} errors={n_err}")
+    if all_acc.errors:
+        print(f"Skipped scenes with errors: {len(all_acc.errors)}")
+        for line in all_acc.errors[:10]:
             print(f"  - {line}")
-        if len(errors) > 10:
-            print(f"  ... and {len(errors) - 10} more")
+        if len(all_acc.errors) > 10:
+            print(f"  ... and {len(all_acc.errors) - 10} more")
 
-    split_tag = "_".join(sorted(target_splits))
-    output_dir = resolve_repo_path(args.output_dir) if args.output_dir else resolve_repo_path(
-        f"data/flair3d_plus/stats/label_distribution_{split_tag}"
-    )
+    output_root = resolve_repo_path(args.output_dir)
+    multi_split = len(split_order) > 1
 
-    distributions: Dict[str, TaskDistribution] = {}
-    saved_paths: List[str] = []
-    for task in SEMANTIC_TASKS:
-        dist = _build_task_distribution(
-            task,
-            total_counts[task],
-            scenes_with_file[task],
-            processed,
-        )
-        distributions[task] = dist
-        _print_task_distribution(dist)
-        csv_path, txt_path = _save_task_distribution(dist, output_dir)
-        saved_paths.extend([csv_path, txt_path])
-
-    multilabel_dist = _build_multilabel_distribution(
-        multilabel_counts,
-        scenes_with_file=multilabel_scenes_with_file,
-        scenes_total=processed,
-        scenes_all_zero=multilabel_scenes_all_zero,
-        scenes_missing=multilabel_scenes_missing,
-    )
-    distributions[MULTILABEL_TASK] = multilabel_dist
-    _print_task_distribution(multilabel_dist)
-    csv_path, txt_path = _save_task_distribution(multilabel_dist, output_dir)
-    saved_paths.extend([csv_path, txt_path])
-
-    summary_path = _save_run_summary(
-        output_dir,
-        meta={
-            "data_root": data_root,
-            "csv_manifest": csv_manifest,
-            "splits": sorted(target_splits),
-            "excluded_tiles": len(excluded),
-            "scenes_scanned": len(scenes),
-            "scenes_processed": processed,
-            "use_fill_for_missing": not args.skip_missing_optional,
-            "label_definitions": {
-                task: _TASK_REMAP_STATE[task].target_definition for task in SEMANTIC_TASKS
-            },
-            "storage_definitions": {
-                task: _TASK_REMAP_STATE[task].storage_definition for task in SEMANTIC_TASKS
-            },
-            f"{MULTILABEL_TASK}_missing": multilabel_scenes_missing,
-            f"{MULTILABEL_TASK}_all_zero": multilabel_scenes_all_zero,
+    shared_meta: Dict[str, Any] = {
+        "data_root": data_root,
+        "csv_manifest": csv_manifest,
+        "splits": split_order,
+        "excluded_tiles": len(excluded),
+        "scenes_scanned": len(scenes),
+        "use_fill_for_missing": not args.skip_missing_optional,
+        "label_definitions": {
+            task_name: _TASK_REMAP_STATE[task_name].target_definition
+            for task_name in SEMANTIC_TASKS
         },
-        distributions=distributions,
-        errors=errors,
-    )
+        "storage_definitions": {
+            task_name: _TASK_REMAP_STATE[task_name].storage_definition
+            for task_name in SEMANTIC_TASKS
+        },
+        "nathab_axis_definitions": {
+            axis: {
+                "source_task": NATHAB_AXIS_SOURCE_TASK,
+                "storage_definition": _NATHAB_AXIS_REMAP_STATE[axis].storage_definition,
+                "target_definition": _NATHAB_AXIS_REMAP_STATE[axis].target_definition,
+            }
+            for axis in NATHAB_AXIS_TASKS
+        },
+    }
 
-    print(f"\nSaved outputs under: {output_dir}")
-    for path in saved_paths:
-        print(f"  - {os.path.basename(path)}")
-    print(f"  - {os.path.basename(summary_path)}")
-    if errors:
-        print(f"  - errors.txt")
+    if multi_split:
+        buckets: List[Tuple[str, SplitAccumulator, str]] = [
+            (split, per_split[split], os.path.join(output_root, split))
+            for split in split_order
+        ]
+        buckets.append(("all", all_acc, os.path.join(output_root, "all")))
+    else:
+        only = split_order[0]
+        buckets = [(only, per_split[only], output_root)]
+
+    for bucket, acc, out_dir in buckets:
+        _emit_bucket_outputs(
+            bucket=bucket,
+            acc=acc,
+            output_dir=out_dir,
+            shared_meta=shared_meta,
+        )
+
+    if multi_split:
+        index_path = os.path.join(output_root, "index.json")
+        with open(index_path, "w", encoding="utf-8") as handle:
+            json.dump(
+                {
+                    **shared_meta,
+                    "buckets": {
+                        bucket: {
+                            "output_dir": out_dir,
+                            "scenes_processed": acc.processed,
+                            "error_count": len(acc.errors or []),
+                        }
+                        for bucket, acc, out_dir in buckets
+                    },
+                },
+                handle,
+                indent=2,
+            )
+            handle.write("\n")
+        print(f"\nIndex: {index_path}")
 
 
 if __name__ == "__main__":
