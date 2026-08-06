@@ -248,7 +248,7 @@ hooks = [
     dict(type="ModelHook"),
     dict(type="WeightDecaySchedular", base_value=base_wd, final_value=final_wd),
     dict(type="IterationTimer", warmup_iter=2),
-    dict(type="InformationWriter", log_interval=100),
+    dict(type="InformationWriter", log_interval=1),
     dict(type="CheckpointSaver", save_freq=eval_every),
     # After CheckpointSaver so epoch_N.pth exists; submits non-blocking sbatch probes.
     dict(

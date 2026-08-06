@@ -8,6 +8,7 @@ Please cite our work if the code is helpful to you.
 from itertools import chain
 from packaging import version
 from functools import partial
+import logging
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -22,6 +23,13 @@ from pointcept.models.modules import PointModel
 from pointcept.models.utils import offset2batch, offset2bincount, batch2offset
 from pointcept.utils.comm import get_world_size, all_gather
 from pointcept.utils.scheduler import CosineScheduler
+
+# pointcept's get_root_logger() sets the "pointcept" logger to ERROR level on
+# non-zero ranks (to avoid duplicate spam); explicitly set our own level so
+# this diagnostic isn't silently swallowed on the other 31/32 ranks where the
+# empty-match issue is equally likely to occur.
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.WARNING)
 
 
 class OnlineCluster(nn.Module):
@@ -312,6 +320,25 @@ class Sonata(PointModel):
         point_mask = torch.isin(point_cluster, mask_patch_index)
         return point_mask, point_cluster
 
+    def _warn_empty_match_groups(self, name, batch, match_index):
+        """Debug diagnostic for NaN loss: segment_coo(reduce='mean') silently
+        returns NaN for any batch id with 0 matched points (empty-tensor mean).
+        Logs which batch id(s) hit that, to confirm/refute before segment_coo runs."""
+        all_ids = set(batch.unique().tolist())
+        matched_ids = (
+            set(batch[match_index[:, 0]].unique().tolist())
+            if match_index.shape[0] > 0
+            else set()
+        )
+        missing = all_ids - matched_ids
+        if missing:
+            rank = dist.get_rank() if get_world_size() > 1 else 0
+            logger.warning(
+                f"[Sonata NaN-diagnostic] rank={rank} {name}: batch id(s) {sorted(missing)} "
+                f"have 0 matched points out of {len(all_ids)} (match_max_r={self.match_max_r}) "
+                f"-> this segment will be NaN after segment_coo(reduce='mean')."
+            )
+
     @torch.no_grad()
     def match_neighbour(
         self,
@@ -439,6 +466,9 @@ class Sonata(PointModel):
                         global_point_.origin_coord,
                         global_point_.offset,
                     )
+                    self._warn_empty_match_groups(
+                        "mask_loss", mask_global_point_.batch, match_index
+                    )
                     # teacher forward
                     mask_target_sim = self.sinkhorn_knopp(
                         global_point_.feat[match_index[:, 1]],
@@ -470,6 +500,9 @@ class Sonata(PointModel):
                         mask_global_point_.offset,
                         roll_global_point_.origin_coord,
                         roll_global_point_.offset,
+                    )
+                    self._warn_empty_match_groups(
+                        "roll_mask_loss", mask_global_point_.batch, match_index
                     )
                     # teacher forward
                     roll_mask_target_sim = self.sinkhorn_knopp(
@@ -506,6 +539,9 @@ class Sonata(PointModel):
                     local_point_.offset[self.num_local_view - 1 :: self.num_local_view],
                     global_point_.origin_coord[principal_view_mask],
                     batch2offset(principal_view_batch),
+                )
+                self._warn_empty_match_groups(
+                    "unmask_loss", local_point_.batch, match_index
                 )
                 # teacher forward
                 unmask_target_sim = self.sinkhorn_knopp(
