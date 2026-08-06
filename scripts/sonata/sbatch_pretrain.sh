@@ -31,7 +31,11 @@ EXP_NAME="${1:-sonata_pretrain_flair3dplus}"
 NUM_GPUS=8  # must match --gres=gpu:N (per node); total GPUs = nodes × NUM_GPUS
 
 REPO_ROOT=/lustre/fswork/projects/rech/unv/usi32yh/Pointcept
-JOB_DIR=${REPO_ROOT}/logs/slurm/${SLURM_JOB_ID}
+# Pass an existing job dir as $2 to resume it (train.sh auto-resumes when
+# JOB_DIR/model/model_last.pth exists), e.g.:
+#   sbatch scripts/sonata/sbatch_pretrain.sh sonata_pretrain_flair3dplus logs/slurm/<OLD_JOB_ID>
+# (not `sbatch --export=...`: the Jean-Zay sbatch wrapper doesn't forward that flag.)
+JOB_DIR=${2:-${REPO_ROOT}/logs/slurm/${SLURM_JOB_ID}}
 mkdir -p ${JOB_DIR}
 
 cp $0 ${JOB_DIR}/script.slurm
