@@ -23,11 +23,36 @@ enable_amp = True
 amp_dtype = "bfloat16"
 find_unused_parameters = False
 grid_size = 0.1
+stride = (2, 3, 3, 3)
 max_size = 65_536  # points-per-view budget (MultiViewGenerator); calibrate via
                    # scripts/find_max_view_size.py when batch_size_per_gpu changes
 
+# match_max_r must scale with the point spacing at the matching resolution
+# (grid_size after up_cast_level=2 pooling stages), not be a fixed absolute
+# distance: upstream Sonata (configs/sonata/pretrain-sonata-v1m2-0-uni-teacher-head.py)
+# uses match_max_r=0.32 with grid_size=0.02/stride=(2,2,...) -> voxel=0.08m, a 4x
+# margin. Flair3D copied 0.32 verbatim with grid_size=0.1 -> voxel=0.6m here, i.e.
+# a margin *smaller* than the voxel itself, which silently produces "0 matched
+# points" (-> NaN via segment_coo(reduce="mean") of an empty group) on sparse
+# tiles. Keep the same ~4x margin upstream used.
+match_max_r_factor = 4
+match_max_r = match_max_r_factor * grid_size * stride[0] * stride[1]
+
+# generate_mask (pointcept/models/sonata/sonata_v1m1_base.py) buckets points via
+# (coord - min_coord) // mask_size on metric coordinates, so mask_size/mask_jitter
+# are absolute distances (meters), not voxel counts -- copying the upstream 0.1/0.4/0.01
+# verbatim would keep the same physical patch size (in meters) but make it span 5x fewer
+# voxels here (grid_size=0.1 vs upstream 0.02, a mask_size/grid_size ratio of 1-4 instead
+# of 5-20), degenerating toward near-single-point masking instead of meaningful patches.
+# Scale linearly by grid_size so patches keep the same voxel footprint as upstream, same
+# rationale as match_max_r above.
+grid_size_factor = grid_size / 0.02 # 0.02 is the grid_size used in the defaut Sonata config
+mask_size_start = 0.1 * grid_size_factor
+mask_size_base = 0.4 * grid_size_factor
+mask_jitter = 0.01 * grid_size_factor
+
 # Iter-limited schedule (1 trainer epoch = 1000 optimizer steps)
-total_iters = 30_000  # → 30 trainer epochs
+total_iters = 30_000 
 iter_per_epoch = 1000
 
 # Regular evaluation is replaced by linear-probe jobs
@@ -49,7 +74,7 @@ model = dict(
         type="PT-v3m2",
         in_channels=7,  # coord(3) + color(3) + strength(1)
         order=("z", "z-trans", "hilbert", "hilbert-trans"),
-        stride=(2, 3, 3, 3),
+        stride=stride,
         enc_depths=(3, 3, 3, 12, 3),
         enc_channels=(48, 96, 192, 384, 512),
         enc_num_head=(3, 6, 12, 24, 32),
@@ -81,13 +106,13 @@ model = dict(
     head_num_prototypes=4096,
     num_global_view=2,
     num_local_view=4,
-    mask_size_start=0.1,
-    mask_size_base=0.4,
+    mask_size_start=mask_size_start,
+    mask_size_base=mask_size_base,
     mask_size_warmup_ratio=0.05,
     mask_ratio_start=0.3,
     mask_ratio_base=0.7,
     mask_ratio_warmup_ratio=0.05,
-    mask_jitter=0.01,
+    mask_jitter=mask_jitter,
     teacher_temp_start=0.04,
     teacher_temp_base=0.07,
     teacher_temp_warmup_ratio=0.05,
@@ -98,14 +123,14 @@ model = dict(
     momentum_base=0.994,
     momentum_final=1,
     match_max_k=8,
-    match_max_r=0.32,
+    match_max_r=match_max_r,
     up_cast_level=2,
 )
 
 # -----------------------------------------------------------------------------
 # Optimizer / scheduler
 # -----------------------------------------------------------------------------
-base_lr = 0.001  # Sonata default; matched to 32-GPU global batch (bs=96)
+base_lr = 0.004  # Sonata default : 0.004
 lr_decay = 0.9  # layer-wise lr decay
 
 base_wd = 0.04
