@@ -1,14 +1,18 @@
 """
-SpUNet longer toy overfit for network pixel segmentation on Hecate (D067).
+SpUNet ROI overfit for network pixel segmentation on Hecate (D067).
 
-Same recipe as ``spunet_toy.py`` (1 tile, Mix3D off, no crop), but a longer
-schedule so pixel logits can move away from ~0.5 before evaluating
-collapse-to-background.
+Same recipe as ``spunet_toy_long.py``, but overfits on the full
+D067-2021_AF-S1-22 ROI (100 tiles, all locally mirrored on Hecate) instead of
+a single subtile. With real per-tile diversity, the single-tile
+loop-to-fill-a-batch trick is no longer needed: SphereCrop(mode="random")
+gives a random center per sample, batch_size is raised accordingly, and
+mix_prob>0 is safe again (NetworkRasterToPointLabels rasterizes labels
+per-point after collate, same as ``spunet_network_toy.py``).
 
 Example::
 
     export PYTHONPATH="$PWD"
-    python tools/train.py --config-file configs/flair3d_default/network/spunet_toy_long.py \\
+    python tools/train.py --config-file configs/flair3d_default/network/spunet_toy_roi.py \\
       --num-gpus 1
 """
 
@@ -22,34 +26,33 @@ _base_ = ["../../_base_/default_runtime.py"]
 # -----------------------------------------------------------------------------
 
 grp_exp = 1
-num_exp = 2
+num_exp = 3
 seed = 14028665
 
 num_gpu = 1
 num_worker = 8 * num_gpu
 enable_amp = True
 
-# batch_size=1: SphereCrop is removed below (see train transform) so each replica
-# is the full ~287k-point tile at grid_size=0.1 -- too big to batch at 4x.
-batch_size = 1 * num_gpu
+batch_size = 8 * num_gpu
 batch_size_val = batch_size
 batch_size_test = 1
 
-# One unique scene; train ``loop`` repeats it so DataLoader can form full batches
-# (each index maps to the same tile via idx % len(data_list)).
-overfit_unique_samples = 1
-overfit_train_loop = batch_size
+# ROI manifest is already filtered to the 100 D067-2021_AF-S1-22 tiles, so no
+# max_sample truncation is needed -- every row is used.
+train_max_sample = None
+val_max_sample = None
+test_max_sample = None
 
-train_max_sample = overfit_unique_samples
-val_max_sample = overfit_unique_samples
-test_max_sample = overfit_unique_samples
+# No single-tile repeat trick needed anymore (real per-tile diversity).
+overfit_train_loop = 1
 
 grid_size = 0.1
-# Single-tile overfit: no Mix3D (would only pair copies of the same scene).
-mix_prob = 0.0
+point_max = 100000
+# Real multi-tile diversity: Mix3D is safe again (see module docstring).
+mix_prob = 0.8
 
 lr = 1e-3
-total_iters = 10000
+total_iters = 8_000
 iter_per_epoch = 100
 eval_every = 5
 warmup_iters = 200
@@ -59,7 +62,7 @@ feat_keys = ["coord", "color", "strength"]
 coord_feat_scale = 0.01
 
 wandb_run_name = (
-    f"SpUNet network overfit-long D067 | lr={lr}, iters={total_iters}, "
+    f"SpUNet network overfit-ROI D067-2021_AF-S1-22 | lr={lr}, iters={total_iters}, "
     f"mix_prob={mix_prob}"
 )
 wandb_project = "flair3d_network_overfit"
@@ -98,7 +101,6 @@ hooks = [
     dict(type="MultiTaskEvaluator", write_cls_iou=True),
     dict(type="CheckpointSaver", save_freq=None),
     dict(type="PreciseEvaluator", test_last=False),
-    # After PreciseEvaluator only (end of training / tools/test.py) -- not on val.
     dict(type="NetworkAPLSEvaluator"),
 ]
 
@@ -138,32 +140,38 @@ scheduler = dict(
 )
 
 # -----------------------------------------------------------------------------
-# Dataset (D067 ROI on Hecate)
+# Dataset (D067-2021_AF-S1-22 ROI on Hecate, 100 tiles)
 # -----------------------------------------------------------------------------
 dataset_type = "Flair3DDataset"
 data_root = "data/flair3d_plus"
-csv_manifest = "data/flair3d_plus/raw/scene_split_manifest_D067.csv"
+csv_manifest = "data/flair3d_plus/raw/scene_split_manifest_D067-2021_AF-S1-22.csv"
 missing_tiles_manifest = "data/flair3d_plus/missing_ply_preflight.txt"
 too_small_tiles_manifest = "data/flair3d_plus/too_small_tiles.csv"
 
-# Opt-in APLS on PreciseEvaluator logits. Overfit uses train for data.test, and
-# D067 has no test split -- keep APLS ``split`` aligned with that.
+# Runs tools/eval_network_apls.py at the end of tools/test.py and from
+# NetworkAPLSEvaluator.after_train (after PreciseEvaluator only -- not on val).
+# ``split`` must match ``data.test.split`` so stitched ROIs find logits on disk.
+# This ROI manifest is train-only, and the overfit loop uses train for test too.
 network_apls_eval = dict(
-    network_graphs_root="/data/geist/Flair3D-build/data/network_graphs",
+    network_graphs_root="/data/geist/Flair3D-build/data/network_graphs",  # Hecate path
     split="train",
     threshold=0.5,
-    overlap_combine="nanmean",
-    connectivity=4,
-    rdp_epsilon_m=2.0,
-    endpoint_fix_stage="pre_rdp",
-    merge_weight_threshold=2.5,
+    overlap_combine="nanmean",  # nanmean|max|first, combines overlapping subtile predictions
+    connectivity=4,  # pixel-graph connectivity for the predicted mask: 4 or 8
+    rdp_epsilon_m=2.0,  # Ramer-Douglas-Peucker simplification epsilon (meters)
+    endpoint_fix_stage="pre_rdp",  # pre_rdp|post_rdp: when the diagonal endpoint-fix runs
+    merge_weight_threshold=2.5,  # post-RDP node-merge edge-weight threshold
+    # Hard cap on exact O(V^2) APLS after densification (raises rather than silently
+    # subsampling). None disables the cap. The whole run_network_apls_eval_if_configured()
+    # call is one try/except around the *entire* eval_network_apls.run() -- a single
+    # oversized ROI with a finite cap would otherwise abort APLS for every other ROI.
     max_nodes_exact=None,
-    max_rois=None,
-    densify=50.0,
-    snap_to_edge=4.0,
-    symmetric=True,
-    radius_fix_radius_m=5,
-    min_path_length_m=5,
+    max_rois=None,  # optional debug limit on number of ROIs scored
+    densify=50.0,  # SpaceNet-aligned max edge length (meters) before matching; None to disable
+    snap_to_edge=4.0,  # snap-to-edge control-point matching radius (meters); None = unrestricted NN
+    symmetric=True,  # score both GT->pred and pred->GT, take the harmonic mean
+    radius_fix_radius_m=5,  # predicted-graph endpoint/isolated-node radius reconnection (meters); None = disabled
+    min_path_length_m=5,  # SpaceNet-style short-path filter (meters); None = disabled
 )
 
 train_multitask_keys, val_multitask_keys, multitask_index_valid_keys = (
@@ -174,7 +182,7 @@ train_multitask_keys, val_multitask_keys, multitask_index_valid_keys = (
 
 del FLAIR3D_COLLECT_PREFIX_GRID, init_multitask_collect_keys
 
-# Same split for train/val/test so overfit metrics watch the same tile.
+# Same split for train/val/test so overfit metrics watch the same ROI tiles.
 _overfit_split = "train"
 
 data = dict(
@@ -209,9 +217,7 @@ data = dict(
                 mode="train",
                 return_grid_coord=True,
             ),
-            # No crop: single-tile overfit, train on the whole tile every step
-            # (SphereCrop(mode="center") always anchored the same fixed point --
-            # ~38% of the tile was never seen across any training iteration).
+            dict(type="SphereCrop", point_max=point_max, mode="random"),
             dict(type="CenterShift", apply_z=False),
             dict(type="NormalizeColor"),
             dict(type="NetworkRasterToPointLabels"),

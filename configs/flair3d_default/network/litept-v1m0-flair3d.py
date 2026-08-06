@@ -96,6 +96,8 @@ hooks = [
     dict(type="MultiTaskEvaluator", write_cls_iou=True),
     dict(type="CheckpointSaver", save_freq=None),
     dict(type="PreciseEvaluator", test_last=False),
+    # After PreciseEvaluator only (end of training / tools/test.py) -- not on val.
+    dict(type="NetworkAPLSEvaluator"),
 ]
 
 test_single_fragment = True
@@ -166,6 +168,28 @@ data_root = "data/flair3d_plus"
 csv_manifest = "data/flair3d_plus/raw/scene_split_manifest.csv"
 missing_tiles_manifest = "data/flair3d_plus/missing_ply_preflight.txt"
 too_small_tiles_manifest = "data/flair3d_plus/too_small_tiles.csv"
+
+# Opt-in APLS scoring of PreciseEvaluator test logits (see NetworkAPLSEvaluator /
+# tools/test.py). ``split`` must match ``data.test.split`` so stitched ROIs find
+# ``{patch_id}_logits_network.npy``. Jean Zay graphs root (Hecate uses
+# /data/geist/Flair3D-build/data/network_graphs).
+network_apls_eval = dict(
+    network_graphs_root="/lustre/fsn1/projects/rech/unv/usi32yh/data_flair3d_build/network_graphs",
+    split="test",
+    threshold=0.5,
+    overlap_combine="nanmean",
+    connectivity=4,
+    rdp_epsilon_m=2.0,
+    endpoint_fix_stage="pre_rdp",
+    merge_weight_threshold=2.5,
+    max_nodes_exact=None,  # None = no |V| cap after densify
+    max_rois=None,
+    densify=50.0,
+    snap_to_edge=4.0,
+    symmetric=True,
+    radius_fix_radius_m=5,
+    min_path_length_m=5,
+)
 
 train_multitask_keys, val_multitask_keys, multitask_index_valid_keys = (
     init_multitask_collect_keys(

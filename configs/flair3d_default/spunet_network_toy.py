@@ -97,6 +97,8 @@ hooks = [
     dict(type="MultiTaskEvaluator", write_cls_iou=True),
     dict(type="CheckpointSaver", save_freq=None),
     dict(type="PreciseEvaluator", test_last=False),
+    # After PreciseEvaluator only (end of training / tools/test.py) -- not on val.
+    dict(type="NetworkAPLSEvaluator"),
 ]
 
 test_single_fragment = True
@@ -147,6 +149,26 @@ data_root = "data/flair3d_plus"
 csv_manifest = "data/flair3d_plus/raw/scene_split_manifest_D067.csv"
 missing_tiles_manifest = "data/flair3d_plus/missing_ply_preflight.txt"
 too_small_tiles_manifest = "data/flair3d_plus/too_small_tiles.csv"
+
+# Opt-in APLS on PreciseEvaluator logits. ``data.test`` uses the val split on D067
+# (no local test rows) -- keep APLS ``split`` aligned so logits are found.
+network_apls_eval = dict(
+    network_graphs_root="/data/geist/Flair3D-build/data/network_graphs",
+    split="val",
+    threshold=0.5,
+    overlap_combine="nanmean",
+    connectivity=4,
+    rdp_epsilon_m=2.0,
+    endpoint_fix_stage="pre_rdp",
+    merge_weight_threshold=2.5,
+    max_nodes_exact=None,
+    max_rois=None,
+    densify=50.0,
+    snap_to_edge=4.0,
+    symmetric=True,
+    radius_fix_radius_m=5,
+    min_path_length_m=5,
+)
 
 train_multitask_keys, val_multitask_keys, multitask_index_valid_keys = (
     init_multitask_collect_keys(
