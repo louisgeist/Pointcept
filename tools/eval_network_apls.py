@@ -139,11 +139,41 @@ def run(
     radius_fix_radius_m: Optional[float] = None,
     min_path_length_m: Optional[float] = None,
     network_types: Optional[List[str]] = None,
+    missing_tiles_file: Optional[Path] = None,
 ) -> dict:
     densify = _coerce_densify(densify)
     snap_to_edge = _coerce_snap_to_edge(snap_to_edge)
     types = tuple(network_types) if network_types else NETWORK_TYPES
-    patches, _ = nps.load_manifest_patches(split_manifest_csv, splits=[split])
+
+    # Same known-missing exclusions as rasterize_network / Flair3DDataset hardcoded set.
+    if missing_tiles_file is None:
+        missing_tiles_file = nps._default_missing_coord_details_csv()
+    else:
+        missing_tiles_file = Path(missing_tiles_file)
+    known_missing = nps._load_known_missing_tiles(
+        missing_tiles_file if missing_tiles_file.is_file() else None
+    )
+    if known_missing:
+        print(
+            f"Known missing tiles: {len(known_missing)} from {missing_tiles_file}"
+        )
+    elif missing_tiles_file is not None and not missing_tiles_file.is_file():
+        print(
+            f"Warning: missing-tiles file not found ({missing_tiles_file}); "
+            "unexpected absences will be reported as [partial]."
+        )
+
+    patches, n_skipped_known_missing = nps.load_manifest_patches(
+        split_manifest_csv,
+        splits=[split],
+        network_types=types,
+        known_missing=known_missing,
+    )
+    if n_skipped_known_missing:
+        print(
+            f"Skipped {n_skipped_known_missing} known-missing tile(s) from "
+            f"{missing_tiles_file}"
+        )
     roi_items, excluded_rois = nps.group_by_roi_complete_only(patches, data_root)
     if excluded_rois:
         print(
@@ -283,6 +313,9 @@ def run(
             "split_manifest_csv": str(split_manifest_csv),
             "network_types": list(types),
             "max_rois": max_rois,
+            "missing_tiles_file": str(missing_tiles_file),
+            "n_known_missing": len(known_missing),
+            "n_skipped_known_missing": int(n_skipped_known_missing),
         },
         "n_rois_processed": n_rois_processed,
         "n_rois_skipped": n_rois_skipped,
@@ -460,12 +493,27 @@ def build_argparser() -> argparse.ArgumentParser:
             "when training dropped TRANSMISSION_LINES."
         ),
     )
+    p.add_argument(
+        "--missing_tiles_file",
+        type=str,
+        default=None,
+        help=(
+            "Exclusion list of known-missing (split, patch_id), same role as "
+            "Flair3DDataset / rasterize_network. Default: "
+            "data/flair3d_plus/missing_coord_tiles.details.csv"
+        ),
+    )
     return p
 
 
 def main(argv: Optional[List[str]] = None) -> None:
     args = build_argparser().parse_args(argv)
     symmetric = False if args.no_symmetric else bool(args.symmetric)
+    missing = (
+        Path(args.missing_tiles_file).resolve()
+        if args.missing_tiles_file
+        else None
+    )
     run(
         Path(args.data_root).resolve(),
         Path(args.save_path).resolve(),
@@ -487,6 +535,7 @@ def main(argv: Optional[List[str]] = None) -> None:
         radius_fix_radius_m=args.radius_fix_radius_m,
         min_path_length_m=args.min_path_length_m,
         network_types=args.network_types,
+        missing_tiles_file=missing,
     )
 
 
