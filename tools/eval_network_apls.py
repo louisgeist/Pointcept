@@ -138,9 +138,11 @@ def run(
     symmetric: bool = True,
     radius_fix_radius_m: Optional[float] = None,
     min_path_length_m: Optional[float] = None,
+    network_types: Optional[List[str]] = None,
 ) -> dict:
     densify = _coerce_densify(densify)
     snap_to_edge = _coerce_snap_to_edge(snap_to_edge)
+    types = tuple(network_types) if network_types else NETWORK_TYPES
     patches, _ = nps.load_manifest_patches(split_manifest_csv, splits=[split])
     roi_items, excluded_rois = nps.group_by_roi_complete_only(patches, data_root)
     if excluded_rois:
@@ -180,7 +182,13 @@ def run(
             continue
         n_rois_processed += 1
 
-        for channel_idx, network_type in enumerate(NETWORK_TYPES):
+        if roi_probs.shape[0] < len(types):
+            raise ValueError(
+                f"{roi_dir.name}: stitched probs have {roi_probs.shape[0]} channels "
+                f"but network_types has {len(types)}: {list(types)}"
+            )
+
+        for channel_idx, network_type in enumerate(types):
             if not flags.get(network_type, False):
                 continue
             processed = _build_predicted_graph(
@@ -407,6 +415,17 @@ def build_argparser() -> argparse.ArgumentParser:
             "for roads). Pass none/null to disable."
         ),
     )
+    p.add_argument(
+        "--network_types",
+        type=str,
+        nargs="+",
+        default=None,
+        help=(
+            "Channel names / order matching logits_network.npy channels "
+            f"(default: {' '.join(NETWORK_TYPES)}). Pass e.g. ROADS RAILROADS "
+            "when training dropped TRANSMISSION_LINES."
+        ),
+    )
     return p
 
 
@@ -433,6 +452,7 @@ def main(argv: Optional[List[str]] = None) -> None:
         symmetric=symmetric,
         radius_fix_radius_m=args.radius_fix_radius_m,
         min_path_length_m=args.min_path_length_m,
+        network_types=args.network_types,
     )
 
 

@@ -45,6 +45,12 @@ def run_network_apls_eval_if_configured(cfg, logger):
         )
         return None
 
+    # Align APLS channels with the trained head (e.g. ROADS+RAILROADS only).
+    if "network_types" not in opts and task_configs and "network" in task_configs:
+        channel_names = task_configs["network"].get("channel_names")
+        if channel_names:
+            opts["network_types"] = list(channel_names)
+
     tools_dir = str(Path(__file__).resolve().parents[2] / "tools")
     if tools_dir not in sys.path:
         sys.path.insert(0, tools_dir)
