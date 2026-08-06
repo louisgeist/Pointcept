@@ -2,10 +2,32 @@
 LitePT-v1 on Flair3D+ (coord + RGB + strength in feat_keys).
 
 Mono-task Flair3D+ config for target ``network`` (binary 1 m Lambert pixel
-semantic segmentation of ROADS / RAILROADS / TRANSMISSION_LINES).
+semantic segmentation of ROADS / RAILROADS only). TRANSMISSION_LINES is not
+trained.
 
-Requires ``network.npy`` written by
-``rasterize_network.py`` and ``ExtractAbsXY`` before geometric shifts.
+Train/val/test use the roads+railroads filtered manifest (build on Jean Zay)::
+
+    python - <<'PY'
+    import csv
+    src = "data/flair3d_plus/raw/scene_split_manifest.csv"
+    dst = "data/flair3d_plus/raw/scene_split_manifest_roads_railroads.csv"
+    with open(src, newline="", encoding="utf-8") as f_in, open(
+        dst, "w", newline="", encoding="utf-8"
+    ) as f_out:
+        reader = csv.DictReader(f_in)
+        writer = csv.DictWriter(f_out, fieldnames=reader.fieldnames)
+        writer.writeheader()
+        n = 0
+        for row in reader:
+            if row.get("ROADS") == "True" or row.get("RAILROADS") == "True":
+                writer.writerow(row)
+                n += 1
+    print(f"Wrote {n} rows -> {dst}")
+    PY
+
+Online val is further restricted to ``val_dev_subset_2000.csv`` (intersection
+with the filtered CSV). Requires ``network.npy`` from ``rasterize_network.py``
+and ``ExtractAbsXY`` before geometric shifts.
 """
 
 # -----------------------------------------------------------------------------
@@ -29,7 +51,7 @@ enable_amp = True
 
 # Data parameters
 batch_size = 20 * num_gpu  # total batch size across all gpus
-batch_size_val = batch_size // 2
+batch_size_val = 5
 batch_size_test = batch_size // 4
 
 grid_size = 0.1
@@ -41,7 +63,7 @@ patch_size = 1024
 
 # Optimization parameters
 lr = 1e-3
-total_iters = 10_000
+total_iters = 30_000
 warmup_iters = 500
 
 # Features
@@ -51,7 +73,8 @@ coord_feat_scale = 0.01
 
 # Wandb parameters
 wandb_run_name = (
-    f"Flair3D+ LitePT mono network {grp_exp}.{num_exp}) lr={lr}"
+    f"Flair3D+ LitePT mono network roads+railroads "
+    f"{grp_exp}.{num_exp} lr={lr} iters={total_iters} filtered+strat_val"
 )
 wandb_project = "flair3d_network"
 
@@ -165,9 +188,10 @@ param_dicts = [dict(keyword="block", lr=lr / 10)]
 # -----------------------------------------------------------------------------
 dataset_type = "Flair3DDataset"
 data_root = "data/flair3d_plus"
-csv_manifest = "data/flair3d_plus/raw/scene_split_manifest.csv"
+csv_manifest = "data/flair3d_plus/raw/scene_split_manifest_roads_railroads.csv"
 missing_tiles_manifest = "data/flair3d_plus/missing_ply_preflight.txt"
 too_small_tiles_manifest = "data/flair3d_plus/too_small_tiles.csv"
+val_stratified_subset_manifest = "data/flair3d_plus/manifests/val_dev_subset_2000.csv"
 
 # Opt-in APLS scoring of PreciseEvaluator test logits (see NetworkAPLSEvaluator /
 # tools/test.py). ``split`` must match ``data.test.split``. Jean Zay graphs root.
@@ -263,6 +287,7 @@ data = dict(
         csv_manifest=csv_manifest,
         missing_tiles_manifest=missing_tiles_manifest,
         too_small_tiles_manifest=too_small_tiles_manifest,
+        stratified_subset_manifest=val_stratified_subset_manifest,
         target_keys=list(target_keys),
         primary_target_key=main_task,
         transform=[

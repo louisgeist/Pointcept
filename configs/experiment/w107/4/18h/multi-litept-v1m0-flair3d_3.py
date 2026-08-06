@@ -1,11 +1,20 @@
 """
-LitePT-v1 on Flair3D+ (coord + RGB + strength in feat_keys).
+LitePT-Small on Flair3D+ multitask + network (ROADS / RAILROADS only).
 
-Mono-task Flair3D+ config for target ``network`` (binary 1 m Lambert pixel
-semantic segmentation of ROADS / RAILROADS / TRANSMISSION_LINES).
+Tasks: segment (v20) + forest + elevation + 4 nathab tile_distribution axes
+(Habitat Type / Moisture Regime / Soil Chemistry / Bioclimatic Zone) + network
+(binary 1 m Lambert pixel semantic). Nathab axes derived on the fly from raw
+natural_habitat via Flair3DLabelRemap (storage definition default / CarHab
+ids 0-43). Checkpoint selection uses main_task=segment.
 
-Requires ``network.npy`` written by
-``rasterize_network.py`` and ``ExtractAbsXY`` before geometric shifts.
+GradNormLite pools the 4 nathab axes into one "nathab" group (same as
+w107/4/13h/_5). segment / forest / elevation / network keep independent scales.
+
+Train on the full national manifest (no roads/railroads filter). Online val
+uses ``val_dev_subset_2000.csv``. Wandb project matches mono network runs
+(``flair3d_network``).
+
+Requires ``network.npy`` / ``ExtractAbsXY`` + ``NetworkRasterToPointLabels``.
 """
 
 # -----------------------------------------------------------------------------
@@ -19,8 +28,13 @@ _base_ = ["../../../../_base_/default_runtime.py"]
 
 # Logging parameters
 grp_exp = 1
-num_exp = 1
+num_exp = 3
 
+log_task_gradient_norms = False
+grad_norm_lite = True
+grad_norm_lite_interval = 100
+grad_norm_lite_ema_alpha = 0.1
+grad_norm_lite_eps = 1e-3
 
 # Hardware parameters
 num_gpu = 1
@@ -29,7 +43,9 @@ enable_amp = True
 
 # Data parameters
 batch_size = 20 * num_gpu  # total batch size across all gpus
-batch_size_val = batch_size // 2
+# Fixed (not batch_size-derived): keeps val VRAM stable; has no bearing on the
+# metric being investigated.
+batch_size_val = 5
 batch_size_test = batch_size // 4
 
 grid_size = 0.1
@@ -41,43 +57,83 @@ patch_size = 1024
 
 # Optimization parameters
 lr = 1e-3
-total_iters = 10_000
-warmup_iters = 500
+total_iters = 30_000
 
 # Features
 learned_masked_feat = True
 feat_keys = ["coord", "color", "strength"]
 coord_feat_scale = 0.01
 
+# Backbone pooling stride (encoder stages)
+stride = (2, 2, 2, 2)
+
 # Wandb parameters
 wandb_run_name = (
-    f"Flair3D+ LitePT mono network {grp_exp}.{num_exp}) lr={lr}"
+    f"Flair3D+ LitePT-S multi + network roads+railroads + nathab_distribution "
+    f"{grp_exp}.{num_exp} stride={stride} lr={lr} grad_norm_lite=pooled_nathab"
 )
 wandb_project = "flair3d_network"
 
 # -----------------------------------------------------------------------------
-# Mono-task configuration : targets configuration
+# Multitask configuration : targets configuration
 # -----------------------------------------------------------------------------
 from pointcept.datasets.flair3d_config_utils import (
+    ELEVATION_TARGET_SCALE,
+    FLAIR3D_TILE_DISTRIBUTION_TASKS,
     init_task_configs,
     init_task_criteria,
     FLAIR3D_COLLECT_PREFIX_LITEPT,
     init_multitask_collect_keys,
+    get_regression_target_scales,
 )
 
-main_task = "network"
-target_keys = (main_task,)
+main_task = "segment"
+nathab_keys = tuple(FLAIR3D_TILE_DISTRIBUTION_TASKS.keys())
+target_keys = (main_task, "forest", "elevation") + nathab_keys + ("network",)
+# natural_habitat is loader-only (remap source), not a supervised task.
+dataset_target_keys = ("natural_habitat",) + target_keys
 
-task_configs = init_task_configs(target_keys)
+# GradNormLite: pool the 4 nathab axes into one "nathab" group instead of
+# scaling each independently (see module docstring). segment/forest/elevation/
+# network are left ungrouped (each keeps its own scale).
+grad_norm_lite_task_groups = {task_name: "nathab" for task_name in nathab_keys}
+
+nathab_axis_remaps = dict(
+    nathab_habitat_type=("natural_habitat", "by_habitat_type_ecological"),
+    nathab_moisture_regime=("natural_habitat", "by_moisture_regime"),
+    nathab_soil_chemistry=("natural_habitat", "by_soil_chemistry"),
+    nathab_bioclimatic_zone=("natural_habitat", "by_climatic_domain"),
+)
+nathab_axis_storage_definitions = dict(natural_habitat="default")
+nathab_axis_remap = dict(
+    type="Flair3DLabelRemap",
+    remaps=nathab_axis_remaps,
+    storage_definitions=nathab_axis_storage_definitions,
+)
+
+elevation_target_scale = ELEVATION_TARGET_SCALE
+elevation_key_scales = dict(elevation=elevation_target_scale)
+target_scales = get_regression_target_scales(target_keys)
+
+label_definitions = dict(
+    segment="v20",
+)
+
+task_configs = init_task_configs(target_keys, definitions=label_definitions)
 task_criteria = init_task_criteria(task_configs)
-task_weights = {main_task: 1.0}
+task_weights = {task_name: 1.0 for task_name in task_configs.keys()}
 
 # Remove the imported helpers from this module's namespace so they do not leak
 # into the Pointcept config dict. The config loader (pointcept/utils/config.py)
 # treats every non-dunder module attribute as a config entry, and Config.dump
 # pipes the resulting Python text through yapf. Yapf cannot reformat function
 # objects rendered as "<function ... at 0x...>" and raises a SyntaxError.
-del init_task_configs, init_task_criteria
+del (
+    init_task_configs,
+    init_task_criteria,
+    get_regression_target_scales,
+    FLAIR3D_TILE_DISTRIBUTION_TASKS,
+)
 
 # main_task drives checkpoint selection / mIoU logging, so its num_classes,
 # ignore_index and names are exposed at the data root for backward-compat hooks.
@@ -106,7 +162,9 @@ test = dict(type="MultiTaskTester", verbose=True, write_cls_iou=True)
 # -----------------------------------------------------------------------------
 # Model
 # -----------------------------------------------------------------------------
-# MultiTaskSegmentorV2: max-pool points into 1 m pixels, then Linear(C -> 2*r).
+# MultiTaskSegmentorV2 attaches per-task heads on top of backbone features
+# (semantic: nn.Linear(backbone_out_channels, num_classes_task); elevation: 1;
+# tile_distribution: WeightedKLDivLoss on pooled softmax; network: pixel_semantic).
 model = dict(
     type="MultiTaskSegmentorV2",
     backbone_out_channels=72,
@@ -114,7 +172,7 @@ model = dict(
         type="LitePT-v1",
         in_channels=7,  # coord (3) + color (3) + strength (1)
         order=("z", "z-trans", "hilbert", "hilbert-trans"),
-        stride=(2, 2, 2, 2),
+        stride=stride,
         enc_depths=(2, 2, 2, 6, 2),
         enc_channels=(36, 72, 144, 252, 504),
         enc_num_head=(2, 4, 8, 14, 28),
@@ -149,14 +207,18 @@ model = dict(
     task_weights=task_weights,
 )
 
+
 # -----------------------------------------------------------------------------
 # Optimizer / scheduler
 # -----------------------------------------------------------------------------
 optimizer = dict(type="AdamW", lr=lr, weight_decay=0.005)
 scheduler = dict(
-    type="LinearLR",
-    start_factor=1 / 10,
-    total_iters=warmup_iters,
+    type="OneCycleLR",
+    max_lr=[lr, lr / 10],
+    pct_start=0.05,
+    anneal_strategy="cos",
+    div_factor=10.0,
+    final_div_factor=1000.0,
 )
 param_dicts = [dict(keyword="block", lr=lr / 10)]
 
@@ -168,6 +230,7 @@ data_root = "data/flair3d_plus"
 csv_manifest = "data/flair3d_plus/raw/scene_split_manifest.csv"
 missing_tiles_manifest = "data/flair3d_plus/missing_ply_preflight.txt"
 too_small_tiles_manifest = "data/flair3d_plus/too_small_tiles.csv"
+val_stratified_subset_manifest = "data/flair3d_plus/manifests/val_dev_subset_2000.csv"
 
 # Opt-in APLS scoring of PreciseEvaluator test logits (see NetworkAPLSEvaluator /
 # tools/test.py). ``split`` must match ``data.test.split``. Jean Zay graphs root.
@@ -201,6 +264,7 @@ data = dict(
     num_classes=num_classes,
     ignore_index=ignore_index,
     names=names,
+    target_scales=target_scales,
     task_configs=task_configs,
     main_task=main_task,
     train=dict(
@@ -210,7 +274,7 @@ data = dict(
         csv_manifest=csv_manifest,
         missing_tiles_manifest=missing_tiles_manifest,
         too_small_tiles_manifest=too_small_tiles_manifest,
-        target_keys=list(target_keys),
+        target_keys=list(dataset_target_keys),
         primary_target_key=main_task,
         transform=[
             dict(
@@ -219,6 +283,7 @@ data = dict(
             ),
             # Freeze Lambert XY before geometric augs / recentering.
             dict(type="ExtractAbsXY"),
+            nathab_axis_remap,
             dict(type="CenterShift", apply_z=True),
             dict(type="Z_MinShift"),
             dict(type="Z_RandomOffset"),
@@ -252,6 +317,7 @@ data = dict(
                 keys=train_multitask_keys,
                 feat_keys=feat_keys,
                 feat_scales=dict(coord=coord_feat_scale),
+                key_scales=elevation_key_scales,
             ),
         ],
         test_mode=False,
@@ -263,7 +329,8 @@ data = dict(
         csv_manifest=csv_manifest,
         missing_tiles_manifest=missing_tiles_manifest,
         too_small_tiles_manifest=too_small_tiles_manifest,
-        target_keys=list(target_keys),
+        stratified_subset_manifest=val_stratified_subset_manifest,
+        target_keys=list(dataset_target_keys),
         primary_target_key=main_task,
         transform=[
             dict(
@@ -271,8 +338,13 @@ data = dict(
                 keys_dict={"index_valid_keys": list(multitask_index_valid_keys)},
             ),
             dict(type="ExtractAbsXY"),
+            nathab_axis_remap,
             dict(type="CenterShift", apply_z=True),
             dict(type="Z_MinShift"),
+            dict(
+                type="Copy",
+                keys_dict={t: f"origin_{t}" for t in target_keys},
+            ),
             dict(
                 type="GridSample",
                 grid_size=grid_size,
@@ -291,6 +363,7 @@ data = dict(
                 keys=val_multitask_keys,
                 feat_keys=feat_keys,
                 feat_scales=dict(coord=coord_feat_scale),
+                key_scales=elevation_key_scales,
             ),
         ],
         test_mode=False,
@@ -302,7 +375,7 @@ data = dict(
         csv_manifest=csv_manifest,
         missing_tiles_manifest=missing_tiles_manifest,
         too_small_tiles_manifest=too_small_tiles_manifest,
-        target_keys=list(target_keys),
+        target_keys=list(dataset_target_keys),
         primary_target_key=main_task,
         transform=[
             dict(
@@ -310,6 +383,7 @@ data = dict(
                 keys_dict={"index_valid_keys": list(multitask_index_valid_keys)},
             ),
             dict(type="ExtractAbsXY"),
+            nathab_axis_remap,
             dict(type="CenterShift", apply_z=True),
             dict(type="Z_MinShift"),
             dict(type="NormalizeColor"),
