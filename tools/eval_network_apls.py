@@ -147,15 +147,14 @@ def run(
     roi_items, excluded_rois = nps.group_by_roi_complete_only(patches, data_root)
     if excluded_rois:
         print(
-            f"[excluded] {len(excluded_rois)} ROI(s) dropped entirely: incomplete local "
-            "subtile mirror (would bias APLS -- run on a fully-mirrored manifest, e.g. "
-            "Jean Zay, for complete/official numbers). See 'excluded_rois' in the output "
-            "JSON for the full list."
+            f"[excluded] {len(excluded_rois)} ROI(s) with no usable local subtiles "
+            "(see 'excluded_rois' in the output JSON)."
         )
         for info in excluded_rois:
             print(
-                f"  - {info['roi']}: missing {info['n_subtiles_missing']}/"
-                f"{info['n_subtiles_total']} subtiles"
+                f"  - {info['roi']}: reason={info.get('reason')} "
+                f"missing {info.get('n_subtiles_missing', '?')}/"
+                f"{info.get('n_subtiles_total', '?')} subtiles"
             )
     if max_rois is not None:
         roi_items = roi_items[: max(0, int(max_rois))]
@@ -163,14 +162,46 @@ def run(
     results: List[apls.ApsSymmetricResult] = []
     n_rois_processed = 0
     n_rois_skipped = 0
+    partial_rois: List[dict] = []
 
-    for roi_dir, flags, patch_dirs in roi_items:
+    for roi_dir, flags, patch_dirs, coverage in roi_items:
+        n_total = int(coverage.get("n_subtiles_total", len(patch_dirs)))
+        n_disk_missing = int(coverage.get("n_subtiles_missing", 0))
+        missing_pred = [
+            p.name
+            for p in patch_dirs
+            if not (save_path / f"{p.name}_logits_network.npy").is_file()
+        ]
+        n_pred_missing = len(missing_pred)
+        n_pred_present = len(patch_dirs) - n_pred_missing
+        if n_disk_missing or n_pred_missing:
+            partial = {
+                "roi": roi_dir.name,
+                "n_subtiles_total": n_total,
+                "n_subtiles_on_disk": int(coverage.get("n_subtiles_present", len(patch_dirs))),
+                "n_subtiles_missing_disk": n_disk_missing,
+                "n_predictions_present": n_pred_present,
+                "n_predictions_missing": n_pred_missing,
+                "missing_patch_ids_disk": coverage.get("missing_patch_ids", []),
+                "missing_prediction_ids": missing_pred,
+            }
+            partial_rois.append(partial)
+            print(
+                f"[partial] {roi_dir.name}: scoring with incomplete coverage -- "
+                f"disk missing {n_disk_missing}/{n_total} subtiles, "
+                f"predictions missing {n_pred_missing}/{len(patch_dirs)} "
+                f"(APLS vs full-ROI GT can be pessimistic; see partial_rois in JSON)."
+            )
+
         try:
             roi_probs, roi_grid = nps.stitch_roi_predictions(
-                patch_dirs, save_path, combine=overlap_combine
+                patch_dirs,
+                save_path,
+                combine=overlap_combine,
+                allow_missing_predictions=True,
             )
         except FileNotFoundError as exc:
-            print(f"[excluded] {roi_dir.name}: missing prediction file(s) -- {exc}")
+            print(f"[excluded] {roi_dir.name}: no prediction file(s) -- {exc}")
             n_rois_skipped += 1
             excluded_rois.append(
                 {
@@ -250,11 +281,14 @@ def run(
             "save_path": str(save_path),
             "network_graphs_root": str(network_graphs_root),
             "split_manifest_csv": str(split_manifest_csv),
+            "network_types": list(types),
+            "max_rois": max_rois,
         },
         "n_rois_processed": n_rois_processed,
         "n_rois_skipped": n_rois_skipped,
         "n_rois_excluded_total": len(excluded_rois),
         "excluded_rois": excluded_rois,
+        "partial_rois": partial_rois,
         "per_channel": summary["per_channel"],
         "per_channel_gt_to_pred": summary["per_channel_gt_to_pred"],
         "per_channel_pred_to_gt": summary["per_channel_pred_to_gt"],
