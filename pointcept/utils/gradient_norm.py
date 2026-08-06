@@ -255,24 +255,53 @@ def resolve_last_backbone_layer_params(backbone):
     )
 
 
-def compute_task_last_layer_grad_norms(model, loss_by_task, probe_scale=1.0):
-    """Per-task L2 norm of grads w.r.t. the backbone last layer only.
+def compute_task_last_layer_grad_norms(
+    model, loss_by_task, probe_scale=1.0, task_groups=None
+):
+    """Per-task (or per-group) L2 norm of grads w.r.t. the backbone last layer.
 
     Uses raw (unweighted) task losses. Under AMP, pass ``probe_scale`` > 1
     (e.g. 1024) so scene-level losses do not underflow to a zero norm in
     fp16. Does not write into ``.grad``. Non-finite / zero norms are omitted.
+
+    ``task_groups`` optionally maps task_name -> group_name; tasks sharing a
+    group have their losses summed before probing, so the returned dict is
+    keyed by group_name (defaults to task_name for ungrouped tasks) and holds
+    a single norm per group instead of one per task.
     """
     params = model.last_backbone_layer_parameters()
-    norms = {}
+    if not params:
+        return {}
+    grouped_losses = {}
     for task_name, task_loss in loss_by_task.items():
-        if not params:
+        if not isinstance(task_loss, torch.Tensor) or not task_loss.requires_grad:
             continue
+        group = task_groups.get(task_name, task_name) if task_groups else task_name
+        grouped_losses.setdefault(group, []).append(task_loss)
+    norms = {}
+    for group, losses in grouped_losses.items():
+        group_loss = losses[0] if len(losses) == 1 else sum(losses)
         norm = _grad_norm_with_amp_probe(
-            task_loss, params, probe_scale=probe_scale
+            group_loss, params, probe_scale=probe_scale
         )
         if math.isfinite(norm) and norm > 0.0:
-            norms[task_name] = norm
+            norms[group] = norm
     return norms
+
+
+def resolve_grad_norm_lite_scales(ema, task_names, task_groups=None):
+    """Per-task loss scales from a ``GradNormLiteEMA``, honoring ``task_groups``.
+
+    Without ``task_groups`` this is just ``ema.scales(task_names)``. With it,
+    every task in the same group shares the group's EMA scale (the EMA itself
+    is keyed by group_name, matching ``compute_task_last_layer_grad_norms``).
+    """
+    task_names = list(task_names)
+    if not task_groups:
+        return ema.scales(task_names)
+    groups = sorted(set(task_groups.get(t, t) for t in task_names))
+    group_scales = ema.scales(groups)
+    return {t: group_scales[task_groups.get(t, t)] for t in task_names}
 
 
 def all_reduce_mean_task_norms(norms, task_names=None):

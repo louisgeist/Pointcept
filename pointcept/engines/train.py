@@ -41,6 +41,7 @@ from pointcept.utils.gradient_norm import (
     combine_weighted_task_losses,
     compute_task_gradient_norms,
     compute_task_last_layer_grad_norms,
+    resolve_grad_norm_lite_scales,
     l2_model_grad_norm,
     l2_model_update_norm,
     snapshot_trainable_params,
@@ -325,22 +326,38 @@ class Trainer(TrainerBase):
                         1024.0 if self.cfg.enable_amp else 1.0,
                     )
                 )
+                # Optional task_name -> group_name map: tasks sharing a group
+                # get one pooled EMA scale instead of independent ones.
+                task_groups = getattr(self.cfg, "grad_norm_lite_task_groups", None)
                 if iter_idx > 0 and iter_idx % interval == 0:
                     norms = compute_task_last_layer_grad_norms(
-                        model, loss_by_task, probe_scale=amp_probe_scale
+                        model,
+                        loss_by_task,
+                        probe_scale=amp_probe_scale,
+                        task_groups=task_groups,
                     )
                     # Align with SyncBatchNorm: sync across ranks only when sync_bn.
                     if getattr(self.cfg, "sync_bn", False):
-                        task_order = getattr(model, "tasks", None) or sorted(
-                            loss_by_task.keys()
-                        )
+                        if task_groups:
+                            task_order = sorted(
+                                set(
+                                    task_groups.get(t, t)
+                                    for t in loss_by_task.keys()
+                                )
+                            )
+                        else:
+                            task_order = getattr(model, "tasks", None) or sorted(
+                                loss_by_task.keys()
+                            )
                         norms = all_reduce_mean_task_norms(
                             norms, task_names=task_order
                         )
                     self._grad_norm_lite_ema.update(norms)
                     lite_info["last_layer_norms"] = norms
 
-                scales = self._grad_norm_lite_ema.scales(loss_by_task.keys())
+                scales = resolve_grad_norm_lite_scales(
+                    self._grad_norm_lite_ema, loss_by_task.keys(), task_groups
+                )
                 total_loss, scales = combine_weighted_task_losses(
                     loss_by_task,
                     getattr(model, "task_weights", {}),
