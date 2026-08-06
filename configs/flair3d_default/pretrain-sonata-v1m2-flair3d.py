@@ -105,7 +105,7 @@ model = dict(
 # -----------------------------------------------------------------------------
 # Optimizer / scheduler
 # -----------------------------------------------------------------------------
-base_lr = 0.004  # Sonata default; matched to 32-GPU global batch (bs=96)
+base_lr = 0.001  # Sonata default; matched to 32-GPU global batch (bs=96)
 lr_decay = 0.9  # layer-wise lr decay
 
 base_wd = 0.04
