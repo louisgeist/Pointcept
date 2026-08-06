@@ -21,7 +21,8 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:1
-#SBATCH --cpus-per-task=24
+# A100 Jean-Zay: 8 CPU/GPU (gpu_p5). More CPUs = overcharge (e.g. 24 → billed as ~3 GPUs).
+#SBATCH --cpus-per-task=8
 #SBATCH --hint=nomultithread
 
 #SBATCH --job-name=sonata_lin
