@@ -30,17 +30,21 @@ except ImportError:  # pragma: no cover
         GridSpec,
     )
 
-# Re-exported for callers that only need manifest/ROI-grouping (kept here so
-# tools/eval_network_apls.py has a single import surface for this pipeline).
+# Re-exported for callers that only need manifest/ROI-grouping / known-missing
+# exclusions (kept here so tools/eval_network_apls.py has a single import surface).
 try:
     from rasterize_network import (  # type: ignore  # noqa: F401
         ManifestPatch,
+        _default_missing_coord_details_csv,
+        _load_known_missing_tiles,
         group_by_roi,
         load_manifest_patches,
     )
 except ImportError:  # pragma: no cover
     from pointcept.datasets.preprocessing.flair3d_plus.rasterize_network import (  # type: ignore  # noqa: F401
         ManifestPatch,
+        _default_missing_coord_details_csv,
+        _load_known_missing_tiles,
         group_by_roi,
         load_manifest_patches,
     )
