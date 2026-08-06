@@ -322,17 +322,27 @@ class Flair3DDataset(DefaultDataset):
         raise KeyError(f"Unsupported target key: {target_key}")
 
     def _load_network_label(self, data_dict, scene):
-        """Load ``network.npy`` (3, H, W) and grid meta for pixel semantic task.
+        """Load ``network.npy`` and grid meta for the pixel semantic task.
+
+        Training heads use ``num_networks`` channels from
+        ``get_pixel_semantic_config`` (ROADS + RAILROADS). On-disk rasters may
+        still be ``(3, H, W)`` including TRANSMISSION_LINES; those are sliced
+        via ``meta.network.channel_order`` when present, else the first ``r``
+        channels (historical order ROADS, RAILROADS, TRANSMISSION_LINES).
 
         Empty tiles may omit ``network.npy`` and only store ``meta.network``
         (``empty: true`` + width/height); those are synthesized as zeros.
         """
         import json
 
-        from pointcept.datasets.flair3d_config_utils import get_pixel_semantic_config
+        from pointcept.datasets.flair3d_config_utils import (
+            NETWORK_CHANNEL_NAMES,
+            get_pixel_semantic_config,
+        )
 
         cfg = get_pixel_semantic_config("network")
         r = int(cfg["num_networks"])
+        channel_names = list(cfg.get("channel_names") or NETWORK_CHANNEL_NAMES)
 
         origin_x = 0.0
         origin_y = 0.0
@@ -351,11 +361,18 @@ class Flair3DDataset(DefaultDataset):
 
         if "network" in data_dict:
             network = np.asarray(data_dict["network"])
-            if network.ndim != 3 or network.shape[0] != r:
+            if network.ndim != 3:
                 raise ValueError(
-                    f"network.npy expected shape ({r}, H, W), got {network.shape} "
+                    f"network.npy expected shape (C, H, W), got {network.shape} "
                     f"under scene: {scene}"
                 )
+            network = self._select_network_channels(
+                network,
+                r=r,
+                channel_names=channel_names,
+                channel_order=net_meta.get("channel_order"),
+                scene=scene,
+            )
             network = network.astype(np.uint8, copy=False)
         elif net_meta:
             # Preprocess wrote meta only (empty mask) or optional missing fill path.
@@ -382,6 +399,30 @@ class Flair3DDataset(DefaultDataset):
         data_dict["network_origin_y"] = np.asarray([origin_y], dtype=np.float64)
         data_dict["network_pixel_m"] = np.asarray([pixel_m], dtype=np.float64)
         return data_dict
+
+    @staticmethod
+    def _select_network_channels(network, *, r, channel_names, channel_order, scene):
+        """Reduce on-disk ``(C, H, W)`` to the ``r`` training channels."""
+        c = int(network.shape[0])
+        if c == r:
+            return network
+        if c < r:
+            raise ValueError(
+                f"network.npy has {c} channels but task expects {r} "
+                f"({channel_names}) under scene: {scene}"
+            )
+        if isinstance(channel_order, (list, tuple)) and len(channel_order) == c:
+            name_to_idx = {str(name): i for i, name in enumerate(channel_order)}
+            missing = [name for name in channel_names if name not in name_to_idx]
+            if missing:
+                raise ValueError(
+                    f"network.npy channel_order {list(channel_order)} missing "
+                    f"{missing} under scene: {scene}"
+                )
+            indices = [name_to_idx[name] for name in channel_names]
+            return network[indices]
+        # Historical preprocess order: ROADS, RAILROADS, TRANSMISSION_LINES, ...
+        return network[:r]
 
     def _load_classification_label(self, data_dict, target_key, scene):
         if target_key in data_dict:

@@ -160,15 +160,16 @@ FLAIR3D_MULTILABEL_CLASSIFICATION_TASKS: Dict[str, Dict[str, Any]] = {
 }
 
 # Binary 2D pixel semantic tasks (1 m Lambert masks). Not point-wise.
+# Training / heads use ROADS + RAILROADS only. On-disk ``network.npy`` may still
+# be (3, H, W) with TRANSMISSION_LINES as channel 2; Flair3DDataset slices to these.
 NETWORK_CHANNEL_NAMES: Tuple[str, ...] = (
     "ROADS",
     "RAILROADS",
-    "TRANSMISSION_LINES",
 )
 FLAIR3D_PIXEL_SEMANTIC_TASKS: Dict[str, Dict[str, Any]] = {
     "network": {
         "task_type": "pixel_semantic",
-        "num_networks": 3,
+        "num_networks": 2,
         "num_classes": 2,
         "ignore_index": 2,
         "channel_names": list(NETWORK_CHANNEL_NAMES),
@@ -201,7 +202,7 @@ FLAIR3D_TILE_DISTRIBUTION_TARGET_KEYS: Tuple[str, ...] = tuple(
 
 # Keys passed to GridSample / index_valid_keys (superset of all Flair3D+ targets).
 # Only **per-point** arrays belong here. Scene-level tensors (e.g. ``coord_translation``
-# shape (3,), or ``network`` raster (3,H,W) before NetworkRasterToPointLabels) must
+# shape (3,), or ``network`` raster (C,H,W) before NetworkRasterToPointLabels) must
 # NOT be listed — GridSample would index them with point ids → IndexError.
 # ``network`` / ``network_cell`` / ``network_pix`` are appended by
 # NetworkRasterToPointLabels after GridSample.
@@ -500,7 +501,7 @@ def get_missing_target_fill_value(target_key: str) -> Any:
       small non-negative number that collides with a real raw CarHab id.
     - Multilabel targets fallback to ignore_index on all labels (missing NH raster).
     - Elevation regression falls back to NaN so masked losses ignore it.
-    - Network pixel masks fallback to an empty (3, 1, 1) zero raster (absence).
+    - Network pixel masks fallback to an empty (r, 1, 1) zero raster (absence).
     """
     if target_key in FLAIR3D_SEMANTIC_TASKS:
         from pointcept.datasets.preprocessing.flair3d_plus.flair3d_label_remap import (

@@ -3,7 +3,7 @@
 The GT network graphs (exported by Flair3D-build) are per-ROI, but Pointcept trains and
 predicts per-subtile (see ``rasterize_network.py`` module docstring for the subtile/ROI
 distinction). ``MultiTaskTester`` (``pointcept/engines/test.py``) already writes one
-``{patch_id}_logits_network.npy`` (3, H, W) soft-probability raster per subtile, using the
+``{patch_id}_logits_network.npy`` ``(C, H, W)`` soft-probability raster per subtile, using the
 exact same grid as that subtile's ``meta.json["network"]`` (written at preprocessing time by
 ``rasterize_network.py:process_patch``). All subtile grids snap to the same global absolute
 1 m Lambert-93 lattice (``GridSpec`` origins are always integer multiples of ``pixel_m``), so
@@ -128,9 +128,11 @@ def stitch_roi_predictions(
 ) -> Tuple[np.ndarray, GridSpec]:
     """Place each subtile's predicted (3,H,W) raster onto one shared ROI raster.
 
-    Returns ``(roi_probs, roi_grid)``: ``roi_probs`` is ``(3, H_roi, W_roi)`` float32
+    Returns ``(roi_probs, roi_grid)``: ``roi_probs`` is ``(C, H_roi, W_roi)`` float32
     with NaN for cells no subtile *observed by LiDAR* (a real, model-independent gap --
     both GT and prediction are blind there, so treating it as unobserved is fair).
+    ``C`` is inferred from the first ``{patch_id}_logits_network.npy`` (typically 2 for
+    ROADS+RAILROADS training heads, or 3 for legacy three-channel dumps).
     Overlapping subtile cells are combined per ``combine`` (``"nanmean"`` default;
     ``"max"``/``"first"`` for sensitivity checks).
 
@@ -179,7 +181,13 @@ def stitch_roi_predictions(
         pixel_m=float(pixel_m),
     )
 
-    n_channels = 3
+    first_pred = np.load(save_path / f"{kept_patch_dirs[0].name}_logits_network.npy")
+    if first_pred.ndim != 3:
+        raise ValueError(
+            f"{kept_patch_dirs[0].name}_logits_network.npy: expected (C,H,W), "
+            f"got {first_pred.shape}"
+        )
+    n_channels = int(first_pred.shape[0])
     if combine == "nanmean":
         sum_ = np.zeros((n_channels, roi_grid.height, roi_grid.width), dtype=np.float64)
         cnt = np.zeros((n_channels, roi_grid.height, roi_grid.width), dtype=np.int32)
