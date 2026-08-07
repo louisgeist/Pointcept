@@ -266,9 +266,21 @@ class Flair3DLabelRemap(object):
                     f"(source_key, target_definition_name) tuple, got {spec!r}"
                 )
             target_def = get_definition(task_key, target_name)
-            storage_name = storage_definitions.get(
-                task_key, get_default_definition_name(task_key)
+            # Default *on-disk storage* definition -- NOT the same as the default
+            # *training-target* definition (get_default_definition_name), which happen to
+            # coincide for segment/forest/land_use but not for natural_habitat: preprocessing
+            # always writes natural_habitat.npy in the raw/finest "default" CarHab taxonomy
+            # (43 raw classes) so several different targets can be fanned out from the same
+            # on-disk file on the fly, but get_default_definition_name("natural_habitat")
+            # returns "by_habitat_x_domain" (the default *target*). Falling back to it here
+            # would silently collapse the LUT (multiple raw ids -> 1 stored id, last-write-
+            # wins) instead of raising whenever a caller omits storage_definitions for
+            # natural_habitat -- every current config already passes it explicitly, so this
+            # is a latent-bug guard, not a behavior change for existing configs.
+            default_storage_name = (
+                "default" if task_key == "natural_habitat" else get_default_definition_name(task_key)
             )
+            storage_name = storage_definitions.get(task_key, default_storage_name)
             if storage_name == target_name and output_key not in self.fanout_source_keys:
                 continue
             storage_def = get_definition(task_key, storage_name)
