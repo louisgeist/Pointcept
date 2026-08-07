@@ -18,6 +18,12 @@ batch_size = batch_size_per_gpu * num_gpu  # → 96
 num_worker = 8 * num_gpu
 mix_prob = 0
 clip_grad = 3.0
+# Diagnostic for NaN investigation: surfaces gradient/global and
+# gradient/weight_update per-iteration in W&B/TensorBoard instead of only as a
+# per-epoch average. No-op for the heavier per-task breakdown this flag also
+# gates (train.py's compute_task_gradient_norms), since that path requires
+# model.backbone_parameters, which Sonata doesn't have.
+log_task_gradient_norms = True
 empty_cache = False
 enable_amp = True
 amp_dtype = "bfloat16"

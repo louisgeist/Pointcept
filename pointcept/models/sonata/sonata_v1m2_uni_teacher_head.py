@@ -8,7 +8,9 @@ Please cite our work if the code is helpful to you.
 from itertools import chain
 from packaging import version
 from functools import partial
+import collections
 import logging
+import sys
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -195,6 +197,10 @@ class Sonata(PointModel):
         for p in self.teacher.parameters():
             p.requires_grad = False
 
+        # Debug for NaN investigation: rolling history of (tile name, point count
+        # per view) dumped via _dump_nan_debug_buffer the moment loss goes non-finite.
+        self._nan_debug_buffer = collections.deque(maxlen=5)
+
     def before_train(self):
         # make ModelHook after CheckPointLoader
         total_steps = self.trainer.cfg.scheduler.total_steps
@@ -339,6 +345,43 @@ class Sonata(PointModel):
                 f"-> this segment will be NaN after segment_coo(reduce='mean')."
             )
 
+    def _record_nan_debug_entry(self, data_dict, global_point, local_point):
+        """Debug diagnostic for NaN loss: buffers (tile name, point count per
+        view) each iteration so _dump_nan_debug_buffer can report exactly which
+        tile(s)/crop(s) were in the batch the moment loss goes non-finite."""
+        names = list(data_dict.get("name", []))
+        global_counts = offset2bincount(global_point.offset).tolist()
+        local_counts = offset2bincount(local_point.offset).tolist()
+        per_tile = [
+            {
+                "name": name,
+                "global_view_points": global_counts[
+                    i * self.num_global_view : (i + 1) * self.num_global_view
+                ],
+                "local_view_points": local_counts[
+                    i * self.num_local_view : (i + 1) * self.num_local_view
+                ],
+            }
+            for i, name in enumerate(names)
+        ]
+        self._nan_debug_buffer.append(per_tile)
+
+    def _dump_nan_debug_buffer(self):
+        # print (not logger): get_logger only attaches a FileHandler on rank 0,
+        # so a logger.warning/error call on other ranks would only reach that
+        # rank's own stdout/stderr, never the shared train.log.
+        rank = dist.get_rank() if get_world_size() > 1 else 0
+        header = (
+            f"[Sonata NaN-dump] rank={rank} non-finite loss, "
+            f"last {len(self._nan_debug_buffer)} iters:"
+        )
+        print(header, flush=True)
+        print(header, flush=True, file=sys.stderr)
+        for i, entry in enumerate(self._nan_debug_buffer):
+            line = f"[Sonata NaN-dump] rank={rank} iter-{i}: {entry}"
+            print(line, flush=True)
+            print(line, flush=True, file=sys.stderr)
+
     @torch.no_grad()
     def match_neighbour(
         self,
@@ -438,6 +481,8 @@ class Sonata(PointModel):
                 offset=data_dict["local_offset"],
                 grid_size=data_dict["grid_size"][0],
             )
+
+            self._record_nan_debug_entry(data_dict, global_point, local_point)
 
             # create result dictionary for return
             result_dict = dict(loss=[])
@@ -577,4 +622,7 @@ class Sonata(PointModel):
                     result_dict[key] = local_loss + (reduced - local_loss.detach())
                 else:
                     result_dict[key] = reduced
+
+        if not torch.isfinite(result_dict["loss"]):
+            self._dump_nan_debug_buffer()
         return result_dict
