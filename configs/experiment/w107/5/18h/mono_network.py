@@ -217,9 +217,8 @@ network_apls_eval = dict(
     remove_small_objects_enabled=True,
     remove_small_objects_min_size_px=8,
     skeletonize_enabled=True,
-    morph_enabled=False,
-    morph_operation="none",
-    morph_iterations=1,
+    open_iterations=0,
+    close_iterations=0,
     morph_connectivity=4,
 )
 
