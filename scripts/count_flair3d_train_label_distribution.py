@@ -162,6 +162,27 @@ def _make_remap_state(
     )
 
 
+def _default_storage_definition_name(task: str, get_default_definition_name) -> str:
+    """Default *on-disk storage* definition name for a task -- NOT the same as its default
+    *training-target* definition (get_default_definition_name), which happen to coincide
+    for segment/forest/land_use but NOT for natural_habitat: preprocessing always writes
+    natural_habitat.npy in the raw/finest "default" CarHab taxonomy (43 raw classes) so
+    that many different targets (by_habitat_x_domain, the 4 nathab axes, ...) can all be
+    fanned out from the same on-disk file on the fly -- but
+    get_default_definition_name("natural_habitat") returns "by_habitat_x_domain" (the
+    default *target*), not "default" (the actual storage format). Using it as the storage
+    fallback silently collapses the LUT (6 raw ids -> 1 stored id, last-write-wins) instead
+    of raising, corrupting every downstream count without any error. Every real training
+    config already special-cases this explicitly (storage_definitions=dict(natural_habitat=
+    "default")); this mirrors that here so the flag becomes optional instead of silently
+    required. See also get_missing_target_fill_value's docstring in flair3d_config_utils.py
+    for the same storage-vs-target distinction, hit and fixed there previously.
+    """
+    if task == "natural_habitat":
+        return "default"
+    return get_default_definition_name(task)
+
+
 def build_task_remap_state(
     target_definitions: Dict[str, str],
     storage_definitions: Dict[str, str],
@@ -173,7 +194,9 @@ def build_task_remap_state(
     state: Dict[str, TaskRemapState] = {}
     for task in SEMANTIC_TASKS:
         target_name = target_definitions.get(task, get_default_definition_name(task))
-        storage_name = storage_definitions.get(task, get_default_definition_name(task))
+        storage_name = storage_definitions.get(
+            task, _default_storage_definition_name(task, get_default_definition_name)
+        )
         state[task] = _make_remap_state(
             label_remap,
             registry_task=task,
@@ -191,7 +214,7 @@ def build_nathab_axis_remap_state(
     get_default_definition_name = label_remap.get_default_definition_name
     storage_name = storage_definitions.get(
         NATHAB_AXIS_SOURCE_TASK,
-        get_default_definition_name(NATHAB_AXIS_SOURCE_TASK),
+        _default_storage_definition_name(NATHAB_AXIS_SOURCE_TASK, get_default_definition_name),
     )
 
     state: Dict[str, TaskRemapState] = {}
