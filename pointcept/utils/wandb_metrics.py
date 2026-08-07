@@ -32,6 +32,13 @@ def iou_class_tag(split, slug, task=None):
     return f"{split}/{task}/iou/{slug}"
 
 
+def iou_channel_class_tag(split, channel_slug, class_slug, task=None):
+    """Per-channel per-class IoU, e.g. ``val/network/iou/ROADS/Foreground``."""
+    if task is None:
+        return f"{split}/iou/{channel_slug}/{class_slug}"
+    return f"{split}/{task}/iou/{channel_slug}/{class_slug}"
+
+
 def best_miou_tag(split, task=None):
     """Build the best-mIoU tag, e.g. ``val/segment/mIoU_best``."""
     return metric_tag(split, "mIoU_best", task=task)

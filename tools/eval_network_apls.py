@@ -84,6 +84,16 @@ def _coerce_snap_to_edge(value) -> Optional[float]:
     return _coerce_optional_meters(value, default_when_true=4.0, name="snap_to_edge")
 
 
+def _parse_bool(s: str) -> bool:
+    """CLI helper: truthy/falsy strings -> bool."""
+    v = str(s).strip().lower()
+    if v in ("1", "true", "yes", "y", "on"):
+        return True
+    if v in ("0", "false", "no", "n", "off"):
+        return False
+    raise argparse.ArgumentTypeError(f"expected a boolean, got {s!r}")
+
+
 def _build_predicted_graph(
     roi_probs: np.ndarray,
     roi_grid,
@@ -95,6 +105,12 @@ def _build_predicted_graph(
     endpoint_fix_stage: str,
     merge_weight_threshold: float,
     radius_fix_radius_m: Optional[float] = None,
+    open_iterations: int = 0,
+    close_iterations: int = 0,
+    morph_connectivity: int = 4,
+    remove_small_objects_enabled: bool = True,
+    remove_small_objects_min_size_px: int = 8,
+    skeletonize_enabled: bool = True,
 ) -> "ngp.ProcessedNetworkGraph":
     prob = roi_probs[channel_idx]
     # Unobserved (NaN) cells are treated as background -- see plan's design-decision note:
@@ -108,6 +124,12 @@ def _build_predicted_graph(
         mask,
         roi_grid,
         connectivity=connectivity,
+        open_iterations=open_iterations,
+        close_iterations=close_iterations,
+        morph_connectivity=morph_connectivity,
+        remove_small_objects_enabled=remove_small_objects_enabled,
+        remove_small_objects_min_size_px=remove_small_objects_min_size_px,
+        skeletonize_enabled=skeletonize_enabled,
         rdp_epsilon_m=rdp_epsilon_m,
         endpoint_fix_enabled=True,
         endpoint_fix_stage=endpoint_fix_stage,
@@ -138,6 +160,12 @@ def run(
     symmetric: bool = True,
     radius_fix_radius_m: Optional[float] = None,
     min_path_length_m: Optional[float] = None,
+    open_iterations: int = 0,
+    close_iterations: int = 0,
+    morph_connectivity: int = 4,
+    remove_small_objects_enabled: bool = True,
+    remove_small_objects_min_size_px: int = 8,
+    skeletonize_enabled: bool = True,
     network_types: Optional[List[str]] = None,
     missing_tiles_file: Optional[Path] = None,
 ) -> dict:
@@ -262,6 +290,12 @@ def run(
                 endpoint_fix_stage=endpoint_fix_stage,
                 merge_weight_threshold=merge_weight_threshold,
                 radius_fix_radius_m=radius_fix_radius_m,
+                open_iterations=open_iterations,
+                close_iterations=close_iterations,
+                morph_connectivity=morph_connectivity,
+                remove_small_objects_enabled=remove_small_objects_enabled,
+                remove_small_objects_min_size_px=remove_small_objects_min_size_px,
+                skeletonize_enabled=skeletonize_enabled,
             )
             pred_graph = apls.apls_graph_from_pixel_graph(processed.graph_final)
 
@@ -308,6 +342,12 @@ def run(
             "symmetric": symmetric,
             "radius_fix_radius_m": radius_fix_radius_m,
             "min_path_length_m": min_path_length_m,
+            "open_iterations": open_iterations,
+            "close_iterations": close_iterations,
+            "morph_connectivity": morph_connectivity,
+            "remove_small_objects_enabled": remove_small_objects_enabled,
+            "remove_small_objects_min_size_px": remove_small_objects_min_size_px,
+            "skeletonize_enabled": skeletonize_enabled,
             "save_path": str(save_path),
             "network_graphs_root": str(network_graphs_root),
             "split_manifest_csv": str(split_manifest_csv),
@@ -483,6 +523,47 @@ def build_argparser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
+        "--open_iterations",
+        type=int,
+        default=0,
+        help="Erode-then-dilate pass count before remove_small/skeletonize, applied before "
+        "closing; 0 disables opening (default: 0, i.e. no morphology by default here, "
+        "unlike the visualization scripts -- kept off so the official metric stays "
+        "comparable to the baseline unless morphology is explicitly requested).",
+    )
+    p.add_argument(
+        "--close_iterations",
+        type=int,
+        default=0,
+        help="Dilate-then-erode pass count before remove_small/skeletonize, applied after "
+        "opening; 0 disables closing (default: 0).",
+    )
+    p.add_argument(
+        "--morph_connectivity",
+        type=int,
+        default=4,
+        choices=[4, 8],
+        help="Morphology structuring-element connectivity (default: 4)",
+    )
+    p.add_argument(
+        "--remove_small_objects_enabled",
+        type=_parse_bool,
+        default=True,
+        help="Drop small connected components before skeletonize (default: true)",
+    )
+    p.add_argument(
+        "--remove_small_objects_min_size_px",
+        type=int,
+        default=8,
+        help="Min connected-component size in pixels (default: 8)",
+    )
+    p.add_argument(
+        "--skeletonize_enabled",
+        type=_parse_bool,
+        default=True,
+        help="Zhang-Suen skeletonize wide masks to 1px centerlines (default: true)",
+    )
+    p.add_argument(
         "--network_types",
         type=str,
         nargs="+",
@@ -534,6 +615,12 @@ def main(argv: Optional[List[str]] = None) -> None:
         symmetric=symmetric,
         radius_fix_radius_m=args.radius_fix_radius_m,
         min_path_length_m=args.min_path_length_m,
+        open_iterations=args.open_iterations,
+        close_iterations=args.close_iterations,
+        morph_connectivity=args.morph_connectivity,
+        remove_small_objects_enabled=args.remove_small_objects_enabled,
+        remove_small_objects_min_size_px=args.remove_small_objects_min_size_px,
+        skeletonize_enabled=args.skeletonize_enabled,
         network_types=args.network_types,
         missing_tiles_file=missing,
     )

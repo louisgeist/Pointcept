@@ -600,6 +600,7 @@ class MultiTaskSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
         logits_by_task = {}
         targets_by_task = {}
         dense_by_task = {}
+        dense_target_by_task = {}
         for task_name, head in self.pixel_seg_heads.items():
             task_config = self.task_configs[task_name]
             num_networks = int(task_config["num_networks"])
@@ -631,17 +632,26 @@ class MultiTaskSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
             # Observed pixels (at least one point in the 1 m cell): softmax class-1
             # probability in [0, 1]. Unobserved pixels (no point in that cell): NaN.
             # Built only when grid meta matches offset (skipped under Mix3D).
+            #
+            # dense_target mirrors this on the GT side: observed cells hold the pooled
+            # label (long, may equal ignore_index for void); unobserved cells hold -1
+            # (ignore_index is a valid observed value, so it can't double as the
+            # unobserved sentinel).
             dense_list = []
+            dense_target_list = []
             cursor = 0
             for meta in meta_parts:
                 if meta is None:
                     dense_list.append(None)
+                    dense_target_list.append(None)
                     continue
                 n_pix, iy_u, ix_u, height, width, in_grid = meta
                 part = logits[cursor : cursor + n_pix]
+                target_part = targets[cursor : cursor + n_pix]
                 cursor += n_pix
                 if in_grid is None or height is None:
                     dense_list.append(None)
+                    dense_target_list.append(None)
                     continue
                 # float32: under AMP, softmax promotes to fp32 while part may be Half.
                 dense = torch.full(
@@ -650,12 +660,23 @@ class MultiTaskSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
                     device=part.device,
                     dtype=torch.float32,
                 )
+                dense_target = torch.full(
+                    (num_networks, int(height), int(width)),
+                    -1,
+                    device=target_part.device,
+                    dtype=torch.long,
+                )
                 if in_grid.any():
                     probs_fg = torch.softmax(part[in_grid].float(), dim=-1)[..., 1]
                     dense[:, iy_u[in_grid], ix_u[in_grid]] = probs_fg.transpose(0, 1)
+                    dense_target[:, iy_u[in_grid], ix_u[in_grid]] = target_part[
+                        in_grid
+                    ].transpose(0, 1)
                 dense_list.append(dense)
+                dense_target_list.append(dense_target)
             dense_by_task[task_name] = dense_list
-        return logits_by_task, targets_by_task, dense_by_task
+            dense_target_by_task[task_name] = dense_target_list
+        return logits_by_task, targets_by_task, dense_by_task, dense_target_by_task
 
     def _forward_backbone(self, input_dict):
         point = Point(input_dict)
@@ -827,9 +848,12 @@ class MultiTaskSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
         self._fill_masked_feat_with_learned_value(input_dict)
         feat, point = self._forward_backbone(input_dict)
         logits_by_task = self._compute_logits(feat)
-        pixel_logits_by_task, pixel_targets_by_task, pixel_dense_by_task = (
-            self._compute_pixel_logits(feat, input_dict)
-        )
+        (
+            pixel_logits_by_task,
+            pixel_targets_by_task,
+            pixel_dense_by_task,
+            pixel_dense_target_by_task,
+        ) = self._compute_pixel_logits(feat, input_dict)
         reg_pred_by_task = self._compute_reg_preds(feat)
         offset = input_dict["offset"]
         cls_logits_by_task = self._compute_cls_logits(feat, offset)
@@ -853,6 +877,7 @@ class MultiTaskSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
             "pixel_seg_logits_by_task": pixel_logits_by_task,
             "pixel_seg_target_by_task": pixel_targets_by_task,
             "pixel_seg_logits_dense_by_task": pixel_dense_by_task,
+            "pixel_seg_target_dense_by_task": pixel_dense_target_by_task,
             "reg_pred_by_task": reg_pred_by_task,
             "cls_logits_by_task": cls_logits_by_task,
         }

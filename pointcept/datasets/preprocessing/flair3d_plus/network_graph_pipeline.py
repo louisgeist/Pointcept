@@ -7,6 +7,14 @@ which starts directly from an already-thresholded boolean mask (e.g. a predicted
 probability raster) instead of vector line segments -- skipping the
 ``centerline_pixel_mask`` step. No geopandas/GDAL dependency here (unlike Flair3D-build's
 version, which also handles GeoPackage export); this module only builds/simplifies graphs.
+
+The from-mask path also depends on ``scikit-image`` (unlike ``network_xy_raster_utils``,
+which stays a dependency-light, copy-into-other-repos module): a predicted probability
+raster thresholded into a boolean mask is a blob several pixels wide, not the 1px-wide
+centerline ``build_pixel_graph`` assumes, so it's skeletonized (Zhang-Suen thinning) down
+to a topological centerline before graph-building -- otherwise every mask pixel becomes a
+node in a dense 2D grid graph, and ``merge_neighbor_nodes`` collapses whole blobs into a
+single hub node (star-shaped artifacts in the resulting graph).
 """
 
 from __future__ import annotations
@@ -17,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+from skimage.morphology import remove_small_objects, skeletonize
 
 # Prefer sibling imports so this module runs without the full Pointcept stack,
 # matching rasterize_network.py's import contract.
@@ -48,6 +57,12 @@ class ProcessedNetworkGraph:
     radius_fix_info: dict[str, Any] | None
     n_centerline_pixels_raw: int
     n_centerline_pixels: int
+    n_mask_pixels_pre_skeleton: int
+    # Ordered (stage_name, array/graph) snapshots, one per pipeline stage actually executed
+    # (skipped/disabled stages are omitted, not included as no-op duplicates) -- lets a
+    # viewer render "what did stage N do" without recomputing anything itself.
+    mask_stages: list[tuple[str, np.ndarray]]
+    graph_stages: list[tuple[str, xy_rast.PixelGraph]]
 
 
 def _build_processed_network_graph_from_line_mask(
@@ -55,10 +70,12 @@ def _build_processed_network_graph_from_line_mask(
     grid: xy_rast.GridSpec,
     *,
     connectivity: int,
-    morph_enabled: bool,
-    morph_operation: str,
-    morph_iterations: int,
     morph_connectivity: int,
+    open_iterations: int,
+    close_iterations: int,
+    remove_small_objects_enabled: bool,
+    remove_small_objects_min_size_px: int,
+    skeletonize_enabled: bool,
     rdp_epsilon_m: float,
     endpoint_fix_enabled: bool,
     endpoint_fix_stage: str,
@@ -74,11 +91,6 @@ def _build_processed_network_graph_from_line_mask(
     """Shared body: optional morphology -> pixel graph -> endpoint-fix -> RDP -> merge."""
     if connectivity not in (4, 8):
         raise ValueError(f"connectivity must be 4 or 8, got {connectivity}")
-    morph_operation = str(morph_operation).strip().lower()
-    if morph_operation not in ("none", "dilate", "erode"):
-        raise ValueError(
-            f"morphology.operation must be one of none/dilate/erode, got {morph_operation!r}"
-        )
     if morph_connectivity not in (4, 8):
         raise ValueError(
             f"morphology.connectivity must be 4 or 8, got {morph_connectivity}"
@@ -90,23 +102,78 @@ def _build_processed_network_graph_from_line_mask(
             f"{endpoint_fix_stage!r}"
         )
 
+    mask_stages: list[tuple[str, np.ndarray]] = [("binarized", np.array(line_mask, dtype=bool))]
+
     n_line_raw = int(np.count_nonzero(line_mask))
-    if morph_enabled and morph_operation != "none" and morph_iterations > 0:
-        if morph_operation == "dilate":
-            line_mask = xy_rast.morph_dilate_mask(
-                line_mask,
-                iterations=morph_iterations,
-                connectivity=morph_connectivity,
-            )
-        else:
-            line_mask = xy_rast.morph_erode_mask(
-                line_mask,
-                iterations=morph_iterations,
-                connectivity=morph_connectivity,
-            )
+
+    def _dilate(m: np.ndarray, iterations: int) -> np.ndarray:
+        return xy_rast.morph_dilate_mask(
+            m, iterations=iterations, connectivity=morph_connectivity
+        )
+
+    def _erode(m: np.ndarray, iterations: int) -> np.ndarray:
+        return xy_rast.morph_erode_mask(
+            m, iterations=iterations, connectivity=morph_connectivity
+        )
+
+    # Morphology is always opening (if open_iterations > 0) followed by closing (if
+    # close_iterations > 0) -- there's no separate "operation" selector: 0 iterations
+    # disables that step, both can run together (open first), and standalone dilate/erode
+    # aren't exposed since they're rarely what you actually want here (they only ever
+    # grow or only ever shrink, with no noise/gap-specific behavior).
+    if open_iterations > 0:
+        # Opening: erode `open_iterations` times then dilate the same number of times --
+        # shrinks away small protrusions/noise blobs (thinner than the structuring element
+        # after that many passes) while restoring the surviving mask's extent, without
+        # silently dropping isolated blobs the way remove_small_objects does by pixel count
+        # alone. No border-padding needed here: erosion is always a subset of its input
+        # regardless of boundary convention, so open(A) subset-of A holds unconditionally --
+        # the analogous artifact for opening would be *under*-recovering real content near a
+        # tile edge, which isn't fixable without assuming what's beyond the tile, so it's
+        # left as the honest, conservative default.
+        line_mask = _dilate(_erode(line_mask, open_iterations), open_iterations)
+        mask_stages.append(("open", line_mask.copy()))
+    if close_iterations > 0:
+        # Closing: dilate `close_iterations` times then erode the same number of times --
+        # bridges small gaps/breaks in the mask (common in noisy predictions) without
+        # growing the overall extent.
+        #
+        # Plain dilate-then-erode is NOT a correct closing at the array's edges: the erode
+        # pass treats "outside the array" as background, so real mask content within
+        # `close_iterations` pixels of a tile edge gets spuriously eaten away even though
+        # closing must never remove pixels (A subset-of close(A)). Standard fix (mirrors
+        # scipy.ndimage.binary_closing's border_value=1 recommendation): pad the *dilated*
+        # result with True before eroding -- simulates "foreground continues past this
+        # tile" so the erosion can't shrink real edge content -- then crop back to the
+        # original shape. (Padding before the dilate step instead would be wrong: the
+        # artificial True border would itself dilate inward and contaminate real
+        # background near the edge.)
+        dilated = _dilate(line_mask, close_iterations)
+        padded = np.pad(dilated, close_iterations, mode="constant", constant_values=True)
+        eroded = _erode(padded, close_iterations)
+        line_mask = eroded[close_iterations:-close_iterations, close_iterations:-close_iterations]
+        mask_stages.append(("close", line_mask.copy()))
+
+    if remove_small_objects_enabled and remove_small_objects_min_size_px > 0:
+        line_mask = remove_small_objects(
+            line_mask, min_size=remove_small_objects_min_size_px
+        )
+        mask_stages.append(("small_objects_removed", line_mask.copy()))
+
+    n_mask_pixels_pre_skeleton = int(np.count_nonzero(line_mask))
+    if skeletonize_enabled:
+        # A thresholded predicted-probability mask is a blob several pixels wide, not the
+        # 1px-wide centerline build_pixel_graph assumes -- thin it down first, or every mask
+        # pixel becomes a graph node and merge_neighbor_nodes collapses whole blobs into a
+        # single hub node (star-shaped artifacts).
+        line_mask = skeletonize(line_mask)
+        mask_stages.append(("skeleton", line_mask.copy()))
     n_line = int(np.count_nonzero(line_mask))
 
+    graph_stages: list[tuple[str, xy_rast.PixelGraph]] = []
+
     graph = xy_rast.build_pixel_graph(line_mask, grid, connectivity=connectivity)
+    graph_stages.append(("pixel_graph_raw", graph))
     simplified_rdp_only = xy_rast.simplify_pixel_graph_rdp(
         graph, epsilon_m=rdp_epsilon_m
     )
@@ -122,10 +189,13 @@ def _build_processed_network_graph_from_line_mask(
                 include_isolated_nodes=endpoint_fix_include_isolated_nodes,
             )
         )
+        graph_stages.append(("endpoint_fix", graph_pre_rdp_fix))
         graph_after_endpoint_fix = xy_rast.simplify_pixel_graph_rdp(
             graph_pre_rdp_fix, epsilon_m=rdp_epsilon_m
         )
+        graph_stages.append(("rdp", graph_after_endpoint_fix))
     elif endpoint_fix_enabled and endpoint_fix_stage == "post_rdp":
+        graph_stages.append(("rdp", simplified_rdp_only))
         graph_after_endpoint_fix, endpoint_fix_info = (
             xy_rast.repair_degree1_endpoints_diagonal_opposed(
                 simplified_rdp_only,
@@ -133,6 +203,9 @@ def _build_processed_network_graph_from_line_mask(
                 include_isolated_nodes=endpoint_fix_include_isolated_nodes,
             )
         )
+        graph_stages.append(("endpoint_fix", graph_after_endpoint_fix))
+    else:
+        graph_stages.append(("rdp", simplified_rdp_only))
 
     graph_final = graph_after_endpoint_fix
     merged_info: dict[str, int] | None = None
@@ -158,6 +231,7 @@ def _build_processed_network_graph_from_line_mask(
         )
         n_comp_after = len(xy_rast.connected_components_nodes(merged))
         graph_final = merged
+        graph_stages.append(("merge", merged))
         merged_info = {
             "n_components_before": int(n_comp_before),
             "n_components_after": int(n_comp_after),
@@ -183,6 +257,9 @@ def _build_processed_network_graph_from_line_mask(
             )
         )
         graph_final = graph_after_radius_fix
+        graph_stages.append(("node_linking", graph_after_radius_fix))
+
+    graph_stages.append(("final", graph_final))
 
     return ProcessedNetworkGraph(
         grid=grid,
@@ -198,6 +275,9 @@ def _build_processed_network_graph_from_line_mask(
         radius_fix_info=radius_fix_info,
         n_centerline_pixels_raw=n_line_raw,
         n_centerline_pixels=n_line,
+        n_mask_pixels_pre_skeleton=n_mask_pixels_pre_skeleton,
+        mask_stages=mask_stages,
+        graph_stages=graph_stages,
     )
 
 
@@ -206,10 +286,12 @@ def build_processed_network_graph_from_mask(
     grid: xy_rast.GridSpec,
     *,
     connectivity: int = 4,
-    morph_enabled: bool = False,
-    morph_operation: str = "none",
-    morph_iterations: int = 1,
     morph_connectivity: int = 4,
+    open_iterations: int = 1,
+    close_iterations: int = 5,
+    remove_small_objects_enabled: bool = True,
+    remove_small_objects_min_size_px: int = 8,
+    skeletonize_enabled: bool = True,
     rdp_epsilon_m: float = 2.0,
     endpoint_fix_enabled: bool = True,
     endpoint_fix_stage: str = "pre_rdp",
@@ -230,8 +312,43 @@ def build_processed_network_graph_from_mask(
     -- used to turn a predicted probability raster (already thresholded by the caller)
     into a graph comparable to the GT graph. Defaults mirror the GT export preset
     ``network=v5`` (``connectivity=4``, ``rdp_epsilon_m=2.0``, endpoint-fix enabled
-    pre-RDP incl. isolated nodes, merge enabled post-RDP at ``weight_threshold=2.5``,
-    morphology disabled) for an apples-to-apples topological comparison.
+    pre-RDP incl. isolated nodes, merge enabled post-RDP at ``weight_threshold=2.5``)
+    for an apples-to-apples topological comparison, except morphology, which -- unlike
+    the GT export path -- is on by default here since predicted masks (not vector-derived
+    GT ones) are the only caller of this function and benefit from it; see
+    ``open_iterations``/``close_iterations`` below.
+
+    Morphology is always **opening then closing** -- there's no separate operation
+    selector; ``open_iterations``/``close_iterations`` (independent of each other) each
+    control one step, and ``0`` disables that step entirely (so ``open_iterations=0,
+    close_iterations=0`` disables morphology altogether). Standalone dilate/erode aren't
+    exposed here since they only ever grow or only ever shrink the mask, with no
+    noise/gap-specific behavior -- opening and closing are what you actually want for
+    cleaning up a noisy predicted mask.
+
+    ``open_iterations`` (erode that many times, then dilate the same number of times)
+    shrinks away small protrusions and noise blobs thinner than the structuring element
+    after that many passes, without growing the mask past its original extent.
+    ``close_iterations`` (dilate that many times, then erode the same number of times)
+    bridges small gaps/breaks in the mask (common in noisy predictions) without shrinking
+    it -- note closing never removes pixels, so a mask-diff between its input and output is
+    always empty by construction. Opening and closing serve different purposes and
+    typically need different pass counts -- defaults (``open_iterations=1``,
+    ``close_iterations=5``) are a starting point, not derived from any particular dataset
+    calibration.
+
+    ``remove_small_objects_*`` / ``skeletonize_enabled`` (both on by default -- this is the
+    from-mask path's whole reason for existing): a thresholded predicted-probability mask is
+    a blob several pixels wide, not the 1px-wide centerline ``build_pixel_graph`` assumes.
+    ``remove_small_objects`` first drops isolated noise specks under
+    ``remove_small_objects_min_size_px`` connected pixels (cheap to do on the mask, before
+    they'd otherwise become spurious isolated graph nodes/components), then ``skeletonize``
+    (Zhang-Suen thinning) reduces the remaining blob(s) to a topological centerline. Skipping
+    this on a wide mask means every mask pixel becomes a graph node in a dense 2D grid graph,
+    and ``merge_neighbor_nodes`` then collapses whole blobs into a single hub node (visible as
+    star-shaped artifacts -- many nodes directly "connected" to one central node). A mask
+    that's already thin (e.g. a rasterized GT mask) passes through skeletonize unchanged, so
+    this is safe to leave on unconditionally.
 
     ``radius_fix_*`` (disabled by default -- opt in explicitly, it changes the graph and
     therefore any APLS numbers derived from it): radius-based extension of endpoint-fix,
@@ -249,10 +366,12 @@ def build_processed_network_graph_from_mask(
         line_mask,
         grid,
         connectivity=connectivity,
-        morph_enabled=morph_enabled,
-        morph_operation=morph_operation,
-        morph_iterations=morph_iterations,
         morph_connectivity=morph_connectivity,
+        open_iterations=open_iterations,
+        close_iterations=close_iterations,
+        remove_small_objects_enabled=remove_small_objects_enabled,
+        remove_small_objects_min_size_px=remove_small_objects_min_size_px,
+        skeletonize_enabled=skeletonize_enabled,
         rdp_epsilon_m=rdp_epsilon_m,
         endpoint_fix_enabled=endpoint_fix_enabled,
         endpoint_fix_stage=endpoint_fix_stage,

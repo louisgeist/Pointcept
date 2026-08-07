@@ -174,6 +174,9 @@ FLAIR3D_PIXEL_SEMANTIC_TASKS: Dict[str, Dict[str, Any]] = {
         "ignore_index": 2,
         "channel_names": list(NETWORK_CHANNEL_NAMES),
         "names": ["Background", "Foreground", "Void"],
+        # Buffer ("relaxed") precision/recall/F1 tolerance, in pixels (1 px = 1 m on
+        # this task's Lambert grid). See MultiTaskEvaluator's pixel_semantic handling.
+        "buffer_radius_px": 3, # for dilated recall/precision/f1
     },
 }
 

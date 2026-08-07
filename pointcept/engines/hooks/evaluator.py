@@ -44,6 +44,10 @@ from pointcept.utils.wandb_metrics import (
     iou_class_tag,
     metric_tag,
 )
+from pointcept.utils.dilated_metrics import (
+    dilated_precision_recall_counts,
+    precision_recall_f1,
+)
 from pointcept.utils.gradient_norm import (
     combine_weighted_task_losses,
     resolve_grad_norm_lite_scales,
@@ -156,6 +160,34 @@ def local_task_confusion_hist_totals(storage, task_name, num_classes):
         np.asarray(union, dtype=np.float64).reshape(-1),
         np.asarray(target, dtype=np.float64).reshape(-1),
     )
+
+
+def local_dilated_prf_totals(storage, task_name, ch_name):
+    """Local buffer-P/R hit/denominator sums for one pixel_semantic task channel (or zeros)."""
+    histories = storage.histories()
+    base = f"val_dilated_prf/{task_name}/{ch_name}"
+
+    def _total(key):
+        return float(histories[key].total) if key in histories else 0.0
+
+    return (
+        _total(f"{base}/p_num"),
+        _total(f"{base}/p_denom"),
+        _total(f"{base}/r_num"),
+        _total(f"{base}/r_denom"),
+    )
+
+
+def sync_dilated_prf_totals(p_num, p_denom, r_num, r_denom):
+    """All-reduce buffer-P/R totals once after the val loop (see sync_confusion_hist_totals)."""
+    if comm.get_world_size() <= 1:
+        return p_num, p_denom, r_num, r_denom
+    buf = torch.tensor(
+        [p_num, p_denom, r_num, r_denom], dtype=torch.float64, device="cuda"
+    )
+    dist.all_reduce(buf)
+    flat = buf.cpu().tolist()
+    return flat[0], flat[1], flat[2], flat[3]
 
 
 def local_semseg_confusion_hist_totals(storage, num_classes):
@@ -937,6 +969,12 @@ class MultiTaskEvaluator(HookBase):
                 # --------- Evaluate Pixel-Semantic Tasks (network 2D) ---------
                 pixel_logits_by_task = output_dict.get("pixel_seg_logits_by_task") or {}
                 pixel_targets_by_task = output_dict.get("pixel_seg_target_by_task") or {}
+                pixel_dense_by_task = (
+                    output_dict.get("pixel_seg_logits_dense_by_task") or {}
+                )
+                pixel_dense_target_by_task = (
+                    output_dict.get("pixel_seg_target_dense_by_task") or {}
+                )
                 for task_name in pixel_semantic_tasks:
                     task_config = task_configs[task_name]
                     if (
@@ -949,6 +987,9 @@ class MultiTaskEvaluator(HookBase):
                     num_classes = int(task_config["num_classes"])
                     ignore_index = int(task_config["ignore_index"])
                     num_networks = int(task_config.get("num_networks", logits.shape[1]))
+                    channel_names = task_config.get("channel_names") or [
+                        f"ch{c}" for c in range(num_networks)
+                    ]
                     # Aggregate confusion over all network channels (binary like forest).
                     inter_sum = None
                     union_sum = None
@@ -975,10 +1016,7 @@ class MultiTaskEvaluator(HookBase):
                             inter_sum = inter_sum + intersection
                             union_sum = union_sum + union
                             target_sum = target_sum + target
-                        # Per-channel foreground IoU storage for logging.
-                        channel_names = task_config.get("channel_names") or [
-                            f"ch{c}" for c in range(num_networks)
-                        ]
+                        # Per-channel foreground confusion storage for logging.
                         ch_name = channel_names[c] if c < len(channel_names) else f"ch{c}"
                         self.trainer.storage.put_scalar(
                             f"val_intersection/{task_name}/{ch_name}", intersection
@@ -999,6 +1037,42 @@ class MultiTaskEvaluator(HookBase):
                         self.trainer.storage.put_scalar(
                             f"val_target/{task_name}", target_sum
                         )
+
+                    # ---- Buffer ("relaxed") precision/recall hit accumulation ----
+                    # Uses the dense per-scene grids (reconstructed on the GT Lambert
+                    # grid) so the tolerance dilation has real 2D neighborhoods to work
+                    # with; the (P, r) pooled arrays above have no spatial layout.
+                    dense_pred_list = pixel_dense_by_task.get(task_name) or []
+                    dense_gt_list = pixel_dense_target_by_task.get(task_name) or []
+                    radius_px = int(task_config.get("buffer_radius_px", 3))
+                    for dense_pred, dense_gt in zip(dense_pred_list, dense_gt_list):
+                        if dense_pred is None or dense_gt is None:
+                            continue
+                        dense_pred_np = dense_pred.detach().cpu().numpy()
+                        dense_gt_np = dense_gt.detach().cpu().numpy()
+                        for c in range(num_networks):
+                            ch_name = (
+                                channel_names[c] if c < len(channel_names) else f"ch{c}"
+                            )
+                            pred_prob = dense_pred_np[c]
+                            gt = dense_gt_np[c]
+                            # Unobserved cells: pred_prob is NaN, gt is -1 (see
+                            # models/default.py _compute_pixel_logits). Void GT cells
+                            # (ignore_index) are excluded like plain IoU excludes them.
+                            observed = ~np.isnan(pred_prob) & (gt != -1)
+                            valid = observed & (gt != ignore_index)
+                            pred_fg = (pred_prob > 0.5) & valid
+                            gt_fg = (gt == 1) & valid
+                            p_num, p_denom, r_num, r_denom = (
+                                dilated_precision_recall_counts(
+                                    pred_fg, gt_fg, valid, radius_px=radius_px
+                                )
+                            )
+                            base = f"val_dilated_prf/{task_name}/{ch_name}"
+                            self.trainer.storage.put_scalar(f"{base}/p_num", p_num)
+                            self.trainer.storage.put_scalar(f"{base}/p_denom", p_denom)
+                            self.trainer.storage.put_scalar(f"{base}/r_num", r_num)
+                            self.trainer.storage.put_scalar(f"{base}/r_denom", r_denom)
 
                 cls_logits_by_task = output_dict.get("cls_logits_by_task") or {}
                 for task_name in classification_tasks:
@@ -1212,6 +1286,80 @@ class MultiTaskEvaluator(HookBase):
                         )
                     )
 
+        # Per-channel precision/recall/F1 for pixel-semantic tasks (e.g. network
+        # ROADS / RAILROADS): plain IoU is not a good diagnostic for thin curvilinear
+        # masks (a 1 px lateral offset destroys IoU on a 1 px line while still being a
+        # good prediction), so we report exact P/R/F1 (derived from the confusion
+        # histograms, no new accumulation needed) alongside buffer ("relaxed") P/R/F1
+        # with a configurable pixel tolerance (accumulated during the val loop).
+        # Everything here was already stored per channel during the val loop; sync on
+        # all ranks (all_reduce) then log. Must not be gated on is_main_process.
+        per_task_channel_metrics = {}
+        for task_name in pixel_semantic_tasks:
+            task_config = task_configs[task_name]
+            num_classes = int(task_config["num_classes"])
+            num_networks = int(task_config.get("num_networks", 1))
+            channel_names = task_config.get("channel_names") or [
+                f"ch{c}" for c in range(num_networks)
+            ]
+            names = list(task_config["names"])
+            fg_idx = names.index("Foreground") if "Foreground" in names else 1
+            radius_px = int(task_config.get("buffer_radius_px", 3))
+            per_task_channel_metrics[task_name] = {}
+            for c in range(num_networks):
+                ch_name = (
+                    channel_names[c] if c < len(channel_names) else f"ch{c}"
+                )
+                intersection, union, target = local_task_confusion_hist_totals(
+                    self.trainer.storage,
+                    f"{task_name}/{ch_name}",
+                    num_classes,
+                )
+                intersection, union, target = sync_confusion_hist_totals(
+                    intersection, union, target
+                )
+                tp = intersection[fg_idx]
+                area_pred = union[fg_idx] - target[fg_idx] + tp
+                exact_precision, exact_recall, exact_f1 = precision_recall_f1(
+                    tp, area_pred, tp, target[fg_idx]
+                )
+
+                p_num, p_denom, r_num, r_denom = local_dilated_prf_totals(
+                    self.trainer.storage, task_name, ch_name
+                )
+                p_num, p_denom, r_num, r_denom = sync_dilated_prf_totals(
+                    p_num, p_denom, r_num, r_denom
+                )
+                dilated_precision, dilated_recall, dilated_f1 = precision_recall_f1(
+                    p_num, p_denom, r_num, r_denom
+                )
+
+                per_task_channel_metrics[task_name][ch_name] = dict(
+                    precision=exact_precision,
+                    recall=exact_recall,
+                    f1=exact_f1,
+                    dilated_precision=dilated_precision,
+                    dilated_recall=dilated_recall,
+                    dilated_f1=dilated_f1,
+                )
+                if comm.is_main_process():
+                    self.trainer.logger.info(
+                        "[task={}] Channel_{}-{} Result: precision/recall/f1 "
+                        "{:.4f}/{:.4f}/{:.4f} | dilated(r={}px) precision/recall/f1 "
+                        "{:.4f}/{:.4f}/{:.4f}".format(
+                            task_name,
+                            c,
+                            ch_name,
+                            exact_precision,
+                            exact_recall,
+                            exact_f1,
+                            radius_px,
+                            dilated_precision,
+                            dilated_recall,
+                            dilated_f1,
+                        )
+                    )
+
         multilabel_metrics_by_task = {}
         for task_name in multilabel_tasks:
             stats = self._sync_multilabel_stats(multilabel_stats[task_name])
@@ -1328,6 +1476,27 @@ class MultiTaskEvaluator(HookBase):
                             )
                         if wandb_log is not None:
                             wandb_log[tag] = value
+                for task_name, channel_metrics in per_task_channel_metrics.items():
+                    for ch_name, metric in channel_metrics.items():
+                        ch_slug = class_name_slug(ch_name)
+                        for metric_name in (
+                            "precision",
+                            "recall",
+                            "f1",
+                            "dilated_precision",
+                            "dilated_recall",
+                            "dilated_f1",
+                        ):
+                            tag = metric_tag(
+                                "val", f"{ch_slug}/{metric_name}", task=task_name
+                            )
+                            value = float(metric[metric_name])
+                            if self.trainer.writer is not None:
+                                self.trainer.writer.add_scalar(
+                                    tag, value, current_epoch
+                                )
+                            if wandb_log is not None:
+                                wandb_log[tag] = value
 
         best_neg_rmse_epoch = float("-inf")
         writer = self.trainer.writer

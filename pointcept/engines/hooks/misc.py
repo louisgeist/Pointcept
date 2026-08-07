@@ -792,7 +792,7 @@ class NetworkAPLSEvaluator(HookBase):
 
     def after_train(self):
         t0 = time.time()
-        run_network_apls_eval_if_configured(self.trainer.cfg, self.trainer.logger)
+        payload = run_network_apls_eval_if_configured(self.trainer.cfg, self.trainer.logger)
         elapsed_s = time.time() - t0
         self.trainer.logger.info(f"Network APLS eval took {elapsed_s:.1f}s")
 
@@ -802,6 +802,26 @@ class NetworkAPLSEvaluator(HookBase):
             self.trainer.writer.add_scalar(tag, elapsed_s, current_epoch)
         if self.trainer.cfg.enable_wandb:
             wandb.log({"Epoch": current_epoch, tag: elapsed_s})
+
+        if payload is None:
+            return
+
+        scalars = {}
+        macro_apls = float(payload["macro_apls"])
+        if math.isfinite(macro_apls):
+            scalars[metric_tag("test", "APLS", task="network")] = macro_apls
+        for ch_name, value in payload["per_channel"].items():
+            value = float(value)
+            if not math.isfinite(value):
+                continue
+            ch_slug = class_name_slug(ch_name)
+            scalars[metric_tag("test", f"APLS/{ch_slug}", task="network")] = value
+
+        if self.trainer.writer is not None:
+            for k, v in scalars.items():
+                self.trainer.writer.add_scalar(k, v, current_epoch)
+        if self.trainer.cfg.enable_wandb and scalars:
+            wandb.log({"Epoch": current_epoch, **scalars})
 
 
 @HOOKS.register_module()
