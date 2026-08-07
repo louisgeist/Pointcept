@@ -114,6 +114,30 @@ def build_axis_states(storage_definition: str) -> Dict[str, AxisState]:
     return states
 
 
+def load_natural_habitat_manifest_flags(
+    csv_manifest: str, target_splits: set[str]
+) -> Dict[Tuple[str, str], bool]:
+    """(split, patch_id) -> manifest's NATURAL_HABITAT boolean.
+
+    Used only as a cross-check against actual on-disk file presence (never to filter
+    scenes: file presence is the source of truth for what gets counted). A tile flagged
+    True with a missing file is a real anomaly worth investigating; a tile flagged False
+    with the file actually present just means the manifest is stale for that row (observed
+    once already, locally, for department D068) -- harmless for the metric itself since
+    file presence already governs inclusion, but worth surfacing either way.
+    """
+    flags: Dict[Tuple[str, str], bool] = {}
+    with open(csv_manifest, "r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        for row in reader:
+            split = str(row["split"]).strip()
+            if split not in target_splits:
+                continue
+            patch_id = str(row["patch_id"]).strip()
+            flags[(split, patch_id)] = _count_script.parse_manifest_bool(row.get("NATURAL_HABITAT"))
+    return flags
+
+
 def _process_scene(scene: SceneRecord) -> Tuple[str, str, Dict[str, np.ndarray] | None, str | None]:
     """Returns (split, patch_id, {axis: counts[C_a]} or None, error)."""
     nh_path = os.path.join(scene.scene_path, f"{NATHAB_AXIS_SOURCE_TASK}.npy")
@@ -139,7 +163,28 @@ def kl(q: np.ndarray, p: np.ndarray, eps: float = 1e-12) -> float:
     return float(np.sum(q[mask] * np.log(q[mask] / np.clip(p[mask], eps, None))))
 
 
-def compute_axis_metrics(tile_counts: Dict[str, np.ndarray], class_names: Tuple[str, ...]) -> dict:
+def load_axis_marginal_from_csv(csv_path: str, num_classes: int) -> np.ndarray:
+    """Read the per-class 'count' column (bucket=='class', in class_id order) from a
+    {axis}_label_distribution.csv produced by count_flair3d_train_label_distribution.py.
+    Returns raw (un-normalized) counts, length num_classes."""
+    counts = [None] * num_classes
+    with open(csv_path, "r", encoding="utf-8", newline="") as f:
+        for row in csv.DictReader(f):
+            if row["bucket"] != "class":
+                continue
+            cid = int(row["class_id"])
+            if cid < num_classes:
+                counts[cid] = float(row["count"])
+    if any(c is None for c in counts):
+        raise ValueError(f"{csv_path}: missing class rows for 0..{num_classes - 1}")
+    return np.array(counts, dtype=np.float64)
+
+
+def compute_axis_metrics(
+    tile_counts: Dict[str, np.ndarray],
+    class_names: Tuple[str, ...],
+    extra_pi_hats: Dict[str, np.ndarray] | None = None,
+) -> dict:
     C_a = len(class_names)
     tile_ids = [t for t, c in tile_counts.items() if c.sum() > 0]
     if not tile_ids:
@@ -175,6 +220,19 @@ def compute_axis_metrics(tile_counts: Dict[str, np.ndarray], class_names: Tuple[
         and gap_analytic - 1e-9 <= m_unif <= lnC + 1e-9
     )
 
+    # For any fixed (non-tile-dependent) pi_hat: m_a(pi_hat) = H_a + KL(q_bar || pi_hat).
+    # Same identity as the uniform gap check above, generalized; kept as a sanity check.
+    extra: Dict[str, dict] = {}
+    for name, raw in (extra_pi_hats or {}).items():
+        pi_hat_extra = raw / raw.sum()
+        m_extra = m_a(pi_hat_extra)
+        kl_qbar_extra = kl(q_bar, pi_hat_extra)
+        extra[name] = dict(
+            m_a=m_extra,
+            kl_qbar=kl_qbar_extra,
+            sanity_decomp_ok=abs((m_extra - m_static) - kl_qbar_extra) < 1e-6,
+        )
+
     return dict(
         H_a=m_static,
         m_static=m_static,
@@ -189,6 +247,7 @@ def compute_axis_metrics(tile_counts: Dict[str, np.ndarray], class_names: Tuple[
         class_names=list(class_names),
         N_T=N_T,
         n_tiles=len(tile_ids),
+        extra=extra,
     )
 
 
@@ -219,6 +278,21 @@ def main() -> None:
     parser.add_argument("--num_workers", type=int, default=8)
     parser.add_argument("--max_scenes", type=int, default=0, help="Debug: limit number of scenes (0=all)")
     parser.add_argument("--output_dir", default="stats/flair3d/nathab_baseline_metrics")
+    parser.add_argument(
+        "--extra_pi_hat_csv_dir",
+        default="",
+        help="Directory with {axis}_label_distribution.csv files (e.g. from "
+        "count_flair3d_train_label_distribution.py run on --split train) providing an "
+        "additional, fixed pi_hat to evaluate against the SAME per-tile q_t/N_t as "
+        "--split (e.g. tiles are test, but pi_hat is train's global marginal -- measures "
+        "train/test distribution shift on top of intra-split heterogeneity). Optional; "
+        "H_a/m_static/m_unif (evaluation split's own q_bar and uniform) are unaffected.",
+    )
+    parser.add_argument(
+        "--extra_pi_hat_name",
+        default="train",
+        help="Label for the --extra_pi_hat_csv_dir distribution in the output (default: train).",
+    )
     args = parser.parse_args()
 
     global _AXIS_STATE
@@ -257,6 +331,8 @@ def main() -> None:
     if args.max_scenes > 0:
         scenes = scenes[: args.max_scenes]
 
+    nathab_flags = load_natural_habitat_manifest_flags(csv_manifest, target_splits)
+
     print(f"data_root={data_root}")
     print(f"csv_manifest={csv_manifest}")
     print(f"splits={sorted(target_splits)}")
@@ -271,10 +347,29 @@ def main() -> None:
 
     tile_counts_by_axis: Dict[str, Dict[str, np.ndarray]] = {axis: {} for axis in NATHAB_AXIS_TASKS}
     errors: List[str] = []
+    dept_totals: Dict[str, int] = {}
+    dept_missing: Dict[str, int] = {}
+    # manifest=True (covered) but file actually missing -- the real anomaly to watch for.
+    flagged_true_but_missing: Dict[str, List[str]] = {}
+    # manifest=False (not covered) but file actually present -- stale manifest row, harmless
+    # for the metric (file presence already governs inclusion) but worth surfacing.
+    flagged_false_but_present: Dict[str, List[str]] = {}
+
+    def _dept_of(patch_id: str) -> str:
+        return patch_id.split("_", 1)[0]
 
     def _consume(split, patch_id, counts, err):
+        dept = _dept_of(patch_id)
+        dept_totals[dept] = dept_totals.get(dept, 0) + 1
+        manifest_covered = nathab_flags.get((split, patch_id), False)
+        file_present = err is None
+        if manifest_covered and not file_present:
+            flagged_true_but_missing.setdefault(dept, []).append(patch_id)
+        elif not manifest_covered and file_present:
+            flagged_false_but_present.setdefault(dept, []).append(patch_id)
         if err is not None:
             errors.append(err)
+            dept_missing[dept] = dept_missing.get(dept, 0) + 1
             return
         for axis, arr in counts.items():
             tile_counts_by_axis[axis][patch_id] = arr
@@ -291,41 +386,128 @@ def main() -> None:
 
     print(f"\nScanned OK: {len(scenes) - len(errors)}/{len(scenes)} (errors: {len(errors)})")
     if errors:
-        for line in errors[:10]:
-            print(f"  - {line}")
-        if len(errors) > 10:
-            print(f"  ... and {len(errors) - 10} more")
+        # Diagnostic only (not filtered on): the manifest's NATURAL_HABITAT column has been
+        # observed to be stale for at least one department (D068, verified against on-disk
+        # data), so department-level exclusion is NOT applied here -- file presence is the
+        # sole source of truth for whether a tile contributes to the metric (matches the
+        # spec's N_t^a=0 exclusion rule automatically). This breakdown just helps distinguish
+        # "whole department has no natural_habitat.npy" (expected per README_flair3dplus.md's
+        # documented 55/74 dept-year NATURAL_HABITAT coverage) from isolated missing files
+        # within an otherwise-covered department (worth investigating).
+        print("\nMissing natural_habitat.npy by department (diagnostic, not filtered on):")
+        for dept in sorted(dept_missing, key=lambda d: -dept_missing[d]):
+            total = dept_totals[dept]
+            missing = dept_missing[dept]
+            tag = "whole dept" if missing == total else "PARTIAL -- check"
+            manifest_flag = (
+                "manifest=covered" if dept in flagged_true_but_missing else "manifest=not-covered"
+            )
+            print(f"  {dept:20s} {missing:>6d}/{total:<6d} missing  [{tag}, {manifest_flag}]")
+
+    n_real_anomalies = sum(len(v) for v in flagged_true_but_missing.values())
+    if n_real_anomalies:
+        print(
+            f"\n*** {n_real_anomalies} tile(s) flagged NATURAL_HABITAT=True in the manifest "
+            "but natural_habitat.npy is actually MISSING on disk -- likely a real dataset "
+            "problem (unfinished/failed preprocessing sync), not the documented coverage gap: ***"
+        )
+        for dept in sorted(flagged_true_but_missing, key=lambda d: -len(flagged_true_but_missing[d])):
+            ids = flagged_true_but_missing[dept]
+            print(f"  {dept:20s} {len(ids):>6d} tile(s), e.g. {ids[:3]}")
+    else:
+        print("\nNo manifest=True/file-missing anomalies found (every tile the manifest claims is covered has a file).")
+
+    n_stale_manifest = sum(len(v) for v in flagged_false_but_present.values())
+    if n_stale_manifest:
+        print(
+            f"\n{n_stale_manifest} tile(s) flagged NATURAL_HABITAT=False in the manifest but "
+            "the file IS present on disk (manifest under-reports coverage; harmless for the "
+            "metric since file presence already governs inclusion, but worth a look):"
+        )
+        for dept in sorted(flagged_false_but_present, key=lambda d: -len(flagged_false_but_present[d])):
+            ids = flagged_false_but_present[dept]
+            print(f"  {dept:20s} {len(ids):>6d} tile(s), e.g. {ids[:3]}")
 
     results = {}
     for axis in NATHAB_AXIS_TASKS:
         state = _AXIS_STATE[axis]
-        results[axis] = compute_axis_metrics(tile_counts_by_axis[axis], state.class_names)
+        extra_pi_hats = {}
+        if args.extra_pi_hat_csv_dir:
+            csv_path = os.path.join(
+                _count_script.resolve_repo_path(args.extra_pi_hat_csv_dir),
+                f"{axis}_label_distribution.csv",
+            )
+            extra_pi_hats[args.extra_pi_hat_name] = load_axis_marginal_from_csv(
+                csv_path, state.num_classes
+            )
+        results[axis] = compute_axis_metrics(
+            tile_counts_by_axis[axis], state.class_names, extra_pi_hats=extra_pi_hats
+        )
+
+    extra_name = args.extra_pi_hat_name if args.extra_pi_hat_csv_dir else None
 
     m_static_total = sum(r["m_static"] for r in results.values())
     m_unif_total = sum(r["m_unif"] for r in results.values())
+    kl_unif_total = sum(r["gap_analytic"] for r in results.values())  # = sum KL(q_bar||U)
+    extra_totals = {}
+    if extra_name:
+        extra_totals["m_a"] = sum(r["extra"][extra_name]["m_a"] for r in results.values())
+        extra_totals["kl_qbar"] = sum(r["extra"][extra_name]["kl_qbar"] for r in results.values())
 
-    print("\n" + "=" * 88)
-    print(f"{'axis':20s} {'C_a':>4s} {'n_tiles':>8s} {'H_a=m_static':>14s} {'m_unif':>10s} "
-          f"{'gap_ok':>7s} {'bounds_ok':>10s}")
-    print("-" * 88)
+    # Main table, per the requested layout: H_a (heterogeneity term) alongside the two
+    # AGGREGATE-level divergences KL(q_bar_test, pi_hat_train) and KL(q_bar_test, U) --
+    # these are single numbers comparing the two *global* distributions directly, distinct
+    # from m_unif/m_train (tile-weighted averages of per-tile KL, kept in JSON/CSV only).
+    # KL(q_bar_test, pi_hat_test) is omitted: it's 0 by construction (pi_hat_test := q_bar_test).
+    kl_train_header = f" {'KL(qbar,train)':>15s}" if extra_name else ""
+    width = 96 + (16 if extra_name else 0)
+    print("\n" + "=" * width)
+    print(
+        f"{'axis':20s} {'C_a':>4s} {'n_tiles':>8s} {'N_T':>10s} {'H_a':>10s}"
+        f"{kl_train_header} {'KL(qbar,U)':>11s} {'lnC':>7s} {'H_a/lnC':>8s}"
+    )
+    print("-" * width)
     for axis in NATHAB_AXIS_TASKS:
         r = results[axis]
+        kl_train_col = f" {r['extra'][extra_name]['kl_qbar']:>15.4f}" if extra_name else ""
         print(
             f"{AXIS_DISPLAY_NAMES[axis]:20s} {len(r['class_names']):>4d} {r['n_tiles']:>8d} "
-            f"{r['H_a']:>14.4f} {r['m_unif']:>10.4f} "
-            f"{str(r['sanity_gap_ok']):>7s} {str(r['sanity_bounds_ok']):>10s}"
+            f"{r['N_T']:>10d} {r['H_a']:>10.4f}{kl_train_col} {r['gap_analytic']:>11.4f} "
+            f"{r['lnC']:>7.4f} {r['H_a'] / r['lnC']:>8.2%}"
         )
-    print("-" * 88)
-    print(f"{'TOTAL':20s} {'':>4s} {'':>8s} {m_static_total:>14.4f} {m_unif_total:>10.4f}")
-    print("=" * 88)
+    print("-" * width)
+    kl_train_total_col = f" {extra_totals['kl_qbar']:>15.4f}" if extra_name else ""
+    print(
+        f"{'TOTAL':20s} {'':>4s} {'':>8s} {'':>10s} {m_static_total:>10.4f}"
+        f"{kl_train_total_col} {kl_unif_total:>11.4f}"
+    )
+    print("=" * width)
+    print(
+        "H_a = m_static = intra-test heterogeneity (tile-weighted avg KL(q_t||q_bar_test)); "
+        "KL(qbar,*) = single divergence between the AGGREGATE test distribution and the "
+        "reference (not tile-weighted). KL(qbar,pi_hat_test) omitted: 0 by construction."
+    )
+    if extra_name:
+        print(
+            f"m_{extra_name} (tile-weighted avg KL(q_t||{extra_name} marginal), the 'total' a "
+            f"static-{extra_name}-prior predictor would incur on test) = {extra_totals['m_a']:.4f} "
+            f"nats total; identity check: m_{extra_name} - H_a == KL(qbar,{extra_name}) per axis "
+            f"(see sanity_decomp_ok below)."
+        )
 
     for axis in NATHAB_AXIS_TASKS:
         r = results[axis]
         if not (r["sanity_gap_ok"] and r["sanity_bounds_ok"]):
             print(
-                f"WARNING: sanity check failed for {axis}: "
+                f"WARNING: uniform sanity check failed for {axis}: "
                 f"gap_direct={r['gap_direct']:.6f} gap_analytic={r['gap_analytic']:.6f} "
                 f"H_qbar={r['H_qbar']:.6f} lnC={r['lnC']:.6f}"
+            )
+        if extra_name and not r["extra"][extra_name]["sanity_decomp_ok"]:
+            e = r["extra"][extra_name]
+            print(
+                f"WARNING: {extra_name} decomposition check failed for {axis}: "
+                f"m_a - H_a = {e['m_a'] - r['H_a']:.6f}, KL(qbar,{extra_name}) = {e['kl_qbar']:.6f}"
             )
 
     output_dir = _count_script.resolve_repo_path(args.output_dir)
@@ -345,9 +527,16 @@ def main() -> None:
                 "manifest_rows_no_local_dir": n_no_local_dir,
                 "scenes_scanned": len(scenes),
                 "scenes_errors": len(errors),
+                "dept_missing_natural_habitat": dept_missing,
+                "dept_totals": dept_totals,
+                "manifest_true_but_file_missing": flagged_true_but_missing,
+                "manifest_false_but_file_present": flagged_false_but_present,
                 "axes": results,
                 "m_static_total": m_static_total,
                 "m_unif_total": m_unif_total,
+                "extra_pi_hat_name": args.extra_pi_hat_name if args.extra_pi_hat_csv_dir else None,
+                "extra_pi_hat_csv_dir": args.extra_pi_hat_csv_dir or None,
+                "extra_totals": extra_totals,
             },
             f,
             indent=2,
@@ -355,14 +544,32 @@ def main() -> None:
 
     with open(os.path.join(out_dir, "summary.csv"), "w", encoding="utf-8", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(["axis", "C_a", "n_tiles", "N_T", "H_a_m_static", "m_unif", "H_qbar", "lnC"])
+        header = [
+            "axis", "C_a", "n_tiles", "N_T",
+            "H_a", "KL_qbar_U", "lnC", "H_a_over_lnC",
+            "m_unif",
+        ]
+        if extra_name:
+            header += [f"KL_qbar_{extra_name}", f"m_{extra_name}", f"sanity_decomp_ok_{extra_name}"]
+        writer.writerow(header)
         for axis in NATHAB_AXIS_TASKS:
             r = results[axis]
-            writer.writerow(
-                [AXIS_DISPLAY_NAMES[axis], len(r["class_names"]), r["n_tiles"], r["N_T"],
-                 f"{r['H_a']:.6f}", f"{r['m_unif']:.6f}", f"{r['H_qbar']:.6f}", f"{r['lnC']:.6f}"]
-            )
-        writer.writerow(["TOTAL", "", "", "", f"{m_static_total:.6f}", f"{m_unif_total:.6f}", "", ""])
+            row = [
+                AXIS_DISPLAY_NAMES[axis], len(r["class_names"]), r["n_tiles"], r["N_T"],
+                f"{r['H_a']:.6f}", f"{r['gap_analytic']:.6f}", f"{r['lnC']:.6f}",
+                f"{r['H_a'] / r['lnC']:.6f}", f"{r['m_unif']:.6f}",
+            ]
+            if extra_name:
+                e = r["extra"][extra_name]
+                row += [f"{e['kl_qbar']:.6f}", f"{e['m_a']:.6f}", str(e["sanity_decomp_ok"])]
+            writer.writerow(row)
+        total_row = [
+            "TOTAL", "", "", "",
+            f"{m_static_total:.6f}", f"{kl_unif_total:.6f}", "", "", f"{m_unif_total:.6f}",
+        ]
+        if extra_name:
+            total_row += [f"{extra_totals['kl_qbar']:.6f}", f"{extra_totals['m_a']:.6f}", ""]
+        writer.writerow(total_row)
 
     print(f"\nSaved: {out_dir}/results.json, {out_dir}/summary.csv")
     if args.require_local_dir and n_no_local_dir > 0:
