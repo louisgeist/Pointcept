@@ -12,7 +12,7 @@ Tasks: segment (v20) + forest + elevation + 4 nathab tile_distribution axes
 on the fly from raw natural_habitat via Flair3DLabelRemap (storage definition
 default / CarHab ids 0-43). Checkpoint selection uses main_task=segment.
 
-stride=(2, 2, 2, 2), batch_size=20, elevation=meters, num_gpu=1.
+stride=(3, 3, 3, 3), batch_size=20, elevation=meters, num_gpu=1.
 """
 
 # -----------------------------------------------------------------------------
@@ -63,7 +63,7 @@ feat_keys = ["coord", "color", "strength"]
 coord_feat_scale = 0.01
 
 # Backbone pooling stride (encoder stages)
-stride = (2, 2, 2, 2)
+stride = (3, 3, 3, 3)
 
 # Wandb parameters
 wandb_run_name = (
