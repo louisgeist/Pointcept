@@ -116,6 +116,16 @@ New script `pointcept/datasets/preprocessing/flair3d_plus/rasterize_forest.py`, 
   literally, for no functional benefit — the default parameter preserves their behavior
   unchanged). New `forest_2d` pipelines use
   `dict(type="NetworkRasterToPointLabels", target_key="forest_2d")`.
+  **Deliberate behavior change found necessary during planning**: the current
+  implementation ends by doing `data_dict.pop("abs_xy", None)`. A multi-task pipeline that
+  wants both `network` and `forest_2d` runs this transform twice (once per target_key,
+  since each has its own grid/origin) — the second call would silently no-op (its own
+  guard clause returns early once `abs_xy` is gone) if the first call already popped it,
+  leaving the second target's raster un-converted (still dense `(r,H,W)`) all the way to
+  `Collect`, which would then fail (or silently corrupt) batching. Fix: stop popping
+  `abs_xy` inside this transform. This is safe — `Collect` only gathers explicitly listed
+  keys, so a leftover `abs_xy` is simply discarded with the rest of the per-sample dict —
+  and it is required for `network` + `forest_2d` to coexist correctly.
 - Pipeline shape for `forest_2d` mirrors `network`'s exactly, in train/val/test alike:
   `ExtractAbsXY` → (crop/augment) → `NetworkRasterToPointLabels(target_key="forest_2d")` →
   `ToTensor` → `Collect`. No special-casing at test time — same `MultiTaskTester`, no
