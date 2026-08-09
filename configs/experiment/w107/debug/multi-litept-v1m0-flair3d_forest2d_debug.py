@@ -73,7 +73,7 @@ wandb_run_name = (
     f"Flair3D+ LitePT-S multi debug forest_2d {grp_exp}.{num_exp} "
     f"stride={stride} batch_size={batch_size} lr={lr}"
 )
-wandb_project = "flair3d_multi"
+wandb_project = "flair3d_debug"
 
 # -----------------------------------------------------------------------------
 # Multitask configuration : targets configuration
