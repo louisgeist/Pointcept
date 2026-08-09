@@ -108,7 +108,25 @@ elif [ "${RESUME}" = true ] && [ -d "$EXP_DIR" ]; then
 else
   RESUME=false
   mkdir -p "$MODEL_DIR" "$CODE_DIR"
-  cp -r scripts tools pointcept "$CODE_DIR"
+  if [ "${SLURM_NODEID:-0}" = "0" ]; then
+    cp -r scripts tools pointcept "$CODE_DIR"
+    touch "${CODE_DIR}/.code_ready"
+  else
+    # Every node under a multi-node `srun --ntasks-per-node=1` runs this script and shares
+    # CODE_DIR on the cluster filesystem; only node 0 snapshots the code, others wait for it
+    # instead of racing their own `cp -r` into the same destination (which can leave a
+    # subpackage like pointcept/engines/ incompletely copied when this node's python starts).
+    WAIT_ELAPSED=0
+    WAIT_TIMEOUT=600
+    while [ ! -f "${CODE_DIR}/.code_ready" ]; do
+      sleep 2
+      WAIT_ELAPSED=$((WAIT_ELAPSED + 2))
+      if [ "$WAIT_ELAPSED" -ge "$WAIT_TIMEOUT" ]; then
+        echo "Error: timed out waiting for node 0 to finish code snapshot in ${CODE_DIR}" >&2
+        exit 1
+      fi
+    done
+  fi
 fi
 
 echo "Loading config in:" $CONFIG_DIR
