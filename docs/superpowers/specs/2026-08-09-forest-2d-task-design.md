@@ -178,19 +178,42 @@ additive to its existing APLS metric) precision/recall/F1 computation, foregroun
 ("class 1", i.e. `names.index("Foreground")`, matching how the existing exact/dilated P-R-F1
 already restrict to `fg_idx`):
 
-- Also fetch the model's dense **target** reconstruction, `output_dict.get("pixel_seg_target_dense_by_task")`
-  (already computed and returned by `MultiTaskSegmentorV2._compute_pixel_logits`, exposed
-  under this exact key at `default.py:880` — currently fetched nowhere in `test.py`). Merge it
-  across test-time fragments the same way predictions are merged
-  (`batch_pixel_dense_sum`/`cnt`, `test.py:1269-1288`): since a GT value at a given cell is
-  constant across fragments (only its observed/unobserved status changes), a plain
-  "keep whichever fragment observed it" merge suffices — no averaging needed — seeded at `-1`
-  (the model's own unobserved sentinel).
+**Key simplification found while re-reading `test.py`**: the dense whole-tile GT raster for a
+pixel_semantic task is *already* sitting in `targets_by_task[task_name]` at full `(r, H, W)`
+resolution — no fragment-merging or model dependency needed to get it. Proof:
+`Flair3DDataset.prepare_test_data` (`flair3d.py:551-599`) calls `self.get_data(idx)` (which
+already produces the channel-selected dense raster, `flair3d.py:396`) *before* running any
+per-fragment transform, then explicitly does, for every pixel_semantic target key
+(`flair3d.py:564-567`):
+```python
+if key in FLAIR3D_PIXEL_SEMANTIC_TARGETS:
+    # Keep raster in data_dict so fragments still carry it for the
+    # pixel_semantic head; also expose GT at scene level for metrics.
+    result_dict[key] = deepcopy(data_dict[key])
+```
+`NetworkRasterToPointLabels` (which turns the raster into per-point labels) only runs later,
+per-fragment, inside `post_transform` (`flair3d.py:596-597`) — so this `result_dict[key]` copy
+is untouched, full-resolution, dense. In `test.py`, `targets_by_task = batch_targets[b_idx]`
+(`test.py:1015-1041`, `1393`) is exactly this `result_dict`, so `targets_by_task[task_name]` is
+the dense `(r, H, W)` GT array, shape- and grid-aligned with the merged prediction raster
+(`pixel_logits_np[task_name]`, also `(r, H, W)`, `test.py:1327-1352`) because both ultimately
+derive from the same on-disk raster/meta. This holds **regardless of the npy-cache fast path**
+(`test.py:1139-1162`) — `batch_pixel_logits_np` is populated identically whether predictions
+come from a fresh forward pass or from cache, and `targets_by_task` never depends on the model
+at all. (An earlier draft of this section proposed fetching and fragment-merging
+`output_dict["pixel_seg_target_dense_by_task"]` from the model — that approach is strictly
+worse: more code, and silently broken under the cache-hit fast path where the model never
+runs. Discarded in favor of the above.)
+
 - Per scene, in the existing "compute metrics for each scene" loop (`test.py:1391+`, right
-  where `sem_metrics_scene` is built): for each pixel_semantic task and each of its
-  `num_networks` channels, using the already-finalized merged dense prediction
-  (`pixel_logits_np[task_name][c]`, `test.py:1327-1352`) and the newly-merged dense target:
-  - `valid = isfinite(prob) & (target != -1) & (target != ignore_index)`
+  where `sem_metrics_scene` is built): pull `pixel_logits_np = batch_pixel_logits_np[b_idx]`
+  (not currently destructured there — `pred_cls_np`/`pred_reg_np` are, `pixel_logits_np` isn't
+  yet). For each pixel_semantic task and each of its `num_networks` channels `c`:
+  - `prob = pixel_logits_np[task_name][c]` (dense probs, NaN = no point in any test fragment
+    observed that cell)
+  - `target = targets_by_task[task_name][c]` (dense GT label ids, straight from disk)
+  - `valid = isfinite(prob) & (target != ignore_index)` (excludes cells nobody observed, and
+    Void cells)
   - `pred_fg = (prob > 0.5) & valid`, `gt_fg = (target == fg_idx) & valid`
   - accumulate scene-level `tp / fp / fn` (plain ints)
   - add to the existing per-scene record: `record[data_name] = dict(semantic=...,
@@ -200,22 +223,26 @@ already restrict to `fg_idx`):
   distributed-sync code needed. On rank 0, sum `tp/fp/fn` across every scene in the test split,
   mirroring how semantic-task confusion histograms are already summed in that same merge loop
   (`test.py:1594-1608`).
-- Compute global `precision = tp/(tp+fp)`, `recall = tp/(tp+fn)`, `f1 = 2PR/(P+R)` per
-  pixel_semantic task/channel; log via `logger.info` plus
+- Compute global `precision, recall, f1 = precision_recall_f1(tp, tp + fp, tp, tp + fn)`
+  (reuse `pointcept.utils.dilated_metrics.precision_recall_f1`, already used for exactly this
+  math in `evaluator.py`) per pixel_semantic task/channel; log via `logger.info` plus
   `log_dict[metric_tag("test", "precision"/"recall"/"f1", task=task_name)]`, the same
   convention already used for `mIoU`/`macro_f1`/etc. (`test.py:1667-1684`), so it surfaces in
   wandb/tensorboard exactly like every other final test metric.
 - For `forest_2d` (`num_networks=1`) this yields exactly one precision/recall/F1 triplet for
   the Forest class. `network` (`num_networks=2`) gets one triplet per channel (ROADS,
   RAILROADS), purely additive — nothing existing changes for it.
+- No `default.py` changes needed for this section — `pixel_seg_target_dense_by_task` remains
+  unused for this feature (only the online-validation dilated-P/R computation, which
+  `forest_2d` disables, still uses it).
 
 **Precise answer to "which pixels":** the test-set P/R/F1 population is *every dense-grid
 pixel, across every tile in the test split, observed by at least one point in at least one
-test-time fragment on both the prediction and target reconstruction (`dense_cnt >= 1`), whose
-GT label is not Void*. This is the same "occupied, non-void cell" restriction as validation
-(section 5) — the only difference is that validation computes it on a flat per-crop pooled
-tensor summed over the `val` split, while this computes it on the fragment-merged, whole-tile
-dense grid summed over the `test` split.
+test-time fragment (`prob` finite), whose GT label is not Void*. This is the same "occupied,
+non-void cell" restriction as validation (section 5) — the only difference is that validation
+computes it on a flat per-crop pooled tensor summed over the `val` split, while this computes
+it on the fragment-merged, whole-tile dense grid (prediction side only — GT is always
+fully dense) summed over the `test` split.
 
 ### 6. Config scope
 
