@@ -5,9 +5,12 @@ w107/7/toward_bm/multi-litept-v1m0-flair3d_2.py (segment v20 + forest + elevatio
 grid-pooled variant, forest_2d (mean-pooled 0.5m Lambert grid + linear head,
 see docs/superpowers/specs/2026-08-09-forest-2d-task-design.md).
 
-Debug speed overrides only (train_max_sample/val_max_sample/total_iters/
-iter_per_epoch) -- everything else matches the reference config so a
-successful run here validates the real multi-task wiring, not a simplified one.
+Debug speed overrides (train_max_sample/val_max_sample/total_iters/
+iter_per_epoch) plus two other intentional deviations from the reference
+config: `stride=(2, 2, 2, 2)` instead of `(2, 3, 3, 3)`, and no
+`val_stratified_subset_manifest` (debug runs rely on `val_max_sample`
+instead) -- everything else matches, so a successful run here still
+validates the real multi-task wiring, not a simplified one.
 
 Prerequisite: forest_2d.npy must already exist under each tile's scene dir --
 run pointcept/datasets/preprocessing/flair3d_plus/rasterize_forest.py first.

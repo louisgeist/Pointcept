@@ -184,6 +184,22 @@ python pointcept/datasets/preprocessing/flair3d_plus/rasterize_network.py \
   --num_workers 16
 ```
 
+**Add forest_2d labels** (2D grid variant of the per-point `forest` task): unlike network,
+FOREST is already a raster, so ``rasterize_forest.py`` just resamples the window of the source
+FOREST GeoTIFF covering each tile's point-cloud bounding box (majority vote) onto the target
+``pixel_m`` grid and writes it out ``(1, H, W)`` south-up, same layout as ``network.npy``.
+FOREST coverage is complete for every manifest patch (no "expected but absent" case like
+network), so this must be run once before any `forest_2d` training — no tile has
+`forest_2d.npy` until this has run:
+
+```bash
+python pointcept/datasets/preprocessing/flair3d_plus/rasterize_forest.py \
+    --data_root data/flair3d_plus \
+    --source_dataset_root data/flair3d_plus/raw \
+    --split_manifest_csv data/flair3d_plus/raw/scene_split_manifest.csv \
+    --pixel_m 0.5
+```
+
 **Visualize network masks** (GT binary panels + mean-pooled LiDAR RGB on the same 1 m grid).
 Mutually exclusive modes: ``--tile`` (one subtile) or ``--roi`` (all subtiles stitched).
 With predictions (``--logits`` / ``--result-dir``), also shows soft probs, a binarized row

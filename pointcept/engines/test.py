@@ -1454,6 +1454,11 @@ class MultiTaskTester(TesterBase):
                     ]
                     target_arr = np.asarray(targets_by_task[task_name])
                     pred_arr = np.asarray(pixel_logits_np[task_name])
+                    if pred_arr.shape != target_arr.shape:
+                        raise ValueError(
+                            f"{task_name} scene {data_name}: prediction shape {pred_arr.shape} "
+                            f"!= ground-truth shape {target_arr.shape}"
+                        )
                     channel_stats = {}
                     for c in range(num_networks):
                         ch_name = (

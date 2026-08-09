@@ -140,6 +140,10 @@ Semantic/scene targets (`segment`, `forest`, `land_use`, `natural_habitat`, `cli
 - Network labels (roads/railroads/transmission lines) are graph-derived and rasterized into per-tile binary
   masks by `pointcept/datasets/preprocessing/flair3d_plus/rasterize_network.py` (hard-fails on missing
   `*_graph.gpkg` for tiles flagged `True` in the split manifest).
+- Forest 2D grid labels (`forest_2d`) are rasterized directly from the FOREST GeoTIFF (the same source used by
+  the per-point `forest` task) into per-tile masks by
+  `pointcept/datasets/preprocessing/flair3d_plus/rasterize_forest.py` at a configurable `--pixel_m` (default
+  0.5m); this must be run once before any `forest_2d` training, since no tile has `forest_2d.npy` until then.
 - Stratified validation subsets (to validate on a fixed ~2k-tile sample instead of the full split) are
   precomputed once via `scripts/build_stratified_subset.py` and referenced from a config via
   `data.val.stratified_subset_manifest=<csv>`.

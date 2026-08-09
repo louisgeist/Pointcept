@@ -41,6 +41,7 @@ _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 try:
+    from network_label_utils import parse_bool_flag  # type: ignore
     from network_xy_raster_utils import (  # type: ignore
         abs_xy_bounds_from_coord,
         default_missing_coord_details_csv,
@@ -49,6 +50,9 @@ try:
     )
     from preprocess_flair3d_v2 import build_modality_patch_path  # type: ignore
 except ImportError:  # pragma: no cover
+    from pointcept.datasets.preprocessing.flair3d_plus.network_label_utils import (
+        parse_bool_flag,
+    )
     from pointcept.datasets.preprocessing.flair3d_plus.network_xy_raster_utils import (
         abs_xy_bounds_from_coord,
         default_missing_coord_details_csv,
@@ -61,10 +65,6 @@ except ImportError:  # pragma: no cover
 
 
 REQUIRED_MANIFEST_COLUMNS = frozenset({"split", "dept_year", "roi", "patch_id", "LIDARHD"})
-
-
-def _parse_bool_flag(value) -> bool:
-    return str(value).strip().lower() in ("true", "1", "yes")
 
 
 @dataclass(frozen=True)
@@ -116,7 +116,7 @@ def load_manifest_patches(
                 continue
             if splits_set is not None and split not in splits_set:
                 continue
-            if not _parse_bool_flag(row.get("LIDARHD")):
+            if not parse_bool_flag(row.get("LIDARHD")):
                 continue
             if (split, patch_id) in skip:
                 n_skipped += 1
@@ -176,6 +176,7 @@ def process_patch(
     grid = grid_from_xy_bounds(xmin, ymin, xmax, ymax, pixel_m=pixel_m)
 
     with rasterio.open(str(forest_tiff_path)) as src:
+        nodata = src.nodata
         window = from_bounds(
             grid.origin_x,
             grid.origin_y,
@@ -192,12 +193,31 @@ def process_patch(
             fill_value=ignore_index,
         )
 
+    # Map the raster's own nodata sentinel (if declared) to ignore_index --
+    # mirrors the nodata->void mapping sample_raster_to_points does for the
+    # per-point `forest` task (preprocess_flair3d_v2.py). Without this, a
+    # stray nodata value would be written verbatim into forest_2d.npy and
+    # only surface later as an opaque CUDA nll_loss assert during training.
+    if nodata is not None:
+        raw = np.where(raw == nodata, ignore_index, raw)
+
     # rasterio reads north-up (row 0 = north/top); the Flair3D+ grid
     # convention used by network.npy / NetworkRasterToPointLabels is south-up
     # (row 0 = south, row index increases with northing) -- see
     # network_xy_raster_utils.mask_from_absolute_cells. Flip to match.
     forest = np.flipud(raw).astype(np.uint8, copy=False)
     forest = forest[np.newaxis, :, :]  # (1, H, W)
+
+    valid_values = {0, 1, ignore_index}
+    bad_values = sorted(int(v) for v in np.unique(forest) if int(v) not in valid_values)
+    if bad_values:
+        raise ValueError(
+            f"{patch_dir}: forest_2d raster for {forest_tiff_path} contains "
+            f"unexpected pixel value(s) {bad_values} outside the valid set "
+            f"{sorted(valid_values)} (0=non-forest, 1=forest, "
+            f"{ignore_index}=ignore_index/void). Check the source FOREST "
+            "GeoTIFF's nodata handling before re-running preprocessing."
+        )
 
     np.save(patch_dir / "forest_2d.npy", forest)
 
@@ -274,6 +294,11 @@ def run(
         n_ok += 1
 
     print(f"Done. forest_2d.npy written for {n_ok} patches ({n_missing_tiff} missing tiffs).")
+    if n_missing_tiff > 0:
+        raise RuntimeError(
+            f"{n_missing_tiff} FOREST tiff(s) were missing (see WARNING lines above); "
+            "FOREST coverage is expected to be complete for every manifest patch."
+        )
 
 
 def build_argparser() -> argparse.ArgumentParser:

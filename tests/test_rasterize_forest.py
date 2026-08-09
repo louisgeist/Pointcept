@@ -30,7 +30,7 @@ from pointcept.datasets.preprocessing.flair3d_plus.rasterize_forest import (
 
 @unittest.skipUnless(HAS_RASTERIO, "rasterio not installed")
 class TestProcessPatch(unittest.TestCase):
-    def _write_synthetic_tiff(self, path, xmin, ymax, pixel_m, array):
+    def _write_synthetic_tiff(self, path, xmin, ymax, pixel_m, array, nodata=None):
         # array is already in "north-up" (row 0 = north) orientation, as a real
         # GeoTIFF read would return it.
         transform = from_origin(xmin, ymax, pixel_m, pixel_m)
@@ -44,6 +44,7 @@ class TestProcessPatch(unittest.TestCase):
             dtype=array.dtype,
             crs="EPSG:2154",
             transform=transform,
+            nodata=nodata,
         ) as dst:
             dst.write(array, 1)
 
@@ -109,6 +110,62 @@ class TestProcessPatch(unittest.TestCase):
 
             forest = np.load(os.path.join(patch_dir, "forest_2d.npy"))
             self.assertTrue((forest == 1).all())
+
+    def test_nodata_pixel_mapped_to_ignore_index(self):
+        # Native tiff declares nodata=255 and has one pixel set to that
+        # sentinel; the rest is valid forest (1) / non-forest (0) data.
+        native = np.zeros((4, 4), dtype=np.uint8)
+        native[0, 0] = 255  # nodata sentinel, north-west corner
+        native[1, 1] = 1
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tiff_path = os.path.join(tmp, "FOREST.tif")
+            self._write_synthetic_tiff(
+                tiff_path, xmin=0.0, ymax=2.0, pixel_m=0.5, array=native, nodata=255,
+            )
+
+            patch_dir = os.path.join(tmp, "patch")
+            os.makedirs(patch_dir)
+            coord = np.array([[0.1, 0.1, 0.0], [1.9, 1.9, 0.0]], dtype=np.float32)
+            np.save(os.path.join(patch_dir, "coord.npy"), coord)
+            np.save(
+                os.path.join(patch_dir, "coord_translation.npy"),
+                np.array([0.0, 0.0, 0.0], dtype=np.float64),
+            )
+
+            process_patch(patch_dir, tiff_path, pixel_m=0.5, ignore_index=2)
+
+            forest = np.load(os.path.join(patch_dir, "forest_2d.npy"))
+            # The raw nodata sentinel (255) must never survive into the
+            # written array -- it should be remapped to ignore_index.
+            self.assertNotIn(255, np.unique(forest).tolist())
+            # native[0, 0] (north-west) lands at south-up row -1, col 0.
+            self.assertEqual(int(forest[0, -1, 0]), 2)
+
+    def test_raises_on_unexpected_pixel_values(self):
+        # A raster with no declared nodata but an out-of-range pixel value
+        # (e.g. a corrupt/mislabeled source tiff) must fail loudly at
+        # preprocessing time rather than silently write an invalid label.
+        native = np.zeros((4, 4), dtype=np.uint8)
+        native[2, 2] = 7  # not in {0, 1, ignore_index}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tiff_path = os.path.join(tmp, "FOREST.tif")
+            self._write_synthetic_tiff(
+                tiff_path, xmin=0.0, ymax=2.0, pixel_m=0.5, array=native,
+            )
+
+            patch_dir = os.path.join(tmp, "patch")
+            os.makedirs(patch_dir)
+            coord = np.array([[0.1, 0.1, 0.0], [1.9, 1.9, 0.0]], dtype=np.float32)
+            np.save(os.path.join(patch_dir, "coord.npy"), coord)
+            np.save(
+                os.path.join(patch_dir, "coord_translation.npy"),
+                np.array([0.0, 0.0, 0.0], dtype=np.float64),
+            )
+
+            with self.assertRaises(ValueError):
+                process_patch(patch_dir, tiff_path, pixel_m=0.5, ignore_index=2)
 
 
 if __name__ == "__main__":

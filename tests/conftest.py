@@ -41,6 +41,13 @@ import importlib.util
 import os
 import sys
 import types
+from pathlib import Path
+
+# tests/conftest.py is one level below the repo root; resolve paths from here
+# so the fallback stubs work regardless of pytest's invocation cwd (e.g.
+# `cd /tmp && pytest /path/to/repo/tests/`), not just when run from the repo
+# root.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 def _stub_pkg(name, path):
@@ -68,28 +75,42 @@ def _load_real(name, path):
 
 
 def _install_fallback_stubs():
-    _stub_pkg("pointcept", "pointcept")
-    datasets_pkg = _stub_pkg("pointcept.datasets", "pointcept/datasets")
-    models_pkg = _stub_pkg("pointcept.models", "pointcept/models")
+    _stub_pkg("pointcept", str(_REPO_ROOT / "pointcept"))
+    datasets_pkg = _stub_pkg("pointcept.datasets", str(_REPO_ROOT / "pointcept" / "datasets"))
+    models_pkg = _stub_pkg("pointcept.models", str(_REPO_ROOT / "pointcept" / "models"))
 
     # --- pointcept.models: real leaf modules only, no backbones ---
-    models_utils = _load_real("pointcept.models.utils", "pointcept/models/utils")
-    models_builder = _load_real("pointcept.models.builder", "pointcept/models/builder.py")
-    models_losses = _load_real("pointcept.models.losses", "pointcept/models/losses")
-    models_default = _load_real("pointcept.models.default", "pointcept/models/default.py")
+    _load_real("pointcept.models.utils", str(_REPO_ROOT / "pointcept" / "models" / "utils"))
+    models_builder = _load_real(
+        "pointcept.models.builder", str(_REPO_ROOT / "pointcept" / "models" / "builder.py")
+    )
+    _load_real("pointcept.models.losses", str(_REPO_ROOT / "pointcept" / "models" / "losses"))
+    models_default = _load_real(
+        "pointcept.models.default", str(_REPO_ROOT / "pointcept" / "models" / "default.py")
+    )
     models_pkg.build_model = models_builder.build_model
     models_pkg.MultiTaskSegmentorV2 = models_default.MultiTaskSegmentorV2
 
     # --- pointcept.datasets: real leaf modules only, no per-dataset backends ---
-    datasets_defaults = _load_real("pointcept.datasets.defaults", "pointcept/datasets/defaults.py")
-    datasets_builder = _load_real("pointcept.datasets.builder", "pointcept/datasets/builder.py")
-    datasets_transform = _load_real("pointcept.datasets.transform", "pointcept/datasets/transform.py")
+    datasets_defaults = _load_real(
+        "pointcept.datasets.defaults", str(_REPO_ROOT / "pointcept" / "datasets" / "defaults.py")
+    )
+    datasets_builder = _load_real(
+        "pointcept.datasets.builder", str(_REPO_ROOT / "pointcept" / "datasets" / "builder.py")
+    )
+    _load_real(
+        "pointcept.datasets.transform", str(_REPO_ROOT / "pointcept" / "datasets" / "transform.py")
+    )
     _load_real(
         "pointcept.datasets.flair3d_config_utils",
-        "pointcept/datasets/flair3d_config_utils.py",
+        str(_REPO_ROOT / "pointcept" / "datasets" / "flair3d_config_utils.py"),
     )
-    datasets_flair3d = _load_real("pointcept.datasets.flair3d", "pointcept/datasets/flair3d.py")
-    datasets_utils = _load_real("pointcept.datasets.utils", "pointcept/datasets/utils.py")
+    datasets_flair3d = _load_real(
+        "pointcept.datasets.flair3d", str(_REPO_ROOT / "pointcept" / "datasets" / "flair3d.py")
+    )
+    datasets_utils = _load_real(
+        "pointcept.datasets.utils", str(_REPO_ROOT / "pointcept" / "datasets" / "utils.py")
+    )
     datasets_pkg.build_dataset = datasets_builder.build_dataset
     datasets_pkg.collate_fn = datasets_utils.collate_fn
     datasets_pkg.point_collate_fn = datasets_utils.point_collate_fn
@@ -100,5 +121,10 @@ def _install_fallback_stubs():
 try:
     import pointcept.datasets  # noqa: F401
     import pointcept.models  # noqa: F401
-except ImportError:
+except ImportError as exc:
+    print(
+        f"tests/conftest.py: real import failed ({exc!r}); "
+        "falling back to lightweight leaf-module stubs for this test session.",
+        file=sys.stderr,
+    )
     _install_fallback_stubs()
