@@ -1,15 +1,15 @@
 """
-LitePT-Small on Flair3D+ multitask: GradNormLite pooled nathab, lr=1e-3,
+LitePT-Base on Flair3D+ multitask: GradNormLite pooled nathab, lr=1e-3,
 stride=(3, 3, 3, 3), elevation ×0.01 (ELEVATION_TARGET_SCALE).
 
-_16: LitePT-S + batch_size=64 + total_iters=30_000.
+_17: LitePT-B + batch_size=12 + total_iters=30_000.
 
 Tasks: segment (v20) + forest + elevation + 4 nathab tile_distribution axes
 (Habitat Type / Moisture Regime / Soil Chemistry / Bioclimatic Zone), derived
 on the fly from raw natural_habitat via Flair3DLabelRemap (storage definition
 default / CarHab ids 0-43). Checkpoint selection uses main_task=segment.
 
-stride=(3, 3, 3, 3), batch_size=64, total_iters=30_000, lr=1e-3, num_gpu=1.
+stride=(3, 3, 3, 3), batch_size=12, total_iters=30_000, lr=1e-3, num_gpu=1.
 """
 
 # -----------------------------------------------------------------------------
@@ -23,7 +23,7 @@ _base_ = ["../../../../_base_/default_runtime.py"]
 
 # Logging parameters
 grp_exp = 1
-num_exp = 16
+num_exp = 17
 
 log_task_gradient_norms = False
 grad_norm_lite = True
@@ -37,10 +37,10 @@ num_worker = 8 * num_gpu
 enable_amp = True
 
 # Data parameters
-batch_size = 64 * num_gpu  # total batch size across all gpus
+batch_size = 12 * num_gpu  # total batch size across all gpus
 # Cap scenes/batch; actual packing uses *_voxel_budget (w105/6/19h: 2M worked).
-batch_size_val = 8 * num_gpu
-batch_size_test = 8 * num_gpu
+batch_size_val = 4 * num_gpu
+batch_size_test = 4 * num_gpu
 test_voxel_budget = 2_000_000
 val_voxel_budget = 2_000_000
 
@@ -64,7 +64,7 @@ stride = (3, 3, 3, 3)
 
 # Wandb parameters
 wandb_run_name = (
-    f"Flair3D+ LitePT-S multi + nathab_distribution "
+    f"Flair3D+ LitePT-B multi + nathab_distribution "
     f"{grp_exp}.{num_exp} stride={stride} batch_size={batch_size} lr={lr} "
     f"grad_norm_lite=pooled_nathab"
 )
@@ -167,16 +167,17 @@ model = dict(
         in_channels=7,  # coord (3) + color (3) + strength (1)
         order=("z", "z-trans", "hilbert", "hilbert-trans"),
         stride=stride,
-        enc_depths=(2, 2, 2, 6, 2),
-        enc_channels=(36, 72, 144, 252, 504),
-        enc_num_head=(2, 4, 8, 14, 28),
+        # LitePT-Base official dims (deeper/wider than Small).
+        enc_depths=(3, 3, 3, 12, 3),
+        enc_channels=(54, 108, 216, 432, 576),
+        enc_num_head=(3, 6, 12, 24, 32),
         enc_patch_size=(patch_size, patch_size, patch_size, patch_size, patch_size),
         enc_conv=(True, True, True, False, False),
         enc_attn=(False, False, False, True, True),
         enc_rope_freq=(100.0, 100.0, 100.0, 100.0, 100.0),
         dec_depths=(0, 0, 0, 0),
-        dec_channels=(72, 72, 144, 252),
-        dec_num_head=(4, 4, 8, 14),
+        dec_channels=(72, 108, 216, 432),
+        dec_num_head=(4, 6, 12, 24),
         dec_patch_size=(patch_size, patch_size, patch_size, patch_size),
         dec_conv=(False, False, False, False),
         dec_attn=(False, False, False, False),

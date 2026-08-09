@@ -2,14 +2,14 @@
 LitePT-Small on Flair3D+ multitask: GradNormLite pooled nathab, lr=1e-3,
 stride=(3, 3, 3, 3), elevation ×0.01 (ELEVATION_TARGET_SCALE).
 
-_16: LitePT-S + batch_size=64 + total_iters=30_000.
+_15: LitePT-S + batch_size=12 + total_iters=60_000.
 
 Tasks: segment (v20) + forest + elevation + 4 nathab tile_distribution axes
 (Habitat Type / Moisture Regime / Soil Chemistry / Bioclimatic Zone), derived
 on the fly from raw natural_habitat via Flair3DLabelRemap (storage definition
 default / CarHab ids 0-43). Checkpoint selection uses main_task=segment.
 
-stride=(3, 3, 3, 3), batch_size=64, total_iters=30_000, lr=1e-3, num_gpu=1.
+stride=(3, 3, 3, 3), batch_size=12, total_iters=60_000, lr=1e-3, num_gpu=1.
 """
 
 # -----------------------------------------------------------------------------
@@ -23,7 +23,7 @@ _base_ = ["../../../../_base_/default_runtime.py"]
 
 # Logging parameters
 grp_exp = 1
-num_exp = 16
+num_exp = 15
 
 log_task_gradient_norms = False
 grad_norm_lite = True
@@ -37,7 +37,7 @@ num_worker = 8 * num_gpu
 enable_amp = True
 
 # Data parameters
-batch_size = 64 * num_gpu  # total batch size across all gpus
+batch_size = 12 * num_gpu  # total batch size across all gpus
 # Cap scenes/batch; actual packing uses *_voxel_budget (w105/6/19h: 2M worked).
 batch_size_val = 8 * num_gpu
 batch_size_test = 8 * num_gpu
@@ -52,7 +52,7 @@ patch_size = 1024
 
 # Optimization parameters
 lr = 1e-3
-total_iters = 30_000
+total_iters = 60_000
 
 # Features
 learned_masked_feat = True
