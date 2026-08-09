@@ -178,6 +178,20 @@ FLAIR3D_PIXEL_SEMANTIC_TASKS: Dict[str, Dict[str, Any]] = {
         # this task's Lambert grid). See MultiTaskEvaluator's pixel_semantic handling.
         "buffer_radius_px": 3, # for dilated recall/precision/f1
     },
+    "forest_2d": {
+        "task_type": "pixel_semantic",
+        "num_networks": 1,
+        "num_classes": 2,
+        "ignore_index": 2,
+        "channel_names": ["FOREST"],
+        "names": ["Not Forest", "Forest", "Void"],
+        # Area-coverage class: mean-pool point features per cell (unlike network's
+        # default max-pool, which suits catching a single strong "line here" signal).
+        "pooling": "mean",
+        # Buffer/dilated tolerance is a diagnostic for thin curvilinear masks
+        # (road/rail); not meaningful for a blobby area-coverage mask like forest.
+        "enable_dilated_prf": False,
+    },
 }
 
 # Nathab ecological-axis distribution tasks: point-wise per-axis categorical labels
@@ -419,26 +433,31 @@ def init_multitask_collect_keys(
 ) -> Tuple[Tuple[str, ...], Tuple[str, ...], Tuple[str, ...]]:
     """Build train/val Collect keys and index_valid_keys for Flair3D+ configs.
 
-    train: coord + collect_prefix_keys + target_keys (+ network cell ints / grid meta)
+    train: coord + collect_prefix_keys + target_keys (+ per pixel_semantic task's cell
+    ints / grid meta)
     val: coord + collect_prefix_keys + (task, origin_task) per point-wise target + inverse
 
-    For ``network``, Collect includes ``network_cell`` / ``network_pix`` (int64 Lambert
-    indices from ``NetworkRasterToPointLabels``), plus ``network_origin_*``,
-    ``network_pixel_m``, and ``network_height`` / ``network_width`` for dense test.
+    For every pixel_semantic target in ``target_keys`` (e.g. ``network``, ``forest_2d``),
+    Collect includes ``{key}_cell`` / ``{key}_pix`` (int64 Lambert indices from
+    ``NetworkRasterToPointLabels(target_key=key)``), plus ``{key}_origin_*``,
+    ``{key}_pixel_m``, and ``{key}_height`` / ``{key}_width`` for dense test. Each
+    pixel_semantic task gets its own independent key set, so e.g. ``network`` and
+    ``forest_2d`` can coexist in the same multi-task run without collisions.
     """
     _validate_target_keys(target_keys)
     base = ("coord",) + collect_prefix_keys
     extra: Tuple[str, ...] = ()
-    if any(_is_pixel_semantic_target(k) for k in target_keys):
-        extra = (
-            "network_cell",
-            "network_pix",
-            "network_origin_x",
-            "network_origin_y",
-            "network_pixel_m",
-            "network_height",
-            "network_width",
-        )
+    for key in target_keys:
+        if _is_pixel_semantic_target(key):
+            extra += (
+                f"{key}_cell",
+                f"{key}_pix",
+                f"{key}_origin_x",
+                f"{key}_origin_y",
+                f"{key}_pixel_m",
+                f"{key}_height",
+                f"{key}_width",
+            )
     train_keys = base + extra + target_keys
     val_target_keys: Tuple[str, ...] = ()
     for key in target_keys:
