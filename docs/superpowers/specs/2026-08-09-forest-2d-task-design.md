@@ -158,6 +158,65 @@ unconditional for every pixel_semantic task). Add a per-task opt-out:
 No APLS-equivalent script is added for `forest_2d` — plain IoU/Acc/exact-P-R-F1 is the full
 metric surface for this task.
 
+### 5b. Test-set precision/recall/F1 (new — extends `MultiTaskTester`, `pointcept/engines/test.py`)
+
+**Gap found during design review**: everything in section 5 above is the *online validation*
+evaluator (`MultiTaskEvaluator`, runs periodically during training on the `val` split). The
+final "precise test" pass (`PreciseEvaluator` → `MultiTaskTester.test()`, run once at the end
+of training on the `test` split, see `pointcept/engines/hooks/misc.py:745`) currently computes
+**no aggregate metric at all** for any `pixel_semantic` task — it only merges per-tile
+test-time fragments into a dense probability raster and saves it to disk
+(`{patch_id}_logits_{task_name}.npy`, `test.py:1269-1352`). The final aggregation loop
+(`test.py:~1585-1690`) only handles `semantic_tasks` / `regression_tasks` /
+`multilabel_tasks` / `tile_distribution_tasks`. For `network`, the only consumer of those
+saved rasters is the opt-in `NetworkAPLSEvaluator` (graph-based APLS, not P/R/F1). This means
+today there is **no test-set number to cite** for any pixel_semantic task, forest_2d
+included — only training-time validation numbers exist.
+
+Add a generic (applies to every `pixel_semantic` task, so `network` gets it too, purely
+additive to its existing APLS metric) precision/recall/F1 computation, foreground-class-only
+("class 1", i.e. `names.index("Foreground")`, matching how the existing exact/dilated P-R-F1
+already restrict to `fg_idx`):
+
+- Also fetch the model's dense **target** reconstruction, `output_dict.get("pixel_seg_target_dense_by_task")`
+  (already computed and returned by `MultiTaskSegmentorV2._compute_pixel_logits`, exposed
+  under this exact key at `default.py:880` — currently fetched nowhere in `test.py`). Merge it
+  across test-time fragments the same way predictions are merged
+  (`batch_pixel_dense_sum`/`cnt`, `test.py:1269-1288`): since a GT value at a given cell is
+  constant across fragments (only its observed/unobserved status changes), a plain
+  "keep whichever fragment observed it" merge suffices — no averaging needed — seeded at `-1`
+  (the model's own unobserved sentinel).
+- Per scene, in the existing "compute metrics for each scene" loop (`test.py:1391+`, right
+  where `sem_metrics_scene` is built): for each pixel_semantic task and each of its
+  `num_networks` channels, using the already-finalized merged dense prediction
+  (`pixel_logits_np[task_name][c]`, `test.py:1327-1352`) and the newly-merged dense target:
+  - `valid = isfinite(prob) & (target != -1) & (target != ignore_index)`
+  - `pred_fg = (prob > 0.5) & valid`, `gt_fg = (target == fg_idx) & valid`
+  - accumulate scene-level `tp / fp / fn` (plain ints)
+  - add to the existing per-scene record: `record[data_name] = dict(semantic=...,
+    tile_distribution=..., pixel_semantic=pixel_prf_metrics_scene)` (extends the dict built at
+    `test.py:1549`).
+- This rides along the existing `comm.gather(record, dst=0)` (`test.py:1585`) — no new
+  distributed-sync code needed. On rank 0, sum `tp/fp/fn` across every scene in the test split,
+  mirroring how semantic-task confusion histograms are already summed in that same merge loop
+  (`test.py:1594-1608`).
+- Compute global `precision = tp/(tp+fp)`, `recall = tp/(tp+fn)`, `f1 = 2PR/(P+R)` per
+  pixel_semantic task/channel; log via `logger.info` plus
+  `log_dict[metric_tag("test", "precision"/"recall"/"f1", task=task_name)]`, the same
+  convention already used for `mIoU`/`macro_f1`/etc. (`test.py:1667-1684`), so it surfaces in
+  wandb/tensorboard exactly like every other final test metric.
+- For `forest_2d` (`num_networks=1`) this yields exactly one precision/recall/F1 triplet for
+  the Forest class. `network` (`num_networks=2`) gets one triplet per channel (ROADS,
+  RAILROADS), purely additive — nothing existing changes for it.
+
+**Precise answer to "which pixels":** the test-set P/R/F1 population is *every dense-grid
+pixel, across every tile in the test split, observed by at least one point in at least one
+test-time fragment on both the prediction and target reconstruction (`dense_cnt >= 1`), whose
+GT label is not Void*. This is the same "occupied, non-void cell" restriction as validation
+(section 5) — the only difference is that validation computes it on a flat per-crop pooled
+tensor summed over the `val` split, while this computes it on the fragment-merged, whole-tile
+dense grid summed over the `test` split.
+
 ### 6. Config scope
 
 Only the task-registry entry is added now (`FLAIR3D_PIXEL_SEMANTIC_TASKS["forest_2d"]`).
@@ -176,6 +235,10 @@ Following the repo convention of one focused test file per piece of logic:
 - A test for the new `pooling="mean"` branch in `_pixel_pool_and_gather`: verify mean-pool
   output differs correctly from max-pool on a small synthetic per-pixel feature/label
   fixture, and that omitting `pooling` preserves today's max-pool behavior.
+- A test for the section 5b test-set precision/recall/F1 aggregation: on synthetic per-scene
+  dense prediction/target grids with known observed/unobserved/void cells, verify tp/fp/fn
+  match a hand-computed expectation and that unobserved (`dense_cnt == 0`) and Void cells are
+  correctly excluded.
 
 ## Open items resolved during design review
 
@@ -183,4 +246,8 @@ Following the repo convention of one focused test file per piece of logic:
 - Grid resolution: `0.5m` (confirmed).
 - Config scope: task-registry entry only, no mono-task config directory yet (confirmed).
 - Test pipeline: identical structure to train/val, no APLS-equivalent (confirmed).
-- Metrics: exact P/R/F1 + plain IoU/Acc only, no dilated P/R/F1 (confirmed).
+- Validation metrics: exact P/R/F1 + plain IoU/Acc only, no dilated P/R/F1 (confirmed).
+- Test-set metrics: no aggregate metric currently exists at test time for any pixel_semantic
+  task (gap found during design review) — add a generic test-set precision/recall/F1
+  (foreground class only) to `MultiTaskTester`, applying to `forest_2d` and, additively, to
+  `network` (confirmed, section 5b).
