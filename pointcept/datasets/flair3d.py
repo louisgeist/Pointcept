@@ -34,6 +34,7 @@ FLAIR3D_SPECIFIC_ASSETS = (
     "natural_habitat_multilabel",
     "coord_translation",
     "network",
+    "forest_2d",
 )
 FLAIR3D_SEMANTIC_TARGETS = ("segment", "forest", "land_use", "natural_habitat")
 FLAIR3D_CLASSIFICATION_TARGETS = FLAIR3D_CLASSIFICATION_TARGET_KEYS
@@ -321,17 +322,19 @@ class Flair3DDataset(DefaultDataset):
             return np.full(n, float(fill_value), dtype=np.float32)
         raise KeyError(f"Unsupported target key: {target_key}")
 
-    def _load_network_label(self, data_dict, scene):
-        """Load ``network.npy`` and grid meta for the pixel semantic task.
+    def _load_pixel_semantic_label(self, data_dict, scene, target_key="network"):
+        """Load ``{target_key}.npy`` and grid meta for a pixel semantic task.
 
         Training heads use ``num_networks`` channels from
-        ``get_pixel_semantic_config`` (ROADS + RAILROADS). On-disk rasters may
-        still be ``(3, H, W)`` including TRANSMISSION_LINES; those are sliced
-        via ``meta.network.channel_order`` when present, else the first ``r``
-        channels (historical order ROADS, RAILROADS, TRANSMISSION_LINES).
+        ``get_pixel_semantic_config(target_key)``. On-disk rasters may have more
+        channels than the task trains on (e.g. historical ``network.npy`` with
+        TRANSMISSION_LINES as channel 2); those are sliced via
+        ``meta.{target_key}.channel_order`` when present, else the first ``r``
+        channels.
 
-        Empty tiles may omit ``network.npy`` and only store ``meta.network``
-        (``empty: true`` + width/height); those are synthesized as zeros.
+        Empty tiles may omit ``{target_key}.npy`` and only store
+        ``meta.{target_key}`` (``empty: true`` + width/height); those are
+        synthesized as zeros.
         """
         import json
 
@@ -340,75 +343,81 @@ class Flair3DDataset(DefaultDataset):
             get_pixel_semantic_config,
         )
 
-        cfg = get_pixel_semantic_config("network")
+        cfg = get_pixel_semantic_config(target_key)
         r = int(cfg["num_networks"])
-        channel_names = list(cfg.get("channel_names") or NETWORK_CHANNEL_NAMES)
+        default_channel_names = (
+            NETWORK_CHANNEL_NAMES if target_key == "network" else (target_key,)
+        )
+        channel_names = list(cfg.get("channel_names") or default_channel_names)
 
         origin_x = 0.0
         origin_y = 0.0
         pixel_m = 1.0
-        net_meta = {}
+        raster_meta = {}
         meta_path = os.path.join(scene, "meta.json")
         if os.path.isfile(meta_path):
             with open(meta_path, "r", encoding="utf-8") as f:
                 meta = json.load(f)
-            maybe = meta.get("network") or {}
+            maybe = meta.get(target_key) or {}
             if isinstance(maybe, dict):
-                net_meta = maybe
-                origin_x = float(net_meta.get("origin_x", 0.0))
-                origin_y = float(net_meta.get("origin_y", 0.0))
-                pixel_m = float(net_meta.get("pixel_m", 1.0))
+                raster_meta = maybe
+                origin_x = float(raster_meta.get("origin_x", 0.0))
+                origin_y = float(raster_meta.get("origin_y", 0.0))
+                pixel_m = float(raster_meta.get("pixel_m", 1.0))
 
-        if "network" in data_dict:
-            network = np.asarray(data_dict["network"])
-            if network.ndim != 3:
+        if target_key in data_dict:
+            raster = np.asarray(data_dict[target_key])
+            if raster.ndim != 3:
                 raise ValueError(
-                    f"network.npy expected shape (C, H, W), got {network.shape} "
+                    f"{target_key}.npy expected shape (C, H, W), got {raster.shape} "
                     f"under scene: {scene}"
                 )
-            network = self._select_network_channels(
-                network,
+            raster = self._select_pixel_semantic_channels(
+                raster,
                 r=r,
                 channel_names=channel_names,
-                channel_order=net_meta.get("channel_order"),
+                channel_order=raster_meta.get("channel_order"),
                 scene=scene,
+                target_key=target_key,
             )
-            network = network.astype(np.uint8, copy=False)
-        elif net_meta:
+            raster = raster.astype(np.uint8, copy=False)
+        elif raster_meta:
             # Preprocess wrote meta only (empty mask) or optional missing fill path.
-            h = int(net_meta.get("height", 1))
-            w = int(net_meta.get("width", 1))
-            network = np.zeros((r, max(h, 1), max(w, 1)), dtype=np.uint8)
-        elif self._is_optional_target("network"):
-            network = self._missing_target_array("network", 0)
+            h = int(raster_meta.get("height", 1))
+            w = int(raster_meta.get("width", 1))
+            raster = np.zeros((r, max(h, 1), max(w, 1)), dtype=np.uint8)
+        elif self._is_optional_target(target_key):
+            raster = self._missing_target_array(target_key, 0)
         else:
             raise FileNotFoundError(
-                f"target key 'network' but network.npy missing under scene: {scene}"
+                f"target key '{target_key}' but {target_key}.npy missing under scene: {scene}"
             )
 
         # Align tiny optional fill (1,1) to meta grid when present.
-        if network.shape[1] == 1 and network.shape[2] == 1 and net_meta:
-            h = int(net_meta.get("height", 1))
-            w = int(net_meta.get("width", 1))
+        if raster.shape[1] == 1 and raster.shape[2] == 1 and raster_meta:
+            h = int(raster_meta.get("height", 1))
+            w = int(raster_meta.get("width", 1))
             if h > 1 or w > 1:
-                network = np.zeros((r, h, w), dtype=np.uint8)
+                raster = np.zeros((r, h, w), dtype=np.uint8)
 
-        data_dict["network"] = network
+        data_dict[target_key] = raster
         # Keep origins in float64 for precise cell binning in NetworkRasterToPointLabels.
-        data_dict["network_origin_x"] = np.asarray([origin_x], dtype=np.float64)
-        data_dict["network_origin_y"] = np.asarray([origin_y], dtype=np.float64)
-        data_dict["network_pixel_m"] = np.asarray([pixel_m], dtype=np.float64)
+        data_dict[f"{target_key}_origin_x"] = np.asarray([origin_x], dtype=np.float64)
+        data_dict[f"{target_key}_origin_y"] = np.asarray([origin_y], dtype=np.float64)
+        data_dict[f"{target_key}_pixel_m"] = np.asarray([pixel_m], dtype=np.float64)
         return data_dict
 
     @staticmethod
-    def _select_network_channels(network, *, r, channel_names, channel_order, scene):
+    def _select_pixel_semantic_channels(
+        raster, *, r, channel_names, channel_order, scene, target_key
+    ):
         """Reduce on-disk ``(C, H, W)`` to the ``r`` training channels."""
-        c = int(network.shape[0])
+        c = int(raster.shape[0])
         if c == r:
-            return network
+            return raster
         if c < r:
             raise ValueError(
-                f"network.npy has {c} channels but task expects {r} "
+                f"{target_key}.npy has {c} channels but task expects {r} "
                 f"({channel_names}) under scene: {scene}"
             )
         if isinstance(channel_order, (list, tuple)) and len(channel_order) == c:
@@ -416,13 +425,13 @@ class Flair3DDataset(DefaultDataset):
             missing = [name for name in channel_names if name not in name_to_idx]
             if missing:
                 raise ValueError(
-                    f"network.npy channel_order {list(channel_order)} missing "
+                    f"{target_key}.npy channel_order {list(channel_order)} missing "
                     f"{missing} under scene: {scene}"
                 )
             indices = [name_to_idx[name] for name in channel_names]
-            return network[indices]
+            return raster[indices]
         # Historical preprocess order: ROADS, RAILROADS, TRANSMISSION_LINES, ...
-        return network[:r]
+        return raster[:r]
 
     def _load_classification_label(self, data_dict, target_key, scene):
         if target_key in data_dict:
@@ -527,8 +536,8 @@ class Flair3DDataset(DefaultDataset):
                 data_dict, tk, scene
             )
 
-        if "network" in pixel_semantic_keys:
-            data_dict = self._load_network_label(data_dict, scene)
+        for tk in pixel_semantic_keys:
+            data_dict = self._load_pixel_semantic_label(data_dict, scene, target_key=tk)
 
         if "elevation" in self.target_keys:
             if "elevation" not in data_dict:
