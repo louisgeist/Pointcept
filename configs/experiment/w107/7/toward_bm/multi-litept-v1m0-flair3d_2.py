@@ -24,7 +24,7 @@ _base_ = ["../../../../_base_/default_runtime.py"]
 # -----------------------------------------------------------------------------
 
 # Logging parameters
-grp_exp = 1
+grp_exp = 2
 num_exp = 2
 
 log_task_gradient_norms = False
