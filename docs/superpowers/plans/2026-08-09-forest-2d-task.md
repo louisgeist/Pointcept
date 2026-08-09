@@ -1930,25 +1930,34 @@ the GT side, and it works identically under the npy-cache fast path."
 
 ---
 
-## Task 7: New preprocessing script `rasterize_forest.py`
+## Task 7: Shared preprocessing utils + new `rasterize_forest.py` script
 
 **Files:**
+- Modify: `pointcept/datasets/preprocessing/flair3d_plus/network_xy_raster_utils.py` (add
+  `abs_xy_bounds_from_coord`, `load_known_missing_tiles`, `default_missing_coord_details_csv`)
+- Modify: `pointcept/datasets/preprocessing/flair3d_plus/rasterize_network.py` (use the three
+  functions above instead of its own private copies — pure relocation, no behavior change)
 - Create: `pointcept/datasets/preprocessing/flair3d_plus/rasterize_forest.py`
-- Test: `tests/test_rasterize_forest.py`
+- Test: `tests/test_network_xy_raster_shared_utils.py`, `tests/test_rasterize_forest.py`
 
 **Interfaces:**
-- Produces: a CLI script that writes `forest_2d.npy` (`(1, H, W)` uint8) + `meta.json
-  ["forest_2d"]` per patch directory, plus a `process_patch(patch_dir, forest_tiff_path, *,
-  pixel_m, ignore_index, force_reload_bounds=False) -> dict` function importable for testing.
+- Produces (in `network_xy_raster_utils.py`): `abs_xy_bounds_from_coord(patch_dir) ->
+  tuple[float, float, float, float]`, `load_known_missing_tiles(path) -> set[tuple[str,
+  str]]`, `default_missing_coord_details_csv() -> Path`.
+- Produces (in `rasterize_forest.py`): a CLI script that writes `forest_2d.npy` (`(1, H, W)`
+  uint8) + `meta.json["forest_2d"]` per patch directory, plus a `process_patch(patch_dir,
+  forest_tiff_path, *, pixel_m, ignore_index, force_reload_bounds=False) -> dict` function
+  importable for testing.
 
-**Design notes carried over from the spec (read before implementing):**
-- Grid bounds come from the tile's own `coord.npy` + `coord_translation.npy` (like
-  `rasterize_network.py`'s `_abs_xy_bounds_from_coord`), not from the source tiff's full
-  extent — this duplicates a ~25-line helper from `rasterize_network.py` rather than importing
-  it (that function is private/underscore-prefixed, and every `preprocessing/flair3d_plus/*.py`
-  script in this repo is written to run standalone without cross-script imports — see
-  `rasterize_network.py`'s own module docstring). This is a deliberate, small, accepted
-  duplication, not an oversight.
+**Design notes carried over from the spec, updated during pre-flight review (read before
+implementing):** the original design duplicated three small helpers (bounds-from-coord,
+missing-tiles-CSV parsing) from `rasterize_network.py`'s private, single-use functions rather
+than importing them. A pre-flight review flagged that as the kind of thing a quality reviewer
+treats as a defect, so this task now **extracts** them into `network_xy_raster_utils.py`
+(already the shared module both scripts import from for grid math) as public functions, and
+updates `rasterize_network.py` to import them too — removing its own private copies. This is a
+pure relocation (identical bodies, no behavior change) of code that currently has **no test
+coverage at all**; this task adds it as part of the move.
 - **Row-orientation flip is mandatory and easy to get backwards**: `rasterio` reads a
   north-up GeoTIFF with row 0 = north (top). Every other grid array in this codebase
   (`network.npy`, `NetworkRasterToPointLabels`, `network_xy_raster_utils.mask_from_absolute_
@@ -1964,7 +1973,277 @@ the GT side, and it works identically under the npy-cache fast path."
   `boundless=True` (a patch's bounding box can, in principle, extend slightly past the source
   tiff's own extent at a département boundary).
 
-- [ ] **Step 1: Write the failing test**
+### Part A: extract the shared helpers (touches `rasterize_network.py`)
+
+- [ ] **Step 1: Write the failing test for the shared helpers**
+
+Create `tests/test_network_xy_raster_shared_utils.py`:
+
+```python
+"""
+Tests for preprocessing utilities shared between rasterize_network.py and
+rasterize_forest.py: abs_xy_bounds_from_coord, load_known_missing_tiles, and
+default_missing_coord_details_csv. Extracted from rasterize_network.py
+(previously private, single-use helpers with no test coverage) into
+network_xy_raster_utils.py so rasterize_forest.py can reuse them without
+duplication.
+
+Run with: PYTHONPATH=./ pytest tests/test_network_xy_raster_shared_utils.py
+"""
+
+import csv
+import os
+import tempfile
+import unittest
+from pathlib import Path
+
+import numpy as np
+
+from pointcept.datasets.preprocessing.flair3d_plus.network_xy_raster_utils import (
+    abs_xy_bounds_from_coord,
+    default_missing_coord_details_csv,
+    load_known_missing_tiles,
+)
+
+
+class TestAbsXyBoundsFromCoord(unittest.TestCase):
+    def test_computes_bounds_with_translation(self):
+        with tempfile.TemporaryDirectory() as patch_dir:
+            coord = np.array(
+                [[0.0, 0.0, 0.0], [10.0, 5.0, 0.0], [3.0, -2.0, 0.0]], dtype=np.float32
+            )
+            np.save(os.path.join(patch_dir, "coord.npy"), coord)
+            np.save(
+                os.path.join(patch_dir, "coord_translation.npy"),
+                np.array([1000.0, 2000.0, 0.0], dtype=np.float64),
+            )
+            xmin, ymin, xmax, ymax = abs_xy_bounds_from_coord(Path(patch_dir))
+            self.assertEqual((xmin, ymin, xmax, ymax), (1000.0, 1998.0, 1010.0, 2005.0))
+
+    def test_missing_translation_file_raises(self):
+        with tempfile.TemporaryDirectory() as patch_dir:
+            np.save(
+                os.path.join(patch_dir, "coord.npy"),
+                np.zeros((1, 3), dtype=np.float32),
+            )
+            with self.assertRaises(FileNotFoundError):
+                abs_xy_bounds_from_coord(Path(patch_dir))
+
+
+class TestLoadKnownMissingTiles(unittest.TestCase):
+    def test_none_path_returns_empty_set(self):
+        self.assertEqual(load_known_missing_tiles(None), set())
+
+    def test_reads_details_csv_reason_filtered(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "missing_coord_tiles.details.csv")
+            with open(path, "w", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=["split", "patch_id", "reason"])
+                writer.writeheader()
+                writer.writerow(
+                    {"split": "Train", "patch_id": "A-1", "reason": "missing_coord_file"}
+                )
+                writer.writerow(
+                    {"split": "Train", "patch_id": "B-2", "reason": "other_reason"}
+                )
+            result = load_known_missing_tiles(Path(path))
+            self.assertEqual(result, {("train", "A-1")})
+
+    def test_reads_plain_text_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "missing_ply_preflight.txt")
+            with open(path, "w") as f:
+                f.write("# comment\nVal,C-3,some note\n")
+            result = load_known_missing_tiles(Path(path))
+            self.assertEqual(result, {("val", "C-3")})
+
+
+class TestDefaultMissingCoordDetailsCsv(unittest.TestCase):
+    def test_points_under_data_flair3d_plus(self):
+        path = default_missing_coord_details_csv()
+        parts = path.parts
+        self.assertIn("data", parts)
+        self.assertIn("flair3d_plus", parts)
+        self.assertEqual(path.name, "missing_coord_tiles.details.csv")
+
+
+if __name__ == "__main__":
+    unittest.main()
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `PYTHONPATH=./ pytest tests/test_network_xy_raster_shared_utils.py -v`
+Expected: FAIL with `ImportError` — none of the three functions exist yet in
+`network_xy_raster_utils.py`.
+
+- [ ] **Step 3: Add the three functions to `network_xy_raster_utils.py`**
+
+Add `import csv` to the existing import block (currently `from dataclasses import dataclass`,
+`from pathlib import Path`, `import numpy as np`, `from PIL import Image`), then append these
+three functions anywhere after the existing imports/constants (e.g. right after the `GridSpec`
+class and `grid_from_xy_bounds`, before `xy_to_indices`):
+
+```python
+def abs_xy_bounds_from_coord(patch_dir: Path) -> tuple[float, float, float, float]:
+    """Return (xmin, ymin, xmax, ymax) in absolute Lambert meters for one patch dir.
+
+    Reads coord.npy + coord_translation.npy (mmap'd, XY-only scan). Shared by
+    rasterize_network.py and rasterize_forest.py.
+    """
+    patch_dir = Path(patch_dir)
+    coord_path = patch_dir / "coord.npy"
+    transl_path = patch_dir / "coord_translation.npy"
+    if not transl_path.is_file():
+        raise FileNotFoundError(f"Missing coord_translation.npy under {patch_dir}")
+
+    coord = np.load(coord_path, mmap_mode="r")
+    transl = np.load(transl_path)
+    if coord.ndim != 2 or coord.shape[1] < 2:
+        raise ValueError(f"Unexpected coord shape {coord.shape} in {coord_path}")
+    if transl.shape[0] < 2:
+        raise ValueError(f"Unexpected coord_translation shape {transl.shape}")
+
+    x = np.asarray(coord[:, 0], dtype=np.float64) + float(transl[0])
+    y = np.asarray(coord[:, 1], dtype=np.float64) + float(transl[1])
+    finite = np.isfinite(x) & np.isfinite(y)
+    if not np.any(finite):
+        raise ValueError(f"No finite XY in {patch_dir}")
+    x, y = x[finite], y[finite]
+    return float(x.min()), float(y.min()), float(x.max()), float(y.max())
+
+
+def load_known_missing_tiles(path: Path | None) -> set[tuple[str, str]]:
+    """Load ``(split, patch_id)`` pairs expected to lack coord.npy.
+
+    Accepts either ``missing_coord_tiles.details.csv`` (DictReader, reason=
+    missing_coord_file) or a plain ``split,patch_id,...`` text file. Shared by
+    rasterize_network.py and rasterize_forest.py.
+    """
+    if path is None:
+        return set()
+    path = Path(path)
+    if not path.is_file():
+        raise FileNotFoundError(f"missing tiles file not found: {path}")
+
+    out: set[tuple[str, str]] = set()
+    with path.open("r", encoding="utf-8", newline="") as f:
+        sample = f.read(2048)
+        f.seek(0)
+        if "reason" in sample.splitlines()[0] if sample else False:
+            reader = csv.DictReader(f)
+            for row in reader:
+                if row.get("reason") and row.get("reason") != "missing_coord_file":
+                    continue
+                split = (row.get("split") or "").strip().lower()
+                patch_id = (row.get("patch_id") or "").strip()
+                if split and patch_id:
+                    out.add((split, patch_id))
+        else:
+            for line in f:
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#"):
+                    continue
+                parts = [p.strip() for p in stripped.split(",", 2)]
+                if len(parts) < 2:
+                    continue
+                split, patch_id = parts[0].lower(), parts[1]
+                if split and patch_id:
+                    out.add((split, patch_id))
+    return out
+
+
+def default_missing_coord_details_csv() -> Path:
+    """Repo ``data/flair3d_plus/missing_coord_tiles.details.csv`` (same as Flair3DDataset)."""
+    # network_xy_raster_utils.py -> .../preprocessing/flair3d_plus -> repo root = parents[4]
+    return (
+        Path(__file__).resolve().parents[4]
+        / "data"
+        / "flair3d_plus"
+        / "missing_coord_tiles.details.csv"
+    )
+```
+
+- [ ] **Step 4: Update `rasterize_network.py` to use the shared functions**
+
+In `pointcept/datasets/preprocessing/flair3d_plus/rasterize_network.py`:
+
+1. Replace the import block (currently the `try`/`except ImportError` pair importing from
+   `network_label_utils` and `network_xy_raster_utils`) with:
+
+```python
+try:
+    from network_label_utils import (  # type: ignore
+        NETWORK_TYPES,
+        load_roi_exported_networks,
+        parse_bool_flag,
+    )
+    from network_xy_raster_utils import (  # type: ignore
+        abs_xy_bounds_from_coord,
+        default_missing_coord_details_csv,
+        densify_segments_to_absolute_cells,
+        grid_from_xy_bounds,
+        load_known_missing_tiles,
+        mask_from_absolute_cells,
+    )
+except ImportError:  # pragma: no cover
+    from pointcept.datasets.preprocessing.flair3d_plus.network_label_utils import (
+        NETWORK_TYPES,
+        load_roi_exported_networks,
+        parse_bool_flag,
+    )
+    from pointcept.datasets.preprocessing.flair3d_plus.network_xy_raster_utils import (
+        abs_xy_bounds_from_coord,
+        default_missing_coord_details_csv,
+        densify_segments_to_absolute_cells,
+        grid_from_xy_bounds,
+        load_known_missing_tiles,
+        mask_from_absolute_cells,
+    )
+```
+
+2. Delete the three now-redundant private function definitions entirely: `_default_missing_
+   coord_details_csv`, `_load_known_missing_tiles`, and `_abs_xy_bounds_from_coord` (their
+   bodies are now identical copies living in `network_xy_raster_utils.py`).
+
+3. Update the three call sites to drop the leading underscore:
+   - In `process_patch`: `bounds = _abs_xy_bounds_from_coord(patch_dir)` becomes
+     `bounds = abs_xy_bounds_from_coord(patch_dir)`.
+   - In `run`: `missing_tiles_file = _default_missing_coord_details_csv()` becomes
+     `missing_tiles_file = default_missing_coord_details_csv()`, and
+     `known_missing = _load_known_missing_tiles(...)` becomes
+     `known_missing = load_known_missing_tiles(...)`.
+
+No other line in `rasterize_network.py` changes — this step is a pure move, not a rewrite.
+
+- [ ] **Step 5: Run test to verify it passes, and sanity-check `rasterize_network.py` still
+  imports**
+
+Run: `PYTHONPATH=./ pytest tests/test_network_xy_raster_shared_utils.py -v`
+Expected: PASS
+
+Run: `PYTHONPATH=./ python -c "import pointcept.datasets.preprocessing.flair3d_plus.rasterize_network"`
+Expected: no error (catches a missed call-site rename or leftover reference to a deleted
+private function).
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add pointcept/datasets/preprocessing/flair3d_plus/network_xy_raster_utils.py pointcept/datasets/preprocessing/flair3d_plus/rasterize_network.py tests/test_network_xy_raster_shared_utils.py
+git commit -m "Extract shared preprocessing helpers out of rasterize_network.py
+
+abs_xy_bounds_from_coord / load_known_missing_tiles /
+default_missing_coord_details_csv move from private, single-use
+functions in rasterize_network.py to public functions in the already-
+shared network_xy_raster_utils.py, gaining test coverage for the
+first time. Pure relocation -- rasterize_network.py's behavior is
+unchanged. Enables rasterize_forest.py (next) to reuse them instead
+of duplicating them."
+```
+
+### Part B: the new `rasterize_forest.py` script
+
+- [ ] **Step 7: Write the failing test**
 
 Create `tests/test_rasterize_forest.py`:
 
@@ -2086,13 +2365,13 @@ if __name__ == "__main__":
     unittest.main()
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **Step 8: Run test to verify it fails**
 
 Run: `PYTHONPATH=./ pytest tests/test_rasterize_forest.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named
 'pointcept.datasets.preprocessing.flair3d_plus.rasterize_forest'`
 
-- [ ] **Step 3: Create `rasterize_forest.py`**
+- [ ] **Step 9: Create `rasterize_forest.py`**
 
 Create `pointcept/datasets/preprocessing/flair3d_plus/rasterize_forest.py`:
 
@@ -2131,7 +2410,7 @@ import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 import numpy as np
 from tqdm import tqdm
@@ -2140,11 +2419,19 @@ _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 try:
-    from network_xy_raster_utils import grid_from_xy_bounds  # type: ignore
+    from network_xy_raster_utils import (  # type: ignore
+        abs_xy_bounds_from_coord,
+        default_missing_coord_details_csv,
+        grid_from_xy_bounds,
+        load_known_missing_tiles,
+    )
     from preprocess_flair3d_v2 import build_modality_patch_path  # type: ignore
 except ImportError:  # pragma: no cover
     from pointcept.datasets.preprocessing.flair3d_plus.network_xy_raster_utils import (
+        abs_xy_bounds_from_coord,
+        default_missing_coord_details_csv,
         grid_from_xy_bounds,
+        load_known_missing_tiles,
     )
     from pointcept.datasets.preprocessing.flair3d_plus.preprocess_flair3d_v2 import (
         build_modality_patch_path,
@@ -2174,32 +2461,6 @@ class ManifestPatch:
 
     def lidar_patch_stem(self) -> str:
         return f"{self.dept_year}_LIDARHD_{self.roi}_{self.patch_id}"
-
-
-def _default_missing_coord_details_csv() -> Path:
-    return (
-        Path(__file__).resolve().parents[4]
-        / "data"
-        / "flair3d_plus"
-        / "missing_coord_tiles.details.csv"
-    )
-
-
-def _load_known_missing_tiles(path: Optional[Path]) -> set:
-    """Load ``(split, patch_id)`` pairs expected to lack coord.npy."""
-    if path is None or not path.is_file():
-        return set()
-    out = set()
-    with path.open("r", encoding="utf-8", newline="") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            if row.get("reason") and row.get("reason") != "missing_coord_file":
-                continue
-            split = (row.get("split") or "").strip().lower()
-            patch_id = (row.get("patch_id") or "").strip()
-            if split and patch_id:
-                out.add((split, patch_id))
-    return out
 
 
 def load_manifest_patches(
@@ -2240,32 +2501,6 @@ def load_manifest_patches(
                 continue
             patches.append(ManifestPatch(split, dept_year, roi, patch_id))
     return patches, n_skipped
-
-
-def abs_xy_bounds_from_coord(patch_dir: Path) -> Tuple[float, float, float, float]:
-    """Return (xmin, ymin, xmax, ymax) in absolute Lambert meters.
-
-    Deliberately duplicated from rasterize_network.py's private
-    _abs_xy_bounds_from_coord (identical logic) rather than imported: every
-    preprocessing/flair3d_plus/*.py script here is written to run standalone.
-    """
-    coord_path = patch_dir / "coord.npy"
-    transl_path = patch_dir / "coord_translation.npy"
-    if not transl_path.is_file():
-        raise FileNotFoundError(f"Missing coord_translation.npy under {patch_dir}")
-
-    coord = np.load(coord_path, mmap_mode="r")
-    transl = np.load(transl_path)
-    if coord.ndim != 2 or coord.shape[1] < 2:
-        raise ValueError(f"Unexpected coord shape {coord.shape} in {coord_path}")
-
-    x = np.asarray(coord[:, 0], dtype=np.float64) + float(transl[0])
-    y = np.asarray(coord[:, 1], dtype=np.float64) + float(transl[1])
-    finite = np.isfinite(x) & np.isfinite(y)
-    if not np.any(finite):
-        raise ValueError(f"No finite XY in {patch_dir}")
-    x, y = x[finite], y[finite]
-    return float(x.min()), float(y.min()), float(x.max()), float(y.max())
 
 
 def _read_meta(patch_dir: Path) -> dict:
@@ -2378,8 +2613,8 @@ def run(
     missing_tiles_file: Optional[Path] = None,
 ) -> None:
     if missing_tiles_file is None:
-        missing_tiles_file = _default_missing_coord_details_csv()
-    known_missing = _load_known_missing_tiles(
+        missing_tiles_file = default_missing_coord_details_csv()
+    known_missing = load_known_missing_tiles(
         missing_tiles_file if missing_tiles_file.is_file() else None
     )
     patches, n_skipped = load_manifest_patches(
@@ -2459,7 +2694,7 @@ if __name__ == "__main__":
     main()
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [ ] **Step 10: Run test to verify it passes**
 
 Run: `PYTHONPATH=./ pytest tests/test_rasterize_forest.py -v`
 Expected: PASS. If the `boundless=True` + `out_shape` + `resampling` combination raises a
@@ -2471,17 +2706,17 @@ resampling=Resampling.mode)`, then `.read(1)` from the VRT) as a fallback — bu
 simpler direct-read form first, since it is expected to work on any reasonably current
 rasterio (the repo already pins a modern torch/cuda stack).
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 11: Commit**
 
 ```bash
 git add pointcept/datasets/preprocessing/flair3d_plus/rasterize_forest.py tests/test_rasterize_forest.py
 git commit -m "Add rasterize_forest.py: precompute forest_2d.npy from the FOREST GeoTIFF
 
-Standalone, additive script (mirrors rasterize_network.py's manifest-
-driven, hard-fail-on-missing-coord.npy pattern) -- reads each tile's
-own point-cloud bounding box, resamples the source 0.2m FOREST tiff
-to a 0.5m grid via majority-vote decimated read, and flips it to the
-south-up row convention used everywhere else in this pipeline."
+Standalone, additive script -- reads each tile's own point-cloud
+bounding box (via the newly-shared abs_xy_bounds_from_coord),
+resamples the source 0.2m FOREST tiff to a 0.5m grid via
+majority-vote decimated read, and flips it to the south-up row
+convention used everywhere else in this pipeline."
 ```
 
 ---
@@ -2933,7 +3168,7 @@ already exist on disk (run rasterize_forest.py first)."
 
 ## Final verification (after all 8 tasks)
 
-- [ ] Run the full new-test surface together: `PYTHONPATH=./ pytest tests/test_pixel_semantic_collect_keys.py tests/test_dilated_prf_opt_out.py tests/test_pixel_semantic_raster_to_points.py tests/test_pixel_semantic_dataset_loading.py tests/test_pixel_semantic_pooling.py tests/test_pixel_semantic_test_prf.py tests/test_rasterize_forest.py -v`
+- [ ] Run the full new-test surface together: `PYTHONPATH=./ pytest tests/test_pixel_semantic_collect_keys.py tests/test_dilated_prf_opt_out.py tests/test_pixel_semantic_raster_to_points.py tests/test_pixel_semantic_dataset_loading.py tests/test_pixel_semantic_pooling.py tests/test_pixel_semantic_test_prf.py tests/test_network_xy_raster_shared_utils.py tests/test_rasterize_forest.py -v`
   Expected: all PASS.
 - [ ] Run the pre-existing regression suite to confirm nothing else broke:
   `PYTHONPATH=./ pytest tests/ -v`
