@@ -28,6 +28,7 @@ from pointcept.utils.misc import (
     AverageMeter,
     abs_freq_error_rows,
     accumulate_regression_errors,
+    binary_prf_counts,
     f1_scores_from_hist,
     intersection_and_union,
     intersection_and_union_gpu,
@@ -37,6 +38,7 @@ from pointcept.utils.misc import (
     mean_iou_from_hist,
     pool_axis_distribution_from_probs,
 )
+from pointcept.utils.dilated_metrics import precision_recall_f1
 from pointcept.utils.progress import EvaluationProgressBar
 from pointcept.utils.regression import (
     denorm_regression_prediction,
@@ -1394,7 +1396,8 @@ class MultiTaskTester(TesterBase):
                 scene_extra = batch_scene_extra[b_idx]
                 pred_cls_np = batch_pred_cls_np[b_idx]
                 pred_reg_np = batch_pred_reg_np[b_idx]
-                
+                pixel_logits_np = batch_pixel_logits_np[b_idx]
+
                 sem_metrics_scene = {}
                 for task_name in semantic_tasks:
                     if task_name not in targets_by_task:
@@ -1426,6 +1429,41 @@ class MultiTaskTester(TesterBase):
                     iou_class = intersection / (union + 1e-10)
                     scene_m_iou = np.mean(iou_class[mask]) if mask.any() else 0.0
                     running_iou[task_name].update(scene_m_iou)
+
+                # Test-set precision/recall/F1 for pixel_semantic tasks (foreground
+                # class only). targets_by_task[task_name] is already the dense
+                # (r, H, W) GT raster at full tile resolution (Flair3DDataset.
+                # prepare_test_data snapshots it before any per-fragment transform
+                # runs), so no fragment-merging is needed on the GT side --
+                # pixel_logits_np[task_name] (the merged dense prediction, from
+                # either a fresh forward pass or the npy cache) is the only thing
+                # that needed merging, and that already happened above.
+                pixel_prf_metrics_scene = {}
+                for task_name in pixel_semantic_tasks:
+                    if task_name not in targets_by_task:
+                        continue
+                    if task_name not in pixel_logits_np:
+                        continue
+                    tc = task_configs[task_name]
+                    ignore_index = int(tc["ignore_index"])
+                    num_networks = int(tc.get("num_networks", 1))
+                    names = list(tc["names"])
+                    fg_idx = names.index("Foreground") if "Foreground" in names else 1
+                    channel_names = tc.get("channel_names") or [
+                        f"ch{c}" for c in range(num_networks)
+                    ]
+                    target_arr = np.asarray(targets_by_task[task_name])
+                    pred_arr = np.asarray(pixel_logits_np[task_name])
+                    channel_stats = {}
+                    for c in range(num_networks):
+                        ch_name = (
+                            channel_names[c] if c < len(channel_names) else f"ch{c}"
+                        )
+                        tp, fp, fn = binary_prf_counts(
+                            pred_arr[c], target_arr[c], ignore_index, fg_idx
+                        )
+                        channel_stats[ch_name] = dict(tp=tp, fp=fp, fn=fn)
+                    pixel_prf_metrics_scene[task_name] = channel_stats
 
                 pred_scene_cls_np = batch_pred_scene_cls_np[b_idx]
                 for task_name in classification_tasks:
@@ -1547,7 +1585,9 @@ class MultiTaskTester(TesterBase):
                         )
 
                 record[data_name] = dict(
-                    semantic=sem_metrics_scene, tile_distribution=td_metrics_scene
+                    semantic=sem_metrics_scene,
+                    tile_distribution=td_metrics_scene,
+                    pixel_semantic=pixel_prf_metrics_scene,
                 )
 
             all_cached_here = all(batch_all_cached)
@@ -1592,6 +1632,7 @@ class MultiTaskTester(TesterBase):
                 del r
 
             per_task_sem = {t: None for t in semantic_tasks}
+            per_task_pixel_prf = {t: {} for t in pixel_semantic_tasks}
             for _, payload in merged.items():
                 for task_name, meters in payload["semantic"].items():
                     if task_name not in per_task_sem:
@@ -1614,6 +1655,16 @@ class MultiTaskTester(TesterBase):
                     td_sums_global[task_name]["abs_weighted"] += np.asarray(
                         meters["abs_weighted"], dtype=np.float64
                     )
+                for task_name, channel_stats in payload.get("pixel_semantic", {}).items():
+                    if task_name not in per_task_pixel_prf:
+                        continue
+                    for ch_name, counts in channel_stats.items():
+                        acc = per_task_pixel_prf[task_name].setdefault(
+                            ch_name, {"tp": 0, "fp": 0, "fn": 0}
+                        )
+                        acc["tp"] += counts["tp"]
+                        acc["fp"] += counts["fp"]
+                        acc["fn"] += counts["fn"]
 
             per_task_metrics = {}
             for task_name in semantic_tasks:
@@ -1682,6 +1733,36 @@ class MultiTaskTester(TesterBase):
                         log_dict[
                             iou_class_tag("test", slug, task=task_name)
                         ] = float(metric["iou_class"][class_idx])
+
+            for task_name in pixel_semantic_tasks:
+                channel_stats = per_task_pixel_prf.get(task_name) or {}
+                for ch_name, counts in channel_stats.items():
+                    tp, fp, fn = counts["tp"], counts["fp"], counts["fn"]
+                    if tp + fp + fn == 0:
+                        logger.warning(
+                            "[task=%s] Channel %s: no test-set pixel_semantic "
+                            "samples accumulated; skipping P/R/F1.",
+                            task_name,
+                            ch_name,
+                        )
+                        continue
+                    precision, recall, f1 = precision_recall_f1(tp, tp + fp, tp, tp + fn)
+                    logger.info(
+                        "[task={}] Channel {} Test result: precision/recall/f1 "
+                        "{:.4f}/{:.4f}/{:.4f} (tp={}, fp={}, fn={}).".format(
+                            task_name, ch_name, precision, recall, f1, tp, fp, fn
+                        )
+                    )
+                    ch_slug = class_name_slug(ch_name)
+                    log_dict[
+                        metric_tag("test", f"{ch_slug}/precision", task=task_name)
+                    ] = float(precision)
+                    log_dict[
+                        metric_tag("test", f"{ch_slug}/recall", task=task_name)
+                    ] = float(recall)
+                    log_dict[
+                        metric_tag("test", f"{ch_slug}/f1", task=task_name)
+                    ] = float(f1)
 
             for task_name in regression_tasks:
                 s = reg_sums_global[task_name]

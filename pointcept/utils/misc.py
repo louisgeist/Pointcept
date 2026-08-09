@@ -198,6 +198,27 @@ def mean_acc_from_hist(intersection, target, union=None):
     return 0.0
 
 
+def binary_prf_counts(prob, target, ignore_index, fg_idx):
+    """True/false positive/negative counts for one binary foreground channel.
+
+    ``prob`` (float, NaN = unobserved) and ``target`` (int label ids) are same-shape
+    arrays (typically a dense (H, W) grid). A cell is scored only if ``prob`` is
+    finite (something was actually predicted there) and ``target != ignore_index``
+    (not a Void/unlabeled cell).
+
+    Returns ``(tp, fp, fn)`` as plain Python ints.
+    """
+    prob = np.asarray(prob)
+    target = np.asarray(target)
+    valid = np.isfinite(prob) & (target != ignore_index)
+    pred_fg = (prob > 0.5) & valid
+    gt_fg = (target == fg_idx) & valid
+    tp = int(np.count_nonzero(pred_fg & gt_fg))
+    fp = int(np.count_nonzero(pred_fg & ~gt_fg))
+    fn = int(np.count_nonzero(~pred_fg & gt_fg))
+    return tp, fp, fn
+
+
 def make_dirs(dir_name):
     if not os.path.exists(dir_name):
         os.makedirs(dir_name, exist_ok=True)
