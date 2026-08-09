@@ -35,16 +35,16 @@ except ImportError:  # pragma: no cover
 try:
     from rasterize_network import (  # type: ignore  # noqa: F401
         ManifestPatch,
-        _default_missing_coord_details_csv,
-        _load_known_missing_tiles,
+        default_missing_coord_details_csv,
+        load_known_missing_tiles,
         group_by_roi,
         load_manifest_patches,
     )
 except ImportError:  # pragma: no cover
     from pointcept.datasets.preprocessing.flair3d_plus.rasterize_network import (  # type: ignore  # noqa: F401
         ManifestPatch,
-        _default_missing_coord_details_csv,
-        _load_known_missing_tiles,
+        default_missing_coord_details_csv,
+        load_known_missing_tiles,
         group_by_roi,
         load_manifest_patches,
     )

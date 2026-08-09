@@ -175,10 +175,10 @@ def run(
 
     # Same known-missing exclusions as rasterize_network / Flair3DDataset hardcoded set.
     if missing_tiles_file is None:
-        missing_tiles_file = nps._default_missing_coord_details_csv()
+        missing_tiles_file = nps.default_missing_coord_details_csv()
     else:
         missing_tiles_file = Path(missing_tiles_file)
-    known_missing = nps._load_known_missing_tiles(
+    known_missing = nps.load_known_missing_tiles(
         missing_tiles_file if missing_tiles_file.is_file() else None
     )
     if known_missing:
