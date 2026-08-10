@@ -1470,6 +1470,38 @@ class MultiTaskTester(TesterBase):
                         channel_stats[ch_name] = dict(tp=tp, fp=fp, fn=fn)
                     pixel_prf_metrics_scene[task_name] = channel_stats
 
+                    # mIoU/mAcc/allAcc, summed over channels into one task-level
+                    # confusion histogram (same convention as the online validator's
+                    # per-task pixel_semantic aggregation) and folded into
+                    # sem_metrics_scene so it rides the semantic_tasks aggregation/
+                    # logging path below for free.
+                    num_classes = int(tc["num_classes"])
+                    inter_sum = union_sum = target_sum = None
+                    for c in range(num_networks):
+                        valid = np.isfinite(pred_arr[c])
+                        pred_cls = (pred_arr[c] > 0.5).astype(np.int64)
+                        target_cls = target_arr[c].astype(np.int64).copy()
+                        target_cls[~valid] = ignore_index
+                        intersection, union, target_hist = intersection_and_union(
+                            pred_cls, target_cls, num_classes, ignore_index
+                        )
+                        if inter_sum is None:
+                            inter_sum, union_sum, target_sum = (
+                                intersection,
+                                union,
+                                target_hist,
+                            )
+                        else:
+                            inter_sum = inter_sum + intersection
+                            union_sum = union_sum + union
+                            target_sum = target_sum + target_hist
+                    if inter_sum is not None:
+                        sem_metrics_scene[task_name] = dict(
+                            intersection=inter_sum,
+                            union=union_sum,
+                            target=target_sum,
+                        )
+
                 pred_scene_cls_np = batch_pred_scene_cls_np[b_idx]
                 for task_name in classification_tasks:
                     if task_name not in targets_by_task:
@@ -1636,7 +1668,7 @@ class MultiTaskTester(TesterBase):
                 merged.update(r)
                 del r
 
-            per_task_sem = {t: None for t in semantic_tasks}
+            per_task_sem = {t: None for t in semantic_tasks + pixel_semantic_tasks}
             per_task_pixel_prf = {t: {} for t in pixel_semantic_tasks}
             for _, payload in merged.items():
                 for task_name, meters in payload["semantic"].items():
@@ -1672,7 +1704,7 @@ class MultiTaskTester(TesterBase):
                         acc["fn"] += counts["fn"]
 
             per_task_metrics = {}
-            for task_name in semantic_tasks:
+            for task_name in semantic_tasks + pixel_semantic_tasks:
                 hist = per_task_sem[task_name]
                 if hist is None:
                     logger.warning(
