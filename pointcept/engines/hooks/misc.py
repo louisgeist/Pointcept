@@ -817,6 +817,27 @@ class NetworkAPLSEvaluator(HookBase):
             ch_slug = class_name_slug(ch_name)
             scalars[metric_tag("test", f"APLS/{ch_slug}", task="network")] = value
 
+        # Unidirectional halves (already aggregated in the APLS payload).
+        for direction, key in (
+            ("gt_to_pred", "per_channel_gt_to_pred"),
+            ("pred_to_gt", "per_channel_pred_to_gt"),
+        ):
+            per_ch = payload.get(key) or {}
+            finite_vals = []
+            for ch_name, value in per_ch.items():
+                value = float(value)
+                if not math.isfinite(value):
+                    continue
+                finite_vals.append(value)
+                ch_slug = class_name_slug(ch_name)
+                scalars[
+                    metric_tag("test", f"APLS_{direction}/{ch_slug}", task="network")
+                ] = value
+            if finite_vals:
+                scalars[metric_tag("test", f"APLS_{direction}", task="network")] = (
+                    sum(finite_vals) / len(finite_vals)
+                )
+
         if self.trainer.writer is not None:
             for k, v in scalars.items():
                 self.trainer.writer.add_scalar(k, v, current_epoch)
