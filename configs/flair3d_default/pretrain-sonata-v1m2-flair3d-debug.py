@@ -18,6 +18,8 @@ batch_size = batch_size_per_gpu * num_gpu
 num_worker = 4 * num_gpu
 mix_prob = 0
 clip_grad = 3.0
+# Skip optimizer/scheduler when global grad L2 is NaN/Inf (all-reduced across ranks).
+skip_nan_grad = True
 empty_cache = False
 enable_amp = True
 amp_dtype = "bfloat16"

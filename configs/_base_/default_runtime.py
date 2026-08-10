@@ -34,6 +34,9 @@ iter_per_epoch = None  # iteration steps per epoch (default 1000 when total_iter
 eval_every = None  # validate every N epochs (default 5 when total_iters is set)
 
 clip_grad = None  # disable with None, enable with a float
+# If True, skip optimizer + scheduler when global grad L2 is non-finite
+# (NaN/Inf). Decision is all-reduced across ranks so DDP stays in sync.
+skip_nan_grad = False
 # Global L2 grad norm (train/gradient/global) and weight update norm
 # (train/gradient/weight_update) are always put_scalar'd each optimizer step
 # for epoch averages (train/...). Per-step train_batch/... logging (TB + W&B)

@@ -18,6 +18,8 @@ batch_size = batch_size_per_gpu * num_gpu  # → 96
 num_worker = 8 * num_gpu
 mix_prob = 0
 clip_grad = 3.0
+# Skip optimizer/scheduler when global grad L2 is NaN/Inf (all-reduced across ranks).
+skip_nan_grad = True
 # Diagnostic for NaN investigation: surfaces gradient/global and
 # gradient/weight_update per-iteration in W&B/TensorBoard instead of only as a
 # per-epoch average. No-op for the heavier per-task breakdown this flag also

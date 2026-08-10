@@ -5,12 +5,14 @@ Author: Xiaoyang Wu (xiaoyang.wu.cs@gmail.com)
 Please cite our work if the code is helpful to you.
 """
 
+import math
 import os
 import sys
 import weakref
 import time
 import wandb
 import torch
+import torch.distributed as dist
 import torch.nn as nn
 import torch.utils.data
 from packaging import version
@@ -410,43 +412,65 @@ class Trainer(TrainerBase):
             global_gradient_diag = {}
             if self.cfg.enable_amp:
                 self.scaler.unscale_(self.optimizer)
-                if self.cfg.clip_grad is not None:
-                    grad_l2 = torch.nn.utils.clip_grad_norm_(
-                        self.model.parameters(), self.cfg.clip_grad
-                    )
-                    global_gradient_diag["gradient/global"] = float(grad_l2)
-                else:
-                    global_gradient_diag["gradient/global"] = l2_model_grad_norm(
-                        self.model
-                    )
-                param_snapshot = snapshot_trainable_params(self.model)
-                self.scaler.step(self.optimizer)
 
-                # When enable amp, optimizer.step call are skipped if the loss scaling factor is too large.
-                # Fix torch warning scheduler step before optimizer step.
-                scale = self.scaler.get_scale()
-                self.scaler.update()
-                if scale <= self.scaler.get_scale():
+            if self.cfg.clip_grad is not None:
+                grad_l2 = torch.nn.utils.clip_grad_norm_(
+                    self.model.parameters(), self.cfg.clip_grad
+                )
+                global_gradient_diag["gradient/global"] = float(grad_l2)
+            else:
+                global_gradient_diag["gradient/global"] = l2_model_grad_norm(
+                    self.model
+                )
+
+            valid_gradients = True
+            if getattr(self.cfg, "skip_nan_grad", False):
+                valid_gradients = math.isfinite(
+                    global_gradient_diag["gradient/global"]
+                )
+                if comm.get_world_size() > 1:
+                    # MIN so any rank with bad grads forces every rank to skip
+                    # (avoids DDP desync).
+                    flag = torch.tensor(
+                        1 if valid_gradients else 0,
+                        device="cuda",
+                        dtype=torch.int32,
+                    )
+                    dist.all_reduce(flag, op=dist.ReduceOp.MIN)
+                    valid_gradients = bool(flag.item())
+                if not valid_gradients:
+                    if comm.is_main_process():
+                        self.logger.warning(
+                            "Detected inf or nan values in gradients; "
+                            "skipping optimizer and scheduler step"
+                        )
+                    self.optimizer.zero_grad()
+
+            if valid_gradients:
+                if self.cfg.enable_amp:
+                    param_snapshot = snapshot_trainable_params(self.model)
+                    self.scaler.step(self.optimizer)
+
+                    # When enable amp, optimizer.step call are skipped if the
+                    # loss scaling factor is too large. Fix torch warning
+                    # scheduler step before optimizer step.
+                    scale = self.scaler.get_scale()
+                    self.scaler.update()
+                    if scale <= self.scaler.get_scale():
+                        global_gradient_diag["gradient/weight_update"] = (
+                            l2_model_update_norm(self.model, param_snapshot)
+                        )
+                        self.scheduler.step()
+                else:
+                    param_snapshot = snapshot_trainable_params(self.model)
+                    self.optimizer.step()
                     global_gradient_diag["gradient/weight_update"] = (
                         l2_model_update_norm(self.model, param_snapshot)
                     )
                     self.scheduler.step()
-            else:
-                if self.cfg.clip_grad is not None:
-                    grad_l2 = torch.nn.utils.clip_grad_norm_(
-                        self.model.parameters(), self.cfg.clip_grad
-                    )
-                    global_gradient_diag["gradient/global"] = float(grad_l2)
-                else:
-                    global_gradient_diag["gradient/global"] = l2_model_grad_norm(
-                        self.model
-                    )
-                param_snapshot = snapshot_trainable_params(self.model)
-                self.optimizer.step()
-                global_gradient_diag["gradient/weight_update"] = l2_model_update_norm(
-                    self.model, param_snapshot
-                )
-                self.scheduler.step()
+            elif self.cfg.enable_amp:
+                # Still advance GradScaler state after a skipped step.
+                self.scaler.update()
 
             self.comm_info["global_gradient_diag"] = global_gradient_diag
 
