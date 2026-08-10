@@ -8,12 +8,13 @@ truth; disk is only checked). Known-missing tiles listed in
 
 Unlike ``rasterize_network.py`` (which rasterizes a vector graph), FOREST is
 already a raster: this script reads the window of the source FOREST GeoTIFF
-covering each tile's own point-cloud bounding box, resamples it (majority
-vote) directly to the target ``pixel_m`` grid, and writes it out in the same
-south-up ``(1, H, W)`` layout used by ``network.npy`` / ``NetworkRasterToPoint
-Labels``. FOREST coverage is complete for every (dept_year, roi) couple, so
-(unlike network) there is no "expected but absent" case -- every manifest
-patch gets a ``forest_2d.npy``.
+covering each tile's own point-cloud bounding box and maps it to the target
+``pixel_m`` grid (majority-vote resample, or a direct integer-window read when
+``pixel_m`` matches the native GeoTIFF resolution and the grids are in phase),
+then writes it out in the same south-up ``(1, H, W)`` layout used by
+``network.npy`` / ``NetworkRasterToPointLabels``. FOREST coverage is complete
+for every (dept_year, roi) couple, so (unlike network) there is no "expected
+but absent" case -- every manifest patch gets a ``forest_2d.npy``.
 
 Example (Hecate, D067)::
 
@@ -168,6 +169,31 @@ def _load_cached_bounds(meta: dict) -> Optional[Tuple[float, float, float, float
     return xmin, ymin, xmax, ymax
 
 
+_NATIVE_ALIGN_EPS = 1e-6
+
+
+def _src_matches_pixel_m(src, pixel_m: float, eps: float = _NATIVE_ALIGN_EPS) -> bool:
+    """True if ``src`` is axis-aligned and its resolution equals ``pixel_m``."""
+    t = src.transform
+    if abs(t.b) > eps or abs(t.d) > eps:
+        return False
+    if abs(abs(t.a) - pixel_m) > eps or abs(abs(t.e) - pixel_m) > eps:
+        return False
+    res_x, res_y = src.res
+    return abs(res_x - pixel_m) <= eps and abs(res_y - pixel_m) <= eps
+
+
+def _window_is_integer_aligned(window, width: int, height: int, eps: float = _NATIVE_ALIGN_EPS) -> bool:
+    """True if ``window`` is an integer pixel window of exactly ``width`` x ``height``."""
+    if abs(window.width - width) > eps or abs(window.height - height) > eps:
+        return False
+    if abs(window.col_off - round(window.col_off)) > eps:
+        return False
+    if abs(window.row_off - round(window.row_off)) > eps:
+        return False
+    return True
+
+
 def process_patch(
     patch_dir,
     forest_tiff_path,
@@ -176,10 +202,15 @@ def process_patch(
     ignore_index: int = 2,
     force_reload_bounds: bool = False,
 ) -> dict:
-    """Write forest_2d.npy and update meta.json. Returns a stats dict."""
+    """Write forest_2d.npy and update meta.json. Returns a stats dict.
+
+    When ``pixel_m`` matches the GeoTIFF native resolution and the target grid
+    is phase-aligned with the source pixels, reads an integer window with no
+    resampling. Otherwise falls back to ``Resampling.mode`` (majority vote).
+    """
     import rasterio
     from rasterio.enums import Resampling
-    from rasterio.windows import from_bounds
+    from rasterio.windows import Window, from_bounds
 
     patch_dir = Path(patch_dir)
     meta = _read_meta(patch_dir)
@@ -198,14 +229,39 @@ def process_patch(
             grid.origin_y + grid.height * grid.pixel_m,
             transform=src.transform,
         )
-        raw = src.read(
-            1,
-            window=window,
-            out_shape=(grid.height, grid.width),
-            resampling=Resampling.mode,
-            boundless=True,
-            fill_value=ignore_index,
-        )
+        resampled = True
+        if _src_matches_pixel_m(src, grid.pixel_m) and _window_is_integer_aligned(
+            window, grid.width, grid.height
+        ):
+            int_window = Window(
+                col_off=int(round(window.col_off)),
+                row_off=int(round(window.row_off)),
+                width=grid.width,
+                height=grid.height,
+            )
+            raw = src.read(
+                1,
+                window=int_window,
+                boundless=True,
+                fill_value=ignore_index,
+            )
+            if raw.shape == (grid.height, grid.width):
+                resampled = False
+            else:
+                raw = None  # shape mismatch -- fall through to mode resample
+        else:
+            raw = None
+
+        if raw is None:
+            raw = src.read(
+                1,
+                window=window,
+                out_shape=(grid.height, grid.width),
+                resampling=Resampling.mode,
+                boundless=True,
+                fill_value=ignore_index,
+            )
+            resampled = True
 
     # Map the raster's own nodata sentinel (if declared) to ignore_index --
     # mirrors the nodata->void mapping sample_raster_to_points does for the
@@ -247,6 +303,7 @@ def process_patch(
         "abs_xy_bounds": [xmin, ymin, xmax, ymax],
         "positive_pixel_count": int((forest == 1).sum()),
         "void_pixel_count": int((forest == ignore_index).sum()),
+        "resampled": bool(resampled),
     }
     _write_meta(patch_dir, meta)
     return {
@@ -254,6 +311,7 @@ def process_patch(
         "shape": list(forest.shape),
         "positive_pixel_count": int((forest == 1).sum()),
         "void_pixel_count": int((forest == ignore_index).sum()),
+        "resampled": bool(resampled),
     }
 
 
