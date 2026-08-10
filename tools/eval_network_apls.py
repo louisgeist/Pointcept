@@ -102,6 +102,7 @@ def _build_predicted_graph(
     threshold: float,
     connectivity: int,
     rdp_epsilon_m: float,
+    endpoint_fix_enabled: bool,
     endpoint_fix_stage: str,
     merge_weight_threshold: float,
     radius_fix_radius_m: Optional[float] = None,
@@ -111,6 +112,7 @@ def _build_predicted_graph(
     remove_small_objects_enabled: bool = True,
     remove_small_objects_min_size_px: int = 8,
     skeletonize_enabled: bool = True,
+    min_component_nodes: int = 5,
 ) -> "ngp.ProcessedNetworkGraph":
     prob = roi_probs[channel_idx]
     # Unobserved (NaN) cells are treated as background -- see plan's design-decision note:
@@ -131,10 +133,11 @@ def _build_predicted_graph(
         remove_small_objects_min_size_px=remove_small_objects_min_size_px,
         skeletonize_enabled=skeletonize_enabled,
         rdp_epsilon_m=rdp_epsilon_m,
-        endpoint_fix_enabled=True,
+        endpoint_fix_enabled=endpoint_fix_enabled,
         endpoint_fix_stage=endpoint_fix_stage,
         merge_enabled=True,
         merge_weight_threshold=merge_weight_threshold,
+        min_component_nodes=min_component_nodes,
         **extra,
     )
 
@@ -151,9 +154,10 @@ def run(
     overlap_combine: str = "nanmean",
     connectivity: int = 4,
     rdp_epsilon_m: float = 2.0,
+    endpoint_fix_enabled: bool = True,
     endpoint_fix_stage: str = "pre_rdp",
     merge_weight_threshold: float = 2.5,
-    max_nodes_exact: Optional[int] = 4000,
+    max_nodes_exact: Optional[int] = None,
     max_rois: Optional[int] = None,
     densify: Optional[float] = 50.0,
     snap_to_edge: Optional[float] = 4.0,
@@ -166,6 +170,7 @@ def run(
     remove_small_objects_enabled: bool = True,
     remove_small_objects_min_size_px: int = 8,
     skeletonize_enabled: bool = True,
+    min_component_nodes: int = 5,
     network_types: Optional[List[str]] = None,
     missing_tiles_file: Optional[Path] = None,
 ) -> dict:
@@ -221,8 +226,12 @@ def run(
     n_rois_processed = 0
     n_rois_skipped = 0
     partial_rois: List[dict] = []
+    department_by_roi: dict = {}
 
     for roi_dir, flags, patch_dirs, coverage in roi_items:
+        # roi_dir is <data_root>/<split>/<dept_year>_LIDARHD/<roi> -- recover the
+        # department/year for the per-ROI CSV (roi names alone don't identify the zone).
+        department_by_roi[roi_dir.name] = roi_dir.parent.name.removesuffix("_LIDARHD")
         n_total = int(coverage.get("n_subtiles_total", len(patch_dirs)))
         n_disk_missing = int(coverage.get("n_subtiles_missing", 0))
         missing_pred = [
@@ -287,6 +296,7 @@ def run(
                 threshold=threshold,
                 connectivity=connectivity,
                 rdp_epsilon_m=rdp_epsilon_m,
+                endpoint_fix_enabled=endpoint_fix_enabled,
                 endpoint_fix_stage=endpoint_fix_stage,
                 merge_weight_threshold=merge_weight_threshold,
                 radius_fix_radius_m=radius_fix_radius_m,
@@ -296,6 +306,7 @@ def run(
                 remove_small_objects_enabled=remove_small_objects_enabled,
                 remove_small_objects_min_size_px=remove_small_objects_min_size_px,
                 skeletonize_enabled=skeletonize_enabled,
+                min_component_nodes=min_component_nodes,
             )
             pred_graph = apls.apls_graph_from_pixel_graph(processed.graph_final)
 
@@ -334,6 +345,7 @@ def run(
             "overlap_combine": overlap_combine,
             "connectivity": connectivity,
             "rdp_epsilon_m": rdp_epsilon_m,
+            "endpoint_fix_enabled": endpoint_fix_enabled,
             "endpoint_fix_stage": endpoint_fix_stage,
             "merge_weight_threshold": merge_weight_threshold,
             "max_nodes_exact": max_nodes_exact,
@@ -348,6 +360,7 @@ def run(
             "remove_small_objects_enabled": remove_small_objects_enabled,
             "remove_small_objects_min_size_px": remove_small_objects_min_size_px,
             "skeletonize_enabled": skeletonize_enabled,
+            "min_component_nodes": min_component_nodes,
             "save_path": str(save_path),
             "network_graphs_root": str(network_graphs_root),
             "split_manifest_csv": str(split_manifest_csv),
@@ -369,6 +382,7 @@ def run(
         "per_roi": [
             {
                 "roi": r.roi,
+                "department": department_by_roi.get(r.roi, ""),
                 "network_type": r.network_type,
                 "score": r.score,
                 "score_gt_to_pred": r.score_gt_to_pred,
@@ -400,6 +414,7 @@ def run(
             f,
             fieldnames=[
                 "roi",
+                "department",
                 "network_type",
                 "score",
                 "score_gt_to_pred",
@@ -454,19 +469,37 @@ def build_argparser() -> argparse.ArgumentParser:
     p.add_argument("--connectivity", type=int, default=4, choices=[4, 8])
     p.add_argument("--rdp_epsilon_m", type=float, default=2.0)
     p.add_argument(
+        "--endpoint_fix_enabled",
+        type=_parse_bool,
+        default=True,
+        help="Run degree-1 diagonal endpoint repair in the predicted-graph pipeline "
+        "(default: true). Pass false/0/off to skip.",
+    )
+    p.add_argument(
         "--endpoint_fix_stage",
         type=str,
         default="pre_rdp",
         choices=["pre_rdp", "post_rdp"],
+        help="When to run endpoint-fix relative to RDP (ignored if "
+        "--endpoint_fix_enabled=false).",
     )
     p.add_argument("--merge_weight_threshold", type=float, default=2.5)
     p.add_argument(
+        "--min_component_nodes",
+        type=int,
+        default=5,
+        help=(
+            "Drop predicted-graph connected components with fewer than this many nodes, "
+            "applied last (after merge/radius-fix). Pass 0 or 1 to disable."
+        ),
+    )
+    p.add_argument(
         "--max_nodes_exact",
         type=_parse_optional_int,
-        default=4000,
+        default=None,
         help=(
-            "Hard cap on exact O(V^2) APLS after densification (default: 4000). "
-            "Pass none/null to disable the cap."
+            "Hard cap on exact O(V^2) APLS after densification (default: none = no cap). "
+            "Pass a positive int to enable."
         ),
     )
     p.add_argument(
@@ -606,6 +639,7 @@ def main(argv: Optional[List[str]] = None) -> None:
         overlap_combine=args.overlap_combine,
         connectivity=args.connectivity,
         rdp_epsilon_m=args.rdp_epsilon_m,
+        endpoint_fix_enabled=args.endpoint_fix_enabled,
         endpoint_fix_stage=args.endpoint_fix_stage,
         merge_weight_threshold=args.merge_weight_threshold,
         max_nodes_exact=args.max_nodes_exact,
@@ -621,6 +655,7 @@ def main(argv: Optional[List[str]] = None) -> None:
         remove_small_objects_enabled=args.remove_small_objects_enabled,
         remove_small_objects_min_size_px=args.remove_small_objects_min_size_px,
         skeletonize_enabled=args.skeletonize_enabled,
+        min_component_nodes=args.min_component_nodes,
         network_types=args.network_types,
         missing_tiles_file=missing,
     )

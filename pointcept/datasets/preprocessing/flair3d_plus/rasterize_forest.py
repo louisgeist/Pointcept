@@ -30,8 +30,8 @@ python pointcept/datasets/preprocessing/flair3d_plus/rasterize_forest.py \
     --data_root data/flair3d_plus \
     --source_dataset_root /lustre/fswork/projects/rech/unv/usi32yh/Pointcept/data/flair3d_plus/raw \
     --split_manifest_csv data/flair3d_plus/raw/scene_split_manifest.csv \
-    --pixel_m 0.5 \
-    --num_workers 24
+    --pixel_m 0.2 \
+    --num_workers 8
 """
 
 from __future__ import annotations

@@ -546,7 +546,7 @@ def apls_pair_diagnostics(
     *,
     roi: str,
     network_type: str,
-    max_nodes_exact: Optional[int] = 4000,
+    max_nodes_exact: Optional[int] = None,
     densify: Optional[float] = None,
     snap_to_edge: Optional[float] = None,
     min_path_length_m: Optional[float] = None,
@@ -681,7 +681,7 @@ def apls_pair_score(
     *,
     roi: str,
     network_type: str,
-    max_nodes_exact: Optional[int] = 4000,
+    max_nodes_exact: Optional[int] = None,
     match_idx: Optional[np.ndarray] = None,
     min_path_length_m: Optional[float] = None,
 ) -> ApsPairResult:
@@ -782,7 +782,7 @@ def apls_symmetric_score(
     densify: Optional[float] = 50.0,
     snap_to_edge: Optional[float] = 4.0,
     symmetric: bool = True,
-    max_nodes_exact: Optional[int] = 4000,
+    max_nodes_exact: Optional[int] = None,
     min_path_length_m: Optional[float] = None,
 ) -> ApsSymmetricResult:
     """SpaceNet-aligned APLS: optional densify, snap-to-edge, bidirectional harmonic mean.

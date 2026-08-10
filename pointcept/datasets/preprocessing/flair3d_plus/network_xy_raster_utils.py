@@ -784,6 +784,56 @@ def merge_neighbor_nodes(
     )
 
 
+def drop_small_components(
+    graph: PixelGraph,
+    *,
+    min_nodes: int,
+) -> PixelGraph:
+    """Drop whole connected components with fewer than ``min_nodes`` nodes.
+
+    Unlike ``merge_neighbor_nodes`` (which contracts a tightly-adjacent component down
+    to a single representative node), this removes small fragments entirely -- their
+    nodes and incident edges -- since a component this small is more likely a spurious
+    prediction artifact than a real, separately-standing piece of network.
+    """
+    n = int(graph.node_rc.shape[0])
+    if n == 0 or min_nodes <= 1:
+        return graph
+
+    components = connected_components_nodes(graph)
+    kept = [comp for comp in components if comp.shape[0] >= min_nodes]
+    keep_ids = (
+        np.sort(np.concatenate(kept)) if kept else np.empty((0,), dtype=np.int64)
+    )
+    if keep_ids.shape[0] == n:
+        return graph
+
+    old_to_new = np.full((n,), -1, dtype=np.int64)
+    old_to_new[keep_ids] = np.arange(keep_ids.shape[0], dtype=np.int64)
+
+    edges = np.asarray(graph.edges, dtype=np.int64)
+    if edges.shape[0] == 0:
+        new_edges = np.empty((0, 2), dtype=np.int64)
+        new_weights = np.empty((0,), dtype=np.float64)
+    else:
+        keep_edge = (old_to_new[edges[:, 0]] >= 0) & (old_to_new[edges[:, 1]] >= 0)
+        new_edges = old_to_new[edges[keep_edge]]
+        weights = (
+            np.asarray(graph.edge_weights, dtype=np.float64)
+            if graph.edge_weights is not None
+            else np.ones((edges.shape[0],), dtype=np.float64)
+        )
+        new_weights = weights[keep_edge]
+
+    return PixelGraph(
+        node_rc=graph.node_rc[keep_ids],
+        node_xy=graph.node_xy[keep_ids],
+        edges=new_edges,
+        edge_weights=new_weights,
+        grid=graph.grid,
+    )
+
+
 _ISOLATED_DIAGONAL_OFFSETS: tuple[tuple[int, int], ...] = (
     (-1, -1),  # NW
     (-1, 1),   # NE

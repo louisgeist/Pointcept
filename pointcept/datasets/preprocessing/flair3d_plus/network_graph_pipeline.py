@@ -55,6 +55,7 @@ class ProcessedNetworkGraph:
     endpoint_fix_info: dict[str, Any] | None
     merged_info: dict[str, int] | None
     radius_fix_info: dict[str, Any] | None
+    small_components_info: dict[str, int] | None
     n_centerline_pixels_raw: int
     n_centerline_pixels: int
     n_mask_pixels_pre_skeleton: int
@@ -87,6 +88,7 @@ def _build_processed_network_graph_from_line_mask(
     radius_fix_radius_m: float,
     radius_fix_added_edge_weight: float,
     radius_fix_include_isolated_nodes: bool,
+    min_component_nodes: int,
 ) -> ProcessedNetworkGraph:
     """Shared body: optional morphology -> pixel graph -> endpoint-fix -> RDP -> merge."""
     if connectivity not in (4, 8):
@@ -259,6 +261,26 @@ def _build_processed_network_graph_from_line_mask(
         graph_final = graph_after_radius_fix
         graph_stages.append(("node_linking", graph_after_radius_fix))
 
+    # Final cleanup step: drop whole connected components smaller than
+    # `min_component_nodes` -- runs last so it catches small fragments regardless of
+    # which earlier stages produced them (isolated skeleton specks, leftover merge
+    # remnants, unlinked radius-fix endpoints, ...).
+    small_components_info: dict[str, int] | None = None
+    if min_component_nodes > 1:
+        n_nodes_before_prune = int(graph_final.node_rc.shape[0])
+        n_comp_before_prune = len(xy_rast.connected_components_nodes(graph_final))
+        graph_final = xy_rast.drop_small_components(
+            graph_final, min_nodes=min_component_nodes
+        )
+        graph_stages.append(("small_components_removed", graph_final))
+        small_components_info = {
+            "min_component_nodes": int(min_component_nodes),
+            "n_components_before": n_comp_before_prune,
+            "n_components_after": len(xy_rast.connected_components_nodes(graph_final)),
+            "n_nodes_before": n_nodes_before_prune,
+            "n_nodes_after": int(graph_final.node_rc.shape[0]),
+        }
+
     graph_stages.append(("final", graph_final))
 
     return ProcessedNetworkGraph(
@@ -273,6 +295,7 @@ def _build_processed_network_graph_from_line_mask(
         endpoint_fix_info=endpoint_fix_info,
         merged_info=merged_info,
         radius_fix_info=radius_fix_info,
+        small_components_info=small_components_info,
         n_centerline_pixels_raw=n_line_raw,
         n_centerline_pixels=n_line,
         n_mask_pixels_pre_skeleton=n_mask_pixels_pre_skeleton,
@@ -303,6 +326,7 @@ def build_processed_network_graph_from_mask(
     radius_fix_radius_m: float = 5.0,
     radius_fix_added_edge_weight: float = 1.0,
     radius_fix_include_isolated_nodes: bool = True,
+    min_component_nodes: int = 5,
 ) -> ProcessedNetworkGraph:
     """Build the final pixel graph from an already-thresholded boolean mask.
 
@@ -356,6 +380,13 @@ def build_processed_network_graph_from_mask(
     endpoint/isolated node within ``radius_fix_radius_m`` straight-line meters, not just
     the diagonal-pixel-adjacent case the earlier endpoint-fix stage handles. See
     ``network_xy_raster_utils.repair_degree1_endpoints_within_radius``.
+
+    ``min_component_nodes`` (default ``5``): final cleanup step, applied after everything
+    else (incl. ``radius_fix``) -- drops whole connected components with fewer than this
+    many nodes, since a fragment that small is more likely a spurious prediction artifact
+    (isolated skeleton speck, leftover merge remnant, unlinked endpoint) than real,
+    separately-standing network. Set to ``0`` or ``1`` to disable. See
+    ``network_xy_raster_utils.drop_small_components``.
     """
     line_mask = np.asarray(mask, dtype=bool)
     if line_mask.shape != (grid.height, grid.width):
@@ -383,6 +414,7 @@ def build_processed_network_graph_from_mask(
         radius_fix_radius_m=radius_fix_radius_m,
         radius_fix_added_edge_weight=radius_fix_added_edge_weight,
         radius_fix_include_isolated_nodes=radius_fix_include_isolated_nodes,
+        min_component_nodes=min_component_nodes,
     )
 
 
