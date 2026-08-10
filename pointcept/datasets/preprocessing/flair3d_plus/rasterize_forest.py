@@ -15,12 +15,20 @@ Labels``. FOREST coverage is complete for every (dept_year, roi) couple, so
 (unlike network) there is no "expected but absent" case -- every manifest
 patch gets a ``forest_2d.npy``.
 
-Example::
+Example (Hecate, D067)::
 
 python pointcept/datasets/preprocessing/flair3d_plus/rasterize_forest.py \
     --data_root data/flair3d_plus \
     --source_dataset_root data/flair3d_plus/raw \
     --split_manifest_csv data/flair3d_plus/raw/scene_split_manifest_D067.csv \
+    --pixel_m 0.5
+
+Example (Jean Zay, full manifest)::
+
+python pointcept/datasets/preprocessing/flair3d_plus/rasterize_forest.py \
+    --data_root data/flair3d_plus \
+    --source_dataset_root /lustre/fswork/projects/rech/unv/usi32yh/Pointcept/data/flair3d_plus/raw \
+    --split_manifest_csv data/flair3d_plus/raw/scene_split_manifest.csv \
     --pixel_m 0.5
 """
 
@@ -64,7 +72,9 @@ except ImportError:  # pragma: no cover
     )
 
 
-REQUIRED_MANIFEST_COLUMNS = frozenset({"split", "dept_year", "roi", "patch_id", "LIDARHD"})
+REQUIRED_MANIFEST_COLUMNS = frozenset(
+    {"split", "dept_year", "roi", "scene_i_j", "patch_id", "LIDARHD"}
+)
 
 
 @dataclass(frozen=True)
@@ -74,6 +84,7 @@ class ManifestPatch:
     split: str
     dept_year: str
     roi: str
+    scene_i_j: str
     patch_id: str
 
     def patch_dir(self, data_root: Path) -> Path:
@@ -82,7 +93,7 @@ class ManifestPatch:
         )
 
     def lidar_patch_stem(self) -> str:
-        return f"{self.dept_year}_LIDARHD_{self.roi}_{self.patch_id}"
+        return f"{self.dept_year}_LIDARHD_{self.roi}_{self.scene_i_j}"
 
 
 def load_manifest_patches(
@@ -111,8 +122,9 @@ def load_manifest_patches(
             split = (row.get("split") or "").strip().lower()
             dept_year = (row.get("dept_year") or "").strip()
             roi = (row.get("roi") or "").strip()
+            scene_i_j = (row.get("scene_i_j") or "").strip()
             patch_id = (row.get("patch_id") or "").strip()
-            if not split or not dept_year or not roi or not patch_id:
+            if not split or not dept_year or not roi or not scene_i_j or not patch_id:
                 continue
             if splits_set is not None and split not in splits_set:
                 continue
@@ -121,7 +133,7 @@ def load_manifest_patches(
             if (split, patch_id) in skip:
                 n_skipped += 1
                 continue
-            patches.append(ManifestPatch(split, dept_year, roi, patch_id))
+            patches.append(ManifestPatch(split, dept_year, roi, scene_i_j, patch_id))
     return patches, n_skipped
 
 
