@@ -105,16 +105,43 @@ class _ProfileAggregator:
             )
 
 
+def _merge_timings(
+    dest: Dict[str, float], src: Optional[Dict[str, float]]
+) -> None:
+    if not src:
+        return
+    for name, seconds in src.items():
+        dest[name] = dest.get(name, 0.0) + float(seconds)
+
+
+def _format_timings(timings: Dict[str, float], *, top_n: Optional[int] = None) -> str:
+    """Compact ``name=0.123s`` list, sorted by time desc."""
+    if not timings:
+        return "(none)"
+    rows = sorted(timings.items(), key=lambda kv: kv[1], reverse=True)
+    if top_n is not None:
+        rows = rows[: max(0, int(top_n))]
+    return " ".join(f"{name}={seconds:.3f}s" for name, seconds in rows)
+
+
 @contextmanager
-def _timed(aggregator: Optional[_ProfileAggregator], name: str) -> Iterator[None]:
-    if aggregator is None:
+def _timed(
+    aggregator: Optional[_ProfileAggregator],
+    name: str,
+    local: Optional[Dict[str, float]] = None,
+) -> Iterator[None]:
+    if aggregator is None and local is None:
         yield
         return
     t0 = time.perf_counter()
     try:
         yield
     finally:
-        aggregator.add(name, time.perf_counter() - t0)
+        elapsed = time.perf_counter() - t0
+        if aggregator is not None:
+            aggregator.add(name, elapsed)
+        if local is not None:
+            local[name] = local.get(name, 0.0) + elapsed
 
 
 def _parse_optional_float(s: str) -> Optional[float]:
@@ -340,7 +367,8 @@ def run(
                 )
 
             try:
-                with _timed(profiler, "stitch"):
+                roi_timings: Optional[Dict[str, float]] = {} if profile else None
+                with _timed(profiler, "stitch", local=roi_timings):
                     roi_probs, roi_grid = nps.stitch_roi_predictions(
                         patch_dirs,
                         save_path,
@@ -372,7 +400,8 @@ def run(
             for channel_idx, network_type in enumerate(types):
                 if not flags.get(network_type, False):
                     continue
-                with _timed(profiler, "build_pred_graph"):
+                channel_timings: Optional[Dict[str, float]] = {} if profile else None
+                with _timed(profiler, "build_pred_graph", local=channel_timings):
                     processed = _build_predicted_graph(
                         roi_probs,
                         roi_grid,
@@ -395,16 +424,18 @@ def run(
                     )
                 if profiler is not None:
                     profiler.add_dict(processed.stage_timings)
+                if channel_timings is not None:
+                    _merge_timings(channel_timings, processed.stage_timings)
                 pred_graph = apls.apls_graph_from_pixel_graph(processed.graph_final)
 
                 gt_path = nlu.expected_exported_graph_path(
                     network_graphs_root, roi_dir, network_type
                 )
-                with _timed(profiler, "load_gt"):
+                with _timed(profiler, "load_gt", local=channel_timings):
                     loaded_gt = nlu.load_roi_exported_network_graph(gt_path)
                 gt_graph = apls.apls_graph_from_loaded_graph(loaded_gt)
 
-                with _timed(profiler, "apls"):
+                with _timed(profiler, "apls", local=channel_timings):
                     result = apls.apls_symmetric_score(
                         gt_graph,
                         pred_graph,
@@ -419,6 +450,36 @@ def run(
                 results.append(result)
                 last_score = float(result.score)
                 last_network_type = network_type
+                if channel_timings is not None and roi_timings is not None:
+                    # High-level buckets only for ROI totals (pipeline stages nest under
+                    # build_pred_graph and must not be summed twice).
+                    for key in ("build_pred_graph", "load_gt", "apls"):
+                        if key in channel_timings:
+                            roi_timings[key] = (
+                                roi_timings.get(key, 0.0) + channel_timings[key]
+                            )
+                    channel_total = (
+                        channel_timings.get("build_pred_graph", 0.0)
+                        + channel_timings.get("load_gt", 0.0)
+                        + channel_timings.get("apls", 0.0)
+                    )
+                    detail = {
+                        k: v
+                        for k, v in channel_timings.items()
+                        if k != "build_pred_graph"
+                    }
+                    log(
+                        f"[profile] {roi_dir.name} {network_type} "
+                        f"total={channel_total:.3f}s | {_format_timings(detail)}"
+                    )
+
+            if profile and roi_timings is not None:
+                stitch_s = float(roi_timings.get("stitch", 0.0))
+                roi_total = sum(roi_timings.values())
+                log(
+                    f"[profile] {roi_dir.name} ROI total={roi_total:.3f}s | "
+                    f"{_format_timings(roi_timings)}"
+                )
 
             postfix = {"roi": roi_dir.name}
             if last_network_type is not None and last_score is not None:
