@@ -14,6 +14,7 @@ Standalone module (numpy + Pillow) intended to be copied into other repos.
 
 from __future__ import annotations
 
+import csv
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -117,6 +118,85 @@ def grid_from_xy_bounds(
         width=int(ix1 - ix0),
         height=int(iy1 - iy0),
         pixel_m=step,
+    )
+
+
+def abs_xy_bounds_from_coord(patch_dir: Path) -> tuple[float, float, float, float]:
+    """Return (xmin, ymin, xmax, ymax) in absolute Lambert meters for one patch dir.
+
+    Reads coord.npy + coord_translation.npy (mmap'd, XY-only scan). Shared by
+    rasterize_network.py and rasterize_forest.py.
+    """
+    patch_dir = Path(patch_dir)
+    coord_path = patch_dir / "coord.npy"
+    transl_path = patch_dir / "coord_translation.npy"
+    if not transl_path.is_file():
+        raise FileNotFoundError(f"Missing coord_translation.npy under {patch_dir}")
+
+    coord = np.load(coord_path, mmap_mode="r")
+    transl = np.load(transl_path)
+    if coord.ndim != 2 or coord.shape[1] < 2:
+        raise ValueError(f"Unexpected coord shape {coord.shape} in {coord_path}")
+    if transl.shape[0] < 2:
+        raise ValueError(f"Unexpected coord_translation shape {transl.shape}")
+
+    x = np.asarray(coord[:, 0], dtype=np.float64) + float(transl[0])
+    y = np.asarray(coord[:, 1], dtype=np.float64) + float(transl[1])
+    finite = np.isfinite(x) & np.isfinite(y)
+    if not np.any(finite):
+        raise ValueError(f"No finite XY in {patch_dir}")
+    x, y = x[finite], y[finite]
+    return float(x.min()), float(y.min()), float(x.max()), float(y.max())
+
+
+def load_known_missing_tiles(path: Path | None) -> set[tuple[str, str]]:
+    """Load ``(split, patch_id)`` pairs expected to lack coord.npy.
+
+    Accepts either ``missing_coord_tiles.details.csv`` (DictReader, reason=
+    missing_coord_file) or a plain ``split,patch_id,...`` text file. Shared by
+    rasterize_network.py and rasterize_forest.py.
+    """
+    if path is None:
+        return set()
+    path = Path(path)
+    if not path.is_file():
+        raise FileNotFoundError(f"missing tiles file not found: {path}")
+
+    out: set[tuple[str, str]] = set()
+    with path.open("r", encoding="utf-8", newline="") as f:
+        sample = f.read(2048)
+        f.seek(0)
+        if "reason" in sample.splitlines()[0] if sample else False:
+            reader = csv.DictReader(f)
+            for row in reader:
+                if row.get("reason") and row.get("reason") != "missing_coord_file":
+                    continue
+                split = (row.get("split") or "").strip().lower()
+                patch_id = (row.get("patch_id") or "").strip()
+                if split and patch_id:
+                    out.add((split, patch_id))
+        else:
+            for line in f:
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#"):
+                    continue
+                parts = [p.strip() for p in stripped.split(",", 2)]
+                if len(parts) < 2:
+                    continue
+                split, patch_id = parts[0].lower(), parts[1]
+                if split and patch_id:
+                    out.add((split, patch_id))
+    return out
+
+
+def default_missing_coord_details_csv() -> Path:
+    """Repo ``data/flair3d_plus/missing_coord_tiles.details.csv`` (same as Flair3DDataset)."""
+    # network_xy_raster_utils.py -> .../preprocessing/flair3d_plus -> repo root = parents[4]
+    return (
+        Path(__file__).resolve().parents[4]
+        / "data"
+        / "flair3d_plus"
+        / "missing_coord_tiles.details.csv"
     )
 
 
