@@ -481,20 +481,25 @@ class MultiTaskSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
     def _pixel_pool_and_gather(
         self,
         feat,
-        network_cell,
-        network_pix,
+        cell,
+        pix,
         offset,
         point_labels,
         num_networks,
         height=None,
         width=None,
         ignore_index=2,
+        pooling="max",
     ):
-        """Max-pool point features into 1 m Lambert pixels; gather point-wise GT.
+        """Pool point features into Lambert pixels; gather point-wise GT.
 
         Point labels are ``(N, r)`` (from ``NetworkRasterToPointLabels``).
-        ``network_cell`` ``(N, 2)`` absolute ``(iy, ix)`` — Mix3D-safe unique keys.
-        ``network_pix`` ``(N, 2)`` relative ``(iy, ix)`` — dense scatter on GT grid.
+        ``cell`` ``(N, 2)`` absolute ``(iy, ix)`` — Mix3D-safe unique keys.
+        ``pix`` ``(N, 2)`` relative ``(iy, ix)`` — dense scatter on GT grid.
+        ``pooling`` is ``"max"`` (default, e.g. ``network`` — catches a single
+        strong "there's a line here" signal) or ``"mean"`` (e.g. ``forest_2d`` —
+        an area-coverage class benefits from averaging the signal across every
+        point in a cell rather than just the strongest one).
         Dense meta is only filled when per-scene ``H,W`` length matches ``offset``
         (skip under Mix3D).
 
@@ -504,6 +509,8 @@ class MultiTaskSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
         targets : (P, r) long
         meta_parts : list of None or (n_pix, iy_u, ix_u, height, width, in_grid)
         """
+        if pooling not in ("max", "mean"):
+            raise ValueError(f"pooling must be 'max' or 'mean', got {pooling!r}")
         device = feat.device
         if not torch.is_tensor(point_labels):
             point_labels = torch.as_tensor(point_labels, device=device)
@@ -519,21 +526,21 @@ class MultiTaskSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
                 f"network labels expected r={num_networks} channels, "
                 f"got {point_labels.shape[1]}"
             )
-        if not torch.is_tensor(network_cell):
-            network_cell = torch.as_tensor(network_cell, device=device)
+        if not torch.is_tensor(cell):
+            cell = torch.as_tensor(cell, device=device)
         else:
-            network_cell = network_cell.to(device=device)
-        if not torch.is_tensor(network_pix):
-            network_pix = torch.as_tensor(network_pix, device=device)
+            cell = cell.to(device=device)
+        if not torch.is_tensor(pix):
+            pix = torch.as_tensor(pix, device=device)
         else:
-            network_pix = network_pix.to(device=device)
-        if network_cell.ndim != 2 or network_cell.shape[0] != feat.shape[0] or network_cell.shape[1] < 2:
+            pix = pix.to(device=device)
+        if cell.ndim != 2 or cell.shape[0] != feat.shape[0] or cell.shape[1] < 2:
             raise ValueError(
-                f"network_cell expected (N={feat.shape[0]}, 2), got {tuple(network_cell.shape)}"
+                f"cell expected (N={feat.shape[0]}, 2), got {tuple(cell.shape)}"
             )
-        if network_pix.ndim != 2 or network_pix.shape[0] != feat.shape[0] or network_pix.shape[1] < 2:
+        if pix.ndim != 2 or pix.shape[0] != feat.shape[0] or pix.shape[1] < 2:
             raise ValueError(
-                f"network_pix expected (N={feat.shape[0]}, 2), got {tuple(network_pix.shape)}"
+                f"pix expected (N={feat.shape[0]}, 2), got {tuple(pix.shape)}"
             )
 
         heights = widths = None
@@ -558,13 +565,16 @@ class MultiTaskSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
             if not point_mask.any():
                 meta_parts.append(None)
                 continue
-            cells = network_cell[point_mask][:, :2].long()
-            pix = network_pix[point_mask][:, :2].long()
+            cells_b = cell[point_mask][:, :2].long()
+            pix_b = pix[point_mask][:, :2].long()
             f = feat[point_mask]
             labels_pt = point_labels[point_mask]
 
-            _, inv = torch.unique(cells, dim=0, return_inverse=True)
-            pooled = torch_scatter.scatter_max(f, inv, dim=0)[0]
+            _, inv = torch.unique(cells_b, dim=0, return_inverse=True)
+            if pooling == "mean":
+                pooled = torch_scatter.scatter_mean(f, inv, dim=0)
+            else:
+                pooled = torch_scatter.scatter_max(f, inv, dim=0)[0]
             idx = torch.arange(inv.numel(), device=device)
             first = torch_scatter.scatter_min(idx, inv, dim=0)[0]
             labels = labels_pt[first].long()
@@ -576,8 +586,8 @@ class MultiTaskSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
             if can_dense:
                 h = int(heights[b].item())
                 w = int(widths[b].item())
-                iy_u = pix[first, 0]
-                ix_u = pix[first, 1]
+                iy_u = pix_b[first, 0]
+                ix_u = pix_b[first, 1]
                 in_grid = (ix_u >= 0) & (iy_u >= 0) & (ix_u < w) & (iy_u < h)
                 meta_parts.append((n_pix, iy_u, ix_u, h, w, in_grid))
             else:
@@ -607,21 +617,25 @@ class MultiTaskSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
             num_classes = int(task_config["num_classes"])
             if task_name not in input_dict:
                 continue
-            if "network_cell" not in input_dict or "network_pix" not in input_dict:
+            cell_key = f"{task_name}_cell"
+            pix_key = f"{task_name}_pix"
+            if cell_key not in input_dict or pix_key not in input_dict:
                 raise KeyError(
-                    f"pixel_semantic task '{task_name}' requires 'network_cell' and "
-                    "'network_pix' in input_dict (add NetworkRasterToPointLabels)."
+                    f"pixel_semantic task '{task_name}' requires '{cell_key}' and "
+                    f"'{pix_key}' in input_dict (add "
+                    f"NetworkRasterToPointLabels(target_key='{task_name}'))."
                 )
             pooled, targets, meta_parts = self._pixel_pool_and_gather(
                 feat,
-                input_dict["network_cell"],
-                input_dict["network_pix"],
+                input_dict[cell_key],
+                input_dict[pix_key],
                 input_dict["offset"],
                 input_dict[task_name],
                 num_networks,
-                height=input_dict.get("network_height"),
-                width=input_dict.get("network_width"),
+                height=input_dict.get(f"{task_name}_height"),
+                width=input_dict.get(f"{task_name}_width"),
                 ignore_index=int(task_config.get("ignore_index", 2)),
+                pooling=str(task_config.get("pooling", "max")),
             )
             raw = head(pooled)  # (P, r * C)
             logits = raw.view(-1, num_networks, num_classes)

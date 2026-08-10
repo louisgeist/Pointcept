@@ -51,8 +51,11 @@ try:
         parse_bool_flag,
     )
     from network_xy_raster_utils import (  # type: ignore
+        abs_xy_bounds_from_coord,
+        default_missing_coord_details_csv,
         densify_segments_to_absolute_cells,
         grid_from_xy_bounds,
+        load_known_missing_tiles,
         mask_from_absolute_cells,
     )
 except ImportError:  # pragma: no cover
@@ -62,8 +65,11 @@ except ImportError:  # pragma: no cover
         parse_bool_flag,
     )
     from pointcept.datasets.preprocessing.flair3d_plus.network_xy_raster_utils import (
+        abs_xy_bounds_from_coord,
+        default_missing_coord_details_csv,
         densify_segments_to_absolute_cells,
         grid_from_xy_bounds,
+        load_known_missing_tiles,
         mask_from_absolute_cells,
     )
 
@@ -105,59 +111,6 @@ class ManifestPatch:
 
     def roi_dir(self, data_root: Path) -> Path:
         return data_root / self.split / f"{self.dept_year}_LIDARHD" / self.roi
-
-
-def _default_missing_coord_details_csv() -> Path:
-    """Repo ``data/flair3d_plus/missing_coord_tiles.details.csv`` (same as Flair3DDataset)."""
-    # rasterize_network.py → …/preprocessing/flair3d_plus → repo root = parents[4]
-    return (
-        Path(__file__).resolve().parents[4]
-        / "data"
-        / "flair3d_plus"
-        / "missing_coord_tiles.details.csv"
-    )
-
-
-def _load_known_missing_tiles(
-    path: Optional[Path],
-) -> set[Tuple[str, str]]:
-    """Load ``(split, patch_id)`` pairs that are expected to lack coord.npy.
-
-    Accepts either:
-    - ``missing_coord_tiles.details.csv`` (DictReader, reason=missing_coord_file)
-    - ``missing_coord_tiles.txt`` / ``missing_ply_preflight.txt`` (``split,patch_id,...``)
-    """
-    if path is None:
-        return set()
-    if not path.is_file():
-        raise FileNotFoundError(f"missing tiles file not found: {path}")
-
-    out: set[Tuple[str, str]] = set()
-    with path.open("r", encoding="utf-8", newline="") as f:
-        sample = f.read(2048)
-        f.seek(0)
-        # details CSV has a header with "reason"
-        if "reason" in sample.splitlines()[0] if sample else False:
-            reader = csv.DictReader(f)
-            for row in reader:
-                if row.get("reason") and row.get("reason") != "missing_coord_file":
-                    continue
-                split = (row.get("split") or "").strip().lower()
-                patch_id = (row.get("patch_id") or "").strip()
-                if split and patch_id:
-                    out.add((split, patch_id))
-        else:
-            for line in f:
-                stripped = line.strip()
-                if not stripped or stripped.startswith("#"):
-                    continue
-                parts = [p.strip() for p in stripped.split(",", 2)]
-                if len(parts) < 2:
-                    continue
-                split, patch_id = parts[0].lower(), parts[1]
-                if split and patch_id:
-                    out.add((split, patch_id))
-    return out
 
 
 def load_manifest_patches(
@@ -267,33 +220,6 @@ def group_by_roi(
     return out
 
 
-def _abs_xy_bounds_from_coord(
-    patch_dir: Path,
-) -> Tuple[float, float, float, float]:
-    """Return (xmin, ymin, xmax, ymax) in absolute Lambert meters."""
-    coord_path = patch_dir / "coord.npy"
-    transl_path = patch_dir / "coord_translation.npy"
-    if not transl_path.is_file():
-        raise FileNotFoundError(f"Missing coord_translation.npy under {patch_dir}")
-
-    coord = np.load(coord_path, mmap_mode="r")
-    transl = np.load(transl_path)
-    if coord.ndim != 2 or coord.shape[1] < 2:
-        raise ValueError(f"Unexpected coord shape {coord.shape} in {coord_path}")
-    if transl.shape[0] < 2:
-        raise ValueError(f"Unexpected coord_translation shape {transl.shape}")
-
-    # Scan XY only (mmap avoids a full RAM copy of the point cloud).
-    x = np.asarray(coord[:, 0], dtype=np.float64) + float(transl[0])
-    y = np.asarray(coord[:, 1], dtype=np.float64) + float(transl[1])
-    finite = np.isfinite(x) & np.isfinite(y)
-    if not np.any(finite):
-        raise ValueError(f"No finite XY in {patch_dir}")
-    x = x[finite]
-    y = y[finite]
-    return float(x.min()), float(y.min()), float(x.max()), float(y.max())
-
-
 def _load_cached_bounds(meta: dict) -> Optional[Tuple[float, float, float, float]]:
     net = meta.get("network")
     if not isinstance(net, dict):
@@ -362,7 +288,7 @@ def process_patch(
     meta = _read_meta(patch_dir)
     bounds = None if force_reload_bounds else _load_cached_bounds(meta)
     if bounds is None:
-        bounds = _abs_xy_bounds_from_coord(patch_dir)
+        bounds = abs_xy_bounds_from_coord(patch_dir)
     xmin, ymin, xmax, ymax = bounds
     grid = grid_from_xy_bounds(xmin, ymin, xmax, ymax, pixel_m=pixel_m)
 
@@ -498,8 +424,8 @@ def run(
     num_workers: int = 1,
 ) -> None:
     if missing_tiles_file is None:
-        missing_tiles_file = _default_missing_coord_details_csv()
-    known_missing = _load_known_missing_tiles(
+        missing_tiles_file = default_missing_coord_details_csv()
+    known_missing = load_known_missing_tiles(
         missing_tiles_file if missing_tiles_file.is_file() else None
     )
     if known_missing:

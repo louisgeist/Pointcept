@@ -436,31 +436,42 @@ class ExtractAbsXY(object):
 
 @TRANSFORMS.register_module()
 class NetworkRasterToPointLabels(object):
-    """Lookup binary network rasters onto points; emit int cell indices.
+    """Lookup binary pixel-semantic rasters onto points; emit int cell indices.
 
-    Converts ``network`` from ``(r, H, W)`` to point-wise ``(N, r)`` so Mix3D
-    carries labels with points. Also writes:
+    Converts ``data_dict[target_key]`` from ``(r, H, W)`` to point-wise ``(N, r)`` so
+    Mix3D carries labels with points. Also writes:
 
-    - ``network_cell`` ``(N, 2)`` int64 — absolute Lambert cells ``(iy, ix)``
+    - ``{target_key}_cell`` ``(N, 2)`` int64 — absolute Lambert cells ``(iy, ix)``
       from ``floor(abs_xy / pixel_m)`` (Mix3D-safe pooling keys)
-    - ``network_pix`` ``(N, 2)`` int64 — relative ``(iy, ix)`` on the GT grid
+    - ``{target_key}_pix`` ``(N, 2)`` int64 — relative ``(iy, ix)`` on the GT grid
       for dense test scatter
 
-    Binning uses ``abs_xy`` float64 (from ``ExtractAbsXY``) and float64 origins.
-    Drops ``abs_xy`` afterward so it is not Collect'd to the GPU.
+    Binning uses ``abs_xy`` float64 (from ``ExtractAbsXY``) and float64 origins read
+    from ``{target_key}_origin_x`` / ``{target_key}_origin_y`` / ``{target_key}_pixel_m``.
 
-    Run after GridSample / SphereCrop and before ToTensor / Collect.
+    ``target_key`` defaults to ``"network"`` so existing configs that instantiate this
+    transform without arguments (``dict(type="NetworkRasterToPointLabels")``) keep their
+    exact current behavior. Pass ``target_key="forest_2d"`` (or any other registered
+    pixel_semantic task name) to bin a different, independently-gridded raster, so e.g.
+    ``network`` and ``forest_2d`` can run as two separate instances of this transform in
+    the same pipeline without their cell/pix/grid-meta keys colliding.
+
+    Run after GridSample / SphereCrop and before ToTensor / Collect. When two instances
+    run on the same data_dict (one per pixel_semantic task), order between them does not
+    matter.
     """
 
-    def __init__(self, ignore_index=2, keep_grid_meta=True):
+    def __init__(self, target_key="network", ignore_index=2, keep_grid_meta=True):
+        self.target_key = str(target_key)
         self.ignore_index = int(ignore_index)
         self.keep_grid_meta = bool(keep_grid_meta)
 
     def __call__(self, data_dict):
-        if "network" not in data_dict or "abs_xy" not in data_dict:
+        key = self.target_key
+        if key not in data_dict or "abs_xy" not in data_dict:
             return data_dict
-        network = np.asarray(data_dict["network"])
-        if network.ndim != 3:
+        raster = np.asarray(data_dict[key])
+        if raster.ndim != 3:
             # Already point-wise (N, r) — leave unchanged.
             return data_dict
 
@@ -473,23 +484,23 @@ class NetworkRasterToPointLabels(object):
                 "(ExtractAbsXY registers it automatically)."
             )
         r, height, width = (
-            int(network.shape[0]),
-            int(network.shape[1]),
-            int(network.shape[2]),
+            int(raster.shape[0]),
+            int(raster.shape[1]),
+            int(raster.shape[2]),
         )
 
         origin_x = float(
-            np.asarray(data_dict.get("network_origin_x", 0.0), dtype=np.float64).reshape(
+            np.asarray(data_dict.get(f"{key}_origin_x", 0.0), dtype=np.float64).reshape(
                 -1
             )[0]
         )
         origin_y = float(
-            np.asarray(data_dict.get("network_origin_y", 0.0), dtype=np.float64).reshape(
+            np.asarray(data_dict.get(f"{key}_origin_y", 0.0), dtype=np.float64).reshape(
                 -1
             )[0]
         )
         pixel_m = float(
-            np.asarray(data_dict.get("network_pixel_m", 1.0), dtype=np.float64).reshape(
+            np.asarray(data_dict.get(f"{key}_pixel_m", 1.0), dtype=np.float64).reshape(
                 -1
             )[0]
         )
@@ -503,24 +514,29 @@ class NetworkRasterToPointLabels(object):
 
         labels = np.full((n, r), self.ignore_index, dtype=np.int64)
         if in_grid.any():
-            labels[in_grid] = network[:, iy_rel[in_grid], ix_rel[in_grid]].T.astype(
+            labels[in_grid] = raster[:, iy_rel[in_grid], ix_rel[in_grid]].T.astype(
                 np.int64
             )
 
-        data_dict["network"] = labels
+        data_dict[key] = labels
         # (iy, ix) convention matches dense scatter dense[:, iy, ix].
-        data_dict["network_cell"] = np.stack([iy_abs, ix_abs], axis=1)
-        data_dict["network_pix"] = np.stack([iy_rel, ix_rel], axis=1)
+        data_dict[f"{key}_cell"] = np.stack([iy_abs, ix_abs], axis=1)
+        data_dict[f"{key}_pix"] = np.stack([iy_rel, ix_rel], axis=1)
         if self.keep_grid_meta:
-            data_dict["network_height"] = np.asarray([height], dtype=np.int64)
-            data_dict["network_width"] = np.asarray([width], dtype=np.int64)
+            data_dict[f"{key}_height"] = np.asarray([height], dtype=np.int64)
+            data_dict[f"{key}_width"] = np.asarray([width], dtype=np.int64)
 
-        # Absolute float XY no longer needed downstream.
-        data_dict.pop("abs_xy", None)
+        # NOTE: unlike the original single-task implementation, abs_xy is
+        # intentionally *not* popped here. A multi-task pipeline runs this
+        # transform once per pixel_semantic target (e.g. "network" then
+        # "forest_2d" on the same data_dict) and each instance needs abs_xy to
+        # still be present. Leaving it behind is harmless: Collect only gathers
+        # explicitly listed keys, so an un-Collected abs_xy is simply discarded
+        # with the rest of the per-sample dict.
 
         if "index_valid_keys" in data_dict:
             keys = [k for k in data_dict["index_valid_keys"] if k != "abs_xy"]
-            for k in ("network", "network_cell", "network_pix"):
+            for k in (key, f"{key}_cell", f"{key}_pix"):
                 if k not in keys:
                     keys.append(k)
             data_dict["index_valid_keys"] = keys

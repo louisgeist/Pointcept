@@ -20,3 +20,6 @@ jz_utils/
 .cursor/
 local/
 .claude/
+.worktrees/
+.superpowers/
+CLAUDE.md

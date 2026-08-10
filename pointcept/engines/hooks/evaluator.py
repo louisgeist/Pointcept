@@ -46,6 +46,7 @@ from pointcept.utils.wandb_metrics import (
 )
 from pointcept.utils.dilated_metrics import (
     dilated_precision_recall_counts,
+    dilated_prf_enabled,
     precision_recall_f1,
 )
 from pointcept.utils.gradient_norm import (
@@ -1042,37 +1043,41 @@ class MultiTaskEvaluator(HookBase):
                     # Uses the dense per-scene grids (reconstructed on the GT Lambert
                     # grid) so the tolerance dilation has real 2D neighborhoods to work
                     # with; the (P, r) pooled arrays above have no spatial layout.
-                    dense_pred_list = pixel_dense_by_task.get(task_name) or []
-                    dense_gt_list = pixel_dense_target_by_task.get(task_name) or []
-                    radius_px = int(task_config.get("buffer_radius_px", 3))
-                    for dense_pred, dense_gt in zip(dense_pred_list, dense_gt_list):
-                        if dense_pred is None or dense_gt is None:
-                            continue
-                        dense_pred_np = dense_pred.detach().cpu().numpy()
-                        dense_gt_np = dense_gt.detach().cpu().numpy()
-                        for c in range(num_networks):
-                            ch_name = (
-                                channel_names[c] if c < len(channel_names) else f"ch{c}"
-                            )
-                            pred_prob = dense_pred_np[c]
-                            gt = dense_gt_np[c]
-                            # Unobserved cells: pred_prob is NaN, gt is -1 (see
-                            # models/default.py _compute_pixel_logits). Void GT cells
-                            # (ignore_index) are excluded like plain IoU excludes them.
-                            observed = ~np.isnan(pred_prob) & (gt != -1)
-                            valid = observed & (gt != ignore_index)
-                            pred_fg = (pred_prob > 0.5) & valid
-                            gt_fg = (gt == 1) & valid
-                            p_num, p_denom, r_num, r_denom = (
-                                dilated_precision_recall_counts(
-                                    pred_fg, gt_fg, valid, radius_px=radius_px
+                    # Skipped entirely for tasks that opt out (e.g. forest_2d): the
+                    # buffer tolerance is a diagnostic for thin curvilinear masks
+                    # (road/rail), not meaningful for a blobby area-coverage mask.
+                    if dilated_prf_enabled(task_config):
+                        dense_pred_list = pixel_dense_by_task.get(task_name) or []
+                        dense_gt_list = pixel_dense_target_by_task.get(task_name) or []
+                        radius_px = int(task_config.get("buffer_radius_px", 3))
+                        for dense_pred, dense_gt in zip(dense_pred_list, dense_gt_list):
+                            if dense_pred is None or dense_gt is None:
+                                continue
+                            dense_pred_np = dense_pred.detach().cpu().numpy()
+                            dense_gt_np = dense_gt.detach().cpu().numpy()
+                            for c in range(num_networks):
+                                ch_name = (
+                                    channel_names[c] if c < len(channel_names) else f"ch{c}"
                                 )
-                            )
-                            base = f"val_dilated_prf/{task_name}/{ch_name}"
-                            self.trainer.storage.put_scalar(f"{base}/p_num", p_num)
-                            self.trainer.storage.put_scalar(f"{base}/p_denom", p_denom)
-                            self.trainer.storage.put_scalar(f"{base}/r_num", r_num)
-                            self.trainer.storage.put_scalar(f"{base}/r_denom", r_denom)
+                                pred_prob = dense_pred_np[c]
+                                gt = dense_gt_np[c]
+                                # Unobserved cells: pred_prob is NaN, gt is -1 (see
+                                # models/default.py _compute_pixel_logits). Void GT cells
+                                # (ignore_index) are excluded like plain IoU excludes them.
+                                observed = ~np.isnan(pred_prob) & (gt != -1)
+                                valid = observed & (gt != ignore_index)
+                                pred_fg = (pred_prob > 0.5) & valid
+                                gt_fg = (gt == 1) & valid
+                                p_num, p_denom, r_num, r_denom = (
+                                    dilated_precision_recall_counts(
+                                        pred_fg, gt_fg, valid, radius_px=radius_px
+                                    )
+                                )
+                                base = f"val_dilated_prf/{task_name}/{ch_name}"
+                                self.trainer.storage.put_scalar(f"{base}/p_num", p_num)
+                                self.trainer.storage.put_scalar(f"{base}/p_denom", p_denom)
+                                self.trainer.storage.put_scalar(f"{base}/r_num", r_num)
+                                self.trainer.storage.put_scalar(f"{base}/r_denom", r_denom)
 
                 cls_logits_by_task = output_dict.get("cls_logits_by_task") or {}
                 for task_name in classification_tasks:
@@ -1324,41 +1329,58 @@ class MultiTaskEvaluator(HookBase):
                     tp, area_pred, tp, target[fg_idx]
                 )
 
-                p_num, p_denom, r_num, r_denom = local_dilated_prf_totals(
-                    self.trainer.storage, task_name, ch_name
-                )
-                p_num, p_denom, r_num, r_denom = sync_dilated_prf_totals(
-                    p_num, p_denom, r_num, r_denom
-                )
-                dilated_precision, dilated_recall, dilated_f1 = precision_recall_f1(
-                    p_num, p_denom, r_num, r_denom
-                )
-
-                per_task_channel_metrics[task_name][ch_name] = dict(
+                dilated_enabled = dilated_prf_enabled(task_config)
+                channel_metrics = dict(
                     precision=exact_precision,
                     recall=exact_recall,
                     f1=exact_f1,
-                    dilated_precision=dilated_precision,
-                    dilated_recall=dilated_recall,
-                    dilated_f1=dilated_f1,
                 )
-                if comm.is_main_process():
-                    self.trainer.logger.info(
-                        "[task={}] Channel_{}-{} Result: precision/recall/f1 "
-                        "{:.4f}/{:.4f}/{:.4f} | dilated(r={}px) precision/recall/f1 "
-                        "{:.4f}/{:.4f}/{:.4f}".format(
-                            task_name,
-                            c,
-                            ch_name,
-                            exact_precision,
-                            exact_recall,
-                            exact_f1,
-                            radius_px,
-                            dilated_precision,
-                            dilated_recall,
-                            dilated_f1,
-                        )
+                if dilated_enabled:
+                    p_num, p_denom, r_num, r_denom = local_dilated_prf_totals(
+                        self.trainer.storage, task_name, ch_name
                     )
+                    p_num, p_denom, r_num, r_denom = sync_dilated_prf_totals(
+                        p_num, p_denom, r_num, r_denom
+                    )
+                    dilated_precision, dilated_recall, dilated_f1 = precision_recall_f1(
+                        p_num, p_denom, r_num, r_denom
+                    )
+                    channel_metrics.update(
+                        dilated_precision=dilated_precision,
+                        dilated_recall=dilated_recall,
+                        dilated_f1=dilated_f1,
+                    )
+                per_task_channel_metrics[task_name][ch_name] = channel_metrics
+                if comm.is_main_process():
+                    if dilated_enabled:
+                        self.trainer.logger.info(
+                            "[task={}] Channel_{}-{} Result: precision/recall/f1 "
+                            "{:.4f}/{:.4f}/{:.4f} | dilated(r={}px) precision/recall/f1 "
+                            "{:.4f}/{:.4f}/{:.4f}".format(
+                                task_name,
+                                c,
+                                ch_name,
+                                exact_precision,
+                                exact_recall,
+                                exact_f1,
+                                radius_px,
+                                dilated_precision,
+                                dilated_recall,
+                                dilated_f1,
+                            )
+                        )
+                    else:
+                        self.trainer.logger.info(
+                            "[task={}] Channel_{}-{} Result: precision/recall/f1 "
+                            "{:.4f}/{:.4f}/{:.4f}".format(
+                                task_name,
+                                c,
+                                ch_name,
+                                exact_precision,
+                                exact_recall,
+                                exact_f1,
+                            )
+                        )
 
         multilabel_metrics_by_task = {}
         for task_name in multilabel_tasks:
@@ -1479,18 +1501,11 @@ class MultiTaskEvaluator(HookBase):
                 for task_name, channel_metrics in per_task_channel_metrics.items():
                     for ch_name, metric in channel_metrics.items():
                         ch_slug = class_name_slug(ch_name)
-                        for metric_name in (
-                            "precision",
-                            "recall",
-                            "f1",
-                            "dilated_precision",
-                            "dilated_recall",
-                            "dilated_f1",
-                        ):
+                        for metric_name, value in metric.items():
                             tag = metric_tag(
                                 "val", f"{ch_slug}/{metric_name}", task=task_name
                             )
-                            value = float(metric[metric_name])
+                            value = float(value)
                             if self.trainer.writer is not None:
                                 self.trainer.writer.add_scalar(
                                     tag, value, current_epoch
