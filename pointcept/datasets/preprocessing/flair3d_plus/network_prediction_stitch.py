@@ -104,6 +104,7 @@ def group_by_roi_complete_only(
             excluded.append(
                 {
                     "roi": roi_dir.name,
+                    "department": roi_dir.parent.name.removesuffix("_LIDARHD"),
                     "reason": "no_local_subtiles",
                     **coverage,
                 }
@@ -113,6 +114,7 @@ def group_by_roi_complete_only(
             excluded.append(
                 {
                     "roi": roi_dir.name,
+                    "department": roi_dir.parent.name.removesuffix("_LIDARHD"),
                     "reason": "incomplete_local_mirror",
                     **coverage,
                 }

@@ -313,8 +313,9 @@ def run(
             "(see 'excluded_rois' in the output JSON)."
         )
         for info in excluded_rois:
+            dept = info.get("department") or "?"
             print(
-                f"  - {info['roi']}: reason={info.get('reason')} "
+                f"  - {dept}/{info['roi']}: reason={info.get('reason')} "
                 f"missing {info.get('n_subtiles_missing', '?')}/"
                 f"{info.get('n_subtiles_total', '?')} subtiles"
             )
@@ -335,7 +336,9 @@ def run(
         for roi_dir, flags, patch_dirs, coverage in roi_items:
             # roi_dir is <data_root>/<split>/<dept_year>_LIDARHD/<roi> -- recover the
             # department/year for the per-ROI CSV (roi names alone don't identify the zone).
-            department_by_roi[roi_dir.name] = roi_dir.parent.name.removesuffix("_LIDARHD")
+            department = roi_dir.parent.name.removesuffix("_LIDARHD")
+            department_by_roi[roi_dir.name] = department
+            roi_label = f"{department}/{roi_dir.name}"
             n_total = int(coverage.get("n_subtiles_total", len(patch_dirs)))
             n_disk_missing = int(coverage.get("n_subtiles_missing", 0))
             missing_pred = [
@@ -348,6 +351,7 @@ def run(
             if n_disk_missing or n_pred_missing:
                 partial = {
                     "roi": roi_dir.name,
+                    "department": department,
                     "n_subtiles_total": n_total,
                     "n_subtiles_on_disk": int(
                         coverage.get("n_subtiles_present", len(patch_dirs))
@@ -360,7 +364,7 @@ def run(
                 }
                 partial_rois.append(partial)
                 log(
-                    f"[partial] {roi_dir.name}: scoring with incomplete coverage -- "
+                    f"[partial] {roi_label}: scoring with incomplete coverage -- "
                     f"disk missing {n_disk_missing}/{n_total} subtiles, "
                     f"predictions missing {n_pred_missing}/{len(patch_dirs)} "
                     f"(APLS vs full-ROI GT can be pessimistic; see partial_rois in JSON)."
@@ -376,11 +380,12 @@ def run(
                         allow_missing_predictions=True,
                     )
             except FileNotFoundError as exc:
-                log(f"[excluded] {roi_dir.name}: no prediction file(s) -- {exc}")
+                log(f"[excluded] {roi_label}: no prediction file(s) -- {exc}")
                 n_rois_skipped += 1
                 excluded_rois.append(
                     {
                         "roi": roi_dir.name,
+                        "department": department,
                         "reason": "missing_prediction_files",
                         "detail": str(exc),
                     }
@@ -391,7 +396,7 @@ def run(
 
             if roi_probs.shape[0] < len(types):
                 raise ValueError(
-                    f"{roi_dir.name}: stitched probs have {roi_probs.shape[0]} channels "
+                    f"{roi_label}: stitched probs have {roi_probs.shape[0]} channels "
                     f"but network_types has {len(types)}: {list(types)}"
                 )
 
@@ -469,19 +474,18 @@ def run(
                         if k != "build_pred_graph"
                     }
                     log(
-                        f"[profile] {roi_dir.name} {network_type} "
+                        f"[profile] {roi_label} {network_type} "
                         f"total={channel_total:.3f}s | {_format_timings(detail)}"
                     )
 
             if profile and roi_timings is not None:
-                stitch_s = float(roi_timings.get("stitch", 0.0))
                 roi_total = sum(roi_timings.values())
                 log(
-                    f"[profile] {roi_dir.name} ROI total={roi_total:.3f}s | "
+                    f"[profile] {roi_label} ROI total={roi_total:.3f}s | "
                     f"{_format_timings(roi_timings)}"
                 )
 
-            postfix = {"roi": roi_dir.name}
+            postfix = {"roi": roi_label}
             if last_network_type is not None and last_score is not None:
                 postfix["type"] = last_network_type
                 postfix["score"] = f"{last_score:.3f}"
