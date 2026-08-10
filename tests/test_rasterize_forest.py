@@ -24,6 +24,8 @@ except ImportError:
     HAS_RASTERIO = False
 
 from pointcept.datasets.preprocessing.flair3d_plus.rasterize_forest import (
+    ManifestPatch,
+    load_manifest_patches,
     process_patch,
 )
 
@@ -166,6 +168,36 @@ class TestProcessPatch(unittest.TestCase):
 
             with self.assertRaises(ValueError):
                 process_patch(patch_dir, tiff_path, pixel_m=0.5, ignore_index=2)
+
+
+class TestManifestPatchLidarStem(unittest.TestCase):
+    def test_lidar_patch_stem_does_not_duplicate_dept_year_and_roi(self):
+        # patch_id is already f"{dept_year}_{roi}_{scene_i_j}" (see
+        # preprocess_flair3d_v2.py's manifest convention) -- lidar_patch_stem
+        # must be built from scene_i_j alone, not from patch_id, or
+        # dept_year/roi get duplicated in the resulting FOREST tiff path.
+        patch = ManifestPatch(
+            split="train",
+            dept_year="D026-2020",
+            roi="AA-S2-1",
+            scene_i_j="5-8",
+            patch_id="D026-2020_AA-S2-1_5-8",
+        )
+        self.assertEqual(patch.lidar_patch_stem(), "D026-2020_LIDARHD_AA-S2-1_5-8")
+
+    def test_load_manifest_patches_reads_scene_i_j_column(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            csv_path = os.path.join(tmp, "manifest.csv")
+            with open(csv_path, "w", encoding="utf-8") as f:
+                f.write("split,dept_year,roi,scene_i_j,patch_id,LIDARHD\n")
+                f.write("train,D026-2020,AA-S2-1,5-8,D026-2020_AA-S2-1_5-8,True\n")
+
+            import pathlib
+
+            patches, n_skipped = load_manifest_patches(pathlib.Path(csv_path))
+            self.assertEqual(n_skipped, 0)
+            self.assertEqual(len(patches), 1)
+            self.assertEqual(patches[0].lidar_patch_stem(), "D026-2020_LIDARHD_AA-S2-1_5-8")
 
 
 if __name__ == "__main__":

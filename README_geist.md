@@ -192,10 +192,20 @@ FOREST coverage is complete for every manifest patch (no "expected but absent" c
 network), so this must be run once before any `forest_2d` training — no tile has
 `forest_2d.npy` until this has run:
 
+On Hecate (D067)
 ```bash
 python pointcept/datasets/preprocessing/flair3d_plus/rasterize_forest.py \
     --data_root data/flair3d_plus \
     --source_dataset_root data/flair3d_plus/raw \
+    --split_manifest_csv data/flair3d_plus/raw/scene_split_manifest_D067.csv \
+    --pixel_m 0.5
+```
+
+On Jean Zay :
+```bash
+python pointcept/datasets/preprocessing/flair3d_plus/rasterize_forest.py \
+    --data_root data/flair3d_plus \
+    --source_dataset_root /lustre/fswork/projects/rech/unv/usi32yh/Pointcept/data/flair3d_plus/raw \
     --split_manifest_csv data/flair3d_plus/raw/scene_split_manifest.csv \
     --pixel_m 0.5
 ```
@@ -473,12 +483,12 @@ Train directement une config dans experiment (sur JeanZay, JZ):
 ```bash
 cdpt
 python -m tools.train \
-  --config-file configs/experiment/w105/2/10h/litept-v1m0-flair3d_12.py \
+  --config-file configs/experiment/w107/7/debug/multi-litept-v1m0-flair3d_forest2d_debug.py \
   --num-gpus 1 \
   --num-machines 1 \
   --machine-rank 0 \
   --dist-url auto \
-  --options save_path=outputs/vram
+  --options save_path=outputs/forest_2d_debug
 ```
 
 ### Sonata pretrain + periodic linear probe (Flair3D+)
