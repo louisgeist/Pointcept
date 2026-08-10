@@ -29,7 +29,8 @@ python pointcept/datasets/preprocessing/flair3d_plus/rasterize_forest.py \
     --data_root data/flair3d_plus \
     --source_dataset_root /lustre/fswork/projects/rech/unv/usi32yh/Pointcept/data/flair3d_plus/raw \
     --split_manifest_csv data/flair3d_plus/raw/scene_split_manifest.csv \
-    --pixel_m 0.5
+    --pixel_m 0.5 \
+    --num_workers 24
 """
 
 from __future__ import annotations
@@ -38,6 +39,7 @@ import argparse
 import csv
 import json
 import sys
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
@@ -265,6 +267,7 @@ def run(
     ignore_index: int = 2,
     force_reload_bounds: bool = False,
     missing_tiles_file: Optional[Path] = None,
+    num_workers: int = 1,
 ) -> None:
     if missing_tiles_file is None:
         missing_tiles_file = default_missing_coord_details_csv()
@@ -274,14 +277,19 @@ def run(
     patches, n_skipped = load_manifest_patches(
         split_manifest_csv, splits=splits, known_missing=known_missing
     )
+    workers = max(1, int(num_workers))
     print(
         f"Manifest: {len(patches) + n_skipped} LIDARHD rows "
-        f"({n_skipped} known-missing skipped) -> {len(patches)} to process"
+        f"({n_skipped} known-missing skipped) -> {len(patches)} to process "
+        f"(num_workers={workers})"
     )
 
-    n_ok = 0
+    # Resolve patch_dir/forest_tiff_path and hard-fail on missing coord.npy
+    # up front (cheap, sequential) -- only the actual raster read/write in
+    # process_patch is worth parallelizing.
+    tasks: List[Tuple[Path, str]] = []
     n_missing_tiff = 0
-    for patch in tqdm(patches, desc="patches", unit="patch"):
+    for patch in patches:
         patch_dir = patch.patch_dir(data_root)
         if not (patch_dir / "coord.npy").is_file():
             raise FileNotFoundError(f"Manifest patch missing coord.npy: {patch_dir}")
@@ -296,14 +304,41 @@ def run(
             n_missing_tiff += 1
             print(f"WARNING: FOREST tiff not found, skipping: {forest_tiff_path}")
             continue
-        process_patch(
-            patch_dir,
-            forest_tiff_path,
-            pixel_m=pixel_m,
-            ignore_index=ignore_index,
-            force_reload_bounds=force_reload_bounds,
-        )
-        n_ok += 1
+        tasks.append((patch_dir, forest_tiff_path))
+
+    n_ok = 0
+    if workers <= 1:
+        for patch_dir, forest_tiff_path in tqdm(tasks, desc="patches", unit="patch"):
+            process_patch(
+                patch_dir,
+                forest_tiff_path,
+                pixel_m=pixel_m,
+                ignore_index=ignore_index,
+                force_reload_bounds=force_reload_bounds,
+            )
+            n_ok += 1
+    else:
+        with ProcessPoolExecutor(max_workers=workers) as pool:
+            futures = {
+                pool.submit(
+                    process_patch,
+                    patch_dir,
+                    forest_tiff_path,
+                    pixel_m=pixel_m,
+                    ignore_index=ignore_index,
+                    force_reload_bounds=force_reload_bounds,
+                ): patch_dir
+                for patch_dir, forest_tiff_path in tasks
+            }
+            for fut in tqdm(
+                as_completed(futures), total=len(futures), desc="patches", unit="patch"
+            ):
+                patch_dir = futures[fut]
+                try:
+                    fut.result()
+                except Exception as exc:  # noqa: BLE001 — surface worker failures
+                    raise RuntimeError(f"Patch worker failed for {patch_dir}: {exc}") from exc
+                n_ok += 1
 
     print(f"Done. forest_2d.npy written for {n_ok} patches ({n_missing_tiff} missing tiffs).")
     if n_missing_tiff > 0:
@@ -331,6 +366,12 @@ def build_argparser() -> argparse.ArgumentParser:
     p.add_argument("--ignore_index", type=int, default=2)
     p.add_argument("--force_reload_bounds", action="store_true")
     p.add_argument("--missing_tiles_file", type=str, default=None)
+    p.add_argument(
+        "--num_workers",
+        type=int,
+        default=1,
+        help="Number of worker processes for rasterizing patches (default: 1, sequential).",
+    )
     return p
 
 
@@ -346,6 +387,7 @@ def main(argv: Optional[List[str]] = None) -> None:
         ignore_index=int(args.ignore_index),
         force_reload_bounds=bool(args.force_reload_bounds),
         missing_tiles_file=missing,
+        num_workers=int(args.num_workers),
     )
 
 
