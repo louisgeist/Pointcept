@@ -70,18 +70,37 @@ python scripts/build_stratified_subset.py \
 - Hook `MetricsJsonWriter` writes `save_path/metrics.json` at end of run
 - End of sbatch: [`scripts/sonata/append_lin_probe_result.py`](scripts/sonata/append_lin_probe_result.py) appends CSV on the pretrain dir
 
+## Visualize a training sample (global + local crops)
+
+[`scripts/visualize_sonata_sample.py`](scripts/visualize_sonata_sample.py) runs one tile through the
+real `MultiViewGenerator` pipeline from the pretrain config and serves an interactive viser scene:
+the tile with each crop's footprint overlaid (via `origin_coord`, untouched by per-view aug), plus
+each view's actual augmented input laid out side by side.
+
+```bash
+python scripts/visualize_sonata_sample.py \
+  --config configs/flair3d_default/pretrain-sonata-v1m2-flair3d.py \
+  --csv-manifest data/flair3d_plus/raw/scene_split_manifest_D067.csv \
+  --index 0
+```
+
 ## Jean-Zay workflow
 
 All launchers live under [`scripts/sonata/`](scripts/sonata/):
 
-- [`scripts/sonata/sbatch_pretrain.sh`](scripts/sonata/sbatch_pretrain.sh) — 8× A100, `WANDB_MODE=offline` (+ hook submits probes)
+- [`scripts/sonata/sbatch_pretrain.sh`](scripts/sonata/sbatch_pretrain.sh) — 4×8 A100 (=32), `WANDB_MODE=offline` (+ hook submits probes)
+- [`scripts/sonata/sbatch_pretrain_h100.sh`](scripts/sonata/sbatch_pretrain_h100.sh) — 8×4 H100 (=32); overrides probe script to H100 via `EXTRA_OPTIONS`
 - [`scripts/sonata/sbatch_lin_probe.sh`](scripts/sonata/sbatch_lin_probe.sh) — 1× A100, short walltime
+- [`scripts/sonata/sbatch_lin_probe_h100.sh`](scripts/sonata/sbatch_lin_probe_h100.sh) — 1× H100
+- [`scripts/sonata/sbatch_pretrain_resume_h100.sh`](scripts/sonata/sbatch_pretrain_resume_h100.sh) — resume under a new config on 32× H100
 - [`scripts/sonata/periodic_lin_probe.py`](scripts/sonata/periodic_lin_probe.py) — **optional** watcher (local / replay only)
 - [`scripts/sonata/append_lin_probe_result.py`](scripts/sonata/append_lin_probe_result.py) — CSV append at end of probe job
 
 ```bash
 # 1) Pretrain only — probes are submitted automatically by LinProbeSbatchHook
 sbatch scripts/sonata/sbatch_pretrain.sh sonata_pretrain_flair3dplus
+# Or on 32× H100 (8 nodes × 4 GPUs):
+sbatch scripts/sonata/sbatch_pretrain_h100.sh sonata_pretrain_flair3dplus_h100
 # PRETRAIN_DIR=logs/slurm/$SLURM_JOB_ID
 
 # 2) Live mIoU (written by each probe job when it finishes)
