@@ -20,12 +20,41 @@ single hub node (star-shaped artifacts in the resulting graph).
 from __future__ import annotations
 
 import sys
+import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 import numpy as np
 from skimage.morphology import remove_small_objects, skeletonize
+
+
+class StageTimer:
+    """Optional wall-clock stage timer for ``build_processed_network_graph_*``.
+
+    When ``enabled`` is False, ``stage(...)`` is a near-no-op. When enabled, each
+    entered stage accumulates seconds into ``timings`` (skipped stages are absent,
+    not recorded as 0.0). Re-entering the same name adds to the existing total
+    (e.g. two RDP passes under ``pre_rdp`` endpoint-fix).
+    """
+
+    def __init__(self, enabled: bool = False) -> None:
+        self.enabled = bool(enabled)
+        self.timings: dict[str, float] = {}
+
+    @contextmanager
+    def stage(self, name: str) -> Iterator[None]:
+        if not self.enabled:
+            yield
+            return
+        t0 = time.perf_counter()
+        try:
+            yield
+        finally:
+            self.timings[name] = self.timings.get(name, 0.0) + (
+                time.perf_counter() - t0
+            )
 
 # Prefer sibling imports so this module runs without the full Pointcept stack,
 # matching rasterize_network.py's import contract.
@@ -64,6 +93,8 @@ class ProcessedNetworkGraph:
     # viewer render "what did stage N do" without recomputing anything itself.
     mask_stages: list[tuple[str, np.ndarray]]
     graph_stages: list[tuple[str, xy_rast.PixelGraph]]
+    # Wall-clock seconds per executed stage when ``collect_timings=True``; else None.
+    stage_timings: dict[str, float] | None = None
 
 
 def _build_processed_network_graph_from_line_mask(
@@ -89,6 +120,7 @@ def _build_processed_network_graph_from_line_mask(
     radius_fix_added_edge_weight: float,
     radius_fix_include_isolated_nodes: bool,
     min_component_nodes: int,
+    collect_timings: bool = False,
 ) -> ProcessedNetworkGraph:
     """Shared body: optional morphology -> pixel graph -> endpoint-fix -> RDP -> merge."""
     if connectivity not in (4, 8):
@@ -104,6 +136,7 @@ def _build_processed_network_graph_from_line_mask(
             f"{endpoint_fix_stage!r}"
         )
 
+    timer = StageTimer(enabled=collect_timings)
     mask_stages: list[tuple[str, np.ndarray]] = [("binarized", np.array(line_mask, dtype=bool))]
 
     n_line_raw = int(np.count_nonzero(line_mask))
@@ -133,7 +166,8 @@ def _build_processed_network_graph_from_line_mask(
         # the analogous artifact for opening would be *under*-recovering real content near a
         # tile edge, which isn't fixable without assuming what's beyond the tile, so it's
         # left as the honest, conservative default.
-        line_mask = _dilate(_erode(line_mask, open_iterations), open_iterations)
+        with timer.stage("open"):
+            line_mask = _dilate(_erode(line_mask, open_iterations), open_iterations)
         mask_stages.append(("open", line_mask.copy()))
     if close_iterations > 0:
         # Closing: dilate `close_iterations` times then erode the same number of times --
@@ -150,16 +184,18 @@ def _build_processed_network_graph_from_line_mask(
         # original shape. (Padding before the dilate step instead would be wrong: the
         # artificial True border would itself dilate inward and contaminate real
         # background near the edge.)
-        dilated = _dilate(line_mask, close_iterations)
-        padded = np.pad(dilated, close_iterations, mode="constant", constant_values=True)
-        eroded = _erode(padded, close_iterations)
-        line_mask = eroded[close_iterations:-close_iterations, close_iterations:-close_iterations]
+        with timer.stage("close"):
+            dilated = _dilate(line_mask, close_iterations)
+            padded = np.pad(dilated, close_iterations, mode="constant", constant_values=True)
+            eroded = _erode(padded, close_iterations)
+            line_mask = eroded[close_iterations:-close_iterations, close_iterations:-close_iterations]
         mask_stages.append(("close", line_mask.copy()))
 
     if remove_small_objects_enabled and remove_small_objects_min_size_px > 0:
-        line_mask = remove_small_objects(
-            line_mask, min_size=remove_small_objects_min_size_px
-        )
+        with timer.stage("remove_small_objects"):
+            line_mask = remove_small_objects(
+                line_mask, min_size=remove_small_objects_min_size_px
+            )
         mask_stages.append(("small_objects_removed", line_mask.copy()))
 
     n_mask_pixels_pre_skeleton = int(np.count_nonzero(line_mask))
@@ -168,43 +204,49 @@ def _build_processed_network_graph_from_line_mask(
         # 1px-wide centerline build_pixel_graph assumes -- thin it down first, or every mask
         # pixel becomes a graph node and merge_neighbor_nodes collapses whole blobs into a
         # single hub node (star-shaped artifacts).
-        line_mask = skeletonize(line_mask)
+        with timer.stage("skeletonize"):
+            line_mask = skeletonize(line_mask)
         mask_stages.append(("skeleton", line_mask.copy()))
     n_line = int(np.count_nonzero(line_mask))
 
     graph_stages: list[tuple[str, xy_rast.PixelGraph]] = []
 
-    graph = xy_rast.build_pixel_graph(line_mask, grid, connectivity=connectivity)
+    with timer.stage("pixel_graph"):
+        graph = xy_rast.build_pixel_graph(line_mask, grid, connectivity=connectivity)
     graph_stages.append(("pixel_graph_raw", graph))
-    simplified_rdp_only = xy_rast.simplify_pixel_graph_rdp(
-        graph, epsilon_m=rdp_epsilon_m
-    )
+    with timer.stage("rdp"):
+        simplified_rdp_only = xy_rast.simplify_pixel_graph_rdp(
+            graph, epsilon_m=rdp_epsilon_m
+        )
 
     endpoint_fix_info: dict[str, Any] | None = None
     graph_pre_rdp_fix: xy_rast.PixelGraph | None = None
     graph_after_endpoint_fix = simplified_rdp_only
     if endpoint_fix_enabled and endpoint_fix_stage == "pre_rdp":
-        graph_pre_rdp_fix, endpoint_fix_info = (
-            xy_rast.repair_degree1_endpoints_diagonal_opposed(
-                graph,
-                added_edge_weight=endpoint_fix_added_edge_weight,
-                include_isolated_nodes=endpoint_fix_include_isolated_nodes,
+        with timer.stage("endpoint_fix"):
+            graph_pre_rdp_fix, endpoint_fix_info = (
+                xy_rast.repair_degree1_endpoints_diagonal_opposed(
+                    graph,
+                    added_edge_weight=endpoint_fix_added_edge_weight,
+                    include_isolated_nodes=endpoint_fix_include_isolated_nodes,
+                )
             )
-        )
         graph_stages.append(("endpoint_fix", graph_pre_rdp_fix))
-        graph_after_endpoint_fix = xy_rast.simplify_pixel_graph_rdp(
-            graph_pre_rdp_fix, epsilon_m=rdp_epsilon_m
-        )
+        with timer.stage("rdp"):
+            graph_after_endpoint_fix = xy_rast.simplify_pixel_graph_rdp(
+                graph_pre_rdp_fix, epsilon_m=rdp_epsilon_m
+            )
         graph_stages.append(("rdp", graph_after_endpoint_fix))
     elif endpoint_fix_enabled and endpoint_fix_stage == "post_rdp":
         graph_stages.append(("rdp", simplified_rdp_only))
-        graph_after_endpoint_fix, endpoint_fix_info = (
-            xy_rast.repair_degree1_endpoints_diagonal_opposed(
-                simplified_rdp_only,
-                added_edge_weight=endpoint_fix_added_edge_weight,
-                include_isolated_nodes=endpoint_fix_include_isolated_nodes,
+        with timer.stage("endpoint_fix"):
+            graph_after_endpoint_fix, endpoint_fix_info = (
+                xy_rast.repair_degree1_endpoints_diagonal_opposed(
+                    simplified_rdp_only,
+                    added_edge_weight=endpoint_fix_added_edge_weight,
+                    include_isolated_nodes=endpoint_fix_include_isolated_nodes,
+                )
             )
-        )
         graph_stages.append(("endpoint_fix", graph_after_endpoint_fix))
     else:
         graph_stages.append(("rdp", simplified_rdp_only))
@@ -212,26 +254,27 @@ def _build_processed_network_graph_from_line_mask(
     graph_final = graph_after_endpoint_fix
     merged_info: dict[str, int] | None = None
     if merge_enabled:
-        simplified_weights = (
-            np.asarray(graph_after_endpoint_fix.edge_weights, dtype=np.float64)
-            if graph_after_endpoint_fix.edge_weights is not None
-            else np.ones(
-                (graph_after_endpoint_fix.edges.shape[0],), dtype=np.float64
+        with timer.stage("merge"):
+            simplified_weights = (
+                np.asarray(graph_after_endpoint_fix.edge_weights, dtype=np.float64)
+                if graph_after_endpoint_fix.edge_weights is not None
+                else np.ones(
+                    (graph_after_endpoint_fix.edges.shape[0],), dtype=np.float64
+                )
             )
-        )
-        edge_keep_mask = simplified_weights > merge_weight_threshold
-        n_edges_filtered = int(np.count_nonzero(edge_keep_mask))
-        n_comp_before = len(
-            xy_rast.connected_components_from_edges(
-                int(graph_after_endpoint_fix.node_rc.shape[0]),
-                graph_after_endpoint_fix.edges[edge_keep_mask],
+            edge_keep_mask = simplified_weights > merge_weight_threshold
+            n_edges_filtered = int(np.count_nonzero(edge_keep_mask))
+            n_comp_before = len(
+                xy_rast.connected_components_from_edges(
+                    int(graph_after_endpoint_fix.node_rc.shape[0]),
+                    graph_after_endpoint_fix.edges[edge_keep_mask],
+                )
             )
-        )
-        merged = xy_rast.merge_neighbor_nodes(
-            graph_after_endpoint_fix,
-            weight_threshold=merge_weight_threshold,
-        )
-        n_comp_after = len(xy_rast.connected_components_nodes(merged))
+            merged = xy_rast.merge_neighbor_nodes(
+                graph_after_endpoint_fix,
+                weight_threshold=merge_weight_threshold,
+            )
+            n_comp_after = len(xy_rast.connected_components_nodes(merged))
         graph_final = merged
         graph_stages.append(("merge", merged))
         merged_info = {
@@ -250,14 +293,15 @@ def _build_processed_network_graph_from_line_mask(
     radius_fix_info: dict[str, Any] | None = None
     graph_after_radius_fix: xy_rast.PixelGraph | None = None
     if radius_fix_enabled:
-        graph_after_radius_fix, radius_fix_info = (
-            xy_rast.repair_degree1_endpoints_within_radius(
-                graph_final,
-                radius_m=radius_fix_radius_m,
-                added_edge_weight=radius_fix_added_edge_weight,
-                include_isolated_nodes=radius_fix_include_isolated_nodes,
+        with timer.stage("radius_fix"):
+            graph_after_radius_fix, radius_fix_info = (
+                xy_rast.repair_degree1_endpoints_within_radius(
+                    graph_final,
+                    radius_m=radius_fix_radius_m,
+                    added_edge_weight=radius_fix_added_edge_weight,
+                    include_isolated_nodes=radius_fix_include_isolated_nodes,
+                )
             )
-        )
         graph_final = graph_after_radius_fix
         graph_stages.append(("node_linking", graph_after_radius_fix))
 
@@ -267,11 +311,12 @@ def _build_processed_network_graph_from_line_mask(
     # remnants, unlinked radius-fix endpoints, ...).
     small_components_info: dict[str, int] | None = None
     if min_component_nodes > 1:
-        n_nodes_before_prune = int(graph_final.node_rc.shape[0])
-        n_comp_before_prune = len(xy_rast.connected_components_nodes(graph_final))
-        graph_final = xy_rast.drop_small_components(
-            graph_final, min_nodes=min_component_nodes
-        )
+        with timer.stage("min_component_nodes"):
+            n_nodes_before_prune = int(graph_final.node_rc.shape[0])
+            n_comp_before_prune = len(xy_rast.connected_components_nodes(graph_final))
+            graph_final = xy_rast.drop_small_components(
+                graph_final, min_nodes=min_component_nodes
+            )
         graph_stages.append(("small_components_removed", graph_final))
         small_components_info = {
             "min_component_nodes": int(min_component_nodes),
@@ -301,6 +346,7 @@ def _build_processed_network_graph_from_line_mask(
         n_mask_pixels_pre_skeleton=n_mask_pixels_pre_skeleton,
         mask_stages=mask_stages,
         graph_stages=graph_stages,
+        stage_timings=dict(timer.timings) if collect_timings else None,
     )
 
 
@@ -327,6 +373,7 @@ def build_processed_network_graph_from_mask(
     radius_fix_added_edge_weight: float = 1.0,
     radius_fix_include_isolated_nodes: bool = True,
     min_component_nodes: int = 5,
+    collect_timings: bool = False,
 ) -> ProcessedNetworkGraph:
     """Build the final pixel graph from an already-thresholded boolean mask.
 
@@ -415,6 +462,7 @@ def build_processed_network_graph_from_mask(
         radius_fix_added_edge_weight=radius_fix_added_edge_weight,
         radius_fix_include_isolated_nodes=radius_fix_include_isolated_nodes,
         min_component_nodes=min_component_nodes,
+        collect_timings=collect_timings,
     )
 
 

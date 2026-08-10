@@ -26,10 +26,14 @@ import csv
 import json
 import os
 import sys
+import time
+from collections import defaultdict
+from contextlib import contextmanager
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, Iterator, List, Optional
 
 import numpy as np
+from tqdm import tqdm
 
 _HERE = Path(__file__).resolve().parent
 _PREPROC_DIR = (
@@ -48,6 +52,69 @@ import network_label_utils as nlu  # type: ignore
 import network_prediction_stitch as nps  # type: ignore
 
 NETWORK_TYPES = nlu.NETWORK_TYPES
+
+
+class _ProfileAggregator:
+    """Accumulate wall-clock samples per stage name across ROI/channel calls."""
+
+    def __init__(self) -> None:
+        self._totals: Dict[str, float] = defaultdict(float)
+        self._maxes: Dict[str, float] = defaultdict(float)
+        self._counts: Dict[str, int] = defaultdict(int)
+
+    def add(self, name: str, seconds: float) -> None:
+        s = float(seconds)
+        self._totals[name] += s
+        if s > self._maxes[name]:
+            self._maxes[name] = s
+        self._counts[name] += 1
+
+    def add_dict(self, timings: Optional[Dict[str, float]]) -> None:
+        if not timings:
+            return
+        for name, seconds in timings.items():
+            self.add(name, seconds)
+
+    def summary(self) -> Dict[str, dict]:
+        out: Dict[str, dict] = {}
+        for name in self._totals:
+            total = self._totals[name]
+            count = self._counts[name]
+            out[name] = {
+                "count": count,
+                "total_s": total,
+                "mean_s": total / count if count else 0.0,
+                "max_s": self._maxes[name],
+            }
+        return out
+
+    def print_report(self) -> None:
+        summary = self.summary()
+        if not summary:
+            print("profiling: (no stages recorded)")
+            return
+        rows = sorted(summary.items(), key=lambda kv: kv[1]["total_s"], reverse=True)
+        print("profiling (stages sorted by total_s desc):")
+        print(
+            f"{'stage':28s} {'count':>7s} {'total_s':>10s} {'mean_s':>10s} {'max_s':>10s}"
+        )
+        for name, stats in rows:
+            print(
+                f"{name:28s} {stats['count']:7d} {stats['total_s']:10.4f} "
+                f"{stats['mean_s']:10.4f} {stats['max_s']:10.4f}"
+            )
+
+
+@contextmanager
+def _timed(aggregator: Optional[_ProfileAggregator], name: str) -> Iterator[None]:
+    if aggregator is None:
+        yield
+        return
+    t0 = time.perf_counter()
+    try:
+        yield
+    finally:
+        aggregator.add(name, time.perf_counter() - t0)
 
 
 def _parse_optional_float(s: str) -> Optional[float]:
@@ -113,6 +180,7 @@ def _build_predicted_graph(
     remove_small_objects_min_size_px: int = 8,
     skeletonize_enabled: bool = True,
     min_component_nodes: int = 5,
+    collect_timings: bool = False,
 ) -> "ngp.ProcessedNetworkGraph":
     prob = roi_probs[channel_idx]
     # Unobserved (NaN) cells are treated as background -- see plan's design-decision note:
@@ -138,6 +206,7 @@ def _build_predicted_graph(
         merge_enabled=True,
         merge_weight_threshold=merge_weight_threshold,
         min_component_nodes=min_component_nodes,
+        collect_timings=collect_timings,
         **extra,
     )
 
@@ -173,10 +242,13 @@ def run(
     min_component_nodes: int = 5,
     network_types: Optional[List[str]] = None,
     missing_tiles_file: Optional[Path] = None,
+    show_progress: bool = True,
+    profile: bool = False,
 ) -> dict:
     densify = _coerce_densify(densify)
     snap_to_edge = _coerce_snap_to_edge(snap_to_edge)
     types = tuple(network_types) if network_types else NETWORK_TYPES
+    profiler = _ProfileAggregator() if profile else None
 
     # Same known-missing exclusions as rasterize_network / Flair3DDataset hardcoded set.
     if missing_tiles_file is None:
@@ -228,112 +300,134 @@ def run(
     partial_rois: List[dict] = []
     department_by_roi: dict = {}
 
-    for roi_dir, flags, patch_dirs, coverage in roi_items:
-        # roi_dir is <data_root>/<split>/<dept_year>_LIDARHD/<roi> -- recover the
-        # department/year for the per-ROI CSV (roi names alone don't identify the zone).
-        department_by_roi[roi_dir.name] = roi_dir.parent.name.removesuffix("_LIDARHD")
-        n_total = int(coverage.get("n_subtiles_total", len(patch_dirs)))
-        n_disk_missing = int(coverage.get("n_subtiles_missing", 0))
-        missing_pred = [
-            p.name
-            for p in patch_dirs
-            if not (save_path / f"{p.name}_logits_network.npy").is_file()
-        ]
-        n_pred_missing = len(missing_pred)
-        n_pred_present = len(patch_dirs) - n_pred_missing
-        if n_disk_missing or n_pred_missing:
-            partial = {
-                "roi": roi_dir.name,
-                "n_subtiles_total": n_total,
-                "n_subtiles_on_disk": int(coverage.get("n_subtiles_present", len(patch_dirs))),
-                "n_subtiles_missing_disk": n_disk_missing,
-                "n_predictions_present": n_pred_present,
-                "n_predictions_missing": n_pred_missing,
-                "missing_patch_ids_disk": coverage.get("missing_patch_ids", []),
-                "missing_prediction_ids": missing_pred,
-            }
-            partial_rois.append(partial)
-            print(
-                f"[partial] {roi_dir.name}: scoring with incomplete coverage -- "
-                f"disk missing {n_disk_missing}/{n_total} subtiles, "
-                f"predictions missing {n_pred_missing}/{len(patch_dirs)} "
-                f"(APLS vs full-ROI GT can be pessimistic; see partial_rois in JSON)."
-            )
+    use_pbar = bool(show_progress) and len(roi_items) > 0
+    pbar = tqdm(total=len(roi_items), desc="ROIs", unit="roi", disable=not use_pbar)
+    log = pbar.write if use_pbar else print
 
-        try:
-            roi_probs, roi_grid = nps.stitch_roi_predictions(
-                patch_dirs,
-                save_path,
-                combine=overlap_combine,
-                allow_missing_predictions=True,
-            )
-        except FileNotFoundError as exc:
-            print(f"[excluded] {roi_dir.name}: no prediction file(s) -- {exc}")
-            n_rois_skipped += 1
-            excluded_rois.append(
-                {
+    try:
+        for roi_dir, flags, patch_dirs, coverage in roi_items:
+            # roi_dir is <data_root>/<split>/<dept_year>_LIDARHD/<roi> -- recover the
+            # department/year for the per-ROI CSV (roi names alone don't identify the zone).
+            department_by_roi[roi_dir.name] = roi_dir.parent.name.removesuffix("_LIDARHD")
+            n_total = int(coverage.get("n_subtiles_total", len(patch_dirs)))
+            n_disk_missing = int(coverage.get("n_subtiles_missing", 0))
+            missing_pred = [
+                p.name
+                for p in patch_dirs
+                if not (save_path / f"{p.name}_logits_network.npy").is_file()
+            ]
+            n_pred_missing = len(missing_pred)
+            n_pred_present = len(patch_dirs) - n_pred_missing
+            if n_disk_missing or n_pred_missing:
+                partial = {
                     "roi": roi_dir.name,
-                    "reason": "missing_prediction_files",
-                    "detail": str(exc),
+                    "n_subtiles_total": n_total,
+                    "n_subtiles_on_disk": int(
+                        coverage.get("n_subtiles_present", len(patch_dirs))
+                    ),
+                    "n_subtiles_missing_disk": n_disk_missing,
+                    "n_predictions_present": n_pred_present,
+                    "n_predictions_missing": n_pred_missing,
+                    "missing_patch_ids_disk": coverage.get("missing_patch_ids", []),
+                    "missing_prediction_ids": missing_pred,
                 }
-            )
-            continue
-        n_rois_processed += 1
+                partial_rois.append(partial)
+                log(
+                    f"[partial] {roi_dir.name}: scoring with incomplete coverage -- "
+                    f"disk missing {n_disk_missing}/{n_total} subtiles, "
+                    f"predictions missing {n_pred_missing}/{len(patch_dirs)} "
+                    f"(APLS vs full-ROI GT can be pessimistic; see partial_rois in JSON)."
+                )
 
-        if roi_probs.shape[0] < len(types):
-            raise ValueError(
-                f"{roi_dir.name}: stitched probs have {roi_probs.shape[0]} channels "
-                f"but network_types has {len(types)}: {list(types)}"
-            )
-
-        for channel_idx, network_type in enumerate(types):
-            if not flags.get(network_type, False):
+            try:
+                with _timed(profiler, "stitch"):
+                    roi_probs, roi_grid = nps.stitch_roi_predictions(
+                        patch_dirs,
+                        save_path,
+                        combine=overlap_combine,
+                        allow_missing_predictions=True,
+                    )
+            except FileNotFoundError as exc:
+                log(f"[excluded] {roi_dir.name}: no prediction file(s) -- {exc}")
+                n_rois_skipped += 1
+                excluded_rois.append(
+                    {
+                        "roi": roi_dir.name,
+                        "reason": "missing_prediction_files",
+                        "detail": str(exc),
+                    }
+                )
+                pbar.update(1)
                 continue
-            processed = _build_predicted_graph(
-                roi_probs,
-                roi_grid,
-                channel_idx,
-                threshold=threshold,
-                connectivity=connectivity,
-                rdp_epsilon_m=rdp_epsilon_m,
-                endpoint_fix_enabled=endpoint_fix_enabled,
-                endpoint_fix_stage=endpoint_fix_stage,
-                merge_weight_threshold=merge_weight_threshold,
-                radius_fix_radius_m=radius_fix_radius_m,
-                open_iterations=open_iterations,
-                close_iterations=close_iterations,
-                morph_connectivity=morph_connectivity,
-                remove_small_objects_enabled=remove_small_objects_enabled,
-                remove_small_objects_min_size_px=remove_small_objects_min_size_px,
-                skeletonize_enabled=skeletonize_enabled,
-                min_component_nodes=min_component_nodes,
-            )
-            pred_graph = apls.apls_graph_from_pixel_graph(processed.graph_final)
+            n_rois_processed += 1
 
-            gt_path = nlu.expected_exported_graph_path(
-                network_graphs_root, roi_dir, network_type
-            )
-            loaded_gt = nlu.load_roi_exported_network_graph(gt_path)
-            gt_graph = apls.apls_graph_from_loaded_graph(loaded_gt)
+            if roi_probs.shape[0] < len(types):
+                raise ValueError(
+                    f"{roi_dir.name}: stitched probs have {roi_probs.shape[0]} channels "
+                    f"but network_types has {len(types)}: {list(types)}"
+                )
 
-            result = apls.apls_symmetric_score(
-                gt_graph,
-                pred_graph,
-                roi=roi_dir.name,
-                network_type=network_type,
-                densify=densify,
-                snap_to_edge=snap_to_edge,
-                symmetric=symmetric,
-                max_nodes_exact=max_nodes_exact,
-                min_path_length_m=min_path_length_m,
-            )
-            results.append(result)
-            print(
-                f"{roi_dir.name:24s} {network_type:20s} score={result.score:.4f} "
-                f"gt->pred={result.score_gt_to_pred:.4f} "
-                f"pred->gt={result.score_pred_to_gt:.4f} "
-                f"n_gt={result.n_nodes_gt} n_pred={result.n_nodes_pred}"
-            )
+            last_score: Optional[float] = None
+            last_network_type: Optional[str] = None
+            for channel_idx, network_type in enumerate(types):
+                if not flags.get(network_type, False):
+                    continue
+                with _timed(profiler, "build_pred_graph"):
+                    processed = _build_predicted_graph(
+                        roi_probs,
+                        roi_grid,
+                        channel_idx,
+                        threshold=threshold,
+                        connectivity=connectivity,
+                        rdp_epsilon_m=rdp_epsilon_m,
+                        endpoint_fix_enabled=endpoint_fix_enabled,
+                        endpoint_fix_stage=endpoint_fix_stage,
+                        merge_weight_threshold=merge_weight_threshold,
+                        radius_fix_radius_m=radius_fix_radius_m,
+                        open_iterations=open_iterations,
+                        close_iterations=close_iterations,
+                        morph_connectivity=morph_connectivity,
+                        remove_small_objects_enabled=remove_small_objects_enabled,
+                        remove_small_objects_min_size_px=remove_small_objects_min_size_px,
+                        skeletonize_enabled=skeletonize_enabled,
+                        min_component_nodes=min_component_nodes,
+                        collect_timings=profile,
+                    )
+                if profiler is not None:
+                    profiler.add_dict(processed.stage_timings)
+                pred_graph = apls.apls_graph_from_pixel_graph(processed.graph_final)
+
+                gt_path = nlu.expected_exported_graph_path(
+                    network_graphs_root, roi_dir, network_type
+                )
+                with _timed(profiler, "load_gt"):
+                    loaded_gt = nlu.load_roi_exported_network_graph(gt_path)
+                gt_graph = apls.apls_graph_from_loaded_graph(loaded_gt)
+
+                with _timed(profiler, "apls"):
+                    result = apls.apls_symmetric_score(
+                        gt_graph,
+                        pred_graph,
+                        roi=roi_dir.name,
+                        network_type=network_type,
+                        densify=densify,
+                        snap_to_edge=snap_to_edge,
+                        symmetric=symmetric,
+                        max_nodes_exact=max_nodes_exact,
+                        min_path_length_m=min_path_length_m,
+                    )
+                results.append(result)
+                last_score = float(result.score)
+                last_network_type = network_type
+
+            postfix = {"roi": roi_dir.name}
+            if last_network_type is not None and last_score is not None:
+                postfix["type"] = last_network_type
+                postfix["score"] = f"{last_score:.3f}"
+            pbar.set_postfix(postfix, refresh=False)
+            pbar.update(1)
+    finally:
+        pbar.close()
 
     summary = apls.aggregate_dataset_apls(results)
 
@@ -369,6 +463,7 @@ def run(
             "missing_tiles_file": str(missing_tiles_file),
             "n_known_missing": len(known_missing),
             "n_skipped_known_missing": int(n_skipped_known_missing),
+            "profile": bool(profile),
         },
         "n_rois_processed": n_rois_processed,
         "n_rois_skipped": n_rois_skipped,
@@ -399,6 +494,8 @@ def run(
             for r in results
         ],
     }
+    if profiler is not None:
+        payload["profiling"] = profiler.summary()
 
     json_path = out_dir / "network_apls_metrics.json"
     tmp_path = str(json_path) + ".tmp"
@@ -438,6 +535,8 @@ def run(
     print(f"per_channel_gt_to_pred: {summary['per_channel_gt_to_pred']}")
     print(f"per_channel_pred_to_gt: {summary['per_channel_pred_to_gt']}")
     print(f"macro_apls: {summary['macro_apls']}")
+    if profiler is not None:
+        profiler.print_report()
     return payload
 
 
@@ -617,6 +716,21 @@ def build_argparser() -> argparse.ArgumentParser:
             "data/flair3d_plus/missing_coord_tiles.details.csv"
         ),
     )
+    p.add_argument(
+        "--no_progress",
+        action="store_true",
+        help="Disable the tqdm ROI progress bar (useful for CI / captured logs).",
+    )
+    p.add_argument(
+        "--profile",
+        action="store_true",
+        help=(
+            "Time pipeline stages (open/close/remove_small/skeletonize/pixel_graph/"
+            "endpoint_fix/rdp/merge/radius_fix/min_component_nodes) and high-level "
+            "phases (stitch/build_pred_graph/load_gt/apls); print a summary and write "
+            "it under 'profiling' in the output JSON."
+        ),
+    )
     return p
 
 
@@ -658,6 +772,8 @@ def main(argv: Optional[List[str]] = None) -> None:
         min_component_nodes=args.min_component_nodes,
         network_types=args.network_types,
         missing_tiles_file=missing,
+        show_progress=not args.no_progress,
+        profile=bool(args.profile),
     )
 
 
