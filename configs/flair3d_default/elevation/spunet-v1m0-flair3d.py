@@ -55,18 +55,15 @@ wandb_project = "flair3d_elevation"
 from pointcept.datasets.flair3d_config_utils import (
     FLAIR3D_COLLECT_PREFIX_GRID,
     init_multitask_collect_keys,
-    ELEVATION_TARGET_SCALE,
-    ELEVATION_SMOOTH_L1_BETA,
-    get_regression_target_scales,
 )
 
 target_key = "elevation"
 target_keys = (target_key,)
 origin_target_key = f"origin_{target_key}"
 
-elevation_target_scale = ELEVATION_TARGET_SCALE
-elevation_key_scales = dict(elevation=elevation_target_scale)
-target_scales = get_regression_target_scales(target_keys)
+# Elevation in meters: no Collect key_scales, no denorm via target_scales
+# (matches configs/experiment/w107/7/toward_bm/multi-litept-v1m0-flair3d_1.py).
+target_scales = {}
 
 # -----------------------------------------------------------------------------
 # Hooks
@@ -93,7 +90,9 @@ model = dict(
     type="DefaultRegressorV2",
     target_key=target_key,
     backbone_out_channels=backbone_channels[-1],
-    criteria=[dict(type="SmoothL1Loss", beta=ELEVATION_SMOOTH_L1_BETA, loss_weight=1.0)],
+    # beta=1.0 (meters) -- elevation trained in raw meters, no Collect key_scales /
+    # target_scales denorm. See multi-litept-v1m0-flair3d_1.py (w107/7/toward_bm).
+    criteria=[dict(type="SmoothL1Loss", beta=1.0, loss_weight=1.0)],
     backbone=dict(
         type="SpUNet-v1m1",
         in_channels=7,  # coord (3) + color (3) + strength (1)
@@ -129,7 +128,7 @@ train_collect_keys, val_collect_keys, index_valid_keys = init_multitask_collect_
     target_keys, collect_prefix_keys=FLAIR3D_COLLECT_PREFIX_GRID
 )
 
-del FLAIR3D_COLLECT_PREFIX_GRID, init_multitask_collect_keys, get_regression_target_scales
+del FLAIR3D_COLLECT_PREFIX_GRID, init_multitask_collect_keys
 
 data = dict(
     target_scales=target_scales,
@@ -179,7 +178,6 @@ data = dict(
                 keys=train_collect_keys,
                 feat_keys=feat_keys,
                 feat_scales=dict(coord=coord_feat_scale),
-                key_scales=elevation_key_scales,
             ),
         ],
         test_mode=False,
@@ -219,7 +217,6 @@ data = dict(
                 keys=val_collect_keys,
                 feat_keys=feat_keys,
                 feat_scales=dict(coord=coord_feat_scale),
-                key_scales=elevation_key_scales,
             ),
         ],
         test_mode=False,

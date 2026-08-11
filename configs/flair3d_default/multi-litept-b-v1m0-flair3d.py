@@ -65,20 +65,18 @@ wandb_project = "flair3d_multi"
 # Multitask configuration : targets configuraiton
 # -----------------------------------------------------------------------------
 from pointcept.datasets.flair3d_config_utils import (
-    ELEVATION_TARGET_SCALE,
     init_task_configs,
     init_task_criteria,
     FLAIR3D_COLLECT_PREFIX_LITEPT,
     init_multitask_collect_keys,
-    get_regression_target_scales,
 )
 
 main_task = "segment"
 target_keys = (main_task, "forest_2d", "elevation", "natural_habitat_multilabel", "network")
 
-elevation_target_scale = ELEVATION_TARGET_SCALE
-elevation_key_scales = dict(elevation=elevation_target_scale)
-target_scales = get_regression_target_scales(target_keys)
+# Elevation in meters: no Collect key_scales, no denorm via target_scales
+# (matches configs/experiment/w107/7/toward_bm/multi-litept-v1m0-flair3d_1.py).
+target_scales = {}
 
 label_definitions = dict(
     segment="v20",
@@ -92,6 +90,12 @@ task_configs["natural_habitat_multilabel"]["pooling"] = "mean"
 task_configs["network"]["num_networks"] = 1
 task_configs["network"]["channel_names"] = ["ROADS"]
 task_criteria = init_task_criteria(task_configs)
+# Elevation in meters (no Collect key_scales / target_scales denorm above).
+# beta=1.0 in meters ≡ former ELEVATION_SMOOTH_L1_BETA=1e-2 in the old ×0.01
+# space (~1 m Huber threshold). See multi-litept-v1m0-flair3d_1.py (w107/7/toward_bm).
+task_criteria["elevation"] = [
+    dict(type="SmoothL1Loss", beta=1.0, loss_weight=1.0),
+]
 _network_ignore = int(task_configs["network"]["ignore_index"])
 task_criteria["network"] = [
     dict(
@@ -109,7 +113,7 @@ task_weights = {task_name: 1.0 for task_name in task_configs.keys()}
 # treats every non-dunder module attribute as a config entry, and Config.dump
 # pipes the resulting Python text through yapf. Yapf cannot reformat function
 # objects rendered as "<function ... at 0x...>" and raises a SyntaxError.
-del init_task_configs, init_task_criteria, get_regression_target_scales
+del init_task_configs, init_task_criteria
 
 # main_task drives checkpoint selection / mIoU logging, so its num_classes,
 # ignore_index and names are exposed at the data root for backward-compat hooks.
@@ -306,7 +310,6 @@ data = dict(
                 keys=train_multitask_keys,
                 feat_keys=feat_keys,
                 feat_scales=dict(coord=coord_feat_scale),
-                key_scales=elevation_key_scales,
             ),
         ],
         test_mode=False,
@@ -356,7 +359,6 @@ data = dict(
                 keys=val_multitask_keys,
                 feat_keys=feat_keys,
                 feat_scales=dict(coord=coord_feat_scale),
-                key_scales=elevation_key_scales,
             ),
         ],
         test_mode=False,
