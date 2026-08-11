@@ -715,12 +715,12 @@ def select_component_medoid_xy(
 def merge_neighbor_nodes(
     graph: PixelGraph,
     *,
-    weight_threshold: float = 2.5,
+    hop_threshold: float = 2.5,
 ) -> PixelGraph:
-    """Merge only tightly-adjacent node groups using weighted edges.
+    """Merge only tightly-adjacent node groups using hop-count edge weights.
 
     Steps:
-    1) Filter edges with ``w < weight_threshold``.
+    1) Filter edges with ``w < hop_threshold``.
     2) Compute connected components on this filtered sub-graph.
     3) Replace each component with its XY medoid representative.
     4) Rebuild inter-component edges from the full original graph.
@@ -738,7 +738,7 @@ def merge_neighbor_nodes(
             f"{weights.shape[0]} vs {graph.edges.shape[0]}"
         )
 
-    keep_edge = weights < float(weight_threshold)
+    keep_edge = weights < float(hop_threshold)
     filtered_edges = graph.edges[keep_edge]
 
     components = connected_components_from_edges(n, filtered_edges)

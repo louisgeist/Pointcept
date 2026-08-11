@@ -114,7 +114,7 @@ def _build_processed_network_graph_from_line_mask(
     endpoint_fix_added_edge_weight: float,
     endpoint_fix_include_isolated_nodes: bool,
     merge_enabled: bool,
-    merge_weight_threshold: float,
+    merge_hop_threshold: float,
     radius_fix_enabled: bool,
     radius_fix_radius_m: float,
     radius_fix_added_edge_weight: float,
@@ -262,7 +262,7 @@ def _build_processed_network_graph_from_line_mask(
                     (graph_after_endpoint_fix.edges.shape[0],), dtype=np.float64
                 )
             )
-            edge_keep_mask = simplified_weights > merge_weight_threshold
+            edge_keep_mask = simplified_weights > merge_hop_threshold
             n_edges_filtered = int(np.count_nonzero(edge_keep_mask))
             n_comp_before = len(
                 xy_rast.connected_components_from_edges(
@@ -272,7 +272,7 @@ def _build_processed_network_graph_from_line_mask(
             )
             merged = xy_rast.merge_neighbor_nodes(
                 graph_after_endpoint_fix,
-                weight_threshold=merge_weight_threshold,
+                hop_threshold=merge_hop_threshold,
             )
             n_comp_after = len(xy_rast.connected_components_nodes(merged))
         graph_final = merged
@@ -367,7 +367,7 @@ def build_processed_network_graph_from_mask(
     endpoint_fix_added_edge_weight: float = 1.0,
     endpoint_fix_include_isolated_nodes: bool = True,
     merge_enabled: bool = True,
-    merge_weight_threshold: float = 2.5,
+    merge_hop_threshold: float = 2.5,
     radius_fix_enabled: bool = False,
     radius_fix_radius_m: float = 5.0,
     radius_fix_added_edge_weight: float = 1.0,
@@ -383,7 +383,7 @@ def build_processed_network_graph_from_mask(
     -- used to turn a predicted probability raster (already thresholded by the caller)
     into a graph comparable to the GT graph. Defaults mirror the GT export preset
     ``network=v5`` (``connectivity=4``, ``rdp_epsilon_m=2.0``, endpoint-fix enabled
-    pre-RDP incl. isolated nodes, merge enabled post-RDP at ``weight_threshold=2.5``)
+    pre-RDP incl. isolated nodes, merge enabled post-RDP at ``merge_hop_threshold=2.5``)
     for an apples-to-apples topological comparison, except morphology, which -- unlike
     the GT export path -- is on by default here since predicted masks (not vector-derived
     GT ones) are the only caller of this function and benefit from it; see
@@ -456,7 +456,7 @@ def build_processed_network_graph_from_mask(
         endpoint_fix_added_edge_weight=endpoint_fix_added_edge_weight,
         endpoint_fix_include_isolated_nodes=endpoint_fix_include_isolated_nodes,
         merge_enabled=merge_enabled,
-        merge_weight_threshold=merge_weight_threshold,
+        merge_hop_threshold=merge_hop_threshold,
         radius_fix_enabled=radius_fix_enabled,
         radius_fix_radius_m=radius_fix_radius_m,
         radius_fix_added_edge_weight=radius_fix_added_edge_weight,

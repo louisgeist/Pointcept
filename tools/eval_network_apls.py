@@ -198,7 +198,7 @@ def _build_predicted_graph(
     rdp_epsilon_m: float,
     endpoint_fix_enabled: bool,
     endpoint_fix_stage: str,
-    merge_weight_threshold: float,
+    merge_hop_threshold: float,
     radius_fix_radius_m: Optional[float] = None,
     open_iterations: int = 0,
     close_iterations: int = 0,
@@ -231,7 +231,7 @@ def _build_predicted_graph(
         endpoint_fix_enabled=endpoint_fix_enabled,
         endpoint_fix_stage=endpoint_fix_stage,
         merge_enabled=True,
-        merge_weight_threshold=merge_weight_threshold,
+        merge_hop_threshold=merge_hop_threshold,
         min_component_nodes=min_component_nodes,
         collect_timings=collect_timings,
         **extra,
@@ -252,7 +252,7 @@ def run(
     rdp_epsilon_m: float = 2.0,
     endpoint_fix_enabled: bool = True,
     endpoint_fix_stage: str = "pre_rdp",
-    merge_weight_threshold: float = 2.5,
+    merge_hop_threshold: float = 2.5,
     max_nodes_exact: Optional[int] = None,
     max_rois: Optional[int] = None,
     densify: Optional[float] = 50.0,
@@ -416,7 +416,7 @@ def run(
                         rdp_epsilon_m=rdp_epsilon_m,
                         endpoint_fix_enabled=endpoint_fix_enabled,
                         endpoint_fix_stage=endpoint_fix_stage,
-                        merge_weight_threshold=merge_weight_threshold,
+                        merge_hop_threshold=merge_hop_threshold,
                         radius_fix_radius_m=radius_fix_radius_m,
                         open_iterations=open_iterations,
                         close_iterations=close_iterations,
@@ -506,7 +506,7 @@ def run(
             "rdp_epsilon_m": rdp_epsilon_m,
             "endpoint_fix_enabled": endpoint_fix_enabled,
             "endpoint_fix_stage": endpoint_fix_stage,
-            "merge_weight_threshold": merge_weight_threshold,
+            "merge_hop_threshold": merge_hop_threshold,
             "max_nodes_exact": max_nodes_exact,
             "densify": densify,
             "snap_to_edge": snap_to_edge,
@@ -647,7 +647,7 @@ def build_argparser() -> argparse.ArgumentParser:
         help="When to run endpoint-fix relative to RDP (ignored if "
         "--endpoint_fix_enabled=false).",
     )
-    p.add_argument("--merge_weight_threshold", type=float, default=2.5)
+    p.add_argument("--merge_hop_threshold", type=float, default=2.5)
     p.add_argument(
         "--min_component_nodes",
         type=int,
@@ -820,7 +820,7 @@ def main(argv: Optional[List[str]] = None) -> None:
         rdp_epsilon_m=args.rdp_epsilon_m,
         endpoint_fix_enabled=args.endpoint_fix_enabled,
         endpoint_fix_stage=args.endpoint_fix_stage,
-        merge_weight_threshold=args.merge_weight_threshold,
+        merge_hop_threshold=args.merge_hop_threshold,
         max_nodes_exact=args.max_nodes_exact,
         max_rois=args.max_rois,
         densify=args.densify,
