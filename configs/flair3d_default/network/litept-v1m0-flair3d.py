@@ -166,8 +166,6 @@ param_dicts = [dict(keyword="block", lr=lr / 10)]
 dataset_type = "Flair3DDataset"
 data_root = "data/flair3d_plus"
 csv_manifest = "data/flair3d_plus/raw/scene_split_manifest.csv"
-missing_tiles_manifest = "data/flair3d_plus/missing_ply_preflight.txt"
-too_small_tiles_manifest = "data/flair3d_plus/too_small_tiles.csv"
 min_points = {"train": 1000}
 
 # Opt-in APLS scoring of PreciseEvaluator test logits (see NetworkAPLSEvaluator /
@@ -218,8 +216,6 @@ data = dict(
         split="train",
         data_root=data_root,
         csv_manifest=csv_manifest,
-        missing_tiles_manifest=missing_tiles_manifest,
-        too_small_tiles_manifest=too_small_tiles_manifest,
         min_points=min_points,
         target_keys=list(target_keys),
         primary_target_key=main_task,
@@ -272,8 +268,6 @@ data = dict(
         split="val",
         data_root=data_root,
         csv_manifest=csv_manifest,
-        missing_tiles_manifest=missing_tiles_manifest,
-        too_small_tiles_manifest=too_small_tiles_manifest,
         min_points=min_points,
         target_keys=list(target_keys),
         primary_target_key=main_task,
@@ -312,8 +306,6 @@ data = dict(
         split="test",
         data_root=data_root,
         csv_manifest=csv_manifest,
-        missing_tiles_manifest=missing_tiles_manifest,
-        too_small_tiles_manifest=too_small_tiles_manifest,
         min_points=min_points,
         target_keys=list(target_keys),
         primary_target_key=main_task,
