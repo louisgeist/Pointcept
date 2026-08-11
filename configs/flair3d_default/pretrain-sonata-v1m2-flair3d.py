@@ -31,7 +31,7 @@ enable_amp = True
 amp_dtype = "bfloat16"
 find_unused_parameters = False
 grid_size = 0.1
-stride = (2, 3, 3, 3)
+stride = (3, 3, 3, 3)
 max_size = 65_536  # points-per-view budget (MultiViewGenerator); calibrate via
                    # scripts/find_max_view_size.py when batch_size_per_gpu changes
 

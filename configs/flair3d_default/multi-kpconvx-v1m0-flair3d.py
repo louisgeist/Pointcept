@@ -1,6 +1,7 @@
 """
-KPConvX on Flair3D+ multitask: segment (v20) + forest + elevation + tile
-natural_habitat_multilabel (mean pooling), aligned with w105 Flair3D experiments.
+KPConvX on Flair3D+ multitask: segment (v20) + forest_2d + elevation + tile
+natural_habitat_multilabel (mean pooling) + network (roads/railroads/transmission
+lines, scored via APLS at test time), aligned with w105 Flair3D experiments.
 
 Follows the KPConvX data path (GridSample return_min_coord, point_max) and
 kpconvx_base backbone. Uses num_classes=0 on the backbone so
@@ -69,8 +70,7 @@ from pointcept.datasets.flair3d_config_utils import (
 )
 
 main_task = "segment"
-semantic_target_keys = (main_task, "forest")
-target_keys = semantic_target_keys + ("elevation", "natural_habitat_multilabel")
+target_keys = (main_task, "forest_2d", "elevation", "natural_habitat_multilabel", "network")
 
 elevation_target_scale = ELEVATION_TARGET_SCALE
 elevation_key_scales = dict(elevation=elevation_target_scale)
@@ -109,6 +109,8 @@ hooks = [
     dict(type="MultiTaskEvaluator", write_cls_iou=True),
     dict(type="CheckpointSaver", save_freq=None),
     dict(type="PreciseEvaluator", test_last=False),
+    # After PreciseEvaluator only (end of training / tools/test.py) -- not on val.
+    dict(type="NetworkAPLSEvaluator"),
 ]
 
 test_single_fragment = True
@@ -190,6 +192,35 @@ csv_manifest = "data/flair3d_plus/raw/scene_split_manifest.csv"
 min_points = {"train": 1000}
 val_stratified_subset_manifest = "data/flair3d_plus/manifests/val_dev_subset_2000.csv"
 
+# Opt-in APLS scoring of PreciseEvaluator test logits (see NetworkAPLSEvaluator /
+# tools/test.py). ``split`` must match ``data.test.split`` so stitched ROIs find
+# ``{patch_id}_logits_network.npy``. Jean Zay graphs root (Hecate uses
+# /data/geist/Flair3D-build/data/network_graphs).
+network_apls_eval = dict(
+    network_graphs_root="/lustre/fsn1/projects/rech/unv/usi32yh/data_flair3d_build/network_graphs",
+    split="test",
+    threshold=0.5,
+    overlap_combine="nanmean",
+    connectivity=4,
+    rdp_epsilon_m=2.0,
+    endpoint_fix_stage="pre_rdp",
+    merge_hop_threshold=2.5,
+    max_nodes_exact=None,  # None = no |V| cap after densify
+    max_rois=None,
+    densify=50.0,
+    snap_to_edge=4.0,
+    symmetric=True,
+    radius_fix_radius_m=5,
+    min_path_length_m=5,
+    # Mask -> graph (from-mask path): drop noise blobs, then skeletonize to 1px.
+    remove_small_objects_enabled=True,
+    remove_small_objects_min_size_px=8,
+    skeletonize_enabled=True,
+    open_iterations=0,
+    close_iterations=0,
+    morph_connectivity=4,
+)
+
 train_multitask_keys, val_multitask_keys, multitask_index_valid_keys = (
     init_multitask_collect_keys(target_keys)
 )
@@ -216,6 +247,8 @@ data = dict(
                 type="Update",
                 keys_dict={"index_valid_keys": list(multitask_index_valid_keys)},
             ),
+            # Freeze Lambert XY before geometric augs / recentering.
+            dict(type="ExtractAbsXY"),
             dict(type="CenterShift", apply_z=True),
             dict(type="Z_MinShift"),
             dict(type="Z_RandomOffset"),
@@ -241,6 +274,8 @@ data = dict(
             dict(type="RandomDropColor", drop_ratio=0.1, drop_application_ratio=0.5, keep_mask=True),
             dict(type="RandomDropStrength", drop_ratio=1.0, drop_application_ratio=0.2, keep_mask=True),
             dict(type="RandomDropStrength", drop_ratio=0.1, drop_application_ratio=0.5, keep_mask=True),
+            dict(type="NetworkRasterToPointLabels"),
+            dict(type="NetworkRasterToPointLabels", target_key="forest_2d"),
             dict(type="ShufflePoint"),
             dict(type="ToTensor"),
             dict(
@@ -267,13 +302,14 @@ data = dict(
                 type="Update",
                 keys_dict={"index_valid_keys": list(multitask_index_valid_keys)},
             ),
+            dict(type="ExtractAbsXY"),
             dict(type="CenterShift", apply_z=True),
             dict(type="Z_MinShift"),
             dict(
                 type="Copy",
                 keys_dict={
                     "segment": "origin_segment",
-                    "forest": "origin_forest",
+                    "forest_2d": "origin_forest_2d",
                     "elevation": "origin_elevation",
                 },
             ),
@@ -287,6 +323,8 @@ data = dict(
             ),
             dict(type="CenterShift", apply_z=False),
             dict(type="NormalizeColor"),
+            dict(type="NetworkRasterToPointLabels"),
+            dict(type="NetworkRasterToPointLabels", target_key="forest_2d"),
             dict(type="ToTensor"),
             dict(
                 type="Collect",
@@ -307,6 +345,11 @@ data = dict(
         target_keys=list(target_keys),
         primary_target_key=main_task,
         transform=[
+            dict(
+                type="Update",
+                keys_dict={"index_valid_keys": list(multitask_index_valid_keys)},
+            ),
+            dict(type="ExtractAbsXY"),
             dict(type="CenterShift", apply_z=True),
             dict(type="Z_MinShift"),
             dict(type="NormalizeColor"),
@@ -325,10 +368,31 @@ data = dict(
             crop=None,
             post_transform=[
                 dict(type="CenterShift", apply_z=False),
+                dict(type="NetworkRasterToPointLabels"),
+                dict(type="NetworkRasterToPointLabels", target_key="forest_2d"),
                 dict(type="ToTensor"),
                 dict(
                     type="Collect",
-                    keys=("coord", "index"),
+                    keys=(
+                        "coord",
+                        "index",
+                        "network",
+                        "network_cell",
+                        "network_pix",
+                        "network_origin_x",
+                        "network_origin_y",
+                        "network_pixel_m",
+                        "network_height",
+                        "network_width",
+                        "forest_2d",
+                        "forest_2d_cell",
+                        "forest_2d_pix",
+                        "forest_2d_origin_x",
+                        "forest_2d_origin_y",
+                        "forest_2d_pixel_m",
+                        "forest_2d_height",
+                        "forest_2d_width",
+                    ),
                     optional_keys=("inverse",),
                     feat_keys=feat_keys,
                     feat_scales=dict(coord=coord_feat_scale),

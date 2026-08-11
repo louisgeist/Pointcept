@@ -159,7 +159,7 @@ network_apls_eval = dict(
     connectivity=4,  # pixel-graph connectivity for the predicted mask: 4 or 8
     rdp_epsilon_m=2.0,  # Ramer-Douglas-Peucker simplification epsilon (meters)
     endpoint_fix_stage="pre_rdp",  # pre_rdp|post_rdp: when the diagonal endpoint-fix runs
-    merge_weight_threshold=2.5,  # post-RDP node-merge edge-weight threshold
+    merge_hop_threshold=2.5,  # post-RDP node-merge edge-weight threshold
     # Hard cap on exact O(V^2) APLS after densification (raises rather than silently
     # subsampling). None disables the cap. The whole run_network_apls_eval_if_configured()
     # call is one try/except around the *entire* eval_network_apls.run() -- a single

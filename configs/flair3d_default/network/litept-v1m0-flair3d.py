@@ -114,7 +114,7 @@ model = dict(
         type="LitePT-v1",
         in_channels=7,  # coord (3) + color (3) + strength (1)
         order=("z", "z-trans", "hilbert", "hilbert-trans"),
-        stride=(2, 2, 2, 2),
+        stride=(3, 3, 3, 3),
         enc_depths=(2, 2, 2, 6, 2),
         enc_channels=(36, 72, 144, 252, 504),
         enc_num_head=(2, 4, 8, 14, 28),
@@ -180,7 +180,7 @@ network_apls_eval = dict(
     connectivity=4,
     rdp_epsilon_m=2.0,
     endpoint_fix_stage="pre_rdp",
-    merge_weight_threshold=2.5,
+    merge_hop_threshold=2.5,
     max_nodes_exact=None,  # None = no |V| cap after densify
     max_rois=None,
     densify=50.0,
