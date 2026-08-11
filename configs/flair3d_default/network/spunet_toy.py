@@ -145,6 +145,7 @@ data_root = "data/flair3d_plus"
 csv_manifest = "data/flair3d_plus/raw/scene_split_manifest_D067.csv"
 missing_tiles_manifest = "data/flair3d_plus/missing_ply_preflight.txt"
 too_small_tiles_manifest = "data/flair3d_plus/too_small_tiles.csv"
+min_points = {"train": 1000}
 
 # Opt-in APLS on PreciseEvaluator logits. Overfit uses train for data.test, and
 # D067 has no test split -- keep APLS ``split`` aligned with that.
@@ -190,6 +191,7 @@ data = dict(
         csv_manifest=csv_manifest,
         missing_tiles_manifest=missing_tiles_manifest,
         too_small_tiles_manifest=too_small_tiles_manifest,
+        min_points=min_points,
         target_keys=list(target_keys),
         primary_target_key=main_task,
         max_sample=train_max_sample,
@@ -232,6 +234,7 @@ data = dict(
         csv_manifest=csv_manifest,
         missing_tiles_manifest=missing_tiles_manifest,
         too_small_tiles_manifest=too_small_tiles_manifest,
+        min_points=min_points,
         target_keys=list(target_keys),
         primary_target_key=main_task,
         max_sample=val_max_sample,
@@ -271,6 +274,7 @@ data = dict(
         csv_manifest=csv_manifest,
         missing_tiles_manifest=missing_tiles_manifest,
         too_small_tiles_manifest=too_small_tiles_manifest,
+        min_points=min_points,
         target_keys=list(target_keys),
         primary_target_key=main_task,
         max_sample=test_max_sample,

@@ -147,6 +147,7 @@ data_root = "data/flair3d_plus"
 csv_manifest = "data/flair3d_plus/raw/scene_split_manifest_D067-2021_AF-S1-22.csv"
 missing_tiles_manifest = "data/flair3d_plus/missing_ply_preflight.txt"
 too_small_tiles_manifest = "data/flair3d_plus/too_small_tiles.csv"
+min_points = {"train": 1000}
 
 # Runs tools/eval_network_apls.py at the end of tools/test.py and from
 # NetworkAPLSEvaluator.after_train (after PreciseEvaluator only -- not on val).
@@ -172,6 +173,13 @@ network_apls_eval = dict(
     symmetric=True,  # score both GT->pred and pred->GT, take the harmonic mean
     radius_fix_radius_m=5,  # predicted-graph endpoint/isolated-node radius reconnection (meters); None = disabled
     min_path_length_m=5,  # SpaceNet-style short-path filter (meters); None = disabled
+    # Mask -> graph (from-mask path): drop noise blobs, then skeletonize wide preds to 1px.
+    remove_small_objects_enabled=True,
+    remove_small_objects_min_size_px=8,  # min connected-component size (pixels)
+    skeletonize_enabled=True,  # Zhang-Suen thinning before build_pixel_graph
+    open_iterations=0,  # optional opening (erode-then-dilate) before remove_small; 0 disables
+    close_iterations=0,  # optional closing (dilate-then-erode) before remove_small; 0 disables
+    morph_connectivity=4,  # 4 or 8
 )
 
 train_multitask_keys, val_multitask_keys, multitask_index_valid_keys = (
@@ -198,6 +206,7 @@ data = dict(
         csv_manifest=csv_manifest,
         missing_tiles_manifest=missing_tiles_manifest,
         too_small_tiles_manifest=too_small_tiles_manifest,
+        min_points=min_points,
         target_keys=list(target_keys),
         primary_target_key=main_task,
         max_sample=train_max_sample,
@@ -238,6 +247,7 @@ data = dict(
         csv_manifest=csv_manifest,
         missing_tiles_manifest=missing_tiles_manifest,
         too_small_tiles_manifest=too_small_tiles_manifest,
+        min_points=min_points,
         target_keys=list(target_keys),
         primary_target_key=main_task,
         max_sample=val_max_sample,
@@ -277,6 +287,7 @@ data = dict(
         csv_manifest=csv_manifest,
         missing_tiles_manifest=missing_tiles_manifest,
         too_small_tiles_manifest=too_small_tiles_manifest,
+        min_points=min_points,
         target_keys=list(target_keys),
         primary_target_key=main_task,
         max_sample=test_max_sample,

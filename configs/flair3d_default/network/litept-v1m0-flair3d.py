@@ -168,6 +168,7 @@ data_root = "data/flair3d_plus"
 csv_manifest = "data/flair3d_plus/raw/scene_split_manifest.csv"
 missing_tiles_manifest = "data/flair3d_plus/missing_ply_preflight.txt"
 too_small_tiles_manifest = "data/flair3d_plus/too_small_tiles.csv"
+min_points = {"train": 1000}
 
 # Opt-in APLS scoring of PreciseEvaluator test logits (see NetworkAPLSEvaluator /
 # tools/test.py). ``split`` must match ``data.test.split`` so stitched ROIs find
@@ -189,6 +190,13 @@ network_apls_eval = dict(
     symmetric=True,
     radius_fix_radius_m=5,
     min_path_length_m=5,
+    # Mask -> graph (from-mask path): drop noise blobs, then skeletonize to 1px.
+    remove_small_objects_enabled=True,
+    remove_small_objects_min_size_px=8,
+    skeletonize_enabled=True,
+    open_iterations=0,
+    close_iterations=0,
+    morph_connectivity=4,
 )
 
 train_multitask_keys, val_multitask_keys, multitask_index_valid_keys = (
@@ -212,6 +220,7 @@ data = dict(
         csv_manifest=csv_manifest,
         missing_tiles_manifest=missing_tiles_manifest,
         too_small_tiles_manifest=too_small_tiles_manifest,
+        min_points=min_points,
         target_keys=list(target_keys),
         primary_target_key=main_task,
         transform=[
@@ -265,6 +274,7 @@ data = dict(
         csv_manifest=csv_manifest,
         missing_tiles_manifest=missing_tiles_manifest,
         too_small_tiles_manifest=too_small_tiles_manifest,
+        min_points=min_points,
         target_keys=list(target_keys),
         primary_target_key=main_task,
         transform=[
@@ -304,6 +314,7 @@ data = dict(
         csv_manifest=csv_manifest,
         missing_tiles_manifest=missing_tiles_manifest,
         too_small_tiles_manifest=too_small_tiles_manifest,
+        min_points=min_points,
         target_keys=list(target_keys),
         primary_target_key=main_task,
         transform=[

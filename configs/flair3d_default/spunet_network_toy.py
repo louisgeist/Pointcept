@@ -1,9 +1,19 @@
 """
 Toy SpUNet config for debugging network pixel segmentation on hecate (D067).
 
-Mono-task: ``network`` (binary 1 m Lambert masks for ROADS / RAILROADS /
-TRANSMISSION_LINES). Requires ``network.npy`` (or empty ``meta.network``) from
-``rasterize_network.py`` and ``ExtractAbsXY`` before geometric shifts.
+Mono-task: ``network`` (binary 1 m Lambert masks for ROADS / RAILROADS).
+Requires ``network.npy`` (or empty ``meta.network``) from ``rasterize_network.py``
+and ``ExtractAbsXY`` before geometric shifts.
+
+Hyper-short schedule + end-of-run APLS smoke: ``data.test`` is capped to the
+first D067 val ROI (AN-S1-15, 100 subtiles) and ``network_apls_eval.max_rois=1``
+scores only that ROI after PreciseEvaluator.
+
+Example::
+
+    export PYTHONPATH="$PWD"
+    python tools/train.py --config-file configs/flair3d_default/spunet_network_toy.py \\
+      --num-gpus 1
 """
 
 # -----------------------------------------------------------------------------
@@ -30,7 +40,10 @@ batch_size_val = batch_size // 4
 batch_size_test = batch_size // 4
 train_max_sample = 20
 val_max_sample = 100
-test_max_sample = val_max_sample
+# First D067 val ROI in the manifest (AN-S1-15) has exactly 100 subtiles and
+# sits at the head of the val list -- keep test_max_sample aligned so PreciseEvaluator
+# writes a complete ROI for APLS stitching.
+test_max_sample = 100  # == n_subtiles of first val ROI (AN-S1-15)
 
 # Stratified fixed val/test subset (see README_geist.md "Fast dev val/test")
 val_stratified_subset_manifest = None
@@ -149,9 +162,11 @@ data_root = "data/flair3d_plus"
 csv_manifest = "data/flair3d_plus/raw/scene_split_manifest_D067.csv"
 missing_tiles_manifest = "data/flair3d_plus/missing_ply_preflight.txt"
 too_small_tiles_manifest = "data/flair3d_plus/too_small_tiles.csv"
+min_points = {"train": 1000}
 
 # Opt-in APLS on PreciseEvaluator logits. ``data.test`` uses the val split on D067
 # (no local test rows) -- keep APLS ``split`` aligned so logits are found.
+# max_rois=1: score only the first complete ROI covered by test_max_sample.
 network_apls_eval = dict(
     network_graphs_root="/data/geist/Flair3D-build/data/network_graphs",
     split="val",
@@ -162,7 +177,7 @@ network_apls_eval = dict(
     endpoint_fix_stage="pre_rdp",
     merge_weight_threshold=2.5,
     max_nodes_exact=None,
-    max_rois=None,
+    max_rois=1,
     densify=50.0,
     snap_to_edge=4.0,
     symmetric=True,
@@ -191,6 +206,7 @@ data = dict(
         csv_manifest=csv_manifest,
         missing_tiles_manifest=missing_tiles_manifest,
         too_small_tiles_manifest=too_small_tiles_manifest,
+        min_points=min_points,
         target_keys=list(target_keys),
         primary_target_key=main_task,
         max_sample=train_max_sample,
@@ -245,6 +261,7 @@ data = dict(
         csv_manifest=csv_manifest,
         missing_tiles_manifest=missing_tiles_manifest,
         too_small_tiles_manifest=too_small_tiles_manifest,
+        min_points=min_points,
         target_keys=list(target_keys),
         primary_target_key=main_task,
         max_sample=val_max_sample,
@@ -285,6 +302,7 @@ data = dict(
         csv_manifest=csv_manifest,
         missing_tiles_manifest=missing_tiles_manifest,
         too_small_tiles_manifest=too_small_tiles_manifest,
+        min_points=min_points,
         target_keys=list(target_keys),
         primary_target_key=main_task,
         max_sample=test_max_sample,

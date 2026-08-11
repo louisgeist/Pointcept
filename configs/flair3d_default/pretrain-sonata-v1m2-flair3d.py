@@ -173,6 +173,7 @@ data_root = "data/flair3d_plus"
 csv_manifest = "data/flair3d_plus/raw/scene_split_manifest.csv"
 missing_tiles_manifest = "data/flair3d_plus/missing_ply_preflight.txt"
 too_small_tiles_manifest = "data/flair3d_plus/too_small_tiles.csv"
+min_points = {"train": 1000}
 
 transform = [
     dict(type="GridSample", grid_size=grid_size, hash_type="fnv", mode="train"),
@@ -270,6 +271,7 @@ data = dict(
         csv_manifest=csv_manifest,
         missing_tiles_manifest=missing_tiles_manifest,
         too_small_tiles_manifest=too_small_tiles_manifest,
+        min_points=min_points,
         transform=transform,
         test_mode=False,
         loop=1,
