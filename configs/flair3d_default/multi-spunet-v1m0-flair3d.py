@@ -1,7 +1,7 @@
 """
 SpUNet on Flair3D+ multitask: segment (v20) + forest_2d + elevation + tile
-natural_habitat_multilabel (mean pooling) + network (roads/railroads/transmission
-lines, scored via APLS at test time), aligned with w105 Flair3D experiments.
+natural_habitat_multilabel (mean pooling) + network (roads only, CE + foreground
+weight=5; railroads/transmission lines dropped; scored via APLS at test time), aligned with w105 Flair3D experiments.
 
 This config is intentionally self-contained: it inherits only from
 default_runtime and duplicates everything it needs so it can be read
@@ -52,7 +52,7 @@ coord_feat_scale = 0.01
 
 # Wandb parameters
 wandb_run_name = (
-    f"Flair3D+ SpUNet multitask + NH multilabel {grp_exp}.{num_exp}) lr={lr}"
+    f"SpUNet multi {grp_exp}.{num_exp}) iter={total_iters}"
 )
 wandb_project = "flair3d_multi"
 
@@ -81,7 +81,22 @@ label_definitions = dict(
 
 task_configs = init_task_configs(target_keys, definitions=label_definitions)
 task_configs["natural_habitat_multilabel"]["pooling"] = "mean"
+# Network head: ROADS only (RAILROADS channel dropped), supervised with CE only
+# and weight=5 on the foreground pixel class. Mirrors
+# configs/experiment/w107/5/18h/mono_network_ce_road_w5.py.
+task_configs["network"]["num_networks"] = 1
+task_configs["network"]["channel_names"] = ["ROADS"]
 task_criteria = init_task_criteria(task_configs)
+_network_ignore = int(task_configs["network"]["ignore_index"])
+task_criteria["network"] = [
+    dict(
+        type="CrossEntropyLoss",
+        loss_weight=1.0,
+        ignore_index=_network_ignore,
+        weight=[1.0, 5.0],  # Background, Foreground
+    ),
+]
+del _network_ignore
 task_weights = {task_name: 1.0 for task_name in task_configs.keys()}
 
 # Remove the imported helpers from this module's namespace so they do not leak
@@ -175,26 +190,30 @@ val_stratified_subset_manifest = "data/flair3d_plus/manifests/val_dev_subset_200
 network_apls_eval = dict(
     network_graphs_root="/lustre/fsn1/projects/rech/unv/usi32yh/data_flair3d_build/network_graphs",
     split="test",
-    threshold=0.5,
+    threshold=0.2,
     overlap_combine="nanmean",
-    connectivity=4,
+    connectivity=8,
     rdp_epsilon_m=2.0,
+    endpoint_fix_enabled=False,
     endpoint_fix_stage="pre_rdp",
     merge_hop_threshold=2.5,
-    max_nodes_exact=None,  # None = no |V| cap after densify
     max_rois=None,
-    densify=50.0,
-    snap_to_edge=4.0,
-    symmetric=True,
     radius_fix_radius_m=5,
-    min_path_length_m=5,
     # Mask -> graph (from-mask path): drop noise blobs, then skeletonize to 1px.
-    remove_small_objects_enabled=True,
+    remove_small_objects_enabled=False,
     remove_small_objects_min_size_px=8,
     skeletonize_enabled=True,
     open_iterations=0,
-    close_iterations=0,
-    morph_connectivity=4,
+    close_iterations=5,
+    morph_connectivity=8,
+    min_component_nodes=5,
+    # APLS scoring itself (parameters that feed apls_symmetric_score directly);
+    # everything above builds the predicted graph. See tools/eval_network_apls.py.
+    apls_max_nodes_exact=None,  # None = no |V| cap after densify
+    apls_densify=50.0,
+    apls_snap_to_edge=4.0,
+    apls_symmetric=True,
+    apls_min_path_length_m=5,
 )
 
 train_multitask_keys, val_multitask_keys, multitask_index_valid_keys = (
@@ -220,6 +239,7 @@ data = dict(
         min_points=min_points,
         target_keys=list(target_keys),
         primary_target_key=main_task,
+        task_configs=task_configs,
         transform=[
             dict(
                 type="Update",
@@ -275,6 +295,7 @@ data = dict(
         stratified_subset_manifest=val_stratified_subset_manifest,
         target_keys=list(target_keys),
         primary_target_key=main_task,
+        task_configs=task_configs,
         transform=[
             dict(
                 type="Update",
@@ -322,6 +343,7 @@ data = dict(
         min_points=min_points,
         target_keys=list(target_keys),
         primary_target_key=main_task,
+        task_configs=task_configs,
         transform=[
             dict(
                 type="Update",

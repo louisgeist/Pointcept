@@ -154,30 +154,34 @@ min_points = {"train": 1000}
 network_apls_eval = dict(
     network_graphs_root="/data/geist/Flair3D-build/data/network_graphs",  # Hecate path
     split="train",
-    threshold=0.5,
+    threshold=0.2,
     overlap_combine="nanmean",  # nanmean|max|first, combines overlapping subtile predictions
-    connectivity=4,  # pixel-graph connectivity for the predicted mask: 4 or 8
+    connectivity=8,  # pixel-graph connectivity for the predicted mask: 4 or 8
     rdp_epsilon_m=2.0,  # Ramer-Douglas-Peucker simplification epsilon (meters)
+    endpoint_fix_enabled=False,
     endpoint_fix_stage="pre_rdp",  # pre_rdp|post_rdp: when the diagonal endpoint-fix runs
     merge_hop_threshold=2.5,  # post-RDP node-merge edge-weight threshold
+    max_rois=None,  # optional debug limit on number of ROIs scored
+    radius_fix_radius_m=5,  # predicted-graph endpoint/isolated-node radius reconnection (meters); None = disabled
+    # Mask -> graph (from-mask path): drop noise blobs, then skeletonize wide preds to 1px.
+    remove_small_objects_enabled=False,
+    remove_small_objects_min_size_px=8,  # min connected-component size (pixels)
+    skeletonize_enabled=True,  # Zhang-Suen thinning before build_pixel_graph
+    open_iterations=0,  # optional opening (erode-then-dilate) before remove_small; 0 disables
+    close_iterations=5,  # optional closing (dilate-then-erode) before remove_small; 0 disables
+    morph_connectivity=8,  # 4 or 8
+    min_component_nodes=5,  # drop connected components with fewer nodes than this after merge
+    # APLS scoring itself (parameters that feed apls_symmetric_score directly);
+    # everything above builds the predicted graph. See tools/eval_network_apls.py.
     # Hard cap on exact O(V^2) APLS after densification (raises rather than silently
     # subsampling). None disables the cap. The whole run_network_apls_eval_if_configured()
     # call is one try/except around the *entire* eval_network_apls.run() -- a single
     # oversized ROI with a finite cap would otherwise abort APLS for every other ROI.
-    max_nodes_exact=None,
-    max_rois=None,  # optional debug limit on number of ROIs scored
-    densify=50.0,  # SpaceNet-aligned max edge length (meters) before matching; None to disable
-    snap_to_edge=4.0,  # snap-to-edge control-point matching radius (meters); None = unrestricted NN
-    symmetric=True,  # score both GT->pred and pred->GT, take the harmonic mean
-    radius_fix_radius_m=5,  # predicted-graph endpoint/isolated-node radius reconnection (meters); None = disabled
-    min_path_length_m=5,  # SpaceNet-style short-path filter (meters); None = disabled
-    # Mask -> graph (from-mask path): drop noise blobs, then skeletonize wide preds to 1px.
-    remove_small_objects_enabled=True,
-    remove_small_objects_min_size_px=8,  # min connected-component size (pixels)
-    skeletonize_enabled=True,  # Zhang-Suen thinning before build_pixel_graph
-    open_iterations=0,  # optional opening (erode-then-dilate) before remove_small; 0 disables
-    close_iterations=0,  # optional closing (dilate-then-erode) before remove_small; 0 disables
-    morph_connectivity=4,  # 4 or 8
+    apls_max_nodes_exact=None,
+    apls_densify=50.0,  # SpaceNet-aligned max edge length (meters) before matching; None to disable
+    apls_snap_to_edge=4.0,  # snap-to-edge control-point matching radius (meters); None = unrestricted NN
+    apls_symmetric=True,  # score both GT->pred and pred->GT, take the harmonic mean
+    apls_min_path_length_m=5,  # SpaceNet-style short-path filter (meters); None = disabled
 )
 
 train_multitask_keys, val_multitask_keys, multitask_index_valid_keys = (

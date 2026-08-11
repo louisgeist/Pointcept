@@ -47,7 +47,7 @@ coord_feat_scale = 0.01
 
 # Wandb parameters
 wandb_run_name = (
-    f"Flair3D+ PTv3 mono elevation {grp_exp}.{num_exp}) lr={lr}"
+    f"ptv3 elevation {grp_exp}.{num_exp}) iter={total_iters}"
 )
 wandb_project = "flair3d_elevation"
 

@@ -150,19 +150,30 @@ min_points = {"train": 1000}
 network_apls_eval = dict(
     network_graphs_root="/data/geist/Flair3D-build/data/network_graphs",
     split="train",
-    threshold=0.5,
+    threshold=0.2,
     overlap_combine="nanmean",
-    connectivity=4,
+    connectivity=8,
     rdp_epsilon_m=2.0,
+    endpoint_fix_enabled=False,
     endpoint_fix_stage="pre_rdp",
     merge_hop_threshold=2.5,
-    max_nodes_exact=None,
     max_rois=None,
-    densify=50.0,
-    snap_to_edge=4.0,
-    symmetric=True,
     radius_fix_radius_m=5,
-    min_path_length_m=5,
+    # Mask -> graph (from-mask path): drop noise blobs, then skeletonize to 1px.
+    remove_small_objects_enabled=False,
+    remove_small_objects_min_size_px=8,
+    skeletonize_enabled=True,
+    open_iterations=0,
+    close_iterations=5,
+    morph_connectivity=8,
+    min_component_nodes=5,
+    # APLS scoring itself (parameters that feed apls_symmetric_score directly);
+    # everything above builds the predicted graph. See tools/eval_network_apls.py.
+    apls_max_nodes_exact=None,
+    apls_densify=50.0,
+    apls_snap_to_edge=4.0,
+    apls_symmetric=True,
+    apls_min_path_length_m=5,
 )
 
 train_multitask_keys, val_multitask_keys, multitask_index_valid_keys = (
