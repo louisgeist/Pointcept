@@ -23,3 +23,5 @@ local/
 .worktrees/
 .superpowers/
 CLAUDE.md
+
+scene_split_manifest_JZ_110826.csv

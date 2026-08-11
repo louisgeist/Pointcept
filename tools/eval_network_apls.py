@@ -171,11 +171,11 @@ def _coerce_optional_meters(value, *, default_when_true: float, name: str) -> Op
 
 
 def _coerce_densify(value) -> Optional[float]:
-    return _coerce_optional_meters(value, default_when_true=50.0, name="densify")
+    return _coerce_optional_meters(value, default_when_true=50.0, name="apls_densify")
 
 
 def _coerce_snap_to_edge(value) -> Optional[float]:
-    return _coerce_optional_meters(value, default_when_true=4.0, name="snap_to_edge")
+    return _coerce_optional_meters(value, default_when_true=4.0, name="apls_snap_to_edge")
 
 
 def _parse_bool(s: str) -> bool:
@@ -253,13 +253,13 @@ def run(
     endpoint_fix_enabled: bool = True,
     endpoint_fix_stage: str = "pre_rdp",
     merge_hop_threshold: float = 2.5,
-    max_nodes_exact: Optional[int] = None,
+    apls_max_nodes_exact: Optional[int] = None,
     max_rois: Optional[int] = None,
-    densify: Optional[float] = 50.0,
-    snap_to_edge: Optional[float] = 4.0,
-    symmetric: bool = True,
+    apls_densify: Optional[float] = 50.0,
+    apls_snap_to_edge: Optional[float] = 4.0,
+    apls_symmetric: bool = True,
     radius_fix_radius_m: Optional[float] = None,
-    min_path_length_m: Optional[float] = None,
+    apls_min_path_length_m: Optional[float] = None,
     open_iterations: int = 0,
     close_iterations: int = 0,
     morph_connectivity: int = 4,
@@ -272,8 +272,8 @@ def run(
     show_progress: bool = True,
     profile: bool = False,
 ) -> dict:
-    densify = _coerce_densify(densify)
-    snap_to_edge = _coerce_snap_to_edge(snap_to_edge)
+    apls_densify = _coerce_densify(apls_densify)
+    apls_snap_to_edge = _coerce_snap_to_edge(apls_snap_to_edge)
     types = tuple(network_types) if network_types else NETWORK_TYPES
     profiler = _ProfileAggregator() if profile else None
 
@@ -446,11 +446,11 @@ def run(
                         pred_graph,
                         roi=roi_dir.name,
                         network_type=network_type,
-                        densify=densify,
-                        snap_to_edge=snap_to_edge,
-                        symmetric=symmetric,
-                        max_nodes_exact=max_nodes_exact,
-                        min_path_length_m=min_path_length_m,
+                        densify=apls_densify,
+                        snap_to_edge=apls_snap_to_edge,
+                        symmetric=apls_symmetric,
+                        max_nodes_exact=apls_max_nodes_exact,
+                        min_path_length_m=apls_min_path_length_m,
                     )
                 results.append(result)
                 last_score = float(result.score)
@@ -507,12 +507,12 @@ def run(
             "endpoint_fix_enabled": endpoint_fix_enabled,
             "endpoint_fix_stage": endpoint_fix_stage,
             "merge_hop_threshold": merge_hop_threshold,
-            "max_nodes_exact": max_nodes_exact,
-            "densify": densify,
-            "snap_to_edge": snap_to_edge,
-            "symmetric": symmetric,
+            "apls_max_nodes_exact": apls_max_nodes_exact,
+            "apls_densify": apls_densify,
+            "apls_snap_to_edge": apls_snap_to_edge,
+            "apls_symmetric": apls_symmetric,
             "radius_fix_radius_m": radius_fix_radius_m,
-            "min_path_length_m": min_path_length_m,
+            "apls_min_path_length_m": apls_min_path_length_m,
             "open_iterations": open_iterations,
             "close_iterations": close_iterations,
             "morph_connectivity": morph_connectivity,
@@ -658,7 +658,7 @@ def build_argparser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
-        "--max_nodes_exact",
+        "--apls_max_nodes_exact",
         type=_parse_optional_int,
         default=None,
         help=(
@@ -670,7 +670,7 @@ def build_argparser() -> argparse.ArgumentParser:
         "--max_rois", type=int, default=None, help="Optional limit on number of ROIs (debug)"
     )
     p.add_argument(
-        "--densify",
+        "--apls_densify",
         type=_parse_optional_float,
         default=50.0,
         help=(
@@ -679,7 +679,7 @@ def build_argparser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
-        "--snap_to_edge",
+        "--apls_snap_to_edge",
         type=_parse_optional_float,
         default=4.0,
         help=(
@@ -688,13 +688,13 @@ def build_argparser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
-        "--symmetric",
+        "--apls_symmetric",
         type=lambda s: str(s).lower() in ("1", "true", "yes"),
         default=True,
         help="Score both directions and take harmonic mean (default: true)",
     )
     p.add_argument(
-        "--no_symmetric",
+        "--no_apls_symmetric",
         action="store_true",
         help="Score only GT->pred (legacy unidirectional APLS)",
     )
@@ -710,7 +710,7 @@ def build_argparser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
-        "--min_path_length_m",
+        "--apls_min_path_length_m",
         type=_parse_optional_float,
         default=None,
         help=(
@@ -801,7 +801,7 @@ def build_argparser() -> argparse.ArgumentParser:
 
 def main(argv: Optional[List[str]] = None) -> None:
     args = build_argparser().parse_args(argv)
-    symmetric = False if args.no_symmetric else bool(args.symmetric)
+    apls_symmetric = False if args.no_apls_symmetric else bool(args.apls_symmetric)
     missing = (
         Path(args.missing_tiles_file).resolve()
         if args.missing_tiles_file
@@ -821,13 +821,13 @@ def main(argv: Optional[List[str]] = None) -> None:
         endpoint_fix_enabled=args.endpoint_fix_enabled,
         endpoint_fix_stage=args.endpoint_fix_stage,
         merge_hop_threshold=args.merge_hop_threshold,
-        max_nodes_exact=args.max_nodes_exact,
+        apls_max_nodes_exact=args.apls_max_nodes_exact,
         max_rois=args.max_rois,
-        densify=args.densify,
-        snap_to_edge=args.snap_to_edge,
-        symmetric=symmetric,
+        apls_densify=args.apls_densify,
+        apls_snap_to_edge=args.apls_snap_to_edge,
+        apls_symmetric=apls_symmetric,
         radius_fix_radius_m=args.radius_fix_radius_m,
-        min_path_length_m=args.min_path_length_m,
+        apls_min_path_length_m=args.apls_min_path_length_m,
         open_iterations=args.open_iterations,
         close_iterations=args.close_iterations,
         morph_connectivity=args.morph_connectivity,
