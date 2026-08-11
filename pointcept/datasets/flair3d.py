@@ -52,31 +52,6 @@ FLAIR3D_ALLOWED_TARGETS = (
 )
 
 
-def _load_missing_lidarhd_tiles():
-    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-    details_csv = os.path.join(
-        repo_root, "data", "flair3d_plus", "missing_coord_tiles.details.csv"
-    )
-    if not os.path.exists(details_csv):
-        logger = get_root_logger()
-        logger.warning(
-            "Flair3D missing tiles file not found: %s. Continuing with empty hardcoded missing tiles set.",
-            details_csv,
-        )
-        return set()
-
-    missing_tiles = set()
-    with open(details_csv, "r", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            if row.get("reason") == "missing_coord_file":
-                split = row.get("split")
-                patch_id = row.get("patch_id")
-                if split and patch_id:
-                    missing_tiles.add((split, patch_id))
-    return missing_tiles
-
-
 @DATASETS.register_module()
 class Flair3DDataset(DefaultDataset):
     """Dataset for Flair3D / LidarHD preprocessed Pointcept scenes.
@@ -87,11 +62,13 @@ class Flair3DDataset(DefaultDataset):
         Lists all the scences in the dataset. It indicates wether the LIDARHD
         is available for the scene.
         
-    :param missing_tiles_manifest: Missing tiles manifest file path
-        Lists all the tiles that are missing from the dataset (but that were expected
-        to be there). This file is usually produced by the preprocessing script
-        ("missing_ply_preflight.txt").
-        
+    :param min_points: Optional dict mapping split name ("train"/"val") to a minimum
+        point-count threshold. Tiles below the threshold are excluded, using the
+        "n_points" column of csv_manifest (populate it via
+        scripts/analyze_flair3d_test_point_voxel_counts.py --write_manifest). Raises if
+        the "n_points" column is missing/empty for a row in a thresholded split, or if
+        "test" is given a threshold.
+
     :param target_keys: Target keys. Supports semantic multitask for "segment", "forest",
         "land_use", and "natural_habitat". "elevation" can be combined with semantic keys.
         Targets are exposed in the batch under their task name.
@@ -101,9 +78,6 @@ class Flair3DDataset(DefaultDataset):
     """
 
     VALID_ASSETS = [*DefaultDataset.VALID_ASSETS, *FLAIR3D_SPECIFIC_ASSETS]
-
-    CORRUPTED_TILES = set()
-    _MISSING_LIDARHD_TILES = None
 
     FLAIR3D_OPTIONAL_TARGETS = (
         "land_use",
@@ -116,21 +90,10 @@ class Flair3DDataset(DefaultDataset):
     #TODO@Geist : elevation should be complete, but I noticed some missing part in D049
     # e.g.: UU-S1-15
 
-    @classmethod
-    def _get_missing_lidarhd_tiles(cls):
-        if cls._MISSING_LIDARHD_TILES is None:
-            cls._MISSING_LIDARHD_TILES = _load_missing_lidarhd_tiles()
-        return cls._MISSING_LIDARHD_TILES
-
-    @classmethod
-    def get_hardcoded_excluded_tiles(cls):
-        return cls.CORRUPTED_TILES | cls._get_missing_lidarhd_tiles()
-
     def __init__(
         self,
         csv_manifest=None,
-        missing_tiles_manifest=None,
-        too_small_tiles_manifest=None,
+        min_points=None,
         target_keys=("segment",),
         primary_target_key=None,
         **kwargs,
@@ -181,11 +144,18 @@ class Flair3DDataset(DefaultDataset):
                     f"{FLAIR3D_SEMANTIC_TARGETS} (got {self.primary_target_key!r})."
                 )
 
-        self.missing_tiles_manifest = missing_tiles_manifest
-        self._missing_tiles = None
+        if min_points is not None:
+            if not isinstance(min_points, dict):
+                raise TypeError(
+                    "min_points must be a dict mapping split name to a minimum point threshold."
+                )
+            if "test" in min_points:
+                raise ValueError(
+                    "min_points must not filter the 'test' split — the benchmark requires "
+                    "the full test set. Only 'train'/'val' thresholds are allowed."
+                )
+        self.min_points = min_points
 
-        self.too_small_tiles_manifest = too_small_tiles_manifest
-        self._too_small_tiles = None
         super().__init__(**kwargs)
         get_root_logger().info(
             "Flair3DDataset target_keys=%s, optional_target_keys=%s, primary_target_key=%s",
@@ -193,69 +163,6 @@ class Flair3DDataset(DefaultDataset):
             self.optional_target_keys,
             self.primary_target_key,
         )
-
-    def _get_missing_tiles(self):
-        if self._missing_tiles is not None:
-            return self._missing_tiles
-
-        missing_tiles = set()
-        if not self.missing_tiles_manifest:
-            self._missing_tiles = missing_tiles
-            return self._missing_tiles
-        elif not os.path.exists(self.missing_tiles_manifest):
-            logger = get_root_logger()
-            logger.warning(
-                f"Flair3D missing tiles file not found: {self.missing_tiles_manifest}. Continuing with empty missing tiles set.",
-            )
-            self._missing_tiles = missing_tiles
-            return self._missing_tiles
-
-        with open(self.missing_tiles_manifest, "r", encoding="utf-8") as f:
-            for line in f:
-                stripped = line.strip()
-                if not stripped or stripped.startswith("#"):
-                    continue
-                parts = [part.strip() for part in stripped.split(",", 2)]
-                if len(parts) < 2:
-                    continue
-                split, patch_id = parts[0], parts[1]
-                if split and patch_id:
-                    missing_tiles.add((split, patch_id))
-
-        self._missing_tiles = missing_tiles
-        return self._missing_tiles
-    
-    def _get_too_small_tiles(self, ):
-        """
-        Only filtering train tiles.
-        """
-        if self._too_small_tiles is not None:
-            return self._too_small_tiles
-
-
-        too_small_tiles = set()
-        if not self.too_small_tiles_manifest:
-            self._too_small_tiles = too_small_tiles
-            return self._too_small_tiles
-        
-        elif not os.path.exists(self.too_small_tiles_manifest):
-            logger = get_root_logger()
-            logger.warning(
-                f"Flair3D too-small tiles file not found: {self.too_small_tiles_manifest}. Continuing with empty too-small tiles set.",
-            )
-            self._too_small_tiles = too_small_tiles
-            return self._too_small_tiles
-
-        with open(self.too_small_tiles_manifest, "r", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                row_split = row.get("split")
-                patch_id = row.get("patch_id")
-                if row_split == "train" and row_split and patch_id:
-                    too_small_tiles.add((row_split, patch_id))
-
-        self._too_small_tiles = too_small_tiles
-        return self._too_small_tiles
 
     def get_data_list(self):
         if self.csv_manifest is None:
@@ -268,37 +175,36 @@ class Flair3DDataset(DefaultDataset):
         else:
             raise TypeError
 
-        hardcoded_excluded = self.get_hardcoded_excluded_tiles()
-        missing_excluded = self._get_missing_tiles()
-        too_small_excluded = self._get_too_small_tiles()
-        excluded_tiles = hardcoded_excluded | missing_excluded | too_small_excluded
         logger = get_root_logger()
-        raw_total = (
-            len(hardcoded_excluded) + len(missing_excluded) + len(too_small_excluded)
-        )
-        overlap_count = raw_total - len(excluded_tiles)
-        logger.info(
-            (
-                "Excluded tiles breakdown: "
-                "hardcoded=%d, missing_manifest=%d, too_small=%d, overlap=%d, total_unique=%d"
-            ),
-            len(hardcoded_excluded),
-            len(missing_excluded),
-            len(too_small_excluded),
-            overlap_count,
-            len(excluded_tiles),
-        )
         data_list = []
+        min_points_excluded = 0
         with open(self.csv_manifest, 'r', encoding='utf-8') as f:
             reader = csv.DictReader(f)
             for row in reader:
                 if row['split'] in split_list and row.get('LIDARHD') == 'True':
-                    if (row['split'], row['patch_id']) in excluded_tiles:
-                        continue
+                    if self.min_points and row['split'] in self.min_points:
+                        n_points_raw = row.get('n_points')
+                        if not n_points_raw:
+                            raise ValueError(
+                                f"min_points is configured for split {row['split']!r} but the "
+                                f"'n_points' column is missing/empty for tile {row['patch_id']!r}. "
+                                "Run scripts/analyze_flair3d_test_point_voxel_counts.py "
+                                f"--write_manifest for split {row['split']!r} before enabling "
+                                "min_points on it."
+                            )
+                        if int(n_points_raw) < self.min_points[row['split']]:
+                            min_points_excluded += 1
+                            continue
                     dept_year = row.get('dept_year') or row['patch_id'].split('_')[0]
                     roi = row.get('roi') or row['patch_id'].split('_')[1]
                     data_list.append(os.path.join(self.data_root, row['split'], f"{dept_year}_LIDARHD", roi, row['patch_id']))
-        
+
+        if self.min_points:
+            logger.info(
+                "min_points filter: excluded=%d, final_data_list_size=%d",
+                min_points_excluded,
+                len(data_list),
+            )
         return data_list
 
     def get_data_name(self, idx):
