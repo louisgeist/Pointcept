@@ -35,6 +35,23 @@ class HookBase:
     def after_train(self):
         pass
 
+    def state_dict(self):
+        """Optional hook-local state to persist across resume.
+
+        Overridden by hooks that track running state across the whole training run
+        in instance attributes (e.g. a per-task "best metric so far" used only for
+        W&B/TensorBoard display) rather than in trainer-level state that
+        CheckpointSaver/CheckpointLoader already checkpoint (``trainer.best_metric_value``).
+        Without this, such trackers silently reset to their initial sentinel on every
+        resume, making a "best so far" curve dip after a resume even though it should be
+        a monotonic running max. Return {} (default) for hooks with nothing to persist.
+        """
+        return {}
+
+    def load_state_dict(self, state):
+        """Restore hook-local state saved via :meth:`state_dict`. No-op by default."""
+        pass
+
     def should_evaluate(self):
         cfg = self.trainer.cfg
         if not cfg.evaluate:

@@ -221,9 +221,19 @@ class ClsEvaluator(HookBase):
                 f"ClsEvaluator metric must be one of {self._METRICS}, got {metric!r}"
             )
         self.metric = metric
+        self._best_m_iou = -np.inf
 
     def before_train(self):
-        self._best_m_iou = -np.inf
+        # On resume, CheckpointLoader.before_train (registered first in cfg.hooks)
+        # already restored self._best_m_iou via load_state_dict — don't clobber it.
+        if not self.trainer.cfg.resume:
+            self._best_m_iou = -np.inf
+
+    def state_dict(self):
+        return {"best_m_iou": float(self._best_m_iou)}
+
+    def load_state_dict(self, state):
+        self._best_m_iou = float(state.get("best_m_iou", self._best_m_iou))
 
     def after_epoch(self):
         if self.should_evaluate():
@@ -505,6 +515,12 @@ class RegressionEvaluator(HookBase):
     def __init__(self):
         self._best_neg_rmse = float("-inf")
 
+    def state_dict(self):
+        return {"best_neg_rmse": float(self._best_neg_rmse)}
+
+    def load_state_dict(self, state):
+        self._best_neg_rmse = float(state.get("best_neg_rmse", self._best_neg_rmse))
+
     def after_epoch(self):
         if self.should_evaluate():
             self.eval()
@@ -663,6 +679,18 @@ class MultiTaskEvaluator(HookBase):
         self._best_neg_rmse = float("-inf")
         self._best_miou_by_task = {}
         self._best_neg_kl_by_task = {}
+
+    def state_dict(self):
+        return {
+            "best_neg_rmse": float(self._best_neg_rmse),
+            "best_miou_by_task": dict(self._best_miou_by_task),
+            "best_neg_kl_by_task": dict(self._best_neg_kl_by_task),
+        }
+
+    def load_state_dict(self, state):
+        self._best_neg_rmse = float(state.get("best_neg_rmse", self._best_neg_rmse))
+        self._best_miou_by_task = dict(state.get("best_miou_by_task", {}))
+        self._best_neg_kl_by_task = dict(state.get("best_neg_kl_by_task", {}))
 
     def after_epoch(self):
         if self.should_evaluate():

@@ -74,6 +74,11 @@ class Flair3DDataset(DefaultDataset):
         Targets are exposed in the batch under their task name.
     :param primary_target_key: Primary semantic target. Must be included in target_keys when
         provided.
+    :param task_configs: Optional dict of task_name -> task config, mirroring the
+        model/eval-side ``data.task_configs``. Only pixel_semantic entries are used, to
+        override the registry's per-target ``num_networks``/``channel_names`` (e.g. a
+        config that trains ``network`` on ROADS only, dropping RAILROADS). Absent or
+        missing entries fall back to ``FLAIR3D_PIXEL_SEMANTIC_TASKS`` defaults.
     :param **kwargs: Additional arguments passed to :class:`DefaultDataset`.
     """
 
@@ -96,9 +101,16 @@ class Flair3DDataset(DefaultDataset):
         min_points=None,
         target_keys=("segment",),
         primary_target_key=None,
+        task_configs=None,
         **kwargs,
     ):
         self.csv_manifest = csv_manifest
+        # Optional per-target task_config overrides (e.g. a config-local "network"
+        # entry with num_networks/channel_names trimmed to drop a channel such as
+        # RAILROADS). Only pixel_semantic entries are consulted here; falls back
+        # to the FLAIR3D_PIXEL_SEMANTIC_TASKS registry default when absent so
+        # existing configs that don't pass this keep their exact behavior.
+        self.task_configs = dict(task_configs) if task_configs else {}
         if isinstance(target_keys, str):
             target_keys = [target_keys]
         elif not isinstance(target_keys, Sequence):
@@ -215,7 +227,10 @@ class Flair3DDataset(DefaultDataset):
         return target_key in self.optional_target_keys
 
     def _missing_target_array(self, target_key, n):
-        fill_value = get_missing_target_fill_value(target_key)
+        fill_value = get_missing_target_fill_value(
+            target_key,
+            pixel_semantic_config=getattr(self, "task_configs", {}).get(target_key),
+        )
         if target_key in FLAIR3D_CLASSIFICATION_TARGETS:
             return np.array([int(fill_value)], dtype=np.int64)
         if target_key in FLAIR3D_MULTILABEL_CLASSIFICATION_TARGETS:
@@ -241,6 +256,9 @@ class Flair3DDataset(DefaultDataset):
         Empty tiles may omit ``{target_key}.npy`` and only store
         ``meta.{target_key}`` (``empty: true`` + width/height); those are
         synthesized as zeros.
+
+        ``self.task_configs[target_key]``, when set, overrides the registry's
+        ``num_networks``/``channel_names`` (e.g. to drop RAILROADS from ``network``).
         """
         import json
 
@@ -249,7 +267,9 @@ class Flair3DDataset(DefaultDataset):
             get_pixel_semantic_config,
         )
 
-        cfg = get_pixel_semantic_config(target_key)
+        cfg = getattr(self, "task_configs", {}).get(target_key) or get_pixel_semantic_config(
+            target_key
+        )
         r = int(cfg["num_networks"])
         default_channel_names = (
             NETWORK_CHANNEL_NAMES if target_key == "network" else (target_key,)

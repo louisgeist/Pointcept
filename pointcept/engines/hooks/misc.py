@@ -649,6 +649,14 @@ class CheckpointSaver(HookBase):
                 self.trainer.cfg.save_path, "model", "model_last.pth"
             )
             self.trainer.logger.info("Saving checkpoint to: " + filename)
+            # Per-hook running state (e.g. MultiTaskEvaluator's per-task best-so-far
+            # trackers) that isn't captured by trainer.best_metric_value alone — see
+            # HookBase.state_dict / CheckpointLoader.before_train.
+            hook_states = {}
+            for h in self.trainer.hooks:
+                s = h.state_dict()
+                if s:
+                    hook_states[h.__class__.__name__] = s
             torch.save(
                 {
                     "epoch": self.trainer.epoch + 1,
@@ -661,6 +669,7 @@ class CheckpointSaver(HookBase):
                         else None
                     ),
                     "best_metric_value": self.trainer.best_metric_value,
+                    "hook_states": hook_states,
                 },
                 filename + ".tmp",
             )
@@ -737,6 +746,13 @@ class CheckpointLoader(HookBase):
                 self.trainer.scheduler.load_state_dict(checkpoint["scheduler"])
                 if self.trainer.cfg.enable_amp:
                     self.trainer.scaler.load_state_dict(checkpoint["scaler"])
+                # Restore per-hook running state (older checkpoints predate this key,
+                # hence .get) — see HookBase.state_dict / CheckpointSaver.after_epoch.
+                hook_states = checkpoint.get("hook_states", {})
+                for h in self.trainer.hooks:
+                    state = hook_states.get(h.__class__.__name__)
+                    if state:
+                        h.load_state_dict(state)
         else:
             self.trainer.logger.info(f"No weight found at: {self.trainer.cfg.weight}")
 

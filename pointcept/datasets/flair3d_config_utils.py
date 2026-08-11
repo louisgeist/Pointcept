@@ -506,7 +506,10 @@ def init_task_configs(
             )
     return out
 
-def get_missing_target_fill_value(target_key: str) -> Any:
+def get_missing_target_fill_value(
+    target_key: str,
+    pixel_semantic_config: Optional[Dict[str, Any]] = None,
+) -> Any:
     """Return the fallback value used when a target file is missing.
 
     - Semantic targets fallback to the on-disk *storage* definition's own ignore_index
@@ -524,6 +527,12 @@ def get_missing_target_fill_value(target_key: str) -> Any:
     - Multilabel targets fallback to ignore_index on all labels (missing NH raster).
     - Elevation regression falls back to NaN so masked losses ignore it.
     - Network pixel masks fallback to an empty (r, 1, 1) zero raster (absence).
+
+    ``pixel_semantic_config`` optionally overrides the registry lookup for
+    pixel_semantic targets (e.g. a per-config ``num_networks``/``channel_names``
+    override, such as dropping RAILROADS from the ``network`` task) — pass the
+    caller's ``task_configs[target_key]`` when it was constructed with such an
+    override so the missing-tile fallback shape stays consistent with it.
     """
     if target_key in FLAIR3D_SEMANTIC_TASKS:
         from pointcept.datasets.preprocessing.flair3d_plus.flair3d_label_remap import (
@@ -543,7 +552,7 @@ def get_missing_target_fill_value(target_key: str) -> Any:
             dtype=np.float32,
         )
     if target_key in FLAIR3D_PIXEL_SEMANTIC_TASKS:
-        cfg = get_pixel_semantic_config(target_key)
+        cfg = pixel_semantic_config or get_pixel_semantic_config(target_key)
         r = int(cfg["num_networks"])
         return np.zeros((r, 1, 1), dtype=np.uint8)
     if target_key == "elevation":
