@@ -22,6 +22,9 @@ full test pass.
 
 _base_ = ["../../../../_base_/default_runtime.py"]
 
+# Sonata pretrain ckpt (job 862680, epoch 9) — remap via CheckpointLoader
+weight = "/lustre/fsn1/projects/rech/unv/usi32yh/logs/pointcept_logs/slurm/862680/model/epoch_9.pth"
+
 # -----------------------------------------------------------------------------
 # Run-level settings
 # -----------------------------------------------------------------------------
