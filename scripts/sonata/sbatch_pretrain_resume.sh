@@ -43,8 +43,8 @@
 
 #SBATCH --time=19:50:00
 #SBATCH --signal=B:USR1@120
-#SBATCH --nodes=4
-#SBATCH --ntasks=4
+#SBATCH --nodes=3
+#SBATCH --ntasks=3
 #SBATCH --ntasks-per-node=1
 #SBATCH --gres=gpu:8
 #SBATCH --cpus-per-task=64

@@ -11,10 +11,11 @@ _base_ = ["../_base_/default_runtime.py"]
 # -----------------------------------------------------------------------------
 # Run-level settings
 # -----------------------------------------------------------------------------
-# Hardware template: 4×8 A100 (Jean-Zay); see scripts/sonata/sbatch_pretrain.sh
-num_gpu = 32
-batch_size_per_gpu = 3
-batch_size = batch_size_per_gpu * num_gpu  # → 96
+# Hardware template: 3×8 A100 (Jean-Zay); see scripts/sonata/sbatch_pretrain.sh
+# batch_size_per_gpu=4 confirmed safe with stride=(3,3,3,3) over ~300 VRAM-soak iterations.
+num_gpu = 24
+batch_size_per_gpu = 4
+batch_size = batch_size_per_gpu * num_gpu  # → 96 (unchanged effective batch size)
 num_worker = 8 * num_gpu
 mix_prob = 0
 clip_grad = 3.0
@@ -60,7 +61,7 @@ mask_size_base = 0.4 * grid_size_factor
 mask_jitter = 0.01 * grid_size_factor
 
 # Iter-limited schedule (1 trainer epoch = 1000 optimizer steps)
-total_iters = 30_000 
+total_iters = 150_000 
 iter_per_epoch = 1000
 
 # Regular evaluation is replaced by linear-probe jobs

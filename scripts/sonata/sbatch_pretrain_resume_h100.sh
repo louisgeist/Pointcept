@@ -3,7 +3,7 @@
 # Resume a Sonata-v1m2 pretrain run under a NEW config (e.g. a VRAM-safety
 # variant) from an EXISTING checkpoint from a different (e.g. crashed) job,
 # preserving optimizer/scheduler/epoch state (true resume, not just weight
-# loading). H100 variant (8 nodes × 4 H100 = 32 GPUs).
+# loading). H100 variant (6 nodes × 4 H100 = 24 GPUs).
 #
 # scripts/train.sh only auto-resumes when $JOB_DIR/model/model_last.pth
 # already exists when it starts (see its JOB_DIR branch) — but a fresh sbatch
@@ -43,8 +43,8 @@
 
 #SBATCH --time=19:50:00
 #SBATCH --signal=B:USR1@120
-#SBATCH --nodes=8
-#SBATCH --ntasks=8
+#SBATCH --nodes=6
+#SBATCH --ntasks=6
 #SBATCH --ntasks-per-node=1
 #SBATCH --gres=gpu:4
 #SBATCH --cpus-per-task=96

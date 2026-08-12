@@ -13,7 +13,7 @@ _base_ = ["../_base_/default_runtime.py"]
 # -----------------------------------------------------------------------------
 # Hardware template: 2× A100 (Jean-Zay); see scripts/sonata/sbatch_pretrain_debug.sh
 num_gpu = 2
-batch_size_per_gpu = 3
+batch_size_per_gpu = 4
 batch_size = batch_size_per_gpu * num_gpu
 num_worker = 4 * num_gpu
 mix_prob = 0

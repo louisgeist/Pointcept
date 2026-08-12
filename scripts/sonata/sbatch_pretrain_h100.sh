@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Sonata-v1m2 pretrain on Flair3D+ (default: 8 nodes × 4 H100 = 32 GPUs).
+# Sonata-v1m2 pretrain on Flair3D+ (default: 6 nodes × 4 H100 = 24 GPUs).
 # Usage: sbatch scripts/sonata/sbatch_pretrain_h100.sh [exp_name]
 #
 # Multi-node: bump --nodes AND --ntasks together (1 Slurm task per node).
@@ -19,8 +19,8 @@
 
 #SBATCH --time=19:50:00
 #SBATCH --signal=B:USR1@120
-#SBATCH --nodes=8
-#SBATCH --ntasks=8
+#SBATCH --nodes=6
+#SBATCH --ntasks=6
 #SBATCH --ntasks-per-node=1
 #SBATCH --gres=gpu:4
 #SBATCH --cpus-per-task=96

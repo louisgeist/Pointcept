@@ -88,8 +88,8 @@ python scripts/visualize_sonata_sample.py \
 
 All launchers live under [`scripts/sonata/`](scripts/sonata/):
 
-- [`scripts/sonata/sbatch_pretrain.sh`](scripts/sonata/sbatch_pretrain.sh) — 4×8 A100 (=32), `WANDB_MODE=offline` (+ hook submits probes)
-- [`scripts/sonata/sbatch_pretrain_h100.sh`](scripts/sonata/sbatch_pretrain_h100.sh) — 8×4 H100 (=32); overrides probe script to H100 via `EXTRA_OPTIONS`
+- [`scripts/sonata/sbatch_pretrain.sh`](scripts/sonata/sbatch_pretrain.sh) — 3×8 A100 (=24), `WANDB_MODE=offline` (+ hook submits probes)
+- [`scripts/sonata/sbatch_pretrain_h100.sh`](scripts/sonata/sbatch_pretrain_h100.sh) — 6×4 H100 (=24); overrides probe script to H100 via `EXTRA_OPTIONS`
 - [`scripts/sonata/sbatch_lin_probe.sh`](scripts/sonata/sbatch_lin_probe.sh) — 1× A100, short walltime
 - [`scripts/sonata/sbatch_lin_probe_h100.sh`](scripts/sonata/sbatch_lin_probe_h100.sh) — 1× H100
 - [`scripts/sonata/sbatch_pretrain_resume_h100.sh`](scripts/sonata/sbatch_pretrain_resume_h100.sh) — resume under a new config on 32× H100
