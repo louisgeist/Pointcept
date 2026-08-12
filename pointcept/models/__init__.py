@@ -1,5 +1,6 @@
 from .builder import build_model
 from .default import DefaultSegmentor, DefaultClassifier
+from .grid_probe import GridProbeSegmentorV2
 from .modules import PointModule, PointModel
 
 # Backbones

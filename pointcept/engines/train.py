@@ -5,6 +5,7 @@ Author: Xiaoyang Wu (xiaoyang.wu.cs@gmail.com)
 Please cite our work if the code is helpful to you.
 """
 
+import copy
 import math
 import os
 import sys
@@ -35,6 +36,7 @@ from pointcept.models import build_model
 from pointcept.utils.logger import get_root_logger
 from pointcept.utils.optimizer import build_optimizer
 from pointcept.utils.scheduler import build_scheduler
+from pointcept.utils.config import ConfigDict
 from pointcept.utils.events import EventStorage, ExceptionWriter
 from pointcept.utils.wandb_metrics import define_wandb_metrics
 from pointcept.utils.gradient_norm import (
@@ -760,3 +762,137 @@ class MultiDatasetTrainer(Trainer):
         )
         self.comm_info["iter_per_epoch"] = len(train_loader)
         return train_loader
+
+
+@TRAINERS.register_module("GridProbeTrainer")
+class GridProbeTrainer(Trainer):
+    """Trainer for GridProbeSegmentorV2: N linear probe heads, each with its
+    own optimizer/scheduler/grad_clip type and hyperparameters, sharing one
+    frozen-backbone forward+backward pass per batch.
+
+    self.optimizer / self.scheduler become dict[str, ...] here (one entry per
+    probe) instead of the base Trainer's single instance — hooks that assume
+    a single optimizer/scheduler (InformationWriter's Lr: line, CheckpointSaver,
+    CheckpointLoader) branch on `isinstance(trainer.optimizer, dict)`.
+
+    Precision (enable_amp/amp_dtype) stays a single global setting: the
+    backbone forward (the expensive part) runs once under one autocast
+    context shared by every probe head, so per-probe precision would gain
+    nothing while complicating the shared-backward argument this class
+    relies on (see module docstring in models/grid_probe.py).
+
+    Diagnostics tied to MultiTaskSegmentorV2's heterogeneous-task-weight
+    machinery (grad_norm_lite, log_task_gradient_norms, skip_nan_grad,
+    global_gradient_diag logging) are intentionally not implemented here —
+    those cfg flags are simply never read, no crash risk, just an omission.
+    """
+
+    def _raw_model(self):
+        return self.model.module if hasattr(self.model, "module") else self.model
+
+    def build_optimizer(self):
+        raw_model = self._raw_model()
+        optimizers = {}
+        for name in raw_model.probe_names:
+            probe_cfg = raw_model.probe_configs[name]
+            opt_cfg = ConfigDict(copy.deepcopy(dict(probe_cfg["optimizer"])))
+            optimizers[name] = build_optimizer(
+                opt_cfg, params=raw_model.probe_head_parameters(name)
+            )
+        return optimizers
+
+    def build_scheduler(self):
+        assert hasattr(self, "optimizer")
+        assert hasattr(self, "train_loader")
+        if getattr(self.cfg, "total_iters", None) is not None:
+            total_steps = self.cfg.total_iters // self.cfg.gradient_accumulation_steps
+        else:
+            total_steps = (
+                len(self.train_loader)
+                * self.cfg.eval_epoch
+                // self.cfg.gradient_accumulation_steps
+            )
+        raw_model = self._raw_model()
+        schedulers = {}
+        for name, opt in self.optimizer.items():
+            probe_cfg = raw_model.probe_configs[name]
+            sched_cfg = ConfigDict(copy.deepcopy(dict(probe_cfg["scheduler"])))
+            sched_cfg.total_steps = total_steps
+            schedulers[name] = build_scheduler(sched_cfg, opt)
+        return schedulers
+
+    def run_step(self):
+        if version.parse(torch.__version__) >= version.parse("2.4"):
+            auto_cast = partial(torch.amp.autocast, device_type="cuda")
+        else:
+            # deprecated warning
+            auto_cast = torch.cuda.amp.autocast
+
+        input_dict = self.comm_info["input_dict"]
+        for key in input_dict.keys():
+            if isinstance(input_dict[key], torch.Tensor):
+                input_dict[key] = input_dict[key].cuda(non_blocking=True)
+
+        # Only clear gradients on first accumulation step (every probe optimizer).
+        if self._gradient_accumulation_counter == 0:
+            for opt in self.optimizer.values():
+                opt.zero_grad()
+
+        # Forward pass: one shared backbone + all active probe heads under one autocast.
+        with auto_cast(
+            enabled=self.cfg.enable_amp, dtype=AMP_DTYPE[self.cfg.amp_dtype]
+        ):
+            output_dict = self.model(input_dict)
+            # Sum of independent per-probe losses: since probe heads share zero
+            # trainable params (only the frozen backbone), one backward() on the
+            # sum gives every head exactly its own gradient (see grid_probe.py
+            # module docstring) — no per-probe backward passes needed.
+            loss = (
+                output_dict["loss"] / self.cfg.gradient_accumulation_steps
+            )  # scale loss
+
+        # Backward pass
+        if self.cfg.enable_amp:
+            self.scaler.scale(loss).backward()
+        else:
+            loss.backward()
+        self._gradient_accumulation_counter += 1
+
+        # Perform optimizer step only when enough gradients have accumulated
+        if self._gradient_accumulation_counter >= self.cfg.gradient_accumulation_steps:
+            raw_model = self._raw_model()
+            probe_configs = raw_model.probe_configs
+            scale_before = self.scaler.get_scale() if self.cfg.enable_amp else None
+
+            for name, opt in self.optimizer.items():
+                if self.cfg.enable_amp:
+                    self.scaler.unscale_(opt)
+                grad_clip = probe_configs[name].get("grad_clip")
+                if grad_clip is not None:
+                    torch.nn.utils.clip_grad_norm_(
+                        raw_model.probe_head_parameters(name), grad_clip
+                    )
+                if self.cfg.enable_amp:
+                    self.scaler.step(opt)
+                else:
+                    opt.step()
+
+            if self.cfg.enable_amp:
+                self.scaler.update()
+                # Skip the scheduler step this round if AMP detected an inf/nan
+                # and shrank the scale (mirrors the base Trainer's single-optimizer
+                # guard; GradScaler has one global scale regardless of how many
+                # optimizers share it, so one check covers every probe).
+                step_schedulers = scale_before <= self.scaler.get_scale()
+            else:
+                step_schedulers = True
+            if step_schedulers:
+                for sched in self.scheduler.values():
+                    sched.step()
+
+            # Reset grad accumulation counter
+            self._gradient_accumulation_counter = 0
+
+        if self.cfg.empty_cache:
+            torch.cuda.empty_cache()
+        self.comm_info["model_output_dict"] = output_dict

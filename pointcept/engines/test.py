@@ -488,6 +488,11 @@ class SemSegTester(TesterBase):
         else:
             log_dict = None
 
+        # Additive: lets callers that build a SemSegTester in-process (e.g. a
+        # winner-selection hook after a grid search) read the final metrics
+        # without reparsing the log. No existing caller reads this attribute.
+        self.test_metrics = log_dict
+
         self.end_test_timing_and_log(extra_log_dict=log_dict)
         if comm.is_main_process():
             logger.info("<<<<<<<<<<<<<<<<< End Evaluation <<<<<<<<<<<<<<<<<")

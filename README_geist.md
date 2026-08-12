@@ -271,10 +271,13 @@ per-channel APLS score (GT clipped to the subtile) is a **local sanity-check onl
 `--roi` mode, stitching + APLS match the official per-ROI metric.
 
 Official APLS (`tools/eval_network_apls.py` / `cfg.network_apls_eval`) follows SpaceNet defaults:
-`densify=50` (meters; `None` / `--densify none` to disable), `snap_to_edge=4` (meters;
-`None` / `--snap_to_edge none` = unrestricted nearest-node matching), bidirectional
-harmonic mean (`--no_symmetric` for GT→pred only). Same keys work in `network_apls_eval`.
-`max_nodes_exact` applies **after** densification (`None` disables the cap).
+`apls_densify=50` (meters; `None` / `--apls_densify none` to disable), `apls_snap_to_edge=4`
+(meters; `None` / `--apls_snap_to_edge none` = unrestricted nearest-node matching), bidirectional
+harmonic mean (`--no_apls_symmetric` for GT→pred only). Same keys work in `network_apls_eval`.
+These `apls_*`-prefixed params are the ones that feed `apls_symmetric_score` directly (the APLS
+math itself); everything else in `network_apls_eval` (threshold, morphology, endpoint-fix, merge,
+...) controls upstream mask→graph construction instead.
+`apls_max_nodes_exact` applies **after** densification (`None` disables the cap).
 
 Export is sized for **native 1 m resolution**: each raster panel is ≥ `W×H` PNG pixels
 (one image pixel per 1 m grid cell, `interpolation='nearest'`). Full-ROI figures are large.
@@ -288,11 +291,11 @@ splitting the predicted graph into two disconnected components):
 
 ```bash
 python scripts/network_html_viewer.py \
-  --roi data/flair3d_plus/train/D067-2021_LIDARHD/AF-S1-22 \
-  --result-dir exp/flair3d/spunet_network_overfit_ROI_v2/result \
-  --threshold 0.5 \
+  --roi data/flair3d_plus/test/D075-2021_LIDARHD/UU-S1-4 \
+  --result-dir /data/geist/superpixel_transformer_dev/local/temp/network_UU-S1-4 \
+  --threshold 0.2 \
   --network-graphs-root /data/geist/Flair3D-build/data/network_graphs \
-  --out-dir /tmp/AF-S1-22_viewer
+  --out-dir outputs/html_viewer
 ```
 
 Then open `/tmp/AF-S1-22_viewer/index.html` in a browser (`file://` works directly, no server).
@@ -536,12 +539,12 @@ Train directement une config dans experiment (sur JeanZay, JZ):
 ```bash
 cdpt
 python -m tools.train \
-  --config-file configs/experiment/w107/7/debug/multi-litept-v1m0-flair3d_forest2d_debug.py \
+  --config-file configs/flair3d_default/multi-litept-v1m0-flair3d.py \
   --num-gpus 1 \
   --num-machines 1 \
   --machine-rank 0 \
   --dist-url auto \
-  --options save_path=outputs/forest_2d_debug
+  --options save_path=outputs/forfoi
 ```
 
 
@@ -549,6 +552,71 @@ python -m tools.train \
 ### Sonata pretrain + periodic linear probe (Flair3D+)
 
 See `[README_sonata_geist.md](README_sonata_geist.md)`.
+
+### Sonata grid-search linear probe (multi-probe)
+
+Sweep lin-probe hyperparameters (loss, optimizer, lr, weight_decay, scheduler, dropout,
+input/feature normalization, grad_clip) **in one job** instead of one job per combo: since the
+backbone is frozen, `GridProbeSegmentorV2` + `GridProbeTrainer`
+(`[pointcept/models/grid_probe.py](pointcept/models/grid_probe.py)`,
+`[pointcept/engines/train.py](pointcept/engines/train.py)`) run the frozen backbone forward **once
+per batch**, feed it to N independently-configured linear heads (each with its own optimizer/
+scheduler — genuinely different types allowed, e.g. one head on SGD, another on AdamW), train all N
+simultaneously, then at the end automatically pick the best on val, reload *its own* best checkpoint
+(not the run's final weights), run a precise test pass on it, and log which config won.
+
+Configs: `[configs/flair3d_default/segment/sonata-v1m2-flair3d-lin-grid.py](configs/flair3d_default/segment/sonata-v1m2-flair3d-lin-grid.py)`
+(real manifest) / `-toy.py` (local D067 smoke test, no pretrained backbone needed).
+
+Author `probes = {name: dict(criteria=..., input_norm=..., feat_norm=..., dropout=..., optimizer=...,
+scheduler=..., grad_clip=...), ...}` by hand, or cross axes (e.g. loss × lr — lr is probably worth
+sweeping in every lin-probe run) with `cartesian_probes`
+(`[pointcept/utils/grid_probe_utils.py](pointcept/utils/grid_probe_utils.py)`):
+
+```python
+from pointcept.utils.grid_probe_utils import cartesian_probes
+
+losses = [dict(criteria=[dict(type="CrossEntropyLoss", ignore_index=ignore_index)]),
+          dict(criteria=[dict(type="FocalLoss", gamma=2.0, ignore_index=ignore_index)])]
+lrs = [dict(optimizer=dict(type="AdamW", lr=lr, weight_decay=0.02)) for lr in (1e-4, 5e-4, 2e-3)]
+probes = cartesian_probes(
+    dict(input_norm=None, feat_norm=None, dropout=0.0,
+         scheduler=dict(type="CosineAnnealingLR", eta_min=0.0), grad_clip=3.0),
+    losses, lrs,
+)
+del cartesian_probes, losses, lrs  # avoid leaking a function object into the dumped config
+probes["one_off_variant"] = dict(...)  # composes freely with hand-written probes
+```
+
+Also set `data.task_configs = {name: dict(task_type="semantic", num_classes=..., ignore_index=...,
+names=...) for name in probes}` (see either example config) — without it, per-probe **train** mIoU
+isn't logged (per-probe train **loss** still is).
+
+```bash
+# Local smoke test (D067 mirror, ~15s)
+sh scripts/train.sh -g 1 -d flair3d_default -c segment/sonata-v1m2-flair3d-lin-grid-toy \
+  -n sonata_grid_toy_smoke
+
+# Real run against a Sonata checkpoint (same weight-remap convention as the single-probe config)
+sh scripts/train.sh -g 1 -d flair3d_default -c segment/sonata-v1m2-flair3d-lin-grid \
+  -n sonata_grid_ep10 -w /path/to/epoch_10.pth
+```
+
+**Not yet wired into the Jean-Zay auto-submit pipeline** — `LinProbeSbatchHook` /
+`scripts/sonata/sbatch_lin_probe.sh` still hardcode the single-probe config; running the grid config
+on Jean-Zay means invoking `scripts/train.sh` manually (inside your own `sbatch` script) rather than
+getting it for free from the periodic pretrain-checkpoint watcher.
+
+Produces, in `save_path`: `model/probe_best_{name}.pth` (+ `.json` sidecar) per probe that improved,
+`grid_search_results.json` (full leaderboard + winner's config/test metrics), and `metrics.json`
+(same format as the single-probe pipeline — `best_val_mIoU` already equals the winner's own best
+value, so `append_lin_probe_result.py` / `periodic_lin_probe.py` need zero changes to consume a grid
+run's output). Wandb (if `enable_wandb=True`): per-probe `loss/{name}`, `train/mIoU/{name}`,
+`val/mIoU/{name}` / `val/mIoU_best/{name}`, plus a `winner/*` summary at the end.
+
+Scope limits: precision (AMP) is one global run setting, not per probe; no per-probe `total_iters`
+(all probes train for the same number of iterations); no automatic full-cartesian-expansion beyond
+the axes you actually cross with `cartesian_probes`.
 
 ### Other datasets
 

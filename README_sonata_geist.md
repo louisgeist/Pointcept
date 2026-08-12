@@ -51,8 +51,8 @@ python scripts/build_stratified_subset.py \
 
 - Split: **`train` only** (no val/test leakage into SSL)
 - Features: **coord + color + strength** (`in_channels=7`)
-- Schedule: iter-limited — `total_iters=100_000` (placeholder), `iter_per_epoch=1000`
-- Hardware template: **8× A100**, `batch_size_per_gpu=2` (`batch_size=16`)
+- Schedule: iter-limited — `total_iters=150_000`, `iter_per_epoch=1000`
+- Hardware template: **3×8 A100 (=24)**, `batch_size_per_gpu=4` (`batch_size=96`)
 - Checkpoints: `CheckpointSaver(save_freq=5)` → `epoch_5.pth`, `epoch_10.pth`, …
 - `LinProbeSbatchHook` (after saver): submits `scripts/sonata/sbatch_lin_probe.sh` per epoch ckpt
 ¬- W&B project: `flair3d_sonata`
@@ -92,14 +92,14 @@ All launchers live under [`scripts/sonata/`](scripts/sonata/):
 - [`scripts/sonata/sbatch_pretrain_h100.sh`](scripts/sonata/sbatch_pretrain_h100.sh) — 6×4 H100 (=24); overrides probe script to H100 via `EXTRA_OPTIONS`
 - [`scripts/sonata/sbatch_lin_probe.sh`](scripts/sonata/sbatch_lin_probe.sh) — 1× A100, short walltime
 - [`scripts/sonata/sbatch_lin_probe_h100.sh`](scripts/sonata/sbatch_lin_probe_h100.sh) — 1× H100
-- [`scripts/sonata/sbatch_pretrain_resume_h100.sh`](scripts/sonata/sbatch_pretrain_resume_h100.sh) — resume under a new config on 32× H100
+- [`scripts/sonata/sbatch_pretrain_resume_h100.sh`](scripts/sonata/sbatch_pretrain_resume_h100.sh) — resume under a new config on 24× H100
 - [`scripts/sonata/periodic_lin_probe.py`](scripts/sonata/periodic_lin_probe.py) — **optional** watcher (local / replay only)
 - [`scripts/sonata/append_lin_probe_result.py`](scripts/sonata/append_lin_probe_result.py) — CSV append at end of probe job
 
 ```bash
 # 1) Pretrain only — probes are submitted automatically by LinProbeSbatchHook
 sbatch scripts/sonata/sbatch_pretrain.sh sonata_pretrain_flair3dplus
-# Or on 32× H100 (8 nodes × 4 GPUs):
+# Or on 24× H100 (6 nodes × 4 GPUs):
 sbatch scripts/sonata/sbatch_pretrain_h100.sh sonata_pretrain_flair3dplus_h100
 # PRETRAIN_DIR=logs/slurm/$SLURM_JOB_ID
 
@@ -160,8 +160,8 @@ Keep a **~10–20 %** margin below the confirmed max.
 | Linear probe | `mix_prob=0.8` | `--mix-prob 0.8` |
 
 **Always set `--num-worker` / `NUM_WORKER`** on 1-GPU probes. If omitted, the
-overlay inherits the source config (`num_worker = 8 * num_gpu` → **256** for
-the 32-GPU Sonata template). PyTorch still spawns that many workers even with
+overlay inherits the source config (`num_worker = 8 * num_gpu` → **192** for
+the 24-GPU Sonata template). PyTorch still spawns that many workers even with
 only 24 Slurm CPUs; they then die with `DataLoader worker ... Killed` (host
 RAM OOM) — not a VRAM verdict. Use `8` normally, or `0`/`2` for a VRAM-only
 smoke. The sbatch wrapper defaults `NUM_WORKER=8`.

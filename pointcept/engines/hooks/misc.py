@@ -216,6 +216,18 @@ class InformationWriter(HookBase):
                 )
 
     @staticmethod
+    def _optimizer_lrs(trainer):
+        """{probe_name: lr} for dict-valued trainer.optimizer (GridProbeTrainer,
+        one entry per probe), or {"": lr} for a single optimizer (every other
+        trainer)."""
+        opt = trainer.optimizer
+        if isinstance(opt, dict):
+            return {
+                name: o.state_dict()["param_groups"][0]["lr"] for name, o in opt.items()
+            }
+        return {"": opt.state_dict()["param_groups"][0]["lr"]}
+
+    @staticmethod
     def _skip_console_scalar(key):
         key = str(key)
         return key.startswith("gradient/") or key.startswith("loss_scale/")
@@ -463,8 +475,13 @@ class InformationWriter(HookBase):
             self.trainer.comm_info["iter_info"] += "{key}: {value:.4f} ".format(
                 key=key, value=self.trainer.storage.history(key).val
             )
-        lr = self.trainer.optimizer.state_dict()["param_groups"][0]["lr"]
-        self.trainer.comm_info["iter_info"] += "Lr: {lr:.5f}".format(lr=lr)
+        lrs = self._optimizer_lrs(self.trainer)
+        if list(lrs.keys()) == [""]:
+            self.trainer.comm_info["iter_info"] += "Lr: {lr:.5f}".format(lr=lrs[""])
+        else:
+            self.trainer.comm_info["iter_info"] += " ".join(
+                f"Lr/{name}: {lr:.5f}" for name, lr in lrs.items()
+            )
         if self.curr_iter % self.log_interval == 0 and comm.is_main_process():
             self.trainer.logger.info(self.trainer.comm_info["iter_info"])
         self.trainer.comm_info["iter_info"] = ""  # reset iter info
@@ -473,7 +490,9 @@ class InformationWriter(HookBase):
                 self.trainer.cfg, "log_task_gradient_norms", False
             )
             log_lite = getattr(self.trainer.cfg, "grad_norm_lite", False)
-            self.trainer.writer.add_scalar("params/lr", lr, self.curr_iter)
+            for name, lr in lrs.items():
+                tag = "params/lr" if name == "" else f"params/lr/{name}"
+                self.trainer.writer.add_scalar(tag, lr, self.curr_iter)
             for key in self.model_output_keys:
                 if not self._include_in_train_batch(key, log_task_grads):
                     continue
@@ -487,7 +506,9 @@ class InformationWriter(HookBase):
                 if log_all_steps or log_task_grads or log_lite:
                     wandb_payload = {"Iter": self.curr_iter}
                     if log_all_steps:
-                        wandb_payload["params/lr"] = lr
+                        for name, lr in lrs.items():
+                            key = "params/lr" if name == "" else f"params/lr/{name}"
+                            wandb_payload[key] = lr
                     step_keys = self._wandb_step_keys(
                         self.model_output_keys,
                         log_all_steps,
@@ -582,12 +603,14 @@ class InformationWriter(HookBase):
             and self.trainer.cfg.enable_wandb
             and wandb.run is not None
         ):
-            lr = self.trainer.optimizer.state_dict()["param_groups"][0]["lr"]
+            lrs = self._optimizer_lrs(self.trainer)
             wandb_dict = {
                 "Epoch": epoch_step,
                 "Iter": self.curr_iter,
-                "params/lr": lr,
             }
+            for name, lr in lrs.items():
+                key = "params/lr" if name == "" else f"params/lr/{name}"
+                wandb_dict[key] = lr
             for key in epoch_keys:
                 wandb_dict[f"train/{key}"] = self.trainer.storage.history(key).avg
             if epoch_miou_main is not None:
@@ -657,12 +680,23 @@ class CheckpointSaver(HookBase):
                 s = h.state_dict()
                 if s:
                     hook_states[h.__class__.__name__] = s
+            if isinstance(self.trainer.optimizer, dict):
+                # GridProbeTrainer: one optimizer/scheduler per probe head.
+                optimizer_state = {
+                    name: o.state_dict() for name, o in self.trainer.optimizer.items()
+                }
+                scheduler_state = {
+                    name: s.state_dict() for name, s in self.trainer.scheduler.items()
+                }
+            else:
+                optimizer_state = self.trainer.optimizer.state_dict()
+                scheduler_state = self.trainer.scheduler.state_dict()
             torch.save(
                 {
                     "epoch": self.trainer.epoch + 1,
                     "state_dict": self.trainer.model.state_dict(),
-                    "optimizer": self.trainer.optimizer.state_dict(),
-                    "scheduler": self.trainer.scheduler.state_dict(),
+                    "optimizer": optimizer_state,
+                    "scheduler": scheduler_state,
                     "scaler": (
                         self.trainer.scaler.state_dict()
                         if self.trainer.cfg.enable_amp
@@ -742,8 +776,15 @@ class CheckpointLoader(HookBase):
                 )
                 self.trainer.start_epoch = checkpoint["epoch"]
                 self.trainer.best_metric_value = checkpoint["best_metric_value"]
-                self.trainer.optimizer.load_state_dict(checkpoint["optimizer"])
-                self.trainer.scheduler.load_state_dict(checkpoint["scheduler"])
+                if isinstance(self.trainer.optimizer, dict):
+                    # GridProbeTrainer: one optimizer/scheduler per probe head.
+                    for name, o in self.trainer.optimizer.items():
+                        o.load_state_dict(checkpoint["optimizer"][name])
+                    for name, s in self.trainer.scheduler.items():
+                        s.load_state_dict(checkpoint["scheduler"][name])
+                else:
+                    self.trainer.optimizer.load_state_dict(checkpoint["optimizer"])
+                    self.trainer.scheduler.load_state_dict(checkpoint["scheduler"])
                 if self.trainer.cfg.enable_amp:
                     self.trainer.scaler.load_state_dict(checkpoint["scaler"])
                 # Restore per-hook running state (older checkpoints predate this key,

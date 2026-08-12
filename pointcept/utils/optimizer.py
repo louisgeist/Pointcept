@@ -20,9 +20,13 @@ OPTIMIZERS.register_module(module=torch.optim.AdamW, name="AdamW")
 OPTIMIZERS.register_module(module=MuonKIMI, name="Muon_KIMI")
 
 
-def build_optimizer(cfg, model, param_dicts=None):
+def build_optimizer(cfg, model=None, param_dicts=None, params=None):
     cfg = copy.deepcopy(cfg)
-    if param_dicts is None:
+    if params is not None:
+        # Explicit parameter list (e.g. one probe head's own params in
+        # GridProbeTrainer) takes precedence over model.parameters()/param_dicts.
+        cfg.params = params
+    elif param_dicts is None:
         cfg.params = model.parameters()
     else:
         cfg.params = [dict(names=[], params=[], lr=cfg.lr)]
