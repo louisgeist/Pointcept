@@ -17,6 +17,7 @@
 #     MODE=train MIX_PROB=0 \
 #     MIN_BS_TRAIN=1 MAX_BS_TRAIN=8 \
 #     PROBE_STEPS=32 SOAK_STEPS_TRAIN=200 \
+#     NUM_WORKER=8 \
 #     sbatch sbatch_find_max_batch_size.sh
 #
 #   # Linear probe — Mix3D as in *-lin config
@@ -24,7 +25,14 @@
 #     MODE=train MIX_PROB=0.8 \
 #     MIN_BS_TRAIN=1 MAX_BS_TRAIN=8 \
 #     PROBE_STEPS=32 SOAK_STEPS_TRAIN=200 \
+#     NUM_WORKER=8 \
 #     sbatch sbatch_find_max_batch_size.sh
+#
+# NUM_WORKER (default 8) is passed as --num-worker to find_max_batch_size.py.
+# Do not drop it for multi-GPU source configs (e.g. Sonata num_worker=8*num_gpu):
+# without the override the 1-GPU probe inherits hundreds of DataLoader workers
+# → host RAM OOM ("worker ... Killed"), not a VRAM result. Use NUM_WORKER=0/2
+# for a pure VRAM smoke if needed.
 #
 # Defaults match the recommended local commands (H100, 1 GPU).
 # Probe overlays replace hooks (LinProbeSbatchHook disabled during search).

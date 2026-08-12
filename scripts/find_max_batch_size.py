@@ -10,6 +10,15 @@ Align --mix-prob with the real training config:
   - supervised / lin-probe with Mix3D: keep 0.8 or 1.0
   - Sonata SSL pretrain (no Mix3D): pass --mix-prob 0
 
+**Always pass --num-worker** on 1-GPU probes (CLI flag → ``args.num_worker`` →
+config key ``num_worker``). If omitted (default None), the overlay does *not*
+override and you inherit the source config — e.g. Sonata
+``num_worker = 8 * num_gpu`` with ``num_gpu=32`` → **256 DataLoader workers**
+on a single GPU. PyTorch will spawn them even if Slurm only gave you 24 CPUs;
+workers then die with ``signal: Killed`` (host RAM OOM), which is *not* a VRAM
+verdict. Recommended: ``--num-worker 8`` (or ``0`` / ``2`` for a pure VRAM
+smoke). ``sbatch_find_max_batch_size.sh`` already defaults ``NUM_WORKER=8``.
+
 Probe overlays replace ``hooks`` entirely (see ``build_hooks``), so side-effect
 hooks such as ``LinProbeSbatchHook`` from the source config are never run.
 
@@ -18,35 +27,39 @@ Examples (JeanZay / local GPU)::
   # Train (supervised, Mix3D worst-case)
   python scripts/find_max_batch_size.py \\
     --config-file configs/experiment/w105/2/10h/litept-v1m0-flair3d_13.py \\
-    --mode train --min-bs 2 --max-bs 32 --probe-steps 64 --soak-steps 500
+    --mode train --min-bs 2 --max-bs 32 --probe-steps 64 --soak-steps 500 \\
+    --num-worker 8
 
   # Sonata SSL pretrain (no Mix3D)
   python scripts/find_max_batch_size.py \\
     --config-file configs/flair3d_default/pretrain-sonata-v1m2-flair3d.py \\
     --mode train --min-bs 1 --max-bs 8 --probe-steps 32 --soak-steps 200 \\
-    --mix-prob 0 --num-gpus 1
+    --mix-prob 0 --num-gpus 1 --num-worker 8
 
   # Sonata linear probe (Mix3D as in config)
   python scripts/find_max_batch_size.py \\
     --config-file configs/flair3d_default/segment/sonata-v1m2-flair3d-lin.py \\
     --mode train --min-bs 1 --max-bs 8 --probe-steps 32 --soak-steps 200 \\
-    --mix-prob 0.8 --num-gpus 1
+    --mix-prob 0.8 --num-gpus 1 --num-worker 8
 
   # Sonata linear probe, only reasonable batch sizes (4..32), not a bisection
   python scripts/find_max_batch_size.py \\
     --config-file configs/flair3d_default/segment/sonata-v1m2-flair3d-lin.py \\
     --mode train --candidates 4 8 12 16 20 24 32 \\
-    --probe-steps 32 --soak-steps 200 --mix-prob 0.8 --num-gpus 1
+    --probe-steps 32 --soak-steps 200 --mix-prob 0.8 --num-gpus 1 \\
+    --num-worker 8
 
   # Val (capped samples, no Mix3D)
   python scripts/find_max_batch_size.py \\
     --config-file configs/experiment/w105/2/10h/litept-v1m0-flair3d_13.py \\
-    --mode val --min-bs 1 --max-bs 16 --max-sample 128 --soak-steps 0
+    --mode val --min-bs 1 --max-bs 16 --max-sample 128 --soak-steps 0 \\
+    --num-worker 8
 
   # Test (builds a 1-step seed checkpoint, then probes tools/test.py)
   python scripts/find_max_batch_size.py \\
     --config-file configs/experiment/w105/2/10h/litept-v1m0-flair3d_13.py \\
-    --mode test --min-bs 1 --max-bs 16 --max-sample 128 --soak-steps 0
+    --mode test --min-bs 1 --max-bs 16 --max-sample 128 --soak-steps 0 \\
+    --num-worker 8
 """
 
 from __future__ import annotations
@@ -870,7 +883,18 @@ def parse_args() -> argparse.Namespace:
         help="Force even batch sizes in train mode (Mix3D pairs); default on",
     )
     p.add_argument("--num-gpus", type=int, default=1)
-    p.add_argument("--num-worker", type=int, default=None, help="Override num_worker")
+    p.add_argument(
+        "--num-worker",
+        type=int,
+        default=None,
+        help=(
+            "Override config num_worker (strongly recommended on 1-GPU probes). "
+            "Default None = inherit source config (dangerous when the config sets "
+            "num_worker = 8 * num_gpu for multi-GPU training, e.g. Sonata → 256 "
+            "workers and host-RAM OOM / 'DataLoader worker ... Killed'). "
+            "Use 8 normally, or 0/2 for a VRAM-only smoke."
+        ),
+    )
     p.add_argument(
         "--val-train-batch-size",
         type=int,

@@ -159,6 +159,13 @@ Keep a **~10–20 %** margin below the confirmed max.
 | Pretrain Sonata | `mix_prob=0` (no Mix3D; MultiView SSL) | `--mix-prob 0` |
 | Linear probe | `mix_prob=0.8` | `--mix-prob 0.8` |
 
+**Always set `--num-worker` / `NUM_WORKER`** on 1-GPU probes. If omitted, the
+overlay inherits the source config (`num_worker = 8 * num_gpu` → **256** for
+the 32-GPU Sonata template). PyTorch still spawns that many workers even with
+only 24 Slurm CPUs; they then die with `DataLoader worker ... Killed` (host
+RAM OOM) — not a VRAM verdict. Use `8` normally, or `0`/`2` for a VRAM-only
+smoke. The sbatch wrapper defaults `NUM_WORKER=8`.
+
 Probe overlays **replace `hooks` entirely**, so `LinProbeSbatchHook` from the
 pretrain config is never run during VRAM search (no spurious `sbatch` probes).
 
@@ -172,7 +179,7 @@ python scripts/find_max_batch_size.py \
   --config-file configs/flair3d_default/pretrain-sonata-v1m2-flair3d.py \
   --mode train --min-bs 1 --max-bs 8 \
   --probe-steps 32 --soak-steps 200 \
-  --mix-prob 0 --num-gpus 1
+  --mix-prob 0 --num-gpus 1 --num-worker 8
 ```
 
 Or via sbatch:
@@ -182,6 +189,7 @@ CONFIG=configs/flair3d_default/pretrain-sonata-v1m2-flair3d.py \
   MODE=train MIX_PROB=0 \
   MIN_BS_TRAIN=1 MAX_BS_TRAIN=8 \
   PROBE_STEPS=32 SOAK_STEPS_TRAIN=200 \
+  NUM_WORKER=8 \
   sbatch sbatch_find_max_batch_size.sh
 ```
 
@@ -196,7 +204,7 @@ python scripts/find_max_batch_size.py \
   --config-file configs/flair3d_default/segment/sonata-v1m2-flair3d-lin.py \
   --mode train --min-bs 1 --max-bs 8 \
   --probe-steps 32 --soak-steps 200 \
-  --mix-prob 0.8 --num-gpus 1
+  --mix-prob 0.8 --num-gpus 1 --num-worker 8
 # optional: --mode val for batch_size_val
 ```
 
@@ -207,6 +215,7 @@ CONFIG=configs/flair3d_default/segment/sonata-v1m2-flair3d-lin.py \
   MODE=train MIX_PROB=0.8 \
   MIN_BS_TRAIN=1 MAX_BS_TRAIN=8 \
   PROBE_STEPS=32 SOAK_STEPS_TRAIN=200 \
+  NUM_WORKER=8 \
   sbatch sbatch_find_max_batch_size.sh
 ```
 
