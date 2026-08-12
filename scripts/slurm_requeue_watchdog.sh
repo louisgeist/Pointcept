@@ -63,6 +63,7 @@ while true; do
     fi
     if [ "$left" -le "$MARGIN" ]; then
       echo "[slurm_requeue_watchdog] ${left}s left (margin=${MARGIN}s), requeuing ${SLURM_JOB_ID}" >&2
+      [ -n "${JOB_DIR:-}" ] && touch "${JOB_DIR}/.requeue_triggered" 2>/dev/null || true
       scontrol requeue "${SLURM_JOB_ID}" 2>/dev/null || true
       exit 0
     fi

@@ -97,12 +97,22 @@ srun --nodes="${SLURM_NNODES}" \
 
 # Batch script runs on node 0 only; srun starts one task per node so every node runs train.sh.
 # train.sh uses SLURM_NODEID for --machine-rank and SLURM_NODELIST for the dist URL.
-srun --unbuffered \
-  --nodes="${SLURM_NNODES}" \
-  --ntasks="${SLURM_NNODES}" \
-  --ntasks-per-node=1 \
-  --cpus-per-task="${SLURM_CPUS_PER_TASK}" \
-  bash -c "
+#
+# Wrapped in a retry loop: if training crashes (e.g. a bad sample poisons one rank and
+# srun cancels the whole step), retry in place within THIS SAME allocation instead of
+# resubmitting a new sbatch job (which would queue for a fresh allocation). JOB_DIR is
+# unchanged across retries, so scripts/train.sh auto-resumes from model_last.pth if a
+# checkpoint was already saved. Bounded by should_retry_after_crash (see
+# scripts/slurm_crash_retry.sh) so a systematic crash doesn't spin forever.
+. scripts/slurm_crash_retry.sh
+while true; do
+  ATTEMPT_START=$(date +%s)
+  srun --unbuffered \
+    --nodes="${SLURM_NNODES}" \
+    --ntasks="${SLURM_NNODES}" \
+    --ntasks-per-node=1 \
+    --cpus-per-task="${SLURM_CPUS_PER_TASK}" \
+    bash -c "
 cd ${REPO_ROOT} || exit 1
 export JOB_DIR=\"${JOB_DIR}\"
 export PYTHONPATH=\"${PYTHONPATH}\"
@@ -117,6 +127,11 @@ sh scripts/train.sh \
   -c pretrain-sonata-v1m2-flair3d \
   -n \"${EXP_NAME}\"
 "
+  TRAIN_EXIT_CODE=$?
+  ATTEMPT_DURATION=$(( $(date +%s) - ATTEMPT_START ))
+  [ "$TRAIN_EXIT_CODE" -eq 0 ] && break
+  should_retry_after_crash "$ATTEMPT_DURATION" "${JOB_DIR}" || break
+done
 
 echo "Exp dir: ${JOB_DIR}" >> "${JOB_DIR}/job_info.log"
 

@@ -117,6 +117,12 @@ def _trigger_slurm_requeue(reason):
             except Exception:
                 pass
             _finish_wandb_if_active()
+            job_dir = os.environ.get("JOB_DIR")
+            if job_dir:
+                try:
+                    open(os.path.join(job_dir, ".requeue_triggered"), "a").close()
+                except OSError:
+                    pass
             _log_requeue(f"Requeuing Slurm job {job_id}")
             subprocess.run(["scontrol", "requeue", job_id], check=False)
     else:
