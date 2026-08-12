@@ -254,7 +254,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--config",
-        default="segment/sonata-v1m2-flair3d-lin",
+        default="probe/sonata-v1m2-flair3d-lin",
         help="train.sh -c value",
     )
     parser.add_argument(

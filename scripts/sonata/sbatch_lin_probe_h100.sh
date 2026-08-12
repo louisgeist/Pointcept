@@ -45,7 +45,7 @@ cp $0 ${JOB_DIR}/script.slurm
     echo "Weight: $WEIGHT"
     echo "Pretrain job dir: ${PRETRAIN_JOB_DIR:-<none>}"
     echo "Pretrain epoch/iters: ${PRETRAIN_EPOCH}/${PRETRAIN_ITERS}"
-    echo "Config: flair3d_default/segment/sonata-v1m2-flair3d-lin"
+    echo "Config: flair3d_default/probe/sonata-v1m2-flair3d-lin"
     echo "Starting job at: $(date)"
     echo "Running on host: $(hostname)"
     nvidia-smi
@@ -76,7 +76,7 @@ TRAIN_RC=0
 sh scripts/train.sh \
   -g 1 \
   -d flair3d_default \
-  -c segment/sonata-v1m2-flair3d-lin \
+  -c probe/sonata-v1m2-flair3d-lin \
   -n "$EXP_NAME" \
   -w "$WEIGHT" || TRAIN_RC=$?
 
