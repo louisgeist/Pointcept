@@ -1,22 +1,21 @@
 """
-KPConvX on Flair3D+ multitask: segment (v20) + forest_2d + elevation + 4 nathab
-tile_distribution axes (WeightedKL; Habitat Type / Moisture Regime / Soil
-Chemistry / Bioclimatic Zone, remapped on the fly from natural_habitat) +
+LitePT-Base on Flair3D+ multitask: segment (v20) + forest_2d + elevation + 4
+nathab tile_distribution axes (WeightedKL; Habitat Type / Moisture Regime /
+Soil Chemistry / Bioclimatic Zone, remapped on the fly from natural_habitat) +
 network (roads only, CE + foreground weight=5; railroads/transmission lines
-dropped; scored via APLS at test time). Aligned with w107/w108 toward_bm +
-network roads-only recipe.
+dropped; scored via APLS at test time).
 
-Follows the KPConvX data path (GridSample return_min_coord, point_max) and
-kpconvx_base backbone. Uses num_classes=0 on the backbone so
-MultiTaskSegmentorV2 attaches all task heads (requires kpconvx_base feature mode).
+_1: same as flair3d_default/multi-litept-b-v1m0-flair3d.py with total_iters=50_000.
 
-This config is intentionally self-contained: it inherits only from default_runtime.
+This config is intentionally self-contained: it inherits only from
+default_runtime and can be read top-to-bottom without cross-referencing other
+Flair3D+ configs.
 """
 
 # -----------------------------------------------------------------------------
 # Default
 # -----------------------------------------------------------------------------
-_base_ = ["../_base_/default_runtime.py"]
+_base_ = ["../../../../_base_/default_runtime.py"]
 
 # -----------------------------------------------------------------------------
 # Run-level settings
@@ -38,26 +37,28 @@ num_worker = 8 * num_gpu
 enable_amp = True
 
 # Data parameters
-batch_size = 2 * num_gpu  # total batch size across all gpus
-batch_size_val = batch_size // 2
-batch_size_test = batch_size // 2
+batch_size = 12   # total batch size across all gpus
+batch_size_val = 2 * num_gpu
+batch_size_test = 2 * num_gpu
 
 grid_size = 0.1
-point_max = 40000
+point_max = 102400
 mix_prob = 0.8
+
+patch_size = 1024
 
 # Optimization parameters
 lr = 1e-3
-total_iters = 30_000
+total_iters = 50_000
 
-# Features (RGB + XYZ + strength concatenated into feat)
+# Features
 learned_masked_feat = True
 feat_keys = ["coord", "color", "strength"]
 coord_feat_scale = 0.01
 
 # Wandb parameters
 wandb_run_name = (
-    f"KPConvX multi {grp_exp}.{num_exp}) iter={total_iters}"
+    f"LPT-B multi {grp_exp}.{num_exp} iters={total_iters}"
 )
 wandb_project = "flair3d_multi"
 
@@ -68,6 +69,7 @@ from pointcept.datasets.flair3d_config_utils import (
     FLAIR3D_TILE_DISTRIBUTION_TASKS,
     init_task_configs,
     init_task_criteria,
+    FLAIR3D_COLLECT_PREFIX_LITEPT,
     init_multitask_collect_keys,
 )
 
@@ -164,45 +166,40 @@ test = dict(type="MultiTaskTester", verbose=True, write_cls_iou=True)
 # -----------------------------------------------------------------------------
 # Model
 # -----------------------------------------------------------------------------
-# Backbone returns per-point features (num_classes=0 skips internal classifier).
-backbone_feat_dim = 64
-
+# MultiTaskSegmentorV2 attaches per-task heads on top of backbone features
+# (semantic: nn.Linear(backbone_out_channels, num_classes_task); elevation: 1).
+# LitePT-Base official dims (deeper/wider than Small).
 model = dict(
     type="MultiTaskSegmentorV2",
-    backbone_out_channels=backbone_feat_dim,
+    backbone_out_channels=72,
     backbone=dict(
-        type="kpconvx_base",
-        input_channels=7,
-        num_classes=0,
-        dim=3,
-        task="cloud_segmentation",
-        kp_mode="kpconvx",
-        shell_sizes=(1, 14, 28),
-        kp_radius=2.3,
-        kp_aggregation="nearest",
-        kp_influence="constant",
-        kp_sigma=2.3,
-        share_kp=False,
-        conv_groups=-1,
-        inv_groups=8,
-        inv_act="sigmoid",
-        inv_grp_norm=True,
-        kpx_upcut=False,
-        subsample_size=grid_size,
-        neighbor_limits=(12, 16, 20, 20, 20),
-        layer_blocks=(3, 3, 9, 12, 3),
-        init_channels=64,
-        channel_scaling=1.414,
-        radius_scaling=2.2,
-        decoder_layer=True,
-        grid_pool=True,
-        upsample_n=3,
-        first_inv_layer=1,
-        drop_path_rate=0.3,
-        norm="batch",
-        bn_momentum=0.1,
-        smooth_labels=False, # True only for classification
-        class_w=(),
+        type="LitePT-v1",
+        in_channels=7,  # coord (3) + color (3) + strength (1)
+        order=("z", "z-trans", "hilbert", "hilbert-trans"),
+        stride=(3, 3, 3, 3),
+        enc_depths=(3, 3, 3, 12, 3),
+        enc_channels=(54, 108, 216, 432, 576),
+        enc_num_head=(3, 6, 12, 24, 32),
+        enc_patch_size=(patch_size, patch_size, patch_size, patch_size, patch_size),
+        enc_conv=(True, True, True, False, False),
+        enc_attn=(False, False, False, True, True),
+        enc_rope_freq=(100.0, 100.0, 100.0, 100.0, 100.0),
+        dec_depths=(0, 0, 0, 0),
+        dec_channels=(72, 108, 216, 432),
+        dec_num_head=(4, 6, 12, 24),
+        dec_patch_size=(patch_size, patch_size, patch_size, patch_size),
+        dec_conv=(False, False, False, False),
+        dec_attn=(False, False, False, False),
+        dec_rope_freq=(100.0, 100.0, 100.0, 100.0),
+        mlp_ratio=4,
+        qkv_bias=True,
+        qk_scale=None,
+        attn_drop=0.0,
+        proj_drop=0.0,
+        drop_path=0.3,
+        shuffle_orders=True,
+        pre_norm=True,
+        enc_mode=False,
     ),
     feature_mask_values=dict(
         enable=learned_masked_feat,
@@ -218,18 +215,19 @@ model = dict(
 # -----------------------------------------------------------------------------
 # Optimizer / scheduler
 # -----------------------------------------------------------------------------
-optimizer = dict(type="AdamW", lr=lr, weight_decay=0.02)
+optimizer = dict(type="AdamW", lr=lr, weight_decay=0.005)
 scheduler = dict(
     type="OneCycleLR",
-    max_lr=lr,
+    max_lr=[lr, lr / 10],
     pct_start=0.05,
     anneal_strategy="cos",
     div_factor=10.0,
-    final_div_factor=10000.0,
+    final_div_factor=1000.0,
 )
+param_dicts = [dict(keyword="block", lr=lr / 10)]
 
 # -----------------------------------------------------------------------------
-# Dataset (KPConvX-style subsampling; multitask keys from Flair3D+)
+# Dataset
 # -----------------------------------------------------------------------------
 dataset_type = "Flair3DDataset"
 data_root = "data/flair3d_plus"
@@ -271,10 +269,12 @@ network_apls_eval = dict(
 )
 
 train_multitask_keys, val_multitask_keys, multitask_index_valid_keys = (
-    init_multitask_collect_keys(target_keys)
+    init_multitask_collect_keys(
+        target_keys, collect_prefix_keys=FLAIR3D_COLLECT_PREFIX_LITEPT
+    )
 )
 
-del init_multitask_collect_keys
+del FLAIR3D_COLLECT_PREFIX_LITEPT, init_multitask_collect_keys
 
 data = dict(
     num_classes=num_classes,
@@ -316,7 +316,7 @@ data = dict(
                 grid_size=grid_size,
                 hash_type="fnv",
                 mode="train",
-                return_min_coord=True,
+                return_grid_coord=True,
             ),
             dict(type="SphereCrop", point_max=point_max, mode="random"),
             dict(type="CenterShift", apply_z=False),
@@ -327,8 +327,9 @@ data = dict(
             dict(type="RandomDropStrength", drop_ratio=0.1, drop_application_ratio=0.5, keep_mask=True),
             dict(type="NetworkRasterToPointLabels"),
             dict(type="NetworkRasterToPointLabels", target_key="forest_2d"),
-            dict(type="ShufflePoint"),
+            # dict(type="ShufflePoint"),
             dict(type="ToTensor"),
+            dict(type="Update", keys_dict={"grid_size": grid_size}),
             dict(
                 type="Collect",
                 keys=train_multitask_keys,
@@ -366,7 +367,7 @@ data = dict(
                 grid_size=grid_size,
                 hash_type="fnv",
                 mode="train",
-                return_min_coord=True,
+                return_grid_coord=True,
                 return_inverse=True,
             ),
             dict(type="CenterShift", apply_z=False),
@@ -374,6 +375,7 @@ data = dict(
             dict(type="NetworkRasterToPointLabels"),
             dict(type="NetworkRasterToPointLabels", target_key="forest_2d"),
             dict(type="ToTensor"),
+            dict(type="Update", keys_dict={"grid_size": grid_size}),
             dict(
                 type="Collect",
                 keys=val_multitask_keys,
@@ -412,7 +414,6 @@ data = dict(
                 mode="test",
                 return_grid_coord=True,
                 test_single_fragment=test_single_fragment,
-                return_inverse=True,
             ),
             crop=None,
             post_transform=[
@@ -424,6 +425,7 @@ data = dict(
                     type="Collect",
                     keys=(
                         "coord",
+                        "grid_coord",
                         "index",
                         "network",
                         "network_cell",

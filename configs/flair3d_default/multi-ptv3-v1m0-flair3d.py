@@ -1,7 +1,10 @@
 """
-PT-v3m1 on Flair3D+ multitask: segment (v20) + forest_2d + elevation + tile
-natural_habitat_multilabel (mean pooling) + network (roads only, CE + foreground
-weight=5; railroads/transmission lines dropped; scored via APLS at test time), aligned with w105 Flair3D experiments.
+PT-v3m1 on Flair3D+ multitask: segment (v20) + forest_2d + elevation + 4 nathab
+tile_distribution axes (WeightedKL; Habitat Type / Moisture Regime / Soil
+Chemistry / Bioclimatic Zone, remapped on the fly from natural_habitat) +
+network (roads only, CE + foreground weight=5; railroads/transmission lines
+dropped; scored via APLS at test time). Aligned with w107/w108 toward_bm +
+network roads-only recipe.
 
 This config is intentionally self-contained: it inherits only from default_runtime.
 """
@@ -60,6 +63,7 @@ wandb_project = "flair3d_multi"
 # Multitask configuration : targets configuraiton
 # -----------------------------------------------------------------------------
 from pointcept.datasets.flair3d_config_utils import (
+    FLAIR3D_TILE_DISTRIBUTION_TASKS,
     init_task_configs,
     init_task_criteria,
     FLAIR3D_COLLECT_PREFIX_GRID,
@@ -67,7 +71,26 @@ from pointcept.datasets.flair3d_config_utils import (
 )
 
 main_task = "segment"
-target_keys = (main_task, "forest_2d", "elevation", "natural_habitat_multilabel", "network")
+nathab_keys = tuple(FLAIR3D_TILE_DISTRIBUTION_TASKS.keys())
+target_keys = (main_task, "forest_2d", "elevation") + nathab_keys + ("network",)
+# natural_habitat is loader-only (remap source), not a supervised task.
+dataset_target_keys = ("natural_habitat",) + target_keys
+
+# GradNormLite: pool the 4 nathab axes into one "nathab" group.
+grad_norm_lite_task_groups = {task_name: "nathab" for task_name in nathab_keys}
+
+nathab_axis_remaps = dict(
+    nathab_habitat_type=("natural_habitat", "by_habitat_type_ecological"),
+    nathab_moisture_regime=("natural_habitat", "by_moisture_regime"),
+    nathab_soil_chemistry=("natural_habitat", "by_soil_chemistry"),
+    nathab_bioclimatic_zone=("natural_habitat", "by_climatic_domain"),
+)
+nathab_axis_storage_definitions = dict(natural_habitat="default")
+nathab_axis_remap = dict(
+    type="Flair3DLabelRemap",
+    remaps=nathab_axis_remaps,
+    storage_definitions=nathab_axis_storage_definitions,
+)
 
 # Elevation in meters: no Collect key_scales, no denorm via target_scales
 # (matches configs/experiment/w107/7/toward_bm/multi-litept-v1m0-flair3d_1.py).
@@ -78,7 +101,6 @@ label_definitions = dict(
 )
 
 task_configs = init_task_configs(target_keys, definitions=label_definitions)
-task_configs["natural_habitat_multilabel"]["pooling"] = "mean"
 # Network head: ROADS only (RAILROADS channel dropped), supervised with CE only
 # and weight=5 on the foreground pixel class. Mirrors
 # configs/experiment/w107/5/18h/mono_network_ce_road_w5.py.
@@ -108,7 +130,11 @@ task_weights = {task_name: 1.0 for task_name in task_configs.keys()}
 # treats every non-dunder module attribute as a config entry, and Config.dump
 # pipes the resulting Python text through yapf. Yapf cannot reformat function
 # objects rendered as "<function ... at 0x...>" and raises a SyntaxError.
-del init_task_configs, init_task_criteria
+del (
+    init_task_configs,
+    init_task_criteria,
+    FLAIR3D_TILE_DISTRIBUTION_TASKS,
+)
 
 # main_task drives checkpoint selection / mIoU logging, so its num_classes,
 # ignore_index and names are exposed at the data root for backward-compat hooks.
@@ -263,7 +289,7 @@ data = dict(
         data_root=data_root,
         csv_manifest=csv_manifest,
         min_points=min_points,
-        target_keys=list(target_keys),
+        target_keys=list(dataset_target_keys),
         primary_target_key=main_task,
         task_configs=task_configs,
         transform=[
@@ -273,6 +299,7 @@ data = dict(
             ),
             # Freeze Lambert XY before geometric augs / recentering.
             dict(type="ExtractAbsXY"),
+            nathab_axis_remap,
             dict(type="CenterShift", apply_z=True),
             dict(type="Z_MinShift"),
             dict(type="Z_RandomOffset"),
@@ -318,7 +345,7 @@ data = dict(
         csv_manifest=csv_manifest,
         min_points=min_points,
         stratified_subset_manifest=val_stratified_subset_manifest,
-        target_keys=list(target_keys),
+        target_keys=list(dataset_target_keys),
         primary_target_key=main_task,
         task_configs=task_configs,
         transform=[
@@ -327,15 +354,12 @@ data = dict(
                 keys_dict={"index_valid_keys": list(multitask_index_valid_keys)},
             ),
             dict(type="ExtractAbsXY"),
+            nathab_axis_remap,
             dict(type="CenterShift", apply_z=True),
             dict(type="Z_MinShift"),
             dict(
                 type="Copy",
-                keys_dict={
-                    "segment": "origin_segment",
-                    "forest_2d": "origin_forest_2d",
-                    "elevation": "origin_elevation",
-                },
+                keys_dict={t: f"origin_{t}" for t in target_keys},
             ),
             dict(
                 type="GridSample",
@@ -365,7 +389,7 @@ data = dict(
         data_root=data_root,
         csv_manifest=csv_manifest,
         min_points=min_points,
-        target_keys=list(target_keys),
+        target_keys=list(dataset_target_keys),
         primary_target_key=main_task,
         task_configs=task_configs,
         transform=[
@@ -374,6 +398,7 @@ data = dict(
                 keys_dict={"index_valid_keys": list(multitask_index_valid_keys)},
             ),
             dict(type="ExtractAbsXY"),
+            nathab_axis_remap,
             dict(type="CenterShift", apply_z=True),
             dict(type="Z_MinShift"),
             dict(type="NormalizeColor"),
