@@ -126,6 +126,14 @@ export POINTCEPT_SLURM_REQUEUE=1
 . scripts/slurm_requeue_trap.sh
 sh scripts/slurm_requeue_watchdog.sh &
 
+# Per-node nvidia-smi snapshot before training starts: the job_info.log nvidia-smi above only runs
+# on node 0 (batch script), so it can't show a bad/busy GPU on another node. One file per node.
+mkdir -p "${JOB_DIR}/nvidia-smi_pre"
+srun --nodes="${SLURM_NNODES}" \
+  --ntasks="${SLURM_NNODES}" \
+  --ntasks-per-node=1 \
+  bash -c "nvidia-smi > \"${JOB_DIR}/nvidia-smi_pre/\$(hostname).log\" 2>&1"
+
 # Batch script runs on node 0 only; srun starts one task per node so every node runs train.sh.
 # train.sh uses SLURM_NODEID for --machine-rank and SLURM_NODELIST for the dist URL.
 # -c ${CONFIG_REL} only matters if the JOB_DIR-resume pre-seed above didn't fire (see train.sh);
