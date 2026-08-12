@@ -56,9 +56,9 @@ EXP_NAME="${1:?usage: sbatch sbatch_pretrain_resume_h100.sh <exp_name> <config_r
 CONFIG_REL="${2:?usage: sbatch sbatch_pretrain_resume_h100.sh <exp_name> <config_rel_no_ext> <resume_ckpt_abs_path>}"
 RESUME_CKPT="${3:?usage: sbatch sbatch_pretrain_resume_h100.sh <exp_name> <config_rel_no_ext> <resume_ckpt_abs_path>}"
 NUM_GPUS=4  # must match --gres=gpu:N (per node); total GPUs = nodes × NUM_GPUS
-# Point LinProbeSbatchHook at the H100 probe launcher when the resumed config
-# still has the default A100 probe path at hooks[6].
-export EXTRA_OPTIONS="hooks.6.sbatch_script=scripts/sonata/sbatch_lin_probe_h100.sh"
+# LinProbeSbatchHook (hooks[6]) keeps its default sbatch_script
+# (scripts/sonata/sbatch_lin_probe.sh, A100): probe jobs are cheap/short, so
+# they run on A100 even when pretraining itself is on H100, to save H100 hours.
 
 REPO_ROOT=/lustre/fswork/projects/rech/unv/usi32yh/Pointcept
 JOB_DIR=${REPO_ROOT}/logs/slurm/${SLURM_JOB_ID}

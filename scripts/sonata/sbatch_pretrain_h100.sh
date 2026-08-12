@@ -30,9 +30,9 @@
 
 EXP_NAME="${1:-sonata_pretrain_flair3dplus_h100}"
 NUM_GPUS=4  # must match --gres=gpu:N (per node); total GPUs = nodes × NUM_GPUS
-# Point LinProbeSbatchHook at the H100 probe launcher (hooks[6] in the default
-# pretrain config). Without this, the config still submits the A100 script.
-export EXTRA_OPTIONS="hooks.6.sbatch_script=scripts/sonata/sbatch_lin_probe_h100.sh"
+# LinProbeSbatchHook (hooks[6]) keeps its default sbatch_script
+# (scripts/sonata/sbatch_lin_probe.sh, A100): probe jobs are cheap/short, so
+# they run on A100 even when pretraining itself is on H100, to save H100 hours.
 
 REPO_ROOT=/lustre/fswork/projects/rech/unv/usi32yh/Pointcept
 # Pass an existing job dir as $2 to resume it (train.sh auto-resumes when
