@@ -31,8 +31,9 @@ weight = "/lustre/fsn1/projects/rech/unv/usi32yh/logs/pointcept_logs/slurm/86268
 num_gpu = 1
 batch_size_per_gpu = 24
 batch_size = batch_size_per_gpu * num_gpu
-batch_size_val = 1
-batch_size_test = max(1, batch_size // 2)
+# Cap scenes/batch; actual packing uses *_voxel_budget.
+batch_size_val = 64 * num_gpu
+batch_size_test = 64 * num_gpu
 num_worker = 8 * num_gpu
 mix_prob = 0.8
 empty_cache = False
@@ -41,6 +42,9 @@ evaluate = True
 
 grid_size = 0.1
 point_max = 102400
+# Packing budgets in voxels (independent of train point_max / SphereCrop).
+val_voxel_budget = 1_000_000
+test_voxel_budget = 1_000_000
 
 total_iters = 20
 iter_per_epoch = 20
