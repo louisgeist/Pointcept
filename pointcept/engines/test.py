@@ -6,6 +6,7 @@ Please cite our work if the code is helpful to you.
 """
 
 import json
+from contextlib import nullcontext
 from uuid import uuid4
 import os
 import time
@@ -259,175 +260,179 @@ class SemSegTester(TesterBase):
                 json.dump(submission, f, indent=4)
         comm.synchronize()
         record = {}
+        packed = self._uses_multi_scene_batches()
+        bar_cm = (
+            EvaluationProgressBar(len(self.test_loader), desc="Test semseg")
+            if packed
+            else nullcontext()
+        )
         # fragment inference
-        for idx, data_dict in enumerate(self.test_loader):
-            start = time.time()
-            if self._uses_multi_scene_batches():
-                self._test_packed_semseg_batch(
-                    batch=data_dict,
-                    loader_idx=idx,
-                    save_path=save_path,
-                    logger=logger,
-                    start=start,
-                    batch_time=batch_time,
-                    intersection_meter=intersection_meter,
-                    union_meter=union_meter,
-                    target_meter=target_meter,
-                    record=record,
-                )
-                continue
-            data_dict = data_dict[0]  # current assume batch size is 1
-            fragment_list = data_dict.pop("fragment_list")
-            segment = data_dict.pop("segment")
-            data_name = data_dict.pop("name")
-            pred_save_path = os.path.join(save_path, "{}_pred.npy".format(data_name))
-            if os.path.isfile(pred_save_path):
-                logger.info(
-                    "{}/{}: {}, loaded pred and label.".format(
-                        idx + 1, len(self.test_loader), data_name
+        with bar_cm as prog:
+            for idx, data_dict in enumerate(self.test_loader):
+                start = time.time()
+                if packed:
+                    self._test_packed_semseg_batch(
+                        batch=data_dict,
+                        save_path=save_path,
+                        intersection_meter=intersection_meter,
+                        union_meter=union_meter,
+                        target_meter=target_meter,
+                        record=record,
+                        prog=prog,
                     )
-                )
-                pred = np.load(pred_save_path)
-                if "origin_segment" in data_dict.keys():
-                    segment = data_dict["origin_segment"]
-            else:
-                pred = torch.zeros((segment.size, self.cfg.data.num_classes)).cuda()
-                # Single-fragment mode: one point per voxel, broadcast via inverse
-                use_voxel_broadcast = "inverse" in fragment_list[0]
-                for i in range(len(fragment_list)):
-                    fragment_batch_size = 1
-                    s_i, e_i = i * fragment_batch_size, min(
-                        (i + 1) * fragment_batch_size, len(fragment_list)
-                    )
-                    input_dict = collate_fn(fragment_list[s_i:e_i])
-                    for key in input_dict.keys():
-                        if isinstance(input_dict[key], torch.Tensor):
-                            input_dict[key] = input_dict[key].cuda(non_blocking=True)
-                    idx_part = input_dict["index"]
-                    with torch.no_grad():
-                        pred_part = self.model(input_dict)["seg_logits"]  # (n, k)
-                        pred_part = F.softmax(pred_part, -1)
-                        if self.cfg.empty_cache:
-                            torch.cuda.empty_cache()
-                        if use_voxel_broadcast:
-                            inv = fragment_list[s_i:e_i][0]["inverse"]
-                            inv = (
-                                torch.from_numpy(inv).long().cuda()
-                                if isinstance(inv, np.ndarray)
-                                else inv.long().cuda()
-                            )
-                            pred += pred_part[inv, :]
-                        else:
-                            bs = 0
-                            for be in input_dict["offset"]:
-                                pred[idx_part[bs:be], :] += pred_part[bs:be]
-                                bs = be
-
+                    continue
+                data_dict = data_dict[0]  # current assume batch size is 1
+                fragment_list = data_dict.pop("fragment_list")
+                segment = data_dict.pop("segment")
+                data_name = data_dict.pop("name")
+                pred_save_path = os.path.join(save_path, "{}_pred.npy".format(data_name))
+                if os.path.isfile(pred_save_path):
                     logger.info(
-                        "Test: {}/{}-{data_name}, Batch: {batch_idx}/{batch_num}".format(
-                            idx + 1,
-                            len(self.test_loader),
-                            data_name=data_name,
-                            batch_idx=i,
-                            batch_num=len(fragment_list),
+                        "{}/{}: {}, loaded pred and label.".format(
+                            idx + 1, len(self.test_loader), data_name
                         )
                     )
-                if self.cfg.data.test.type == "ScanNetPPDataset":
-                    pred = pred.topk(3, dim=1)[1].data.cpu().numpy()
+                    pred = np.load(pred_save_path)
+                    if "origin_segment" in data_dict.keys():
+                        segment = data_dict["origin_segment"]
                 else:
-                    summed = pred.sum(1)
-                    pred = pred.max(1)[1].data.cpu().numpy()
-                if "origin_segment" in data_dict.keys():
-                    assert "inverse" in data_dict.keys()
-                    pred = pred[data_dict["inverse"]]
-                    segment = data_dict["origin_segment"]
-                np.save(pred_save_path, pred)
-            if (
-                self.cfg.data.test.type == "ScanNetDataset"
-                or self.cfg.data.test.type == "ScanNet200Dataset"
-            ):
-                np.savetxt(
-                    os.path.join(save_path, "submit", "{}.txt".format(data_name)),
-                    self.test_loader.dataset.class2id[pred].reshape([-1, 1]),
-                    fmt="%d",
+                    pred = torch.zeros((segment.size, self.cfg.data.num_classes)).cuda()
+                    # Single-fragment mode: one point per voxel, broadcast via inverse
+                    use_voxel_broadcast = "inverse" in fragment_list[0]
+                    for i in range(len(fragment_list)):
+                        fragment_batch_size = 1
+                        s_i, e_i = i * fragment_batch_size, min(
+                            (i + 1) * fragment_batch_size, len(fragment_list)
+                        )
+                        input_dict = collate_fn(fragment_list[s_i:e_i])
+                        for key in input_dict.keys():
+                            if isinstance(input_dict[key], torch.Tensor):
+                                input_dict[key] = input_dict[key].cuda(non_blocking=True)
+                        idx_part = input_dict["index"]
+                        with torch.no_grad():
+                            pred_part = self.model(input_dict)["seg_logits"]  # (n, k)
+                            pred_part = F.softmax(pred_part, -1)
+                            if self.cfg.empty_cache:
+                                torch.cuda.empty_cache()
+                            if use_voxel_broadcast:
+                                inv = fragment_list[s_i:e_i][0]["inverse"]
+                                inv = (
+                                    torch.from_numpy(inv).long().cuda()
+                                    if isinstance(inv, np.ndarray)
+                                    else inv.long().cuda()
+                                )
+                                pred += pred_part[inv, :]
+                            else:
+                                bs = 0
+                                for be in input_dict["offset"]:
+                                    pred[idx_part[bs:be], :] += pred_part[bs:be]
+                                    bs = be
+
+                        logger.info(
+                            "Test: {}/{}-{data_name}, Batch: {batch_idx}/{batch_num}".format(
+                                idx + 1,
+                                len(self.test_loader),
+                                data_name=data_name,
+                                batch_idx=i,
+                                batch_num=len(fragment_list),
+                            )
+                        )
+                    if self.cfg.data.test.type == "ScanNetPPDataset":
+                        pred = pred.topk(3, dim=1)[1].data.cpu().numpy()
+                    else:
+                        summed = pred.sum(1)
+                        pred = pred.max(1)[1].data.cpu().numpy()
+                    if "origin_segment" in data_dict.keys():
+                        assert "inverse" in data_dict.keys()
+                        pred = pred[data_dict["inverse"]]
+                        segment = data_dict["origin_segment"]
+                    np.save(pred_save_path, pred)
+                if (
+                    self.cfg.data.test.type == "ScanNetDataset"
+                    or self.cfg.data.test.type == "ScanNet200Dataset"
+                ):
+                    np.savetxt(
+                        os.path.join(save_path, "submit", "{}.txt".format(data_name)),
+                        self.test_loader.dataset.class2id[pred].reshape([-1, 1]),
+                        fmt="%d",
+                    )
+                elif self.cfg.data.test.type == "ScanNetPPDataset":
+                    np.savetxt(
+                        os.path.join(save_path, "submit", "{}.txt".format(data_name)),
+                        pred.astype(np.int32),
+                        delimiter=",",
+                        fmt="%d",
+                    )
+                    pred = pred[:, 0]  # for mIoU, TODO: support top3 mIoU
+                elif self.cfg.data.test.type == "SemanticKITTIDataset":
+                    # 00_000000 -> 00, 000000
+                    sequence_name, frame_name = data_name.split("_")
+                    os.makedirs(
+                        os.path.join(
+                            save_path, "submit", "sequences", sequence_name, "predictions"
+                        ),
+                        exist_ok=True,
+                    )
+                    submit = pred.astype(np.uint32)
+                    submit = np.vectorize(
+                        self.test_loader.dataset.learning_map_inv.__getitem__
+                    )(submit).astype(np.uint32)
+                    submit.tofile(
+                        os.path.join(
+                            save_path,
+                            "submit",
+                            "sequences",
+                            sequence_name,
+                            "predictions",
+                            f"{frame_name}.label",
+                        )
+                    )
+                elif self.cfg.data.test.type == "NuScenesDataset":
+                    np.array(pred + 1).astype(np.uint8).tofile(
+                        os.path.join(
+                            save_path,
+                            "submit",
+                            "lidarseg",
+                            "test",
+                            "{}_lidarseg.bin".format(data_name),
+                        )
+                    )
+
+                intersection, union, target = intersection_and_union(
+                    pred, segment, self.cfg.data.num_classes, self.cfg.data.ignore_index
                 )
-            elif self.cfg.data.test.type == "ScanNetPPDataset":
-                np.savetxt(
-                    os.path.join(save_path, "submit", "{}.txt".format(data_name)),
-                    pred.astype(np.int32),
-                    delimiter=",",
-                    fmt="%d",
+                intersection_meter.update(intersection)
+                union_meter.update(union)
+                target_meter.update(target)
+                record[data_name] = dict(
+                    intersection=intersection, union=union, target=target
                 )
-                pred = pred[:, 0]  # for mIoU, TODO: support top3 mIoU
-            elif self.cfg.data.test.type == "SemanticKITTIDataset":
-                # 00_000000 -> 00, 000000
-                sequence_name, frame_name = data_name.split("_")
-                os.makedirs(
-                    os.path.join(
-                        save_path, "submit", "sequences", sequence_name, "predictions"
-                    ),
-                    exist_ok=True,
-                )
-                submit = pred.astype(np.uint32)
-                submit = np.vectorize(
-                    self.test_loader.dataset.learning_map_inv.__getitem__
-                )(submit).astype(np.uint32)
-                submit.tofile(
-                    os.path.join(
-                        save_path,
-                        "submit",
-                        "sequences",
-                        sequence_name,
-                        "predictions",
-                        f"{frame_name}.label",
+
+                mask = union != 0
+                iou_class = intersection / (union + 1e-10)
+                iou = np.mean(iou_class[mask])
+                acc = sum(intersection) / (sum(target) + 1e-10)
+
+                m_iou = np.mean(intersection_meter.sum / (union_meter.sum + 1e-10))
+                m_acc = np.mean(intersection_meter.sum / (target_meter.sum + 1e-10))
+
+                batch_time.update(time.time() - start)
+                logger.info(
+                    "Test: {} [{}/{}]-{} "
+                    "Batch {batch_time.val:.3f} ({batch_time.avg:.3f}) "
+                    "Accuracy {acc:.4f} ({m_acc:.4f}) "
+                    "mIoU {iou:.4f} ({m_iou:.4f})".format(
+                        data_name,
+                        idx + 1,
+                        len(self.test_loader),
+                        segment.size,
+                        batch_time=batch_time,
+                        acc=acc,
+                        m_acc=m_acc,
+                        iou=iou,
+                        m_iou=m_iou,
                     )
                 )
-            elif self.cfg.data.test.type == "NuScenesDataset":
-                np.array(pred + 1).astype(np.uint8).tofile(
-                    os.path.join(
-                        save_path,
-                        "submit",
-                        "lidarseg",
-                        "test",
-                        "{}_lidarseg.bin".format(data_name),
-                    )
-                )
-
-            intersection, union, target = intersection_and_union(
-                pred, segment, self.cfg.data.num_classes, self.cfg.data.ignore_index
-            )
-            intersection_meter.update(intersection)
-            union_meter.update(union)
-            target_meter.update(target)
-            record[data_name] = dict(
-                intersection=intersection, union=union, target=target
-            )
-
-            mask = union != 0
-            iou_class = intersection / (union + 1e-10)
-            iou = np.mean(iou_class[mask])
-            acc = sum(intersection) / (sum(target) + 1e-10)
-
-            m_iou = np.mean(intersection_meter.sum / (union_meter.sum + 1e-10))
-            m_acc = np.mean(intersection_meter.sum / (target_meter.sum + 1e-10))
-
-            batch_time.update(time.time() - start)
-            logger.info(
-                "Test: {} [{}/{}]-{} "
-                "Batch {batch_time.val:.3f} ({batch_time.avg:.3f}) "
-                "Accuracy {acc:.4f} ({m_acc:.4f}) "
-                "mIoU {iou:.4f} ({m_iou:.4f})".format(
-                    data_name,
-                    idx + 1,
-                    len(self.test_loader),
-                    segment.size,
-                    batch_time=batch_time,
-                    acc=acc,
-                    m_acc=m_acc,
-                    iou=iou,
-                    m_iou=m_iou,
-                )
-            )
 
         logger.info("Syncing ...")
         comm.synchronize()
@@ -518,15 +523,12 @@ class SemSegTester(TesterBase):
     def _test_packed_semseg_batch(
         self,
         batch,
-        loader_idx,
         save_path,
-        logger,
-        start,
-        batch_time,
         intersection_meter,
         union_meter,
         target_meter,
         record,
+        prog,
     ):
         """Packed multi-scene test step (batch_size > 1 or VoxelBudget sampler).
 
@@ -560,11 +562,6 @@ class SemSegTester(TesterBase):
         if all(batch_cached):
             batch_pred = []
             for b_idx, pred_save_path in enumerate(batch_pred_paths):
-                logger.info(
-                    "{}/{}: {}, loaded pred and label.".format(
-                        loader_idx + 1, len(self.test_loader), batch_data_names[b_idx]
-                    )
-                )
                 pred = np.load(pred_save_path)
                 segment = batch_segments[b_idx]
                 if "origin_segment" in batch_scene_extra[b_idx]:
@@ -622,31 +619,19 @@ class SemSegTester(TesterBase):
                 np.save(batch_pred_paths[b_idx], pred)
                 batch_pred.append(pred)
 
-        logger.info(
-            "Test batch {}/{}: {} scenes ({})".format(
-                loader_idx + 1,
-                len(self.test_loader),
-                len(batch),
-                ", ".join(batch_data_names),
-            )
-        )
-
         for b_idx in range(len(batch)):
             self._emit_semseg_scene_result(
                 pred=batch_pred[b_idx],
                 segment=batch_segments[b_idx],
                 data_name=batch_data_names[b_idx],
                 save_path=save_path,
-                logger=logger,
-                loader_idx=loader_idx,
-                start=start,
-                batch_time=batch_time,
                 intersection_meter=intersection_meter,
                 union_meter=union_meter,
                 target_meter=target_meter,
                 record=record,
-                update_batch_time=(b_idx == len(batch) - 1),
+                log_scene=False,
             )
+        prog.step(cached=all(batch_cached))
 
     def _emit_semseg_scene_result(
         self,
@@ -654,15 +639,16 @@ class SemSegTester(TesterBase):
         segment,
         data_name,
         save_path,
-        logger,
-        loader_idx,
-        start,
-        batch_time,
         intersection_meter,
         union_meter,
         target_meter,
         record,
+        logger=None,
+        loader_idx=0,
+        start=None,
+        batch_time=None,
         update_batch_time=True,
+        log_scene=True,
     ):
         if (
             self.cfg.data.test.type == "ScanNetDataset"
@@ -724,6 +710,9 @@ class SemSegTester(TesterBase):
             intersection=intersection, union=union, target=target
         )
 
+        if not log_scene:
+            return
+
         mask = union != 0
         iou_class = intersection / (union + 1e-10)
         iou = np.mean(iou_class[mask])
@@ -732,7 +721,7 @@ class SemSegTester(TesterBase):
         m_iou = np.mean(intersection_meter.sum / (union_meter.sum + 1e-10))
         m_acc = np.mean(intersection_meter.sum / (target_meter.sum + 1e-10))
 
-        if update_batch_time:
+        if update_batch_time and batch_time is not None and start is not None:
             batch_time.update(time.time() - start)
         logger.info(
             "Test: {} [{}/{}]-{} "
