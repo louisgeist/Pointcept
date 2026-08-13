@@ -26,7 +26,8 @@ enable_amp = True
 
 # Data parameters
 batch_size = 40 * num_gpu  # total batch size across all gpus
-batch_size_val = batch_size // 8
+batch_size_val = 8
+val_voxel_budget = 2_000_000
 batch_size_test = batch_size // 20
 
 grid_size = 0.1

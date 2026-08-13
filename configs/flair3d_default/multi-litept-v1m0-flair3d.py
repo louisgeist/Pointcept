@@ -39,7 +39,8 @@ enable_amp = True
 
 # Data parameters
 batch_size = 12  # total batch size across all gpus
-batch_size_val = batch_size // 2
+batch_size_val = 8
+val_voxel_budget = 2_000_000
 # Cap scenes/batch; actual packing uses test_voxel_budget (w105/6/19h: 2M worked).
 batch_size_test = 8 * num_gpu
 test_voxel_budget = 2_000_000
