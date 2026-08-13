@@ -46,14 +46,14 @@ test_voxel_budget = 2_000_000
 
 grid_size = 0.1
 point_max = 102400
-mix_prob = 0.8
+mix_prob = 1
 
 patch_size = 1024
 
 # Debug-speed overrides: a few train steps, a few val/test scenes.
-train_max_sample = 20
-val_max_sample = 8
-test_max_sample = 4
+train_max_sample = 12*20
+val_max_sample = 12*10
+test_max_sample = 12*10
 
 # Optimization parameters
 lr = 1e-3
