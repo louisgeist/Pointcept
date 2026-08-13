@@ -221,13 +221,21 @@ class GridProbeSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
 
     def forward(self, input_dict, return_point=False):
         feat_by_norm, point, active = self.prepare_batch(input_dict)
+        return_dict = {}
+        if return_point:
+            return_dict["point"] = point
+        else:
+            # Backbone-internal-only state (serialized order/inverse, per-stage
+            # pad/unpad/cu_seqlens, sparse_conv_feat, ...) -- same reasoning as
+            # GridProbeTrainer.run_step: nothing below reads `point`, but the
+            # reference would otherwise sit in this frame's locals (kept alive
+            # by Python until forward() returns) for every active probe below,
+            # e.g. GridProbeEvaluator's per-batch self.trainer.model(input_dict).
+            del point
         seg_logits_by_task = {
             name: self.probe_logits(name, feat_by_norm) for name in active
         }
-
-        return_dict = {"seg_logits_by_task": seg_logits_by_task}
-        if return_point:
-            return_dict["point"] = point
+        return_dict["seg_logits_by_task"] = seg_logits_by_task
 
         has_target = self.target_key in input_dict
         if has_target:
