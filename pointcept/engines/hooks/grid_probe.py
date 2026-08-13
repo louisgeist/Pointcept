@@ -343,6 +343,7 @@ class GridProbeWinnerSelector(HookBase):
             for name, best in evaluator._best_miou_by_probe.items()
         }
         payload = {
+            "num_probes": len(raw_model.probe_names),
             "winner": {
                 "probe_name": winner_name,
                 "probe_config": dict(raw_model.probe_configs[winner_name]),
