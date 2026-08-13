@@ -768,9 +768,14 @@ class MultiDatasetTrainer(Trainer):
 class GridProbeTrainer(Trainer):
     """Trainer for GridProbeSegmentorV2: N linear probe heads, each with its
     own optimizer/scheduler/grad_clip type and hyperparameters, sharing one
-    frozen-backbone forward per batch, then one backward per head (heads share
-    no trainable params, so this frees each probe's autograd graph before the
-    next).
+    frozen-backbone forward per batch, then one shared backward over the sum
+    of every active probe's loss (heads share no trainable params, so this
+    gives every head exactly its own gradient in one autograd pass — cheaper
+    than one backward() per probe, but keeps every active probe's forward+loss
+    graph alive simultaneously until that point: ~440MB/probe measured on the
+    wide-grid config (batch_size=12, point_max=102400) — cap probe count to
+    what fits (~100 is a safe margin on an 80GB GPU; verify per-config with
+    scripts/sonata/diagnose_grid_probe_vram.py rather than assuming).
 
     self.optimizer / self.scheduler become dict[str, ...] here (one entry per
     probe) instead of the base Trainer's single instance — hooks that assume
@@ -856,9 +861,15 @@ class GridProbeTrainer(Trainer):
             for opt in self.optimizer.values():
                 opt.zero_grad()
 
-        # One frozen-backbone forward, then per-probe head+loss+backward so
-        # autograd only saves one [P, C] Linear input / Lovasz graph at a time
-        # (heads share no trainable params).
+        # One frozen-backbone forward, then one shared backward over the sum
+        # of every active probe's loss: heads share zero trainable params
+        # (only the frozen backbone), so one backward() on the sum gives every
+        # head exactly its own gradient. Cheaper in wall-clock than one
+        # backward() per probe (no repeated autograd-engine dispatch), at the
+        # cost of keeping every active probe's forward+loss graph alive at
+        # once until this point -- ~440MB/probe measured (batch_size=12,
+        # point_max=102400, wide-grid config), so cap probe count accordingly
+        # (see GridProbeSegmentorV2 docstring / scripts/sonata/diagnose_grid_probe_vram.py).
         raw_model = self._raw_model()
         with auto_cast(
             enabled=self.cfg.enable_amp, dtype=AMP_DTYPE[self.cfg.amp_dtype]
@@ -873,19 +884,23 @@ class GridProbeTrainer(Trainer):
             target = input_dict.get(raw_model.target_key)
             loss_by_task = {}
             pred_by_task = {}
+            task_losses = []
             for name in active:
                 logits = raw_model.probe_logits(name, feat_by_norm)
                 if target is not None:
                     task_loss = raw_model.criteria_by_task[name](logits, target)
-                    scaled = task_loss / self.cfg.gradient_accumulation_steps
-                    if self.cfg.enable_amp:
-                        self.scaler.scale(scaled).backward()
-                    else:
-                        scaled.backward()
+                    task_losses.append(task_loss)
                     loss_by_task[name] = task_loss.detach()
                     pred_by_task[name] = logits.argmax(dim=1).detach()
                     input_dict.setdefault(name, target)
                 del logits
+
+            if task_losses:
+                total = sum(task_losses) / self.cfg.gradient_accumulation_steps
+                if self.cfg.enable_amp:
+                    self.scaler.scale(total).backward()
+                else:
+                    total.backward()
 
         output_dict = {}
         if loss_by_task:
