@@ -227,10 +227,17 @@ class InformationWriter(HookBase):
             }
         return {"": opt.state_dict()["param_groups"][0]["lr"]}
 
-    @staticmethod
-    def _skip_console_scalar(key):
+    def _skip_console_scalar(self, key):
         key = str(key)
-        return key.startswith("gradient/") or key.startswith("loss_scale/")
+        if key.startswith("gradient/") or key.startswith("loss_scale/"):
+            return True
+        # GridProbeTrainer: one optimizer per probe — skip per-probe losses
+        # (loss/<name>) on the console; the aggregate "loss" scalar stays.
+        if key.startswith("loss/") and isinstance(
+            getattr(self.trainer, "optimizer", None), dict
+        ):
+            return True
+        return False
 
     _GLOBAL_GRAD_STEP_KEYS = frozenset(
         {"gradient/global", "gradient/weight_update"}
@@ -478,10 +485,7 @@ class InformationWriter(HookBase):
         lrs = self._optimizer_lrs(self.trainer)
         if list(lrs.keys()) == [""]:
             self.trainer.comm_info["iter_info"] += "Lr: {lr:.5f}".format(lr=lrs[""])
-        else:
-            self.trainer.comm_info["iter_info"] += " ".join(
-                f"Lr/{name}: {lr:.5f}" for name, lr in lrs.items()
-            )
+        # GridProbeTrainer (dict of optimizers): skip per-probe LRs on console.
         if self.curr_iter % self.log_interval == 0 and comm.is_main_process():
             self.trainer.logger.info(self.trainer.comm_info["iter_info"])
         self.trainer.comm_info["iter_info"] = ""  # reset iter info
