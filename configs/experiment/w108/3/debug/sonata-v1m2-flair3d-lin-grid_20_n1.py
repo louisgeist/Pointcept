@@ -29,7 +29,7 @@ weight = "/lustre/fsn1/projects/rech/unv/usi32yh/logs/pointcept_logs/slurm/86268
 # Run-level settings
 # -----------------------------------------------------------------------------
 num_gpu = 1
-batch_size_per_gpu = 12
+batch_size_per_gpu = 24
 batch_size = batch_size_per_gpu * num_gpu
 batch_size_val = 1
 batch_size_test = max(1, batch_size // 2)

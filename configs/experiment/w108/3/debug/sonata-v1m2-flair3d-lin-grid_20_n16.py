@@ -1,5 +1,5 @@
 """
-Sonata-v1m2 wide grid-search linear probe on Flair3D+ segment (v20) — Jean Zay debug w108/3/debug (20 iters, n=21 = 336/16 probes).
+Sonata-v1m2 wide grid-search linear probe on Flair3D+ segment (v20) — Jean Zay debug w108/3/debug (20 iters, n=4 = 336/84 probes).
 
 Explicit nested-loop cartesian (no cartesian_probes helper): loss × lr × wd ×
 input_norm (unitsphere), all AdamW + CosineAnnealing. Shared frozen PT-v3m2
@@ -9,7 +9,7 @@ Intended checkpoint (pretrain job 862680, epoch 9):
   /lustre/fsn1/projects/rech/unv/usi32yh/logs/pointcept_logs/slurm/862680/model/epoch_9.pth
 Launch via scripts/sonata/sbatch_lin_grid_probe.sh (A100) or _h100.sh.
 
-Grid subsampled to 21 probes (keep every 16-th of the full 336):
+Grid subsampled to 4 probes (keep every 84-th of the full 336):
   4 losses (ce_lovasz, ce, focal_g2, focal_g1)
   × 7 LRs (1e-5 … 5e-2)
   × 3 weight decays (0, 1e-4, 1e-6)
@@ -50,7 +50,7 @@ feat_keys = ["coord", "color", "strength"]
 
 wandb_project = "flair3d_sonata"
 wandb_run_name = (
-    f"Sonata-v1m2 grid-debug n21 | bs={batch_size} | "
+    f"Sonata-v1m2 grid-debug n4 | bs={batch_size} | "
     f"iters={total_iters}"
 )
 
@@ -153,8 +153,8 @@ for _loss_name, _criteria in _losses.items():
                     grad_clip=3.0,
                 )
 
-# Keep every 16-th probe (~336/16 = 21) for cheaper debug.
-probes = dict(list(probes.items())[::16])
+# Keep every 21-th probe (~336/21 = 16) for cheaper debug.
+probes = dict(list(probes.items())[::21])
 
 del _losses, _lrs, _wds, _norms, _loss_name, _criteria, _lr_name, _lr
 del _wd_name, _wd, _norm_name, _input_norm, _name
