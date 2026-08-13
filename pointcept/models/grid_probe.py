@@ -26,6 +26,38 @@ _INPUT_NORM_P = {"l1": 1, "l2": 2, "linf": float("inf")}
 _FEAT_NORM_TYPES = frozenset((None, "batchnorm", "layernorm"))
 
 
+def _unitsphere(feat, kind, eps=1e-6):
+    """Row-wise unitsphere: None returns `feat` unchanged; l1/l2/linf divide
+    by the corresponding p-norm (clamped at `eps`). Shared by ProbeHead and
+    GridProbeSegmentorV2's per-kind cache so N heads with the same input_norm
+    do not each materialize a [P, C] copy."""
+    if kind is None:
+        return feat
+    if kind not in _INPUT_NORM_P:
+        raise ValueError(f"input_norm must be one of None/l1/l2/linf, got {kind!r}.")
+    p = _INPUT_NORM_P[kind]
+    return feat / feat.norm(p=p, dim=-1, keepdim=True).clamp_min(eps)
+
+
+def _prepare_shared_feat(feat):
+    """One contiguous (+ AMP-dtype) copy of backbone feat for every probe head."""
+    feat = feat.contiguous()
+    if torch.is_autocast_enabled():
+        feat = feat.to(dtype=torch.get_autocast_gpu_dtype())
+    return feat
+
+
+def _input_norm_cache(feat, heads, names):
+    """At most one unitsphere tensor per (input_norm, eps) among `names`."""
+    cache = {}
+    for name in names:
+        head = heads[name]
+        key = (head.input_norm, head.eps)
+        if key not in cache:
+            cache[key] = _unitsphere(feat, head.input_norm, head.eps)
+    return cache
+
+
 class ProbeHead(nn.Module):
     """One grid-search point: optional input-feature normalization, optional
     feature norm (BatchNorm1d/LayerNorm), optional dropout, then a linear
@@ -57,10 +89,9 @@ class ProbeHead(nn.Module):
         self.dropout = nn.Dropout(p=float(dropout)) if dropout else nn.Identity()
         self.linear = nn.Linear(in_channels, num_classes)
 
-    def forward(self, feat):
-        if self.input_norm is not None:
-            p = _INPUT_NORM_P[self.input_norm]
-            feat = feat / feat.norm(p=p, dim=-1, keepdim=True).clamp_min(self.eps)
+    def forward(self, feat, apply_input_norm=True):
+        if apply_input_norm:
+            feat = _unitsphere(feat, self.input_norm, self.eps)
         feat = self.norm(feat)
         feat = self.dropout(feat)
         return self.linear(feat)
@@ -170,7 +201,15 @@ class GridProbeSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
             feat, point = self._forward_backbone(input_dict)
 
         active = self._active_probe_names()
-        seg_logits_by_task = {name: self.heads[name](feat) for name in active}
+        feat = _prepare_shared_feat(feat)
+        feat_by_norm = _input_norm_cache(feat, self.heads, active)
+        seg_logits_by_task = {
+            name: self.heads[name](
+                feat_by_norm[(self.heads[name].input_norm, self.heads[name].eps)],
+                apply_input_norm=False,
+            )
+            for name in active
+        }
 
         return_dict = {"seg_logits_by_task": seg_logits_by_task}
         if return_point:
