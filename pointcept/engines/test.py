@@ -121,7 +121,11 @@ class TesterBase:
     def build_test_loader(self):
         test_dataset = build_dataset(self.cfg.data.test)
         voxel_budget = getattr(self.cfg, "test_voxel_budget", None)
-        num_workers = self.cfg.batch_size_test_per_gpu
+        # Use cfg.num_worker (via num_worker_per_gpu), not batch_size_test.
+        # batch_size_test_per_gpu is the voxel-packing scene cap (often 64);
+        # using it as DataLoader workers forks that many processes and can
+        # OOM-kill the job (each worker prefetches full LiDAR tiles).
+        num_workers = self.cfg.num_worker_per_gpu
 
         if voxel_budget is not None:
             max_batch_size = int(self.cfg.batch_size_test_per_gpu)
