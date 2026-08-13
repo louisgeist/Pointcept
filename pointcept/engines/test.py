@@ -211,8 +211,12 @@ class TesterBase:
 @TESTERS.register_module()
 class SemSegTester(TesterBase):
     def test(self):
-        assert self.test_loader.batch_size in (1, None)
         logger = get_root_logger()
+        if self._uses_multi_scene_batches():
+            logger.info(
+                "Batch size > 1 detected. Assuming test_single_fragment=True "
+                "for SemSegTester."
+            )
         logger.info(">>>>>>>>>>>>>>>> Start Evaluation >>>>>>>>>>>>>>>>")
         self.begin_test_timing()
 
@@ -258,6 +262,20 @@ class SemSegTester(TesterBase):
         # fragment inference
         for idx, data_dict in enumerate(self.test_loader):
             start = time.time()
+            if self._uses_multi_scene_batches():
+                self._test_packed_semseg_batch(
+                    batch=data_dict,
+                    loader_idx=idx,
+                    save_path=save_path,
+                    logger=logger,
+                    start=start,
+                    batch_time=batch_time,
+                    intersection_meter=intersection_meter,
+                    union_meter=union_meter,
+                    target_meter=target_meter,
+                    record=record,
+                )
+                continue
             data_dict = data_dict[0]  # current assume batch size is 1
             fragment_list = data_dict.pop("fragment_list")
             segment = data_dict.pop("segment")
@@ -496,6 +514,242 @@ class SemSegTester(TesterBase):
         self.end_test_timing_and_log(extra_log_dict=log_dict)
         if comm.is_main_process():
             logger.info("<<<<<<<<<<<<<<<<< End Evaluation <<<<<<<<<<<<<<<<<")
+
+    def _test_packed_semseg_batch(
+        self,
+        batch,
+        loader_idx,
+        save_path,
+        logger,
+        start,
+        batch_time,
+        intersection_meter,
+        union_meter,
+        target_meter,
+        record,
+    ):
+        """Packed multi-scene test step (batch_size > 1 or VoxelBudget sampler).
+
+        Requires test_single_fragment=True (one fragment per scene). Collates
+        those fragments, runs a single forward, and splits logits by offset.
+        """
+        assert all(len(d["fragment_list"]) == 1 for d in batch), (
+            "Batch size > 1 is only supported with test_single_fragment=True "
+            "(1 fragment per scene)."
+        )
+
+        batch_data_names = []
+        batch_segments = []
+        batch_scene_extra = []
+        batch_fragment_lists = []
+        batch_pred_paths = []
+        batch_cached = []
+
+        for data_dict in batch:
+            fragment_list = data_dict.pop("fragment_list")
+            segment = data_dict.pop("segment")
+            data_name = data_dict.pop("name")
+            pred_save_path = os.path.join(save_path, "{}_pred.npy".format(data_name))
+            batch_data_names.append(data_name)
+            batch_segments.append(segment)
+            batch_scene_extra.append(data_dict)
+            batch_fragment_lists.append(fragment_list)
+            batch_pred_paths.append(pred_save_path)
+            batch_cached.append(os.path.isfile(pred_save_path))
+
+        if all(batch_cached):
+            batch_pred = []
+            for b_idx, pred_save_path in enumerate(batch_pred_paths):
+                logger.info(
+                    "{}/{}: {}, loaded pred and label.".format(
+                        loader_idx + 1, len(self.test_loader), batch_data_names[b_idx]
+                    )
+                )
+                pred = np.load(pred_save_path)
+                segment = batch_segments[b_idx]
+                if "origin_segment" in batch_scene_extra[b_idx]:
+                    segment = batch_scene_extra[b_idx]["origin_segment"]
+                batch_pred.append(pred)
+                batch_segments[b_idx] = segment
+        else:
+            fragments = [fl[0] for fl in batch_fragment_lists]
+            use_voxel_broadcast = "inverse" in fragments[0]
+            num_classes = self.cfg.data.num_classes
+            pred_sum = [
+                torch.zeros((int(np.asarray(seg).size), num_classes), device="cuda")
+                for seg in batch_segments
+            ]
+
+            input_dict = collate_fn(fragments)
+            for key in input_dict.keys():
+                if isinstance(input_dict[key], torch.Tensor):
+                    input_dict[key] = input_dict[key].cuda(non_blocking=True)
+            idx_part = input_dict["index"]
+
+            with torch.no_grad():
+                pred_part_all = self.model(input_dict)["seg_logits"]  # (n, k)
+                pred_part_all = F.softmax(pred_part_all, -1)
+                if self.cfg.empty_cache:
+                    torch.cuda.empty_cache()
+
+                bs = 0
+                for b_idx, be in enumerate(input_dict["offset"]):
+                    pred_part = pred_part_all[bs:be]
+                    if use_voxel_broadcast:
+                        inv = fragments[b_idx]["inverse"]
+                        inv = (
+                            torch.from_numpy(inv).long().cuda()
+                            if isinstance(inv, np.ndarray)
+                            else inv.long().cuda()
+                        )
+                        pred_sum[b_idx] += pred_part[inv, :]
+                    else:
+                        pred_sum[b_idx][idx_part[bs:be], :] += pred_part
+                    bs = be
+
+            batch_pred = []
+            for b_idx in range(len(batch)):
+                pred = pred_sum[b_idx]
+                if self.cfg.data.test.type == "ScanNetPPDataset":
+                    pred = pred.topk(3, dim=1)[1].data.cpu().numpy()
+                else:
+                    pred = pred.max(1)[1].data.cpu().numpy()
+                scene_extra = batch_scene_extra[b_idx]
+                if "origin_segment" in scene_extra:
+                    assert "inverse" in scene_extra
+                    pred = pred[scene_extra["inverse"]]
+                    batch_segments[b_idx] = scene_extra["origin_segment"]
+                np.save(batch_pred_paths[b_idx], pred)
+                batch_pred.append(pred)
+
+        logger.info(
+            "Test batch {}/{}: {} scenes ({})".format(
+                loader_idx + 1,
+                len(self.test_loader),
+                len(batch),
+                ", ".join(batch_data_names),
+            )
+        )
+
+        for b_idx in range(len(batch)):
+            self._emit_semseg_scene_result(
+                pred=batch_pred[b_idx],
+                segment=batch_segments[b_idx],
+                data_name=batch_data_names[b_idx],
+                save_path=save_path,
+                logger=logger,
+                loader_idx=loader_idx,
+                start=start,
+                batch_time=batch_time,
+                intersection_meter=intersection_meter,
+                union_meter=union_meter,
+                target_meter=target_meter,
+                record=record,
+                update_batch_time=(b_idx == len(batch) - 1),
+            )
+
+    def _emit_semseg_scene_result(
+        self,
+        pred,
+        segment,
+        data_name,
+        save_path,
+        logger,
+        loader_idx,
+        start,
+        batch_time,
+        intersection_meter,
+        union_meter,
+        target_meter,
+        record,
+        update_batch_time=True,
+    ):
+        if (
+            self.cfg.data.test.type == "ScanNetDataset"
+            or self.cfg.data.test.type == "ScanNet200Dataset"
+        ):
+            np.savetxt(
+                os.path.join(save_path, "submit", "{}.txt".format(data_name)),
+                self.test_loader.dataset.class2id[pred].reshape([-1, 1]),
+                fmt="%d",
+            )
+        elif self.cfg.data.test.type == "ScanNetPPDataset":
+            np.savetxt(
+                os.path.join(save_path, "submit", "{}.txt".format(data_name)),
+                pred.astype(np.int32),
+                delimiter=",",
+                fmt="%d",
+            )
+            pred = pred[:, 0]  # for mIoU, TODO: support top3 mIoU
+        elif self.cfg.data.test.type == "SemanticKITTIDataset":
+            sequence_name, frame_name = data_name.split("_")
+            os.makedirs(
+                os.path.join(
+                    save_path, "submit", "sequences", sequence_name, "predictions"
+                ),
+                exist_ok=True,
+            )
+            submit = pred.astype(np.uint32)
+            submit = np.vectorize(
+                self.test_loader.dataset.learning_map_inv.__getitem__
+            )(submit).astype(np.uint32)
+            submit.tofile(
+                os.path.join(
+                    save_path,
+                    "submit",
+                    "sequences",
+                    sequence_name,
+                    "predictions",
+                    f"{frame_name}.label",
+                )
+            )
+        elif self.cfg.data.test.type == "NuScenesDataset":
+            np.array(pred + 1).astype(np.uint8).tofile(
+                os.path.join(
+                    save_path,
+                    "submit",
+                    "lidarseg",
+                    "test",
+                    "{}_lidarseg.bin".format(data_name),
+                )
+            )
+
+        intersection, union, target = intersection_and_union(
+            pred, segment, self.cfg.data.num_classes, self.cfg.data.ignore_index
+        )
+        intersection_meter.update(intersection)
+        union_meter.update(union)
+        target_meter.update(target)
+        record[data_name] = dict(
+            intersection=intersection, union=union, target=target
+        )
+
+        mask = union != 0
+        iou_class = intersection / (union + 1e-10)
+        iou = np.mean(iou_class[mask])
+        acc = sum(intersection) / (sum(target) + 1e-10)
+
+        m_iou = np.mean(intersection_meter.sum / (union_meter.sum + 1e-10))
+        m_acc = np.mean(intersection_meter.sum / (target_meter.sum + 1e-10))
+
+        if update_batch_time:
+            batch_time.update(time.time() - start)
+        logger.info(
+            "Test: {} [{}/{}]-{} "
+            "Batch {batch_time.val:.3f} ({batch_time.avg:.3f}) "
+            "Accuracy {acc:.4f} ({m_acc:.4f}) "
+            "mIoU {iou:.4f} ({m_iou:.4f})".format(
+                data_name,
+                loader_idx + 1,
+                len(self.test_loader),
+                segment.size if hasattr(segment, "size") else len(segment),
+                batch_time=batch_time,
+                acc=acc,
+                m_acc=m_acc,
+                iou=iou,
+                m_iou=m_iou,
+            )
+        )
 
     @staticmethod
     def collate_fn(batch):
