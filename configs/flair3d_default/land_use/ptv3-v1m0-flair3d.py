@@ -1,5 +1,5 @@
 """
-PT-v3m1 on Flair3D+ (coord + RGB + strength in feat_keys; grid_coord serialization).
+PT-v3-malibu on Flair3D+ (coord + RGB + strength in feat_keys; grid_coord + grid_size).
 
 Mono-task Flair3D+ config for target ``land_use``. Inherits only from default_runtime.
 """
@@ -56,7 +56,7 @@ wandb_project = "flair3d_land_use"
 from pointcept.datasets.flair3d_config_utils import (
     init_task_configs,
     init_task_criteria,
-    FLAIR3D_COLLECT_PREFIX_GRID,
+    FLAIR3D_COLLECT_PREFIX_LITEPT,
     init_multitask_collect_keys,
 )
 
@@ -105,7 +105,7 @@ model = dict(
     type="MultiTaskSegmentorV2",
     backbone_out_channels=64,
     backbone=dict(
-        type="PT-v3m1",
+        type="PT-v3-malibu",
         in_channels=7,  # coord (3) + color (3) + strength (1)
         order=["z", "z-trans", "hilbert", "hilbert-trans"],
         stride=(3, 3, 3, 3),
@@ -130,12 +130,6 @@ model = dict(
         upcast_attention=False,
         upcast_softmax=False,
         enc_mode=False,
-        pdnorm_bn=False,
-        pdnorm_ln=False,
-        pdnorm_decouple=True,
-        pdnorm_adaptive=False,
-        pdnorm_affine=True,
-        pdnorm_conditions=("ScanNet", "S3DIS", "Structured3D"),
     ),
     feature_mask_values=dict(
         enable=learned_masked_feat,
@@ -169,11 +163,11 @@ min_points = {"train": 1000}
 
 train_multitask_keys, val_multitask_keys, multitask_index_valid_keys = (
     init_multitask_collect_keys(
-        target_keys, collect_prefix_keys=FLAIR3D_COLLECT_PREFIX_GRID
+        target_keys, collect_prefix_keys=FLAIR3D_COLLECT_PREFIX_LITEPT
     )
 )
 
-del FLAIR3D_COLLECT_PREFIX_GRID, init_multitask_collect_keys
+del FLAIR3D_COLLECT_PREFIX_LITEPT, init_multitask_collect_keys
 
 data = dict(
     num_classes=num_classes,
@@ -221,6 +215,7 @@ data = dict(
             dict(type="RandomDropStrength", drop_ratio=0.1, drop_application_ratio=0.5, keep_mask=True),
             # dict(type="ShufflePoint"),
             dict(type="ToTensor"),
+            dict(type="Update", keys_dict={"grid_size": grid_size}),
             dict(
                 type="Collect",
                 keys=train_multitask_keys,
@@ -260,6 +255,7 @@ data = dict(
             dict(type="CenterShift", apply_z=False),
             dict(type="NormalizeColor"),
             dict(type="ToTensor"),
+            dict(type="Update", keys_dict={"grid_size": grid_size}),
             dict(
                 type="Collect",
                 keys=val_multitask_keys,

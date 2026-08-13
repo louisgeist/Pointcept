@@ -1,5 +1,5 @@
 """
-PT-v3m1 on Flair3D+ (coord + RGB + strength in feat_keys; grid_coord serialization).
+PT-v3-malibu on Flair3D+ (coord + RGB + strength in feat_keys; grid_coord + grid_size).
 
 Mono-task Flair3D+ config for point-wise elevation regression. Inherits only from
 default_runtime.
@@ -55,7 +55,7 @@ wandb_project = "flair3d_elevation"
 # Mono-task regression configuration
 # -----------------------------------------------------------------------------
 from pointcept.datasets.flair3d_config_utils import (
-    FLAIR3D_COLLECT_PREFIX_GRID,
+    FLAIR3D_COLLECT_PREFIX_LITEPT,
     init_multitask_collect_keys,
 )
 
@@ -94,7 +94,7 @@ model = dict(
     # target_scales denorm. See multi-litept-v1m0-flair3d_1.py (w107/7/toward_bm).
     criteria=[dict(type="SmoothL1Loss", beta=1.0, loss_weight=1.0)],
     backbone=dict(
-        type="PT-v3m1",
+        type="PT-v3-malibu",
         in_channels=7,  # coord (3) + color (3) + strength (1)
         order=["z", "z-trans", "hilbert", "hilbert-trans"],
         stride=(3, 3, 3, 3),
@@ -119,12 +119,6 @@ model = dict(
         upcast_attention=False,
         upcast_softmax=False,
         enc_mode=False,
-        pdnorm_bn=False,
-        pdnorm_ln=False,
-        pdnorm_decouple=True,
-        pdnorm_adaptive=False,
-        pdnorm_affine=True,
-        pdnorm_conditions=("ScanNet", "S3DIS", "Structured3D"),
     ),
     feature_mask_values=dict(
         enable=learned_masked_feat,
@@ -152,10 +146,10 @@ csv_manifest = "data/flair3d_plus/raw/scene_split_manifest.csv"
 min_points = {"train": 1000}
 
 train_collect_keys, val_collect_keys, index_valid_keys = init_multitask_collect_keys(
-    target_keys, collect_prefix_keys=FLAIR3D_COLLECT_PREFIX_GRID
+    target_keys, collect_prefix_keys=FLAIR3D_COLLECT_PREFIX_LITEPT
 )
 
-del FLAIR3D_COLLECT_PREFIX_GRID, init_multitask_collect_keys
+del FLAIR3D_COLLECT_PREFIX_LITEPT, init_multitask_collect_keys
 
 data = dict(
     target_scales=target_scales,
@@ -199,6 +193,7 @@ data = dict(
             dict(type="RandomDropStrength", drop_ratio=1.0, drop_application_ratio=0.2, keep_mask=True),
             dict(type="RandomDropStrength", drop_ratio=0.1, drop_application_ratio=0.5, keep_mask=True),
             dict(type="ToTensor"),
+            dict(type="Update", keys_dict={"grid_size": grid_size}),
             dict(
                 type="Collect",
                 keys=train_collect_keys,
@@ -238,6 +233,7 @@ data = dict(
             dict(type="CenterShift", apply_z=False),
             dict(type="NormalizeColor"),
             dict(type="ToTensor"),
+            dict(type="Update", keys_dict={"grid_size": grid_size}),
             dict(
                 type="Collect",
                 keys=val_collect_keys,

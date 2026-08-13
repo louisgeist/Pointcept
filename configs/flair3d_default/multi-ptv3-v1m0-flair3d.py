@@ -1,10 +1,14 @@
 """
-PT-v3m1 on Flair3D+ multitask: segment (v20) + forest_2d + elevation + 4 nathab
+PT-v3-malibu on Flair3D+ multitask: segment (v20) + forest_2d + elevation + 4 nathab
 tile_distribution axes (WeightedKL; Habitat Type / Moisture Regime / Soil
 Chemistry / Bioclimatic Zone, remapped on the fly from natural_habitat) +
 network (roads only, CE + foreground weight=5; railroads/transmission lines
 dropped; scored via APLS at test time). Aligned with w107/w108 toward_bm +
 network roads-only recipe.
+
+PT-v3-malibu is the in-house PTv3: PT-v3m2 GridPooling (any integer stride)
+plus the PT-v3m1 SubMConv3d stem. Same enc/dec widths as the former v3m1
+recipe; decoder on (enc_mode=False). Collects grid_size like LitePT/Sonata.
 
 This config is intentionally self-contained: it inherits only from default_runtime.
 """
@@ -34,9 +38,11 @@ num_worker = 8 * num_gpu
 enable_amp = True
 
 # Data parameters
-batch_size = 4 * num_gpu  # total batch size across all gpus
-batch_size_val = batch_size // 2
-batch_size_test = batch_size // 2
+batch_size = 12  # total batch size across all gpus
+batch_size_val = 2 * num_gpu
+# Cap scenes/batch; actual packing uses test_voxel_budget (w105/6/19h: 2M worked).
+batch_size_test = 8 * num_gpu
+test_voxel_budget = 2_000_000
 
 grid_size = 0.1
 point_max = 102400
@@ -66,7 +72,7 @@ from pointcept.datasets.flair3d_config_utils import (
     FLAIR3D_TILE_DISTRIBUTION_TASKS,
     init_task_configs,
     init_task_criteria,
-    FLAIR3D_COLLECT_PREFIX_GRID,
+    FLAIR3D_COLLECT_PREFIX_LITEPT,
     init_multitask_collect_keys,
 )
 
@@ -165,11 +171,12 @@ test = dict(type="MultiTaskTester", verbose=True, write_cls_iou=True)
 # -----------------------------------------------------------------------------
 # MultiTaskSegmentorV2 attaches per-task heads on top of backbone features
 # (semantic: nn.Linear(backbone_out_channels, num_classes_task); elevation: 1).
+# PT-v3-malibu: GridPooling (any integer stride) + v3m1 SubMConv3d stem; decoder on.
 model = dict(
     type="MultiTaskSegmentorV2",
     backbone_out_channels=64,
     backbone=dict(
-        type="PT-v3m1",
+        type="PT-v3-malibu",
         in_channels=7,  # coord (3) + color (3) + strength (1)
         order=["z", "z-trans", "hilbert", "hilbert-trans"],
         stride=(3, 3, 3, 3),
@@ -194,12 +201,6 @@ model = dict(
         upcast_attention=False,
         upcast_softmax=False,
         enc_mode=False,
-        pdnorm_bn=False,
-        pdnorm_ln=False,
-        pdnorm_decouple=True,
-        pdnorm_adaptive=False,
-        pdnorm_affine=True,
-        pdnorm_conditions=("ScanNet", "S3DIS", "Structured3D"),
     ),
     feature_mask_values=dict(
         enable=learned_masked_feat,
@@ -270,11 +271,11 @@ network_apls_eval = dict(
 
 train_multitask_keys, val_multitask_keys, multitask_index_valid_keys = (
     init_multitask_collect_keys(
-        target_keys, collect_prefix_keys=FLAIR3D_COLLECT_PREFIX_GRID
+        target_keys, collect_prefix_keys=FLAIR3D_COLLECT_PREFIX_LITEPT
     )
 )
 
-del FLAIR3D_COLLECT_PREFIX_GRID, init_multitask_collect_keys
+del FLAIR3D_COLLECT_PREFIX_LITEPT, init_multitask_collect_keys
 
 data = dict(
     num_classes=num_classes,
@@ -329,6 +330,7 @@ data = dict(
             dict(type="NetworkRasterToPointLabels", target_key="forest_2d"),
             # dict(type="ShufflePoint"),
             dict(type="ToTensor"),
+            dict(type="Update", keys_dict={"grid_size": grid_size}),
             dict(
                 type="Collect",
                 keys=train_multitask_keys,
@@ -374,6 +376,7 @@ data = dict(
             dict(type="NetworkRasterToPointLabels"),
             dict(type="NetworkRasterToPointLabels", target_key="forest_2d"),
             dict(type="ToTensor"),
+            dict(type="Update", keys_dict={"grid_size": grid_size}),
             dict(
                 type="Collect",
                 keys=val_multitask_keys,
