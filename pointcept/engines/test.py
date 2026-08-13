@@ -118,14 +118,36 @@ class TesterBase:
             raise RuntimeError("=> No checkpoint found at '{}'".format(self.cfg.weight))
         return model
 
+    def _test_loader_worker_kwargs(self, packed):
+        """DataLoader worker settings for test.
+
+        ``num_worker`` is a train/val prefetch budget. In test_mode each
+        sample keeps the dense cloud plus ``fragment_list``; a packed batch
+        is ~12 full LiDAR HD tiles. 8 workers × default prefetch_factor=2
+        holds ~16 such batches in CPU RAM and the OS OOM-kills the job
+        (plain ``Killed``, no CUDA traceback) even when val at the same
+        voxel budget is fine.
+        """
+        num_workers = int(self.cfg.num_worker_per_gpu)
+        kwargs = dict(num_workers=num_workers, pin_memory=True)
+        if packed and num_workers > 0:
+            num_workers = min(num_workers, 2)
+            kwargs["num_workers"] = num_workers
+            kwargs["prefetch_factor"] = 1
+            self.logger.info(
+                "Test DataLoader: packed full-res tiles, "
+                "capping num_workers=%d prefetch_factor=1 "
+                "(cfg.num_worker_per_gpu=%d)",
+                num_workers,
+                self.cfg.num_worker_per_gpu,
+            )
+        return kwargs
+
     def build_test_loader(self):
         test_dataset = build_dataset(self.cfg.data.test)
         voxel_budget = getattr(self.cfg, "test_voxel_budget", None)
-        # Use cfg.num_worker (via num_worker_per_gpu), not batch_size_test.
-        # batch_size_test_per_gpu is the voxel-packing scene cap (often 64);
-        # using it as DataLoader workers forks that many processes and can
-        # OOM-kill the job (each worker prefetches full LiDAR tiles).
-        num_workers = self.cfg.num_worker_per_gpu
+        packed = voxel_budget is not None or int(self.cfg.batch_size_test_per_gpu) > 1
+        worker_kwargs = self._test_loader_worker_kwargs(packed)
 
         if voxel_budget is not None:
             max_batch_size = int(self.cfg.batch_size_test_per_gpu)
@@ -147,29 +169,25 @@ class TesterBase:
                 missing_csv,
                 size_source,
             )
-            test_loader = torch.utils.data.DataLoader(
+            return torch.utils.data.DataLoader(
                 test_dataset,
                 batch_sampler=batch_sampler,
-                num_workers=num_workers,
-                pin_memory=True,
                 collate_fn=self.__class__.collate_fn,
+                **worker_kwargs,
             )
-            return test_loader
 
         if comm.get_world_size() > 1:
             test_sampler = torch.utils.data.distributed.DistributedSampler(test_dataset)
         else:
             test_sampler = None
-        test_loader = torch.utils.data.DataLoader(
+        return torch.utils.data.DataLoader(
             test_dataset,
             batch_size=self.cfg.batch_size_test_per_gpu,
             shuffle=False,
-            num_workers=num_workers,
-            pin_memory=True,
             sampler=test_sampler,
             collate_fn=self.__class__.collate_fn,
+            **worker_kwargs,
         )
-        return test_loader
 
     def _uses_multi_scene_batches(self):
         """True when the loader packs multiple scenes per step.
