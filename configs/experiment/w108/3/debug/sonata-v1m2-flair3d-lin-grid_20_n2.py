@@ -1,5 +1,5 @@
 """
-Sonata-v1m2 wide grid-search linear probe on Flair3D+ segment (v20) — Jean Zay debug w108/3/debug (20 iters, n=2 = 336/168 probes).
+Sonata-v1m2 wide grid-search linear probe on Flair3D+ segment (v20) — Jean Zay debug w108/3/debug (2 iters, n=2 = 336/168 probes).
 
 Explicit nested-loop cartesian (no cartesian_probes helper): loss × lr × wd ×
 input_norm (unitsphere), all AdamW + CosineAnnealing. Shared frozen PT-v3m2
@@ -16,7 +16,7 @@ Grid subsampled to 2 probes (keep every 168-th of the full 336):
   × 4 input_norm (l2, linf, l1, none)
   Fixed: feat_norm=None, dropout=0, AdamW, CosineAnnealingLR, grad_clip=3.0.
 
-Plumbing smoke: total_iters=20, iter_per_epoch=20, eval_every=20
+Plumbing smoke: total_iters=2, iter_per_epoch=2, eval_every=2
 (1 trainer epoch; last epoch is always validated). Winner still runs a short test pass.
 """
 
@@ -46,9 +46,9 @@ point_max = 102400
 val_voxel_budget = 1_000_000
 test_voxel_budget = 1_000_000
 
-total_iters = 20
-iter_per_epoch = 20
-eval_every = 20
+total_iters = 2
+iter_per_epoch = 2
+eval_every = 2
 
 feat_keys = ["coord", "color", "strength"]
 
