@@ -36,7 +36,14 @@ def _unitsphere(feat, kind, eps=1e-6):
     if kind not in _INPUT_NORM_P:
         raise ValueError(f"input_norm must be one of None/l1/l2/linf, got {kind!r}.")
     p = _INPUT_NORM_P[kind]
-    return feat / feat.norm(p=p, dim=-1, keepdim=True).clamp_min(eps)
+    norm = feat.norm(p=p, dim=-1, keepdim=True).clamp_min(eps)
+    # Under autocast, .norm() runs (and returns) in fp32 for numerical
+    # stability; dividing fp16 feat by an fp32 norm silently promotes the
+    # whole result to fp32, doubling every l1/l2/linf cache entry in
+    # _input_norm_cache (and forcing an extra fp16-cast-for-Linear, saved
+    # for backward, on every probe that reads it) instead of matching
+    # feat's own dtype like the None branch already does.
+    return feat / norm.to(feat.dtype)
 
 
 def _prepare_shared_feat(feat):
@@ -192,23 +199,30 @@ class GridProbeSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
             feat = point
         return feat, point
 
-    def forward(self, input_dict, return_point=False):
+    def prepare_batch(self, input_dict):
+        """Shared backbone feat + per-kind unitsphere cache for the active heads."""
         self._fill_masked_feat_with_learned_value(input_dict)
         if self.freeze_backbone:
             with torch.no_grad():
                 feat, point = self._forward_backbone(input_dict)
         else:
             feat, point = self._forward_backbone(input_dict)
-
         active = self._active_probe_names()
         feat = _prepare_shared_feat(feat)
         feat_by_norm = _input_norm_cache(feat, self.heads, active)
+        return feat_by_norm, point, active
+
+    def probe_logits(self, name, feat_by_norm):
+        head = self.heads[name]
+        return head(
+            feat_by_norm[(head.input_norm, head.eps)],
+            apply_input_norm=False,
+        )
+
+    def forward(self, input_dict, return_point=False):
+        feat_by_norm, point, active = self.prepare_batch(input_dict)
         seg_logits_by_task = {
-            name: self.heads[name](
-                feat_by_norm[(self.heads[name].input_norm, self.heads[name].eps)],
-                apply_input_norm=False,
-            )
-            for name in active
+            name: self.probe_logits(name, feat_by_norm) for name in active
         }
 
         return_dict = {"seg_logits_by_task": seg_logits_by_task}

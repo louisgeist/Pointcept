@@ -768,7 +768,9 @@ class MultiDatasetTrainer(Trainer):
 class GridProbeTrainer(Trainer):
     """Trainer for GridProbeSegmentorV2: N linear probe heads, each with its
     own optimizer/scheduler/grad_clip type and hyperparameters, sharing one
-    frozen-backbone forward+backward pass per batch.
+    frozen-backbone forward per batch, then one backward per head (heads share
+    no trainable params, so this frees each probe's autograd graph before the
+    next).
 
     self.optimizer / self.scheduler become dict[str, ...] here (one entry per
     probe) instead of the base Trainer's single instance — hooks that assume
@@ -789,6 +791,22 @@ class GridProbeTrainer(Trainer):
 
     def _raw_model(self):
         return self.model.module if hasattr(self.model, "module") else self.model
+
+    def before_train(self):
+        super().before_train()
+        n_probes = len(self._raw_model().probe_names)
+        self.logger.info(
+            "Grid probe: %d linear heads trained in parallel "
+            "(one frozen-backbone forward per batch).",
+            n_probes,
+        )
+        if (
+            self.cfg.enable_wandb
+            and comm.is_main_process()
+            and wandb.run is not None
+        ):
+            wandb.run.summary["grid_probe/num_probes"] = n_probes
+            wandb.log({"grid_probe/num_probes": n_probes})
 
     def build_optimizer(self):
         raw_model = self._raw_model()
@@ -838,24 +856,42 @@ class GridProbeTrainer(Trainer):
             for opt in self.optimizer.values():
                 opt.zero_grad()
 
-        # Forward pass: one shared backbone + all active probe heads under one autocast.
+        # One frozen-backbone forward, then per-probe head+loss+backward so
+        # autograd only saves one [P, C] Linear input / Lovasz graph at a time
+        # (heads share no trainable params).
+        raw_model = self._raw_model()
         with auto_cast(
             enabled=self.cfg.enable_amp, dtype=AMP_DTYPE[self.cfg.amp_dtype]
         ):
-            output_dict = self.model(input_dict)
-            # Sum of independent per-probe losses: since probe heads share zero
-            # trainable params (only the frozen backbone), one backward() on the
-            # sum gives every head exactly its own gradient (see grid_probe.py
-            # module docstring) — no per-probe backward passes needed.
-            loss = (
-                output_dict["loss"] / self.cfg.gradient_accumulation_steps
-            )  # scale loss
+            feat_by_norm, point, active = raw_model.prepare_batch(input_dict)
+            # Backbone-internal-only state (serialized order/inverse for every
+            # order, per-stage pad/unpad/cu_seqlens, sparse_conv_feat, ...) --
+            # nothing below reads `point` again, but the reference would
+            # otherwise sit in this frame's locals (Python doesn't drop it
+            # until the function returns) for the whole per-probe loop.
+            del point
+            target = input_dict.get(raw_model.target_key)
+            loss_by_task = {}
+            pred_by_task = {}
+            for name in active:
+                logits = raw_model.probe_logits(name, feat_by_norm)
+                if target is not None:
+                    task_loss = raw_model.criteria_by_task[name](logits, target)
+                    scaled = task_loss / self.cfg.gradient_accumulation_steps
+                    if self.cfg.enable_amp:
+                        self.scaler.scale(scaled).backward()
+                    else:
+                        scaled.backward()
+                    loss_by_task[name] = task_loss.detach()
+                    pred_by_task[name] = logits.argmax(dim=1).detach()
+                    input_dict.setdefault(name, target)
+                del logits
 
-        # Backward pass
-        if self.cfg.enable_amp:
-            self.scaler.scale(loss).backward()
-        else:
-            loss.backward()
+        output_dict = {}
+        if loss_by_task:
+            output_dict["loss"] = sum(loss_by_task.values())
+            output_dict["loss_by_task"] = loss_by_task
+            output_dict["pred_by_task"] = pred_by_task
         self._gradient_accumulation_counter += 1
 
         # Perform optimizer step only when enough gradients have accumulated
