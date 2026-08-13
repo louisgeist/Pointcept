@@ -1,10 +1,14 @@
 """
-PT-v3m1 on Flair3D+ multitask — short debug smoke (w108/4/ptv3_debug).
+PT-v3-malibu on Flair3D+ multitask — short debug smoke (w108/4/ptv3_debug).
 
 Same task composition as configs/flair3d_default/multi-ptv3-v1m0-flair3d.py
 (segment v20 + forest_2d + elevation + 4 nathab axes + network roads-only).
 Debug-speed overrides only: few train iters, a handful of val/test scenes,
 eval_every=1, no val_stratified_subset_manifest (rely on max_sample).
+
+PT-v3-malibu is the in-house PTv3 (v3m2 GridPooling + v3m1 SubMConv3d stem),
+so stride=(3, 3, 3, 3) is valid. Same enc/dec widths as the former v3m1 recipe;
+decoder on (enc_mode=False).
 
 This config is intentionally self-contained: it inherits only from default_runtime.
 """
@@ -75,7 +79,7 @@ from pointcept.datasets.flair3d_config_utils import (
     FLAIR3D_TILE_DISTRIBUTION_TASKS,
     init_task_configs,
     init_task_criteria,
-    FLAIR3D_COLLECT_PREFIX_GRID,
+    FLAIR3D_COLLECT_PREFIX_LITEPT,
     init_multitask_collect_keys,
 )
 
@@ -174,11 +178,12 @@ test = dict(type="MultiTaskTester", verbose=True, write_cls_iou=True)
 # -----------------------------------------------------------------------------
 # MultiTaskSegmentorV2 attaches per-task heads on top of backbone features
 # (semantic: nn.Linear(backbone_out_channels, num_classes_task); elevation: 1).
+# PT-v3-malibu: GridPooling (any integer stride) + v3m1 SubMConv3d stem; decoder on.
 model = dict(
     type="MultiTaskSegmentorV2",
     backbone_out_channels=64,
     backbone=dict(
-        type="PT-v3m1",
+        type="PT-v3-malibu",
         in_channels=7,  # coord (3) + color (3) + strength (1)
         order=["z", "z-trans", "hilbert", "hilbert-trans"],
         stride=(3, 3, 3, 3),
@@ -203,12 +208,6 @@ model = dict(
         upcast_attention=False,
         upcast_softmax=False,
         enc_mode=False,
-        pdnorm_bn=False,
-        pdnorm_ln=False,
-        pdnorm_decouple=True,
-        pdnorm_adaptive=False,
-        pdnorm_affine=True,
-        pdnorm_conditions=("ScanNet", "S3DIS", "Structured3D"),
     ),
     feature_mask_values=dict(
         enable=learned_masked_feat,
@@ -278,11 +277,11 @@ network_apls_eval = dict(
 
 train_multitask_keys, val_multitask_keys, multitask_index_valid_keys = (
     init_multitask_collect_keys(
-        target_keys, collect_prefix_keys=FLAIR3D_COLLECT_PREFIX_GRID
+        target_keys, collect_prefix_keys=FLAIR3D_COLLECT_PREFIX_LITEPT
     )
 )
 
-del FLAIR3D_COLLECT_PREFIX_GRID, init_multitask_collect_keys
+del FLAIR3D_COLLECT_PREFIX_LITEPT, init_multitask_collect_keys
 
 data = dict(
     num_classes=num_classes,
@@ -338,6 +337,7 @@ data = dict(
             dict(type="NetworkRasterToPointLabels", target_key="forest_2d"),
             # dict(type="ShufflePoint"),
             dict(type="ToTensor"),
+            dict(type="Update", keys_dict={"grid_size": grid_size}),
             dict(
                 type="Collect",
                 keys=train_multitask_keys,
@@ -383,6 +383,7 @@ data = dict(
             dict(type="NetworkRasterToPointLabels"),
             dict(type="NetworkRasterToPointLabels", target_key="forest_2d"),
             dict(type="ToTensor"),
+            dict(type="Update", keys_dict={"grid_size": grid_size}),
             dict(
                 type="Collect",
                 keys=val_multitask_keys,
