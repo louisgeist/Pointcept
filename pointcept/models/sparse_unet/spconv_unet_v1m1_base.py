@@ -20,6 +20,22 @@ from pointcept.models.builder import MODELS
 from pointcept.models.utils import offset2batch
 
 
+def _as_stage_strides(stride, num_stages):
+    """Broadcast an int to every pooling stage, or validate a per-stage sequence.
+
+    Does not change the number of pooling layers: a sequence must match
+    ``num_stages`` (``len(layers) // 2``).
+    """
+    if isinstance(stride, int):
+        return (int(stride),) * num_stages
+    stride = tuple(int(s) for s in stride)
+    assert len(stride) == num_stages, (
+        f"stride length {len(stride)} != num_stages {num_stages}; "
+        "stride does not change the number of pooling layers"
+    )
+    return stride
+
+
 class BasicBlock(spconv.SparseModule):
     expansion = 1
 
@@ -94,6 +110,7 @@ class SpUNetBase(nn.Module):
         base_channels=32,
         channels=(32, 64, 128, 256, 256, 128, 96, 96),
         layers=(2, 3, 4, 6, 2, 2, 2, 2),
+        stride=2,
         enc_mode=False,
     ):
         super().__init__()
@@ -105,6 +122,7 @@ class SpUNetBase(nn.Module):
         self.channels = channels
         self.layers = layers
         self.num_stages = len(layers) // 2
+        self.stride = _as_stage_strides(stride, self.num_stages)
         self.enc_mode = enc_mode
 
         norm_fn = partial(nn.BatchNorm1d, eps=1e-3, momentum=0.01)
@@ -131,14 +149,15 @@ class SpUNetBase(nn.Module):
         self.dec = nn.ModuleList() if not self.enc_mode else None
 
         for s in range(self.num_stages):
+            pool_stride = self.stride[s]
             # encode num_stages
             self.down.append(
                 spconv.SparseSequential(
                     spconv.SparseConv3d(
                         enc_channels,
                         channels[s],
-                        kernel_size=2,
-                        stride=2,
+                        kernel_size=pool_stride,
+                        stride=pool_stride,
                         bias=False,
                         indice_key=f"spconv{s + 1}",
                     ),
@@ -173,7 +192,7 @@ class SpUNetBase(nn.Module):
                         spconv.SparseInverseConv3d(
                             channels[len(channels) - s - 2],
                             dec_channels,
-                            kernel_size=2,
+                            kernel_size=pool_stride,
                             bias=False,
                             indice_key=f"spconv{s + 1}",
                         ),
@@ -289,6 +308,7 @@ class SpUNetNoSkipBase(nn.Module):
         base_channels=32,
         channels=(32, 64, 128, 256, 256, 128, 96, 96),
         layers=(2, 3, 4, 6, 2, 2, 2, 2),
+        stride=2,
     ):
         super().__init__()
         assert len(layers) % 2 == 0
@@ -299,6 +319,7 @@ class SpUNetNoSkipBase(nn.Module):
         self.channels = channels
         self.layers = layers
         self.num_stages = len(layers) // 2
+        self.stride = _as_stage_strides(stride, self.num_stages)
 
         norm_fn = partial(nn.BatchNorm1d, eps=1e-3, momentum=0.01)
         block = BasicBlock
@@ -324,14 +345,15 @@ class SpUNetNoSkipBase(nn.Module):
         self.dec = nn.ModuleList()
 
         for s in range(self.num_stages):
+            pool_stride = self.stride[s]
             # encode num_stages
             self.down.append(
                 spconv.SparseSequential(
                     spconv.SparseConv3d(
                         enc_channels,
                         channels[s],
-                        kernel_size=2,
-                        stride=2,
+                        kernel_size=pool_stride,
+                        stride=pool_stride,
                         bias=False,
                         indice_key=f"spconv{s + 1}",
                     ),
@@ -366,7 +388,7 @@ class SpUNetNoSkipBase(nn.Module):
                     spconv.SparseInverseConv3d(
                         channels[len(channels) - s - 2],
                         dec_channels,
-                        kernel_size=2,
+                        kernel_size=pool_stride,
                         bias=False,
                         indice_key=f"spconv{s + 1}",
                     ),
