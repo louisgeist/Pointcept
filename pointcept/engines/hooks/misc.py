@@ -640,10 +640,14 @@ class InformationWriter(HookBase):
             wandb_dict=wandb_dict,
         )
         if wandb_dict is not None:
-            # Do not pass an explicit `step`: after a Slurm requeue the W&B
-            # run is resumed and its internal step is already past the epoch
-            # number, so `step=epoch_step` would be silently dropped.
-            # Charts use the "Epoch" field as x-axis via define_metric.
+            # Do not pass an explicit `step=epoch`: charts use the "Epoch"
+            # field as x-axis via define_metric. Two resume cases:
+            # - Slurm requeue / already-synced resume: the run's internal
+            #   _step is already past the epoch number, so step=epoch would
+            #   be silently dropped.
+            # - New process + resume (manual relaunch): local _step may
+            #   restart near zero and collide with server history; that is
+            #   handled by bump_wandb_step_on_resume in Trainer.build_writer.
             wandb.log(wandb_dict)
 
 

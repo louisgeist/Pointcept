@@ -39,6 +39,7 @@ from pointcept.utils.scheduler import build_scheduler
 from pointcept.utils.config import ConfigDict
 from pointcept.utils.events import EventStorage, ExceptionWriter
 from pointcept.utils.wandb_metrics import define_wandb_metrics
+from pointcept.utils.wandb_resume import bump_wandb_step_on_resume
 from pointcept.utils.gradient_norm import (
     GradNormLiteEMA,
     all_reduce_mean_task_norms,
@@ -542,6 +543,17 @@ class Trainer(TrainerBase):
                 init_kw["resume"] = "allow"
                 self.logger.info("Resuming W&B run: %s", run_id)
             wandb.init(**init_kw)
+            # New-process resume (manual relaunch or Slurm requeue) can restart
+            # the local _step near zero and collide with already-uploaded
+            # history. Bump past lastHistoryStep before the first wandb.log.
+            if run_id:
+                bump_wandb_step_on_resume(
+                    wandb.run,
+                    project=self.cfg.wandb_project,
+                    run_id=run_id,
+                    logger=self.logger,
+                    entity=getattr(wandb.run, "entity", None),
+                )
             task_configs = getattr(self.cfg.data, "task_configs", None) or {}
             task_names = []
             if isinstance(task_configs, dict):
