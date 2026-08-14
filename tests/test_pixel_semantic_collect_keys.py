@@ -36,7 +36,7 @@ class TestForestTwoDRegistration(unittest.TestCase):
     def test_network_defaults_unchanged(self):
         cfg = FLAIR3D_PIXEL_SEMANTIC_TASKS["network"]
         self.assertNotIn("pooling", cfg)
-        self.assertNotIn("enable_dilated_prf", cfg)
+        self.assertTrue(cfg["enable_dilated_prf"])
 
 
 class TestInitMultitaskCollectKeys(unittest.TestCase):

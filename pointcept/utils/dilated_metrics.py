@@ -84,8 +84,8 @@ def precision_recall_f1(
 def dilated_prf_enabled(task_config) -> bool:
     """Whether a pixel_semantic task's config wants dilated ("relaxed") P/R/F1.
 
-    Defaults to True (existing behavior for tasks like ``network`` that don't set
-    this key). Area-coverage tasks like ``forest_2d`` set ``enable_dilated_prf=False``
+    Defaults to True (``network`` also sets ``enable_dilated_prf=True`` explicitly).
+    Area-coverage tasks like ``forest_2d`` set ``enable_dilated_prf=False``
     since the buffer tolerance this module implements is a diagnostic for thin
     curvilinear masks (road/rail), not blobby area-coverage masks.
     """

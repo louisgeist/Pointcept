@@ -39,7 +39,11 @@ from pointcept.utils.misc import (
     mean_iou_from_hist,
     pool_axis_distribution_from_probs,
 )
-from pointcept.utils.dilated_metrics import precision_recall_f1
+from pointcept.utils.dilated_metrics import (
+    dilated_prf_enabled,
+    dilated_precision_recall_counts,
+    precision_recall_f1,
+)
 from pointcept.utils.progress import EvaluationProgressBar
 from pointcept.utils.regression import (
     denorm_regression_prediction,
@@ -1730,6 +1734,8 @@ class MultiTaskTester(TesterBase):
                             f"!= ground-truth shape {target_arr.shape}"
                         )
                     channel_stats = {}
+                    dilated_enabled = dilated_prf_enabled(tc)
+                    radius_px = int(tc.get("buffer_radius_px", 3))
                     for c in range(num_networks):
                         ch_name = (
                             channel_names[c] if c < len(channel_names) else f"ch{c}"
@@ -1738,6 +1744,24 @@ class MultiTaskTester(TesterBase):
                             pred_arr[c], target_arr[c], ignore_index, fg_idx
                         )
                         channel_stats[ch_name] = dict(tp=tp, fp=fp, fn=fn)
+                        if dilated_enabled:
+                            # Same 0.5-threshold masks as binary_prf_counts / val.
+                            valid = np.isfinite(pred_arr[c]) & (
+                                target_arr[c] != ignore_index
+                            )
+                            pred_fg = (pred_arr[c] > 0.5) & valid
+                            gt_fg = (target_arr[c] == fg_idx) & valid
+                            p_num, p_denom, r_num, r_denom = (
+                                dilated_precision_recall_counts(
+                                    pred_fg, gt_fg, valid, radius_px=radius_px
+                                )
+                            )
+                            channel_stats[ch_name].update(
+                                p_num=p_num,
+                                p_denom=p_denom,
+                                r_num=r_num,
+                                r_denom=r_denom,
+                            )
                     pixel_prf_metrics_scene[task_name] = channel_stats
 
                     # mIoU/mAcc/allAcc, summed over channels into one task-level
@@ -1972,6 +1996,11 @@ class MultiTaskTester(TesterBase):
                         acc["tp"] += counts["tp"]
                         acc["fp"] += counts["fp"]
                         acc["fn"] += counts["fn"]
+                        if "p_num" in counts:
+                            acc["p_num"] = acc.get("p_num", 0.0) + counts["p_num"]
+                            acc["p_denom"] = acc.get("p_denom", 0.0) + counts["p_denom"]
+                            acc["r_num"] = acc.get("r_num", 0.0) + counts["r_num"]
+                            acc["r_denom"] = acc.get("r_denom", 0.0) + counts["r_denom"]
 
             per_task_metrics = {}
             for task_name in semantic_tasks + pixel_semantic_tasks:
@@ -2043,6 +2072,9 @@ class MultiTaskTester(TesterBase):
 
             for task_name in pixel_semantic_tasks:
                 channel_stats = per_task_pixel_prf.get(task_name) or {}
+                task_config = task_configs[task_name]
+                radius_px = int(task_config.get("buffer_radius_px", 3))
+                dilated_enabled = dilated_prf_enabled(task_config)
                 for ch_name, counts in channel_stats.items():
                     tp, fp, fn = counts["tp"], counts["fp"], counts["fn"]
                     if tp + fp + fn == 0:
@@ -2054,12 +2086,6 @@ class MultiTaskTester(TesterBase):
                         )
                         continue
                     precision, recall, f1 = precision_recall_f1(tp, tp + fp, tp, tp + fn)
-                    logger.info(
-                        "[task={}] Channel {} Test result: precision/recall/f1 "
-                        "{:.4f}/{:.4f}/{:.4f} (tp={}, fp={}, fn={}).".format(
-                            task_name, ch_name, precision, recall, f1, tp, fp, fn
-                        )
-                    )
                     ch_slug = class_name_slug(ch_name)
                     log_dict[
                         metric_tag("test", f"{ch_slug}/precision", task=task_name)
@@ -2070,6 +2096,54 @@ class MultiTaskTester(TesterBase):
                     log_dict[
                         metric_tag("test", f"{ch_slug}/f1", task=task_name)
                     ] = float(f1)
+                    if dilated_enabled and "p_num" in counts:
+                        dilated_precision, dilated_recall, dilated_f1 = (
+                            precision_recall_f1(
+                                counts["p_num"],
+                                counts["p_denom"],
+                                counts["r_num"],
+                                counts["r_denom"],
+                            )
+                        )
+                        logger.info(
+                            "[task={}] Channel {} Test result: precision/recall/f1 "
+                            "{:.4f}/{:.4f}/{:.4f} (tp={}, fp={}, fn={}) | "
+                            "dilated(r={}px) precision/recall/f1 "
+                            "{:.4f}/{:.4f}/{:.4f}.".format(
+                                task_name,
+                                ch_name,
+                                precision,
+                                recall,
+                                f1,
+                                tp,
+                                fp,
+                                fn,
+                                radius_px,
+                                dilated_precision,
+                                dilated_recall,
+                                dilated_f1,
+                            )
+                        )
+                        log_dict[
+                            metric_tag(
+                                "test", f"{ch_slug}/dilated_precision", task=task_name
+                            )
+                        ] = float(dilated_precision)
+                        log_dict[
+                            metric_tag(
+                                "test", f"{ch_slug}/dilated_recall", task=task_name
+                            )
+                        ] = float(dilated_recall)
+                        log_dict[
+                            metric_tag("test", f"{ch_slug}/dilated_f1", task=task_name)
+                        ] = float(dilated_f1)
+                    else:
+                        logger.info(
+                            "[task={}] Channel {} Test result: precision/recall/f1 "
+                            "{:.4f}/{:.4f}/{:.4f} (tp={}, fp={}, fn={}).".format(
+                                task_name, ch_name, precision, recall, f1, tp, fp, fn
+                            )
+                        )
 
             for task_name in regression_tasks:
                 s = reg_sums_global[task_name]
