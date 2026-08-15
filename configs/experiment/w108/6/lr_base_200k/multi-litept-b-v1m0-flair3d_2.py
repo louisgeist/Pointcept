@@ -34,7 +34,7 @@ grad_norm_lite_eps = 1e-3
 
 # Hardware parameters
 num_gpu = 1
-num_worker = 8 * num_gpu
+num_worker = 16  # H100: fixed 16 DataLoader workers
 enable_amp = True
 
 # Data parameters
