@@ -72,6 +72,61 @@ def _normalize_split(split) -> str:
     )
 
 
+def _split_label(split) -> str:
+    if isinstance(split, str):
+        return split
+    if isinstance(split, Sequence):
+        return ",".join(str(s) for s in split)
+    return str(split)
+
+
+def _normalize_include_names(include_names) -> Optional[List[str]]:
+    if include_names is None:
+        return None
+    if isinstance(include_names, str):
+        names = [include_names]
+    else:
+        names = list(include_names)
+    out = [str(n).strip() for n in names if str(n).strip()]
+    return out
+
+
+def scene_matches_include_name(path: str, name: str) -> bool:
+    """Loose match of a user-supplied tile id against a scene path / patch_id.
+
+    Accepts both official patch ids (``D075-2021_AA-S2-2``) and informal forms
+    such as ``D075-2021_LIDARHD_AA-S2-2`` (LIDARHD token stripped) or
+    ``D075_UF-S1-2`` (department prefix + ROI suffix).
+    """
+    n = str(name).strip()
+    if not n:
+        return False
+    path_s = os.path.normpath(str(path)).replace("\\", "/")
+    base = os.path.basename(path_s.rstrip("/"))
+    variants = [n]
+    if "_LIDARHD_" in n:
+        variants.append(n.replace("_LIDARHD_", "_"))
+    if n.endswith("_LIDARHD"):
+        variants.append(n[: -len("_LIDARHD")])
+    for variant in variants:
+        if variant == base or variant in path_s or variant in base:
+            return True
+    if "_" in n and "LIDARHD" not in n:
+        dept, rest = n.split("_", 1)
+        if dept and rest and base.startswith(dept) and (
+            base.endswith("_" + rest) or base.endswith(rest)
+        ):
+            return True
+    return False
+
+
+def matching_include_name(path: str, names: Sequence[str]) -> Optional[str]:
+    for name in names:
+        if scene_matches_include_name(path, name):
+            return name
+    return None
+
+
 def load_segment_histogram(
     scene_path: str,
     ignore_index: int = -1,
@@ -567,12 +622,13 @@ def apply_subset_selection(
     split,
     max_sample: Optional[int] = None,
     stratified_subset_manifest: Optional[str] = None,
+    include_names: Optional[Sequence[str]] = None,
 ) -> List[str]:
     logger = get_root_logger()
-    split_name = _normalize_split(split)
     original_len = len(data_list)
 
     if stratified_subset_manifest:
+        split_name = _normalize_split(split)
         sidecar_keys = load_sidecar_keys(stratified_subset_manifest)
         data_list = filter_paths_by_sidecar(data_list, split_name, sidecar_keys)
         missing = len(sidecar_keys) - len(data_list)
@@ -594,6 +650,35 @@ def apply_subset_selection(
         )
     else:
         data_list = list(data_list)
+        split_name = _split_label(split)
+
+    names = _normalize_include_names(include_names)
+    if names:
+        kept = []
+        matched_names = set()
+        for path in data_list:
+            hit = matching_include_name(path, names)
+            if hit is not None:
+                kept.append(path)
+                matched_names.add(hit)
+        unmatched = [n for n in names if n not in matched_names]
+        if unmatched:
+            logger.warning(
+                "include_names: %d/%d names matched no scene (split=%s): %s",
+                len(unmatched),
+                len(names),
+                split_name,
+                unmatched,
+            )
+        logger.info(
+            "include_names filter: %d -> %d scenes (split=%s, %d/%d names matched)",
+            len(data_list),
+            len(kept),
+            split_name,
+            len(matched_names),
+            len(names),
+        )
+        data_list = kept
 
     if max_sample is None or max_sample >= len(data_list):
         return data_list

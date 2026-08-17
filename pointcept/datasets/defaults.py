@@ -55,6 +55,7 @@ class DefaultDataset(Dataset):
         loop=1,
         max_sample=None,
         stratified_subset_manifest=None,
+        include_names=None,
     ):
         super(DefaultDataset, self).__init__()
         self.data_root = data_root
@@ -69,6 +70,7 @@ class DefaultDataset(Dataset):
         self.test_cfg = test_cfg if test_mode else None
         self.max_sample = max_sample
         self.stratified_subset_manifest = stratified_subset_manifest
+        self.include_names = include_names
 
         if test_mode:
             self.test_voxelize = TRANSFORMS.build(self.test_cfg.voxelize)
@@ -84,6 +86,7 @@ class DefaultDataset(Dataset):
             split=self.split,
             max_sample=self.max_sample,
             stratified_subset_manifest=self.stratified_subset_manifest,
+            include_names=self.include_names,
         )
         logger = get_root_logger()
         logger.info(

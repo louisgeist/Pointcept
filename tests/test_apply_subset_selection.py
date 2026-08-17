@@ -24,6 +24,7 @@ assert _spec.loader is not None
 sys.modules[_spec.name] = _subset_utils
 _spec.loader.exec_module(_subset_utils)
 apply_subset_selection = _subset_utils.apply_subset_selection
+scene_matches_include_name = _subset_utils.scene_matches_include_name
 
 
 def _write_sidecar(path: str, rows) -> None:
@@ -84,6 +85,61 @@ class TestApplySubsetSelection(unittest.TestCase):
             [os.path.basename(p) for p in result],
             ["tile_a", "tile_c"],
         )
+
+
+class TestSceneMatchesIncludeName(unittest.TestCase):
+    def test_exact_patch_id(self):
+        path = "/data/flair3d_plus/test/D075-2021_LIDARHD/AA/D075-2021_AA-S2-2"
+        self.assertTrue(scene_matches_include_name(path, "D075-2021_AA-S2-2"))
+
+    def test_lidarhd_token_stripped(self):
+        path = "/data/flair3d_plus/test/D075-2021_LIDARHD/AA/D075-2021_AA-S2-2"
+        self.assertTrue(scene_matches_include_name(path, "D075-2021_LIDARHD_AA-S2-2"))
+
+    def test_dept_plus_roi_suffix(self):
+        path = "/data/flair3d_plus/train/D075-2021_LIDARHD/UF/D075-2021_UF-S1-2"
+        self.assertTrue(scene_matches_include_name(path, "D075_UF-S1-2"))
+
+    def test_no_match(self):
+        path = "/data/flair3d_plus/test/D075-2021_LIDARHD/AA/D075-2021_AA-S2-2"
+        self.assertFalse(scene_matches_include_name(path, "D068_UN-S1-28"))
+
+
+class TestIncludeNamesFilter(unittest.TestCase):
+    def setUp(self):
+        self.data_list = [
+            "/data/flair3d_plus/test/D075-2021_LIDARHD/AA/D075-2021_AA-S2-2",
+            "/data/flair3d_plus/test/D075-2021_LIDARHD/UU/D075-2021_UU-S1-4",
+            "/data/flair3d_plus/train/D068-2021_LIDARHD/FA/D068-2021_FA-S1-26",
+            "/data/flair3d_plus/val/D049-2021_LIDARHD/AA/D049-2021_AA-S1-1",
+        ]
+
+    def test_include_names_keeps_matches(self):
+        result = apply_subset_selection(
+            self.data_list,
+            split=["train", "val", "test"],
+            include_names=[
+                "D075-2021_AA-S2-2",
+                "D075-2021_LIDARHD_UU-S1-4",
+                "D068_FA-S1-26",
+                "D075_UF-S1-2",  # unmatched — should warn, not crash
+            ],
+        )
+        self.assertEqual(
+            [os.path.basename(p) for p in result],
+            [
+                "D075-2021_AA-S2-2",
+                "D075-2021_UU-S1-4",
+                "D068-2021_FA-S1-26",
+            ],
+        )
+
+    def test_multi_split_without_include_names_does_not_raise(self):
+        result = apply_subset_selection(
+            self.data_list,
+            split=["train", "val", "test"],
+        )
+        self.assertEqual(len(result), 4)
 
 
 if __name__ == "__main__":

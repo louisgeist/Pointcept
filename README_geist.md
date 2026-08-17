@@ -199,14 +199,15 @@ python pointcept/datasets/preprocessing/flair3d_plus/rasterize_network.py \
 ```
 
 **Add forest_2d labels** (2D grid variant of the per-point `forest` task): unlike network,
-FOREST is already a raster, so ``rasterize_forest.py`` just resamples the window of the source
+FOREST is already a raster, so `rasterize_forest.py` just resamples the window of the source
 FOREST GeoTIFF covering each tile's point-cloud bounding box (majority vote) onto the target
-``pixel_m`` grid and writes it out ``(1, H, W)`` south-up, same layout as ``network.npy``.
+`pixel_m` grid and writes it out `(1, H, W)` south-up, same layout as `network.npy`.
 FOREST coverage is complete for every manifest patch (no "expected but absent" case like
 network), so this must be run once before any `forest_2d` training — no tile has
 `forest_2d.npy` until this has run:
 
 On Hecate (D067)
+
 ```bash
 python pointcept/datasets/preprocessing/flair3d_plus/rasterize_forest.py \
     --data_root data/flair3d_plus \
@@ -216,6 +217,7 @@ python pointcept/datasets/preprocessing/flair3d_plus/rasterize_forest.py \
 ```
 
 On Jean Zay :
+
 ```bash
 python pointcept/datasets/preprocessing/flair3d_plus/rasterize_forest.py \
     --data_root data/flair3d_plus \
@@ -260,8 +262,6 @@ python scripts/visualize_network_mask.py \
   --out /tmp/AF-S1-22_network_roi.png
 ```
 
-
-
 Graph row colors: predicted edges/nodes = yellow/orange, GT overlay (with `--network-graphs-root`)
 = cyan/dark-blue. In `--tile` mode the graph is built **per subtile** for quick visual QA only —
 real APLS numbers (`tools/eval_network_apls.py`) stitch all subtiles of a ROI first, so a
@@ -299,6 +299,37 @@ python scripts/network_html_viewer.py \
 ```
 
 Then open `/tmp/AF-S1-22_viewer/index.html` in a browser (`file://` works directly, no server).
+
+**Nathab inference dumps** (point-wise linear-head class + tile-wise pooled class).
+`MultiTaskTester` writes, next to `{tile}_pred_segment.npy` / `{tile}_reg_elevation.npy`:
+
+- `{tile}_pred_{axis}.npy` — per-point argmax of the nathab linear head `(N,)`
+- `{tile}_pred_{axis}_tile.npy` — tile-level argmax broadcast to every point `(N,)`
+- `{tile}_dist_{axis}.npy` — pooled tile distribution `(C,)`
+
+Restrict test to a handful of scenes with `data.test.include_names` (substring / LIDARHD-stripped
+/ `D075_UF-S1-2`-style matching). Tiles may live in train/val/test — pass all three splits.
+Use the current repo as `CODE_DIR` (the training job snapshot will not have these dumps):
+
+```bash
+CODE_DIR=/lustre/fswork/projects/rech/unv/usi32yh/Pointcept \
+EXTRA_OPTIONS='data.test.split=[train,val,test] data.test.include_names=[D075-2021_AA-S2-2,D075-2021_UU-S1-4,D068-2021_UF-S1-23,D068-2021_UU-S1-12,D075_UF-S1-2,D068_FA-S1-26,D068_UN-S1-28]' \
+sbatch test_flair3d_resume.sh 873542
+```
+
+Or directly:
+
+```bash
+export PYTHONPATH=/lustre/fswork/projects/rech/unv/usi32yh/Pointcept
+python tools/test.py \
+  --config-file /lustre/fswork/projects/rech/unv/usi32yh/Pointcept/logs/slurm/873542/config.py \
+  --num-gpus 1 \
+  --options \
+    save_path=/lustre/fswork/projects/rech/unv/usi32yh/Pointcept/logs/slurm/873542 \
+    weight=/lustre/fswork/projects/rech/unv/usi32yh/Pointcept/logs/slurm/873542/model/model_best.pth \
+    data.test.split=[train,val,test] \
+    data.test.include_names=[D075-2021_AA-S2-2,D075-2021_UU-S1-4,D068-2021_UF-S1-23,D068-2021_UU-S1-12,D075_UF-S1-2,D068_FA-S1-26,D068_UN-S1-28]
+```
 
 **Network test predictions** (`{tile}_logits_network.npy`): shape `(r, H, W)` with
 `r=3` (ROADS / RAILROADS / TRANSMISSION_LINES), same grid as `network.npy` /
@@ -373,8 +404,7 @@ Mini-dataset smoke test (10 epochs, eval every 10, 2 train + 2 val samples).
 
 ### Training schedule (`epoch` vs `total_iters`)
 
-Two mutually exclusive modes are resolved in
-`[pointcept/engines/defaults.py](pointcept/engines/defaults.py)` (`default_config_parser`).
+Two mutually exclusive modes are resolved in `pointcept/engines/defaults.py](pointcept/engines/defaults.py)` (`default_config_parser`).
 
 #### Classic mode (`total_iters = None`)
 
@@ -415,6 +445,13 @@ to sampling with replacement within the epoch.
 **Resume caveat:** the unseen pool is not checkpointed; on resume a new shuffle is
 started (training continues normally, but sampling order is not bit-identical to
 an uninterrupted run).
+
+**W&B resume:** a manual relaunch (`resume=true`) of an existing run used to
+restart W&B's internal `_step` near zero and merge leftover early-val logs with
+later train-only epochs (so `mIoU_best` looked non-monotonic). `Trainer.build_writer`
+now bumps `_step` past `lastHistoryStep` after `wandb.init(resume=...)`. Prefer
+letting that bump run; if the previous job is still flushing offline history,
+wait for the sync to finish before relaunching.
 
 `total_iters` must be divisible by `iter_per_epoch`. `epoch` and `eval_epoch` are **classic-mode only**.
 
@@ -489,7 +526,7 @@ Generated files (same output prefix):
 
 #### Flair3D+ mono-task (one semantic target per run)
 
-Configs under `[configs/flair3d_default/](configs/flair3d_default/)` — one folder per target, four backbones each (LitePT, SpUNet, PTv3, KPConvX). All mono runs use `lr=1e-3` and `scene_split_manifest.csv`.
+Configs under [configs/flair3d_default/](configs/flair3d_default/) — one folder per target, four backbones each (LitePT, SpUNet, PTv3, KPConvX). All mono runs use `lr=1e-3` and `scene_split_manifest.csv`.
 
 ```text
 configs/flair3d_default/
@@ -516,12 +553,12 @@ Multi-target training (all semantic tasks + elevation) remains in `multi-*-v1m0-
 #### Flair3D+ multi-target (segment, forest, land_use, natural_habitat, elevation)
 
 Class names and `num_classes` / `ignore_index` per semantic target are defined in
-`[pointcept/datasets/flair3d_config_utils.py](pointcept/datasets/flair3d_config_utils.py)`.
+[pointcept/datasets/flair3d_config_utils.py](pointcept/datasets/flair3d_config_utils.py).
 
 - **Semantic targets**: set `target_key` on `Flair3DDataset` (train/val/test) to one of
 `segment`, `forest`, `land_use`, `natural_habitat`. The corresponding `*.npy` is
 copied into `segment` for the existing GridSample / loss pipeline. Example config:
-`[configs/flair3d_plus/litept_target_forest.py](configs/flair3d_plus/litept_target_forest.py)`.
+[configs/flair3d_plus/litept_target_forest.py](configs/flair3d_plus/litept_target_forest.py).
 - 
 - To confirm ...|**Checkpoint transfer** between tasks: use `strict=False` on `load_state_dict`, or
 `CheckpointLoader` with `exclude_keys` for the old head (`seg_head` / `reg_head`).
@@ -551,27 +588,28 @@ python -m tools.train \
 
 ### Sonata pretrain + periodic linear probe (Flair3D+)
 
-See `[README_sonata_geist.md](README_sonata_geist.md)`.
+See [README_sonata_geist.md](README_sonata_geist.md).
 
 ### Sonata grid-search linear probe (multi-probe)
 
 Sweep lin-probe hyperparameters (loss, optimizer, lr, weight_decay, scheduler, dropout,
 input/feature normalization, grad_clip) **in one job** instead of one job per combo: since the
 backbone is frozen, `GridProbeSegmentorV2` + `GridProbeTrainer`
-(`[pointcept/models/grid_probe.py](pointcept/models/grid_probe.py)`,
-`[pointcept/engines/train.py](pointcept/engines/train.py)`) run the frozen backbone forward **once
+([pointcept/models/grid_probe.py](pointcept/models/grid_probe.py),
+[pointcept/engines/train.py](pointcept/engines/train.py)) run the frozen backbone forward **once
 per batch**, feed it to N independently-configured linear heads (each with its own optimizer/
 scheduler — genuinely different types allowed, e.g. one head on SGD, another on AdamW), train all N
 simultaneously, then at the end automatically pick the best on val, reload *its own* best checkpoint
 (not the run's final weights), run a precise test pass on it, and log which config won.
 
-Configs: `[configs/flair3d_default/segment/sonata-v1m2-flair3d-lin-grid.py](configs/flair3d_default/segment/sonata-v1m2-flair3d-lin-grid.py)`
-(real manifest) / `-toy.py` (local D067 smoke test, no pretrained backbone needed).
+Configs:
+- [configs/flair3d_default/probe/sonata-v1m2-flair3d-lin-grid.py](configs/flair3d_default/probe/sonata-v1m2-flair3d-lin-grid.py) — small example grid (real manifest)
+- [configs/flair3d_default/probe/sonata-v1m2-flair3d-lin-grid-wide.py](configs/flair3d_default/probe/sonata-v1m2-flair3d-lin-grid-wide.py) — Jean-Zay wide grid (336 probes, explicit loops: loss × lr × wd × input_norm; AdamW+Cosine; `total_iters=10000`)
+- `-toy.py` — local D067 smoke test (no pretrained backbone needed)
 
-Author `probes = {name: dict(criteria=..., input_norm=..., feat_norm=..., dropout=..., optimizer=...,
-scheduler=..., grad_clip=...), ...}` by hand, or cross axes (e.g. loss × lr — lr is probably worth
+Author `probes = {name: dict(criteria=..., input_norm=..., feat_norm=..., dropout=..., optimizer=..., scheduler=..., grad_clip=...), ...}` by hand, or cross axes (e.g. loss × lr — lr is probably worth
 sweeping in every lin-probe run) with `cartesian_probes`
-(`[pointcept/utils/grid_probe_utils.py](pointcept/utils/grid_probe_utils.py)`):
+([pointcept/utils/grid_probe_utils.py](pointcept/utils/grid_probe_utils.py)):
 
 ```python
 from pointcept.utils.grid_probe_utils import cartesian_probes
@@ -588,30 +626,34 @@ del cartesian_probes, losses, lrs  # avoid leaking a function object into the du
 probes["one_off_variant"] = dict(...)  # composes freely with hand-written probes
 ```
 
-Also set `data.task_configs = {name: dict(task_type="semantic", num_classes=..., ignore_index=...,
-names=...) for name in probes}` (see either example config) — without it, per-probe **train** mIoU
+Also set `data.task_configs = {name: dict(task_type="semantic", num_classes=..., ignore_index=..., names=...) for name in probes}` (see either example config) — without it, per-probe **train** mIoU
 isn't logged (per-probe train **loss** still is).
 
 ```bash
 # Local smoke test (D067 mirror, ~15s)
-sh scripts/train.sh -g 1 -d flair3d_default -c segment/sonata-v1m2-flair3d-lin-grid-toy \
+sh scripts/train.sh -g 1 -d flair3d_default -c probe/sonata-v1m2-flair3d-lin-grid-toy \
   -n sonata_grid_toy_smoke
 
 # Real run against a Sonata checkpoint (same weight-remap convention as the single-probe config)
-sh scripts/train.sh -g 1 -d flair3d_default -c segment/sonata-v1m2-flair3d-lin-grid \
+sh scripts/train.sh -g 1 -d flair3d_default -c probe/sonata-v1m2-flair3d-lin-grid \
   -n sonata_grid_ep10 -w /path/to/epoch_10.pth
+
+# Jean Zay — wide grid (336 probes), default weight = pretrain 862680/epoch_9.pth
+sbatch scripts/sonata/sbatch_lin_grid_probe.sh          # A100, 48h
+sbatch scripts/sonata/sbatch_lin_grid_probe_h100.sh     # H100, 48h
+# override: sbatch scripts/sonata/sbatch_lin_grid_probe.sh /path/to/epoch_N.pth my_exp_name
 ```
 
 **Not yet wired into the Jean-Zay auto-submit pipeline** — `LinProbeSbatchHook` /
-`scripts/sonata/sbatch_lin_probe.sh` still hardcode the single-probe config; running the grid config
-on Jean-Zay means invoking `scripts/train.sh` manually (inside your own `sbatch` script) rather than
-getting it for free from the periodic pretrain-checkpoint watcher.
+`scripts/sonata/sbatch_lin_probe.sh` still hardcode the single-probe config; dedicated grid jobs
+use `sbatch_lin_grid_probe*.sh` above (manual submit, not hooked from pretrain).
 
 Produces, in `save_path`: `model/probe_best_{name}.pth` (+ `.json` sidecar) per probe that improved,
 `grid_search_results.json` (full leaderboard + winner's config/test metrics), and `metrics.json`
 (same format as the single-probe pipeline — `best_val_mIoU` already equals the winner's own best
 value, so `append_lin_probe_result.py` / `periodic_lin_probe.py` need zero changes to consume a grid
-run's output). Wandb (if `enable_wandb=True`): per-probe `loss/{name}`, `train/mIoU/{name}`,
+run's output). Wandb (if `enable_wandb=True`): `grid_probe/num_probes` (how many linear heads
+share one frozen-backbone forward), per-probe `loss/{name}`, `train/mIoU/{name}`,
 `val/mIoU/{name}` / `val/mIoU_best/{name}`, plus a `winner/*` summary at the end.
 
 Scope limits: precision (AMP) is one global run setting, not per probe; no per-probe `total_iters`
@@ -638,20 +680,19 @@ python pointcept/datasets/preprocessing/dales/preprocess_dales.py \
 
 # Brouillon
 
-python -m tools.train   
-  --config-file configs/experiment/w90/5/dales2/ptv3_2b.py  
-  --num-gpus 1   
-  --num-machines 1   
-  --machine-rank 0   
-  --dist-url auto   
-  --options epoch=1 eval_epoch=1 data.train.max_sample=30 data.test.max_sample=30 data.val.max_sample=30
+python -m tools.train  
+  --config-file configs/experiment/w108/3/debug/sonata-v1m2-flair3d-lin-grid_20.py
+  --num-gpus 1  
+  --num-machines 1  
+  --machine-rank 0  
+  --dist-url auto  
 
   data.train.max_sample=30
 
-  python -m tools.train   
+  python -m tools.train  
   --config-file configs/experiment/w90/5/dales2/ptv3_2b.py  
-  --num-gpus 2   
-  --num-machines 1   
-  --machine-rank 0   
-  --dist-url auto   
+  --num-gpus 2  
+  --num-machines 1  
+  --machine-rank 0  
+  --dist-url auto  
   --options epoch=1 eval_epoch=1 data.train.max_sample=300 data.test.max_sample=30 data.val.max_sample=30
