@@ -276,13 +276,19 @@ class GridProbeWinnerSelector(HookBase):
     """After training: pick the probe with the best val mIoU over the whole
     run, reload its best-epoch weights (the live weights at end of training
     are that probe's LAST epoch, not its BEST, since other probes may have
-    kept training after it peaked), run a precise test pass restricted to
-    just that probe, and write save_path/grid_search_results.json.
+    kept training after it peaked), optionally run a precise test pass
+    restricted to just that probe, and write save_path/grid_search_results.json.
 
     Must be registered after GridProbeEvaluator/GridProbeCheckpointSaver, and
     should be last in the hooks list (frees the per-probe optimizers/
     schedulers before testing).
+
+    skip_test: if True, skip the tester (val-only sweeps). The winner JSON
+    is still written; test_mIoU / test_mAcc / test_allAcc are null.
     """
+
+    def __init__(self, skip_test=False):
+        self.skip_test = bool(skip_test)
 
     def after_train(self):
         evaluator = _find_hook(self.trainer, GridProbeEvaluator)
@@ -302,39 +308,46 @@ class GridProbeWinnerSelector(HookBase):
         )
 
         raw_model = _raw_model(self.trainer)
-        model_dir = os.path.join(self.trainer.cfg.save_path, "model")
-        best_head_path = os.path.join(model_dir, f"probe_best_{winner_name}.pth")
-        if os.path.isfile(best_head_path):
-            state = torch.load(best_head_path, map_location="cpu", weights_only=False)
-            raw_model.heads[winner_name].load_state_dict(state)
-        else:
-            self.trainer.logger.warning(
-                "No probe_best_%s.pth found; testing with the probe's last-epoch "
-                "weights instead of its best-epoch weights.",
-                winner_name,
+        test_metrics = {}
+        if self.skip_test:
+            self.trainer.logger.info(
+                "GridProbeWinnerSelector: skip_test=True, writing val-only results."
             )
-        raw_model.active_probe = winner_name
+        else:
+            model_dir = os.path.join(self.trainer.cfg.save_path, "model")
+            best_head_path = os.path.join(model_dir, f"probe_best_{winner_name}.pth")
+            if os.path.isfile(best_head_path):
+                state = torch.load(best_head_path, map_location="cpu", weights_only=False)
+                raw_model.heads[winner_name].load_state_dict(state)
+            else:
+                self.trainer.logger.warning(
+                    "No probe_best_%s.pth found; testing with the probe's last-epoch "
+                    "weights instead of its best-epoch weights.",
+                    winner_name,
+                )
+            raw_model.active_probe = winner_name
 
-        if getattr(self.trainer, "optimizer", None) is not None:
-            del self.trainer.optimizer
-            self.trainer.optimizer = None
-        if getattr(self.trainer, "scheduler", None) is not None:
-            del self.trainer.scheduler
-            self.trainer.scheduler = None
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+            if getattr(self.trainer, "optimizer", None) is not None:
+                del self.trainer.optimizer
+                self.trainer.optimizer = None
+            if getattr(self.trainer, "scheduler", None) is not None:
+                del self.trainer.scheduler
+                self.trainer.scheduler = None
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
-        from pointcept.engines.test import TESTERS
+            from pointcept.engines.test import TESTERS
 
-        cfg = self.trainer.cfg
-        test_cfg = dict(cfg=cfg, model=self.trainer.model, **cfg.test)
-        tester = TESTERS.build(test_cfg)
-        tester.test()
-        test_metrics = getattr(tester, "test_metrics", None) or {}
+            cfg = self.trainer.cfg
+            test_cfg = dict(cfg=cfg, model=self.trainer.model, **cfg.test)
+            tester = TESTERS.build(test_cfg)
+            tester.test()
+            test_metrics = getattr(tester, "test_metrics", None) or {}
 
         if not is_main_process():
             return
 
+        cfg = self.trainer.cfg
         leaderboard = {
             name: {
                 "probe_config": dict(raw_model.probe_configs[name]),

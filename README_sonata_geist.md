@@ -45,7 +45,8 @@ python scripts/build_stratified_subset.py \
 | Role | Path |
 |------|------|
 | Pretrain | [`configs/flair3d_default/pretrain-sonata-v1m2-flair3d.py`](configs/flair3d_default/pretrain-sonata-v1m2-flair3d.py) |
-| Linear probe | [`configs/flair3d_default/segment/sonata-v1m2-flair3d-lin.py`](configs/flair3d_default/segment/sonata-v1m2-flair3d-lin.py) |
+| Linear probe | [`configs/flair3d_default/probe/sonata-v1m2-flair3d-lin.py`](configs/flair3d_default/probe/sonata-v1m2-flair3d-lin.py) |
+| Mini grid-probe (H100 sweep) | [`configs/experiment/w109/1/sonata_grid_mini/sonata-v1m2-flair3d-lin-grid_1.py`](configs/experiment/w109/1/sonata_grid_mini/sonata-v1m2-flair3d-lin-grid_1.py) |
 
 ### Pretrain defaults
 
@@ -92,9 +93,11 @@ All launchers live under [`scripts/sonata/`](scripts/sonata/):
 - [`scripts/sonata/sbatch_pretrain_h100.sh`](scripts/sonata/sbatch_pretrain_h100.sh) — 6×4 H100 (=24); overrides probe script to H100 via `EXTRA_OPTIONS`
 - [`scripts/sonata/sbatch_lin_probe.sh`](scripts/sonata/sbatch_lin_probe.sh) — 1× A100, short walltime
 - [`scripts/sonata/sbatch_lin_probe_h100.sh`](scripts/sonata/sbatch_lin_probe_h100.sh) — 1× H100
+- [`scripts/sonata/sbatch_lin_grid_probe_mini_h100.sh`](scripts/sonata/sbatch_lin_grid_probe_mini_h100.sh) — 1× H100 array, mini grid-probe every 10 epochs (no test)
 - [`scripts/sonata/sbatch_pretrain_resume_h100.sh`](scripts/sonata/sbatch_pretrain_resume_h100.sh) — resume under a new config on 24× H100
 - [`scripts/sonata/periodic_lin_probe.py`](scripts/sonata/periodic_lin_probe.py) — **optional** watcher (local / replay only)
 - [`scripts/sonata/append_lin_probe_result.py`](scripts/sonata/append_lin_probe_result.py) — CSV append at end of probe job
+- [`scripts/sonata/append_grid_probe_result.py`](scripts/sonata/append_grid_probe_result.py) — winner row append at end of mini grid-probe job
 
 ```bash
 # 1) Pretrain only — probes are submitted automatically by LinProbeSbatchHook
@@ -127,6 +130,27 @@ WEIGHT=/path/to/epoch_10.pth EXP_NAME=sonata_lin_ep10 \
   PRETRAIN_EPOCH=10 PRETRAIN_ITERS=10000 \
   sbatch scripts/sonata/sbatch_lin_probe.sh
 ```
+
+### Mini grid-probe sweep (H100, no test)
+
+One config, 11 heads (shared frozen backbone), 15 array tasks on checkpoints
+`epoch_{10,20,…,150}.pth`. No test pass — `GridProbeWinnerSelector(skip_test=True)`.
+
+Grid: 8 CE probes (`input_norm` ∈ {linf, none} × `lr` ∈ {1e-3, 2e-3} × `wd` ∈ {0, 1e-3})
+plus 3 CE `l2` probes (`lr` ∈ {1e-2, 2e-2, 5e-2}, `wd=0`). Schedule: 10000 iters
+(`iter_per_epoch=1000`), val `max_sample=100`.
+
+```bash
+PRETRAIN_JOB_DIR=/lustre/fsn1/projects/rech/unv/usi32yh/logs/pointcept_logs/slurm/862680 \
+  sbatch scripts/sonata/sbatch_lin_grid_probe_mini_h100.sh
+# subset: PRETRAIN_JOB_DIR=... sbatch --array=10,50,150 scripts/sonata/sbatch_lin_grid_probe_mini_h100.sh
+
+tail -f $PRETRAIN_JOB_DIR/grid_probe_results.csv
+```
+
+CSV columns: `pretrain_epoch`, `best_val_mIoU`, `best_config`, `probe_job_dir`,
+`status`, `timestamp`. `best_config` is the winning probe name (e.g. `ce_lr2e-3_wd0_none`).
+Per-job leaderboard: `$JOB_DIR/grid_search_results.json`.
 
 ### Local smoke (no Slurm)
 
@@ -201,7 +225,7 @@ and set `batch_size = batch_size_per_gpu * 8`.
 
 ```bash
 python scripts/find_max_batch_size.py \
-  --config-file configs/flair3d_default/segment/sonata-v1m2-flair3d-lin.py \
+  --config-file configs/flair3d_default/probe/sonata-v1m2-flair3d-lin.py \
   --mode train --min-bs 1 --max-bs 8 \
   --probe-steps 32 --soak-steps 200 \
   --mix-prob 0.8 --num-gpus 1 --num-worker 8
@@ -211,7 +235,7 @@ python scripts/find_max_batch_size.py \
 Or via sbatch:
 
 ```bash
-CONFIG=configs/flair3d_default/segment/sonata-v1m2-flair3d-lin.py \
+CONFIG=configs/flair3d_default/probe/sonata-v1m2-flair3d-lin.py \
   MODE=train MIX_PROB=0.8 \
   MIN_BS_TRAIN=1 MAX_BS_TRAIN=8 \
   PROBE_STEPS=32 SOAK_STEPS_TRAIN=200 \
@@ -220,7 +244,7 @@ CONFIG=configs/flair3d_default/segment/sonata-v1m2-flair3d-lin.py \
 ```
 
 Update
-[`configs/flair3d_default/segment/sonata-v1m2-flair3d-lin.py`](configs/flair3d_default/segment/sonata-v1m2-flair3d-lin.py)
+[`configs/flair3d_default/probe/sonata-v1m2-flair3d-lin.py`](configs/flair3d_default/probe/sonata-v1m2-flair3d-lin.py)
 with the confirmed sizes.
 
 Pretrain MultiView (2 global + 4 local) is much heavier than a segmentor — do
@@ -243,6 +267,9 @@ column -t -s, $PRETRAIN_DIR/lin_probe_results.csv
 ```
 
 State / dedup: `$PRETRAIN_DIR/lin_probe_state.json` (hook marks `submitted`; probe marks `ok`/`failed`).
+
+Mini grid-probe sweep (separate file): `$PRETRAIN_DIR/grid_probe_results.csv`
+(`pretrain_epoch`, `best_val_mIoU`, `best_config`, …).
 
 ### `metrics.json`
 
