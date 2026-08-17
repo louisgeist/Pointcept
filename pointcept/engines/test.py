@@ -125,25 +125,29 @@ class TesterBase:
     def _test_loader_worker_kwargs(self, packed):
         """DataLoader worker settings for test.
 
-        ``num_worker`` is a train/val prefetch budget. In test_mode each
-        sample keeps the dense cloud plus ``fragment_list``; a packed batch
-        is ~12 full LiDAR HD tiles. 8 workers × default prefetch_factor=2
-        holds ~16 such batches in CPU RAM and the OS OOM-kills the job
-        (plain ``Killed``, no CUDA traceback) even when val at the same
-        voxel budget is fine.
+        ``num_worker`` is a train/val prefetch budget; test_mode keeps the dense
+        cloud plus ``fragment_list`` per sample, so it isn't automatically a safe
+        default for a packed (voxel-budget or batch_size_test>1) loader -- on
+        Sonata grid-probe configs, 8 workers x default prefetch_factor=2 held
+        enough packed batches in CPU RAM to OOM-kill the job (plain ``Killed``,
+        no CUDA traceback), even though val at the same voxel budget was fine.
+
+        Set ``cfg.num_worker_test`` to override the worker count for this
+        loader specifically (e.g. ``2``, as used by the grid-probe configs);
+        left unset, it falls back to ``num_worker_per_gpu`` uncapped.
         """
-        num_workers = int(self.cfg.num_worker_per_gpu)
+        override = getattr(self.cfg, "num_worker_test", None)
+        num_workers = int(override) if override is not None else int(self.cfg.num_worker_per_gpu)
         kwargs = dict(num_workers=num_workers, pin_memory=True)
         if packed and num_workers > 0:
-            num_workers = min(num_workers, 2)
-            kwargs["num_workers"] = num_workers
             kwargs["prefetch_factor"] = 1
             self.logger.info(
                 "Test DataLoader: packed full-res tiles, "
-                "capping num_workers=%d prefetch_factor=1 "
-                "(cfg.num_worker_per_gpu=%d)",
+                "num_workers=%d prefetch_factor=1 "
+                "(cfg.num_worker_per_gpu=%d, cfg.num_worker_test=%s)",
                 num_workers,
                 self.cfg.num_worker_per_gpu,
+                override,
             )
         return kwargs
 

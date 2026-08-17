@@ -19,6 +19,13 @@ batch_size_test = None  # auto adapt to bs 1 for each gpu
 # Budgets are independent of train point_max; calibrate ~8× median n_voxels.
 test_voxel_budget = None  # e.g. 1_200_000
 val_voxel_budget = None  # e.g. 1_200_000
+# Worker count override for the test DataLoader specifically (None = use
+# num_worker uncapped). test_mode keeps the dense cloud + fragment_list per
+# sample, so a packed test loader (test_voxel_budget set, or batch_size_test>1)
+# can need far less RAM headroom per worker than train/val at the same
+# num_worker -- set this explicitly (e.g. 2) for configs that hit that ceiling
+# (observed on Sonata grid-probe configs) instead of relying on a blanket cap.
+num_worker_test = None
 
 # -----------------------------------------------------------------------------
 # Training schedule — two mutually exclusive modes (see README_geist.md)
