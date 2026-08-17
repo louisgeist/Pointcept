@@ -8,6 +8,10 @@ per-ROI rasters, builds a predicted graph per network channel by reusing the sam
 mask -> graph post-processing pipeline used to export the ground-truth graphs, and computes
 APLS (Average Path Length Similarity) against the GT graphs exported by Flair3D-build.
 
+By default also writes ``{stem}_{NETWORK}_pred_graph.gpkg`` (same schema as GT) and
+``{stem}_{NETWORK}_apls.json`` (score, G→G', G'→G) next to the dataset-wide metrics.
+Pass ``--no_save_pred_gpkg`` / ``network_apls_eval.save_pred_gpkg=False`` to skip those dumps.
+
 Example::
 
     python tools/eval_network_apls.py \\
@@ -52,6 +56,56 @@ import network_label_utils as nlu  # type: ignore
 import network_prediction_stitch as nps  # type: ignore
 
 NETWORK_TYPES = nlu.NETWORK_TYPES
+
+
+def _json_safe_number(value):
+    """JSON-serializable float; non-finite values become ``None``."""
+    if value is None:
+        return None
+    number = float(value)
+    if not np.isfinite(number):
+        return None
+    return number
+
+
+def apls_sidecar_payload(stem: str, department: str, result: apls.ApsSymmetricResult) -> dict:
+    """Per-stem APLS sidecar written next to ``{stem}_{NETWORK}_pred_graph.gpkg``."""
+    return {
+        "stem": stem,
+        "roi": result.roi,
+        "department": department,
+        "network_type": result.network_type,
+        "score": _json_safe_number(result.score),
+        "score_gt_to_pred": _json_safe_number(result.score_gt_to_pred),
+        "score_pred_to_gt": _json_safe_number(result.score_pred_to_gt),
+        "n_nodes_gt": int(result.n_nodes_gt),
+        "n_nodes_pred": int(result.n_nodes_pred),
+        "n_edges_gt": int(result.n_edges_gt),
+        "n_edges_pred": int(result.n_edges_pred),
+    }
+
+
+def dump_pred_graph_artifacts(
+    out_dir: Path,
+    roi_dir: Path,
+    department: str,
+    network_type: str,
+    graph,
+    result: apls.ApsSymmetricResult,
+) -> tuple[Path, Path]:
+    """Write predicted-graph GeoPackage + APLS JSON sidecar for one ROI/channel."""
+    gpkg_path, json_path, stem = nlu.pred_graph_output_stem_paths(
+        out_dir, roi_dir, network_type
+    )
+    payload = apls_sidecar_payload(stem, department, result)
+    nlu.write_pixel_graph_gpkg(gpkg_path, graph, metadata=dict(payload))
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = str(json_path) + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2, sort_keys=True)
+        f.write("\n")
+    os.replace(tmp_path, json_path)
+    return gpkg_path, json_path
 
 
 class _ProfileAggregator:
@@ -271,6 +325,7 @@ def run(
     missing_tiles_file: Optional[Path] = None,
     show_progress: bool = True,
     profile: bool = False,
+    save_pred_gpkg: bool = True,
 ) -> dict:
     apls_densify = _coerce_densify(apls_densify)
     apls_snap_to_edge = _coerce_snap_to_edge(apls_snap_to_edge)
@@ -321,6 +376,8 @@ def run(
             )
     if max_rois is not None:
         roi_items = roi_items[: max(0, int(max_rois))]
+
+    out_dir.mkdir(parents=True, exist_ok=True)
 
     results: List[apls.ApsSymmetricResult] = []
     n_rois_processed = 0
@@ -455,10 +512,20 @@ def run(
                 results.append(result)
                 last_score = float(result.score)
                 last_network_type = network_type
+                if save_pred_gpkg:
+                    with _timed(profiler, "save_pred_gpkg", local=channel_timings):
+                        dump_pred_graph_artifacts(
+                            out_dir,
+                            roi_dir,
+                            department,
+                            network_type,
+                            processed.graph_final,
+                            result,
+                        )
                 if channel_timings is not None and roi_timings is not None:
                     # High-level buckets only for ROI totals (pipeline stages nest under
                     # build_pred_graph and must not be summed twice).
-                    for key in ("build_pred_graph", "load_gt", "apls"):
+                    for key in ("build_pred_graph", "load_gt", "apls", "save_pred_gpkg"):
                         if key in channel_timings:
                             roi_timings[key] = (
                                 roi_timings.get(key, 0.0) + channel_timings[key]
@@ -467,6 +534,7 @@ def run(
                         channel_timings.get("build_pred_graph", 0.0)
                         + channel_timings.get("load_gt", 0.0)
                         + channel_timings.get("apls", 0.0)
+                        + channel_timings.get("save_pred_gpkg", 0.0)
                     )
                     detail = {
                         k: v
@@ -496,7 +564,6 @@ def run(
 
     summary = apls.aggregate_dataset_apls(results)
 
-    out_dir.mkdir(parents=True, exist_ok=True)
     payload = {
         "config": {
             "split": split,
@@ -529,6 +596,7 @@ def run(
             "n_known_missing": len(known_missing),
             "n_skipped_known_missing": int(n_skipped_known_missing),
             "profile": bool(profile),
+            "save_pred_gpkg": bool(save_pred_gpkg),
         },
         "n_rois_processed": n_rois_processed,
         "n_rois_skipped": n_rois_skipped,
@@ -796,6 +864,14 @@ def build_argparser() -> argparse.ArgumentParser:
             "it under 'profiling' in the output JSON."
         ),
     )
+    p.add_argument(
+        "--no_save_pred_gpkg",
+        action="store_true",
+        help=(
+            "Skip per-ROI predicted-graph GeoPackage and APLS sidecar dumps "
+            "(dataset-wide JSON/CSV are still written)."
+        ),
+    )
     return p
 
 
@@ -839,6 +915,7 @@ def main(argv: Optional[List[str]] = None) -> None:
         missing_tiles_file=missing,
         show_progress=not args.no_progress,
         profile=bool(args.profile),
+        save_pred_gpkg=not args.no_save_pred_gpkg,
     )
 
 
