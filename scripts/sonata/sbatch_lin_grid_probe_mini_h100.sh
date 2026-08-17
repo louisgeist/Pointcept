@@ -15,8 +15,10 @@
 #SBATCH -A uhn@h100
 #SBATCH -C h100
 #SBATCH --comment=flair3d,explore,evaluate
-#SBATCH --output=/lustre/fswork/projects/rech/unv/usi32yh/Pointcept/logs/slurm/%j/slurm.out
-#SBATCH --error=/lustre/fswork/projects/rech/unv/usi32yh/Pointcept/logs/slurm/%j/slurm.err
+# %A_%a (not %j): on Jean-Zay, %j is the array parent id for every task,
+# so 15 tasks would share one slurm.out / JOB_DIR.
+#SBATCH --output=/lustre/fswork/projects/rech/unv/usi32yh/Pointcept/logs/slurm/%A_%a/slurm.out
+#SBATCH --error=/lustre/fswork/projects/rech/unv/usi32yh/Pointcept/logs/slurm/%A_%a/slurm.err
 
 # Mini grid: 10k iters, 11 probes, val@100 every 2 epochs, no test.
 #SBATCH --array=10-150:10
@@ -39,7 +41,7 @@ EXP_NAME="${EXP_NAME:-sonata_grid_mini_ep${PRETRAIN_EPOCH}}"
 CONFIG=experiment/w109/1/sonata_grid_mini/sonata-v1m2-flair3d-lin-grid_1
 
 REPO_ROOT=/lustre/fswork/projects/rech/unv/usi32yh/Pointcept
-JOB_DIR=${REPO_ROOT}/logs/slurm/${SLURM_JOB_ID}
+JOB_DIR=${REPO_ROOT}/logs/slurm/${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}
 mkdir -p ${JOB_DIR}
 
 cp $0 ${JOB_DIR}/script.slurm
