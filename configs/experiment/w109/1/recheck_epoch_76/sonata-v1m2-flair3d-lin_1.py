@@ -29,7 +29,7 @@ num_gpu = 1
 batch_size_per_gpu = 24
 batch_size = batch_size_per_gpu * num_gpu
 # Match grid-probe validation throughput settings.
-batch_size_val = 2 * num_gpu
+batch_size_val = 12 * num_gpu
 num_worker = 8 * num_gpu
 mix_prob = 0.8
 clip_grad = 3.0
