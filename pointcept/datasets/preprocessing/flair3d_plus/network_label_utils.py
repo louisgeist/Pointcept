@@ -1,22 +1,29 @@
-"""Load exported Flair3D-build network graphs for Pointcept preprocessing.
+"""Load and write Flair3D-build network graphs for Pointcept preprocessing.
 
-Expects GeoPackages produced by ``scripts/export_network_graphs.py``::
+Expects / produces GeoPackages with layers ``nodes`` / ``edges`` / ``metadata``
+(EPSG:2154)::
 
     {network_graphs_root}/{dept}_{zone}_{NETWORK}_graph.gpkg
-
-with layers ``nodes`` / ``edges`` / ``metadata`` (EPSG:2154).
+    {out_dir}/{dept}_{zone}_{NETWORK}_pred_graph.gpkg
 """
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Optional, Sequence
+from typing import Any, Dict, Optional, Sequence, TYPE_CHECKING
 
 import geopandas as gpd
 import numpy as np
-from shapely.geometry import LineString, MultiLineString
+from shapely.geometry import LineString, MultiLineString, Point
 from shapely.geometry.base import BaseGeometry
+
+if TYPE_CHECKING:
+    from network_xy_raster_utils import PixelGraph  # type: ignore
+
+CRS_EPSG = "EPSG:2154"
+_OGR_EPSG = 2154
 
 NETWORK_TYPES = ("ROADS", "RAILROADS", "TRANSMISSION_LINES")
 NETWORK_FLAG_COLUMNS = NETWORK_TYPES
@@ -316,4 +323,301 @@ def load_roi_exported_networks(
             out[network_type] = np.empty((0, 2, 3), dtype=np.float64)
         else:
             out[network_type] = load_graph_edge_segments(path)
+    return out
+
+
+def pred_graph_output_stem_paths(
+    out_dir: Path | str,
+    roi_dir: Path | str,
+    network_type: str,
+) -> tuple[Path, Path, str]:
+    """Return ``(gpkg_path, apls_json_path, stem)`` for a predicted-graph dump."""
+    if network_type not in NETWORK_TYPES:
+        raise ValueError(
+            f"Unknown network type {network_type!r}; expected one of {NETWORK_TYPES}"
+        )
+    stem = graph_output_stem(roi_dir)
+    if stem is None:
+        raise ValueError(f"Cannot derive graph stem from ROI directory: {roi_dir}")
+    out = Path(out_dir)
+    prefix = f"{stem}_{network_type}"
+    return out / f"{prefix}_pred_graph.gpkg", out / f"{prefix}_apls.json", stem
+
+
+def edge_euclidean_distances(graph: "PixelGraph") -> np.ndarray:
+    """Euclidean XY distance (m) for each undirected edge ``(u, v)``."""
+    edges = np.asarray(graph.edges, dtype=np.int64)
+    n_edges = int(edges.shape[0]) if edges.size else 0
+    if n_edges == 0:
+        return np.empty((0,), dtype=np.float64)
+    xy = np.asarray(graph.node_xy, dtype=np.float64)
+    delta = xy[edges[:, 1]] - xy[edges[:, 0]]
+    return np.linalg.norm(delta, axis=1)
+
+
+def pixel_graph_to_geodataframes(
+    graph: "PixelGraph",
+) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
+    """Convert a ``PixelGraph`` to ``nodes`` / ``edges`` GeoDataFrames (EPSG:2154)."""
+    n_nodes = int(graph.node_rc.shape[0])
+    node_xy = np.asarray(graph.node_xy, dtype=np.float64)
+    node_rc = np.asarray(graph.node_rc, dtype=np.int64)
+    if n_nodes == 0:
+        nodes = gpd.GeoDataFrame(
+            {
+                "node_id": np.empty((0,), dtype=np.int64),
+                "x": np.empty((0,), dtype=np.float64),
+                "y": np.empty((0,), dtype=np.float64),
+                "row": np.empty((0,), dtype=np.int64),
+                "col": np.empty((0,), dtype=np.int64),
+            },
+            geometry=[],
+            crs=CRS_EPSG,
+        )
+    else:
+        nodes = gpd.GeoDataFrame(
+            {
+                "node_id": np.arange(n_nodes, dtype=np.int64),
+                "x": node_xy[:, 0],
+                "y": node_xy[:, 1],
+                "row": node_rc[:, 0],
+                "col": node_rc[:, 1],
+            },
+            geometry=[Point(float(x), float(y)) for x, y in node_xy],
+            crs=CRS_EPSG,
+        )
+
+    edges_arr = np.asarray(graph.edges, dtype=np.int64)
+    n_edges = int(edges_arr.shape[0]) if edges_arr.size else 0
+    if n_edges == 0:
+        edges = gpd.GeoDataFrame(
+            {
+                "edge_id": np.empty((0,), dtype=np.int64),
+                "u": np.empty((0,), dtype=np.int64),
+                "v": np.empty((0,), dtype=np.int64),
+                "weight": np.empty((0,), dtype=np.float64),
+                "distance": np.empty((0,), dtype=np.float64),
+            },
+            geometry=[],
+            crs=CRS_EPSG,
+        )
+        return nodes, edges
+
+    weights = (
+        np.asarray(graph.edge_weights, dtype=np.float64)
+        if graph.edge_weights is not None
+        else np.ones((n_edges,), dtype=np.float64)
+    )
+    if weights.shape[0] != n_edges:
+        raise ValueError(
+            f"edge_weights length mismatch: {weights.shape[0]} vs {n_edges}"
+        )
+    distances = edge_euclidean_distances(graph)
+    edge_geoms = [
+        LineString(
+            [
+                (float(node_xy[int(u), 0]), float(node_xy[int(u), 1])),
+                (float(node_xy[int(v), 0]), float(node_xy[int(v), 1])),
+            ]
+        )
+        for u, v in edges_arr
+    ]
+    edges = gpd.GeoDataFrame(
+        {
+            "edge_id": np.arange(n_edges, dtype=np.int64),
+            "u": edges_arr[:, 0],
+            "v": edges_arr[:, 1],
+            "weight": weights,
+            "distance": distances,
+        },
+        geometry=edge_geoms,
+        crs=CRS_EPSG,
+    )
+    return nodes, edges
+
+
+def _spatial_ref_epsg2154():
+    from osgeo import osr
+
+    srs = osr.SpatialReference()
+    srs.ImportFromEPSG(_OGR_EPSG)
+    try:
+        srs.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
+    except AttributeError:
+        pass
+    return srs
+
+
+def _ogr_create_layer(ds, name: str, geom_type: int, fields: list[tuple[str, int]], *, srs):
+    from osgeo import ogr
+
+    if geom_type == ogr.wkbNone:
+        layer = ds.CreateLayer(name, srs=srs, geom_type=geom_type)
+    else:
+        layer = ds.CreateLayer(
+            name, srs=srs, geom_type=geom_type, options=["GEOMETRY_NAME=geom"]
+        )
+    if layer is None:
+        raise RuntimeError(f"Failed to create GPKG layer {name!r}")
+    for field_name, field_type in fields:
+        if layer.CreateField(ogr.FieldDefn(field_name, field_type)) != 0:
+            raise RuntimeError(
+                f"Failed to create field {field_name!r} on layer {name!r}"
+            )
+    return layer
+
+
+def _write_nodes_layer(ds, nodes: gpd.GeoDataFrame, srs) -> None:
+    from osgeo import ogr
+
+    layer = _ogr_create_layer(
+        ds,
+        "nodes",
+        ogr.wkbPoint,
+        [
+            ("node_id", ogr.OFTInteger64),
+            ("x", ogr.OFTReal),
+            ("y", ogr.OFTReal),
+            ("row", ogr.OFTInteger64),
+            ("col", ogr.OFTInteger64),
+        ],
+        srs=srs,
+    )
+    if len(nodes) == 0:
+        return
+    defn = layer.GetLayerDefn()
+    node_id = nodes["node_id"].to_numpy(dtype=np.int64, copy=False)
+    xs = nodes["x"].to_numpy(dtype=np.float64, copy=False)
+    ys = nodes["y"].to_numpy(dtype=np.float64, copy=False)
+    rows = nodes["row"].to_numpy(dtype=np.int64, copy=False)
+    cols = nodes["col"].to_numpy(dtype=np.int64, copy=False)
+    for i, geom in enumerate(nodes.geometry):
+        feat = ogr.Feature(defn)
+        feat.SetField("node_id", int(node_id[i]))
+        feat.SetField("x", float(xs[i]))
+        feat.SetField("y", float(ys[i]))
+        feat.SetField("row", int(rows[i]))
+        feat.SetField("col", int(cols[i]))
+        feat.SetGeometry(ogr.CreateGeometryFromWkb(geom.wkb))
+        if layer.CreateFeature(feat) != 0:
+            raise RuntimeError("Failed to write node feature")
+        feat = None
+
+
+def _write_edges_layer(ds, edges: gpd.GeoDataFrame, srs) -> None:
+    from osgeo import ogr
+
+    layer = _ogr_create_layer(
+        ds,
+        "edges",
+        ogr.wkbLineString,
+        [
+            ("edge_id", ogr.OFTInteger64),
+            ("u", ogr.OFTInteger64),
+            ("v", ogr.OFTInteger64),
+            ("weight", ogr.OFTReal),
+            ("distance", ogr.OFTReal),
+        ],
+        srs=srs,
+    )
+    if len(edges) == 0:
+        return
+    defn = layer.GetLayerDefn()
+    edge_id = edges["edge_id"].to_numpy(dtype=np.int64, copy=False)
+    u = edges["u"].to_numpy(dtype=np.int64, copy=False)
+    v = edges["v"].to_numpy(dtype=np.int64, copy=False)
+    weight = edges["weight"].to_numpy(dtype=np.float64, copy=False)
+    distance = edges["distance"].to_numpy(dtype=np.float64, copy=False)
+    for i, geom in enumerate(edges.geometry):
+        feat = ogr.Feature(defn)
+        feat.SetField("edge_id", int(edge_id[i]))
+        feat.SetField("u", int(u[i]))
+        feat.SetField("v", int(v[i]))
+        feat.SetField("weight", float(weight[i]))
+        feat.SetField("distance", float(distance[i]))
+        feat.SetGeometry(ogr.CreateGeometryFromWkb(geom.wkb))
+        if layer.CreateFeature(feat) != 0:
+            raise RuntimeError("Failed to write edge feature")
+        feat = None
+
+
+def _metadata_value_to_str(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, (dict, list, tuple)):
+        return json.dumps(value, ensure_ascii=True, sort_keys=True)
+    if isinstance(value, float) and not np.isfinite(value):
+        return ""
+    if isinstance(value, (bool, int, float, str)):
+        return str(value)
+    return str(value)
+
+
+def flatten_metadata_for_gpkg(meta: dict[str, Any], prefix: str = "") -> dict[str, Any]:
+    """Flatten nested metadata dicts into dotted keys for the GPKG table."""
+    out: dict[str, Any] = {}
+    for key, value in meta.items():
+        full = f"{prefix}.{key}" if prefix else str(key)
+        if isinstance(value, dict):
+            out.update(flatten_metadata_for_gpkg(value, full))
+        else:
+            out[full] = value
+    return out
+
+
+def _write_metadata_layer(ds, metadata: dict[str, Any]) -> None:
+    from osgeo import ogr
+
+    layer = _ogr_create_layer(
+        ds,
+        "metadata",
+        ogr.wkbNone,
+        [("key", ogr.OFTString), ("value", ogr.OFTString)],
+        srs=None,
+    )
+    defn = layer.GetLayerDefn()
+    for key, value in flatten_metadata_for_gpkg(metadata).items():
+        feat = ogr.Feature(defn)
+        feat.SetField("key", str(key))
+        feat.SetField("value", _metadata_value_to_str(value))
+        if layer.CreateFeature(feat) != 0:
+            raise RuntimeError("Failed to write metadata feature")
+        feat = None
+
+
+def write_pixel_graph_gpkg(
+    path: Path | str,
+    graph: "PixelGraph",
+    metadata: Optional[dict[str, Any]] = None,
+) -> Path:
+    """Write ``nodes``, ``edges``, and ``metadata`` layers to a GeoPackage.
+
+    Uses GDAL/OGR in a single CreateDataSource session (avoids Fiona ``mode='a'``
+    NULL pointer failures on GDAL 3.6 / Fiona 1.9). Empty graphs write empty
+    layers rather than raising.
+    """
+    from osgeo import ogr
+
+    out = Path(path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    if out.exists():
+        out.unlink()
+
+    nodes, edges = pixel_graph_to_geodataframes(graph)
+    srs = _spatial_ref_epsg2154()
+    driver = ogr.GetDriverByName("GPKG")
+    if driver is None:
+        raise RuntimeError("GDAL GPKG driver is unavailable")
+
+    ds = driver.CreateDataSource(str(out))
+    if ds is None:
+        raise RuntimeError(f"Failed to create GeoPackage: {out}")
+
+    try:
+        _write_nodes_layer(ds, nodes, srs)
+        _write_edges_layer(ds, edges, srs)
+        _write_metadata_layer(ds, metadata or {})
+    finally:
+        ds = None
+
     return out

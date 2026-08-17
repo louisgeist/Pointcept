@@ -1181,6 +1181,108 @@ class MultiTaskTester(TesterBase):
         ]
 
     @staticmethod
+    def _tile_distribution_cache_paths(save_path, data_name, task_name):
+        return dict(
+            pred=os.path.join(save_path, f"{data_name}_pred_{task_name}.npy"),
+            tile=os.path.join(save_path, f"{data_name}_pred_{task_name}_tile.npy"),
+            dist=os.path.join(save_path, f"{data_name}_dist_{task_name}.npy"),
+        )
+
+    @staticmethod
+    def _empirical_tile_distribution(target_np, ignore_index, num_classes):
+        """Empirical per-tile class histogram from point labels (void excluded)."""
+        target = np.asarray(target_np, dtype=np.int64).reshape(-1)
+        valid = target != int(ignore_index)
+        n_t = int(valid.sum())
+        q = np.zeros((int(num_classes),), dtype=np.float64)
+        if n_t > 0:
+            cls = np.clip(target[valid], 0, int(num_classes) - 1)
+            q = np.bincount(cls, minlength=int(num_classes)).astype(np.float64)
+            q /= float(n_t)
+        return q, n_t
+
+    @staticmethod
+    def _tile_distribution_metrics_from_dist(
+        dist_np, target_np, ignore_index, num_classes
+    ):
+        q, n_t = MultiTaskTester._empirical_tile_distribution(
+            target_np, ignore_index, num_classes
+        )
+        if n_t <= 0:
+            return None
+        pi = torch.from_numpy(np.asarray(dist_np, dtype=np.float64).reshape(1, -1))
+        q_t = torch.from_numpy(q.reshape(1, -1))
+        kl = float(kl_divergence_rows(q_t, pi).item())
+        abs_err = abs_freq_error_rows(pi, q_t)
+        n_val = float(n_t)
+        return dict(
+            kl_weighted=n_val * kl,
+            weight=n_val,
+            abs_weighted=(
+                n_val * abs_err.squeeze(0).detach().cpu().numpy()
+            ).astype(np.float64),
+        )
+
+    @staticmethod
+    def _finalize_and_save_tile_distribution(
+        avg_probs,
+        target_np,
+        ignore_index,
+        num_classes,
+        cache_paths,
+    ):
+        """Argmax-per-point, pooled tile class, and (C,) distribution; write cache files.
+
+        ``avg_probs`` is (N, C) softmaxed per-point probabilities, already inverse-
+        mapped onto the origin cloud when that remap applies.
+        """
+        pred_np = avg_probs.argmax(dim=-1).detach().cpu().numpy().astype(np.int32)
+        n_points = int(pred_np.shape[0])
+        metrics = None
+        target_ok = False
+        if target_np is not None:
+            tgt = np.asarray(target_np, dtype=np.int64).reshape(-1)
+            target_ok = tgt.shape[0] == avg_probs.shape[0]
+        if target_ok:
+            target_t = torch.from_numpy(tgt).long().to(avg_probs.device)
+            indptr = torch.tensor([0, avg_probs.shape[0]], device=avg_probs.device)
+            pi_hat, q_t, n_t = pool_axis_distribution_from_probs(
+                avg_probs, target_t, indptr, int(ignore_index), int(num_classes)
+            )
+            n_val = float(n_t.item())
+            dist_np = pi_hat.squeeze(0).detach().cpu().numpy().astype(np.float32)
+            if n_val > 0:
+                tile_cls = int(pi_hat.squeeze(0).argmax().item())
+                abs_weighted = (
+                    n_val
+                    * abs_freq_error_rows(pi_hat, q_t)
+                    .squeeze(0)
+                    .detach()
+                    .cpu()
+                    .numpy()
+                ).astype(np.float64)
+                metrics = dict(
+                    kl_weighted=n_val * float(kl_divergence_rows(q_t, pi_hat).item()),
+                    weight=n_val,
+                    abs_weighted=abs_weighted,
+                )
+            else:
+                tile_cls = int(ignore_index)
+        elif n_points == 0:
+            dist_np = np.zeros((int(num_classes),), dtype=np.float32)
+            tile_cls = int(ignore_index)
+        else:
+            dist_np = (
+                avg_probs.mean(dim=0).detach().cpu().numpy().astype(np.float32)
+            )
+            tile_cls = int(np.argmax(dist_np))
+        tile_pred_np = np.full((n_points,), tile_cls, dtype=np.int32)
+        np.save(cache_paths["pred"], pred_np)
+        np.save(cache_paths["tile"], tile_pred_np)
+        np.save(cache_paths["dist"], dist_np)
+        return pred_np, tile_pred_np, dist_np, metrics
+
+    @staticmethod
     def _apply_inverse_origin_probs(pred_probs, scene_extra, task_name):
         """(N, C) analogue of _apply_inverse_origin_np, for tile_distribution predictions."""
         origin_key = MultiTaskTester._task_origin_target_key(task_name)
@@ -1304,6 +1406,7 @@ class MultiTaskTester(TesterBase):
             batch_reg_cache_paths = []
             batch_ml_cache_paths = []
             batch_pixel_logits_cache_paths = []
+            batch_td_cache_paths = []
             batch_all_cached = []
             batch_cls_logits_sum = []
             batch_cls_logits_cnt = []
@@ -1367,10 +1470,15 @@ class MultiTaskTester(TesterBase):
                     t: os.path.join(save_path, f"{data_name}_logits_{t}.npy")
                     for t in pixel_semantic_tasks
                 }
+                td_cache_paths = {
+                    t: self._tile_distribution_cache_paths(save_path, data_name, t)
+                    for t in tile_distribution_tasks
+                }
                 batch_sem_cache_paths.append(sem_cache_paths)
                 batch_reg_cache_paths.append(reg_cache_paths)
                 batch_ml_cache_paths.append(ml_cache_paths)
                 batch_pixel_logits_cache_paths.append(pixel_logits_cache_paths)
+                batch_td_cache_paths.append(td_cache_paths)
                 
                 all_sem_cached = all(os.path.isfile(p) for p in sem_cache_paths.values())
                 all_reg_cached = all(os.path.isfile(p) for p in reg_cache_paths.values())
@@ -1378,11 +1486,18 @@ class MultiTaskTester(TesterBase):
                 all_pixel_cached = all(
                     os.path.isfile(p) for p in pixel_logits_cache_paths.values()
                 )
+                all_td_cached = all(
+                    os.path.isfile(p["pred"])
+                    and os.path.isfile(p["tile"])
+                    and os.path.isfile(p["dist"])
+                    for p in td_cache_paths.values()
+                )
                 batch_all_cached.append(
                     all_sem_cached
                     and (len(regression_tasks) == 0 or all_reg_cached)
                     and (len(multilabel_tasks) == 0 or all_ml_cached)
                     and (len(pixel_semantic_tasks) == 0 or all_pixel_cached)
+                    and (len(tile_distribution_tasks) == 0 or all_td_cached)
                 )
                 
                 batch_pred_sem.append({
@@ -1413,10 +1528,11 @@ class MultiTaskTester(TesterBase):
                 batch_pixel_dense_sum.append({t: None for t in pixel_semantic_tasks})
                 batch_pixel_dense_cnt.append({t: None for t in pixel_semantic_tasks})
 
-            # Skip model forward when sem/reg/multilabel/pixel caches are present.
-            # Mono-label classification and tile_distribution are not cached and
-            # still force a forward.
-            if all(batch_all_cached) and not classification_tasks and not tile_distribution_tasks:
+            # Skip model forward when sem/reg/multilabel/pixel/nathab caches are present.
+            # Mono-label classification is not cached and still forces a forward.
+            batch_td_dist_np = []
+            batch_td_metrics = []
+            if all(batch_all_cached) and not classification_tasks:
                 batch_pred_cls_np = []
                 batch_pred_reg_np = []
                 batch_pred_scene_cls_np = []
@@ -1436,10 +1552,15 @@ class MultiTaskTester(TesterBase):
                         pixel_logits_np[t] = np.load(
                             batch_pixel_logits_cache_paths[b_idx][t]
                         )
+                    td_dist = {}
+                    for t in tile_distribution_tasks:
+                        td_dist[t] = np.load(batch_td_cache_paths[b_idx][t]["dist"])
                     batch_pred_cls_np.append(pred_cls_np)
                     batch_pred_reg_np.append(pred_reg_np)
                     batch_pred_scene_cls_np.append(pred_scene_cls_np)
                     batch_pixel_logits_np.append(pixel_logits_np)
+                    batch_td_dist_np.append(td_dist)
+                    batch_td_metrics.append(None)
             else:
                 # Extract the single fragment from each scene
                 fragments = [d.pop("fragment_list")[0] for d in batch]
@@ -1630,6 +1751,52 @@ class MultiTaskTester(TesterBase):
                             batch_pixel_logits_cache_paths[b_idx][task_name],
                             logits_np,
                         )
+
+                    td_dist = {}
+                    td_metrics = {}
+                    for task_name in tile_distribution_tasks:
+                        if task_name not in batch_axis_pred_sum[b_idx]:
+                            continue
+                        cnt = batch_axis_pred_cnt[b_idx][task_name].clamp(min=1).unsqueeze(-1)
+                        avg_probs = batch_axis_pred_sum[b_idx][task_name] / cnt
+                        avg_probs = self._apply_inverse_origin_probs(
+                            avg_probs, batch_scene_extra[b_idx], task_name
+                        )
+                        tgt_np = None
+                        tgt_aligned = False
+                        if task_name in batch_targets[b_idx]:
+                            tgt_np = self._target_for_metrics(
+                                task_name,
+                                batch_targets[b_idx],
+                                batch_scene_extra[b_idx],
+                            )
+                            tgt_aligned = (
+                                np.asarray(tgt_np).reshape(-1).shape[0]
+                                == avg_probs.shape[0]
+                            )
+                            if not tgt_aligned:
+                                logger.warning(
+                                    "Scene %s: tile_distribution task %s pred/target length "
+                                    "mismatch (%d vs %d); skipping metrics.",
+                                    batch_data_names[b_idx],
+                                    task_name,
+                                    avg_probs.shape[0],
+                                    int(np.asarray(tgt_np).reshape(-1).shape[0]),
+                                )
+                                tgt_np = None
+                        tc = task_configs[task_name]
+                        _, _, dist_np, td_m = self._finalize_and_save_tile_distribution(
+                            avg_probs,
+                            tgt_np,
+                            int(tc["ignore_index"]),
+                            int(tc["num_classes"]),
+                            batch_td_cache_paths[b_idx][task_name],
+                        )
+                        td_dist[task_name] = dist_np
+                        if tgt_aligned:
+                            td_metrics[task_name] = td_m
+                    batch_td_dist_np.append(td_dist)
+                    batch_td_metrics.append(td_metrics)
                         
                     batch_pred_cls_np.append(pred_cls_np)
                     batch_pred_reg_np.append(pred_reg_np)
@@ -1875,49 +2042,30 @@ class MultiTaskTester(TesterBase):
                             task_name,
                         )
                         continue
-                    if task_name not in batch_axis_pred_sum[b_idx]:
+                    forwarded = batch_td_metrics[b_idx]
+                    if forwarded is not None:
+                        if task_name not in forwarded:
+                            continue
+                        if forwarded[task_name] is not None:
+                            td_metrics_scene[task_name] = forwarded[task_name]
                         continue
-                    tc = task_configs[task_name]
-                    ignore_index = int(tc["ignore_index"])
-                    num_classes = int(tc["num_classes"])
-                    cnt = batch_axis_pred_cnt[b_idx][task_name].clamp(min=1).unsqueeze(-1)
-                    avg_probs = batch_axis_pred_sum[b_idx][task_name] / cnt
-                    avg_probs = self._apply_inverse_origin_probs(
-                        avg_probs, scene_extra, task_name
-                    )
+                    dist_np = batch_td_dist_np[b_idx].get(task_name)
+                    if dist_np is None:
+                        continue
                     tgt_np = np.asarray(
-                        self._target_for_metrics(task_name, targets_by_task, scene_extra),
+                        self._target_for_metrics(
+                            task_name, targets_by_task, scene_extra
+                        ),
                         dtype=np.int64,
                     ).reshape(-1)
-                    if tgt_np.shape[0] != avg_probs.shape[0]:
-                        logger.warning(
-                            "Scene %s: tile_distribution task %s pred/target length "
-                            "mismatch (%d vs %d); skipping.",
-                            data_name,
-                            task_name,
-                            avg_probs.shape[0],
-                            tgt_np.shape[0],
-                        )
-                        continue
-                    target_t = torch.from_numpy(tgt_np).long().to(avg_probs.device)
-                    indptr = torch.tensor(
-                        [0, avg_probs.shape[0]], device=avg_probs.device
+                    td_m = self._tile_distribution_metrics_from_dist(
+                        dist_np,
+                        tgt_np,
+                        int(task_configs[task_name]["ignore_index"]),
+                        int(task_configs[task_name]["num_classes"]),
                     )
-                    pi_hat, q_t, n_t = pool_axis_distribution_from_probs(
-                        avg_probs, target_t, indptr, ignore_index, num_classes
-                    )
-                    if float(n_t.item()) > 0:
-                        kl = float(kl_divergence_rows(q_t, pi_hat).item())
-                        abs_err = abs_freq_error_rows(pi_hat, q_t)
-                        n_val = float(n_t.item())
-                        td_metrics_scene[task_name] = dict(
-                            kl_weighted=n_val * kl,
-                            weight=n_val,
-                            abs_weighted=(
-                                n_val
-                                * abs_err.squeeze(0).detach().cpu().numpy()
-                            ).astype(np.float64),
-                        )
+                    if td_m is not None:
+                        td_metrics_scene[task_name] = td_m
 
                 record[data_name] = dict(
                     semantic=sem_metrics_scene,
