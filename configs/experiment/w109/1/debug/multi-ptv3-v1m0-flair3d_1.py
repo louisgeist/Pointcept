@@ -55,7 +55,7 @@ patch_size = 1024
 # Debug-speed overrides: a few train steps, a few val/test scenes.
 train_max_sample = 24
 val_max_sample = 16
-test_max_sample = 16
+test_max_sample = 10_000
 
 # Optimization parameters
 lr = 2e-3
