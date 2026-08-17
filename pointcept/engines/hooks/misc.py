@@ -38,6 +38,7 @@ from pointcept.utils.scheduler import CosineScheduler
 import pointcept.utils.comm as comm
 from pointcept.utils.misc import intersection_and_union_gpu
 from pointcept.utils.wandb_metrics import class_name_slug, iou_class_tag, metric_tag
+from pointcept.utils.wandb_resume import write_local_last_step
 from pointcept.utils.multilabel_metrics import (
     MultilabelStats,
     accumulate_multilabel_stats,
@@ -733,6 +734,8 @@ class CheckpointSaver(HookBase):
             from pointcept.utils.runtime_state import flush_runtime_segment
 
             flush_runtime_segment(self.trainer.cfg.save_path)
+            if getattr(self.trainer.cfg, "enable_wandb", False) and wandb.run is not None:
+                write_local_last_step(self.trainer.cfg.save_path, wandb.run.step)
 
 
 @HOOKS.register_module()

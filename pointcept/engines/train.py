@@ -39,7 +39,7 @@ from pointcept.utils.scheduler import build_scheduler
 from pointcept.utils.config import ConfigDict
 from pointcept.utils.events import EventStorage, ExceptionWriter
 from pointcept.utils.wandb_metrics import define_wandb_metrics
-from pointcept.utils.wandb_resume import bump_wandb_step_on_resume
+from pointcept.utils.wandb_resume import bump_wandb_step_on_resume, read_local_last_step
 from pointcept.utils.gradient_norm import (
     GradNormLiteEMA,
     all_reduce_mean_task_norms,
@@ -553,6 +553,7 @@ class Trainer(TrainerBase):
                     run_id=run_id,
                     logger=self.logger,
                     entity=getattr(wandb.run, "entity", None),
+                    local_last_step=read_local_last_step(self.cfg.save_path),
                 )
             task_configs = getattr(self.cfg.data, "task_configs", None) or {}
             task_names = []
