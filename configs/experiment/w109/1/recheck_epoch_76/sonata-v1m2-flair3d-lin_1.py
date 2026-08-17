@@ -10,7 +10,7 @@ remaps student.backbone → backbone.
 Checkpoint (pretrain job 862680, epoch 76):
   /lustre/fsn1/projects/rech/unv/usi32yh/logs/pointcept_logs/slurm/862680/model/epoch_76.pth
 
-Val uses stratified subset (val_dev_subset_2000.csv) capped to max_sample=20;
+Val uses stratified subset (val_dev_subset_2000.csv) capped to max_sample=100;
 eval_every=2. No test split.
 """
 
@@ -28,7 +28,8 @@ num_exp = 1
 num_gpu = 1
 batch_size_per_gpu = 24
 batch_size = batch_size_per_gpu * num_gpu
-batch_size_val = max(1, batch_size // 2)
+# Match grid-probe validation throughput settings.
+batch_size_val = 64 * num_gpu
 num_worker = 8 * num_gpu
 mix_prob = 0.8
 clip_grad = 3.0
@@ -192,7 +193,8 @@ data = dict(
         csv_manifest=csv_manifest,
         min_points=min_points,
         stratified_subset_manifest=val_stratified_subset_manifest,
-        max_sample=20,
+        # Match grid-probe validation sample budget for apples-to-apples comparison.
+        max_sample=100,
         target_keys=["segment"],
         primary_target_key="segment",
         transform=[
