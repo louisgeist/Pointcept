@@ -6,7 +6,8 @@ network (roads only, CE + foreground weight=5; railroads/transmission lines
 dropped; scored via APLS at test time). Aligned with w107/w108 toward_bm +
 network roads-only recipe.
 
-_2: new Flair3D multi default radius_scaling=3.0 (larger inter-stage zoom).
+_2: Flair3D multi default geometry — kp_radius=kp_sigma=3.2 with
+radius_scaling=3.0 (kernel slightly larger than the pooling hop).
 6x A100, 4 samples/GPU, global batch_size=24. Val/test voxel budget 2M,
 cap 8 scenes/GPU.
 
@@ -55,6 +56,8 @@ test_voxel_budget = 2_000_000
 grid_size = 0.1
 point_max = 40000
 mix_prob = 0.8
+kp_radius = 3.2
+kp_sigma = kp_radius
 radius_scaling = 3.0
 
 # Optimization parameters
@@ -68,7 +71,7 @@ coord_feat_scale = 0.01
 
 # Wandb parameters
 wandb_run_name = (
-    f"6xA100 KPConvX multi {grp_exp}.{num_exp} iters={total_iters} bs={batch_size} rs={radius_scaling} lr={lr}"
+    f"6xA100 KPConvX multi {grp_exp}.{num_exp} iters={total_iters} bs={batch_size} kp={kp_radius} rs={radius_scaling} lr={lr}"
 )
 wandb_project = "flair3d_multi"
 
@@ -189,10 +192,10 @@ model = dict(
         task="cloud_segmentation",
         kp_mode="kpconvx",
         shell_sizes=(1, 14, 28),
-        kp_radius=2.3,
+        kp_radius=kp_radius,
         kp_aggregation="nearest",
         kp_influence="constant",
-        kp_sigma=2.3,
+        kp_sigma=kp_sigma,
         share_kp=False,
         conv_groups=-1,
         inv_groups=8,

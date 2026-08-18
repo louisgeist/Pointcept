@@ -6,8 +6,9 @@ network (roads only, CE + foreground weight=5; railroads/transmission lines
 dropped; scored via APLS at test time). Aligned with w107/w108 toward_bm +
 network roads-only recipe.
 
-_1: ablation vs the new Flair3D multi default (radius_scaling=3.0): keep
-radius_scaling=2.2 (old KPConvX / ScanNet default). 8x A100, 3 samples/GPU
+_1: ablation vs the Flair3D multi default (kp_radius=kp_sigma=3.2,
+radius_scaling=3.0): keep the ScanNet / KPConvX-paper recipe
+(kp_radius=kp_sigma=2.3, radius_scaling=2.2). 8x A100, 3 samples/GPU
 (OOM at 4), global batch_size=24. Val/test voxel budget 2M, cap 8 scenes/GPU.
 
 Follows the KPConvX data path (GridSample return_min_coord, point_max) and

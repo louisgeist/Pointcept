@@ -42,10 +42,14 @@ batch_size = 2 * num_gpu  # total batch size across all gpus
 batch_size_val = 8 * num_gpu
 val_voxel_budget = 2_000_000
 batch_size_test = batch_size // 2
+test_voxel_budget = 2_000_000
 
 grid_size = 0.1
 point_max = 40000
 mix_prob = 0.8
+kp_radius = 3.2
+kp_sigma = kp_radius
+radius_scaling = 3.0
 
 # Optimization parameters
 lr = 1e-3
@@ -179,10 +183,10 @@ model = dict(
         task="cloud_segmentation",
         kp_mode="kpconvx",
         shell_sizes=(1, 14, 28),
-        kp_radius=2.3,
+        kp_radius=kp_radius,
         kp_aggregation="nearest",
         kp_influence="constant",
-        kp_sigma=2.3,
+        kp_sigma=kp_sigma,
         share_kp=False,
         conv_groups=-1,
         inv_groups=8,
@@ -194,7 +198,7 @@ model = dict(
         layer_blocks=(3, 3, 9, 12, 3),
         init_channels=64,
         channel_scaling=1.414,
-        radius_scaling=2.2,
+        radius_scaling=radius_scaling,
         decoder_layer=True,
         grid_pool=True,
         upsample_n=3,
