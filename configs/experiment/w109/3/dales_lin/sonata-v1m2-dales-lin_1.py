@@ -79,7 +79,7 @@ names = [
 ]
 
 # -----------------------------------------------------------------------------
-# Grid-search probes — loss x lr x wd x input_norm (3 x 6 x 2 x 3 = 108 probes),
+# Grid-search probes — loss x lr x wd x input_norm (3 x 6 x 1 x 3 = 54 probes),
 # each with its own AdamW + OneCycleLR (matches this config's original single-probe
 # schedule shape) and grad_clip=3.0 (only meaningful under GridProbeTrainer, which
 # has no top-level grad-clip equivalent to the classic Trainer's — added for
@@ -96,7 +96,7 @@ _losses = {
     ],
 }
 _lrs = {"2e-3": 2e-3, "5e-3": 5e-3, "1e-2": 1e-2, "2e-2": 2e-2, "5e-2": 5e-2, "1e-1": 1e-1}
-_wds = {"0": 0.0, "5e-3": 0.005}
+_wds = {"5e-3": 0.005}
 _norms = {"none": None, "l2": "l2", "linf": "linf"}
 
 probes = {}
