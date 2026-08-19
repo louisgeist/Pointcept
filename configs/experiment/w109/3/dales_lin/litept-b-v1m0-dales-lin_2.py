@@ -1,7 +1,7 @@
 """
 LitePT-Base linear probing on DALES — decoder hypercolumn variant (transfer
 from Flair3D+ multitask supervised pretrain, job 873542 — see README_geist.md
-test invocation for the same job).
+test invocation for the same job). Baseline short run, epoch=10.
 
 Unlike `litept-b-v1m0-dales-lin_1.py` (which reads only the decoder's final
 72-dim output), this variant keeps and uses the *entire* trained LitePT-B
@@ -44,7 +44,7 @@ grid_size = 0.1
 point_max = 102400
 
 num_gpu = 1
-epoch = 50
+epoch = 10
 eval_epoch = 10
 lr = 2e-2
 patch_size = 1024

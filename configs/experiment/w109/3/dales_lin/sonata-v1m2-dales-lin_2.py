@@ -1,6 +1,6 @@
 """
 Sonata-v1m2 linear probing on DALES (transfer from Flair3D+ SSL pretrain).
-Baseline short run, epoch=10.
+Epoch=50 variant of `sonata-v1m2-dales-lin_1.py`.
 
 Frozen PT-v3m2 encoder (enc_mode) from the Flair3D+ Sonata pretrain job
 862680, epoch_120. DALES has no RGB — Sonata was pretrained with scene-level
@@ -14,7 +14,7 @@ so a literal zero fill is faithful to what the encoder saw.
 _base_ = ["../../../../_base_/default_runtime.py"]
 
 grp_exp = 1
-num_exp = 1
+num_exp = 2
 
 num_classes = 8
 ignore_index = 8
@@ -22,7 +22,7 @@ grid_size = 0.1
 point_max = 102400
 
 num_gpu = 1
-epoch = 10
+epoch = 50
 eval_epoch = 10
 lr = 2e-2
 patch_size = 1024

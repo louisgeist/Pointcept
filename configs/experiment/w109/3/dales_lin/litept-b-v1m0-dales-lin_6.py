@@ -1,20 +1,42 @@
 """
-Sonata-v1m2 linear probing on DALES (transfer from Flair3D+ SSL pretrain).
-Baseline short run, epoch=10.
+LitePT-Base linear probing on DALES — decoder hypercolumn variant (transfer
+from Flair3D+ multitask supervised pretrain, job 873542 — see README_geist.md
+test invocation for the same job). Epoch=100 variant of `litept-b-v1m0-dales-lin_2.py` (decoder hypercolumn 1404ch).
 
-Frozen PT-v3m2 encoder (enc_mode) from the Flair3D+ Sonata pretrain job
-862680, epoch_120. DALES has no RGB — Sonata was pretrained with scene-level
-RandomDropColor/RandomDropStrength (drop_value=0.0) specifically so the
-encoder tolerates all-zero color at transfer time, so `FillMissingFeat`
-synthesizes a zero "color" channel here to keep in_channels=7. No learned
-masked-feat mechanism was used at pretrain time (feature_mask_values unset),
-so a literal zero fill is faithful to what the encoder saw.
+Unlike `litept-b-v1m0-dales-lin_1.py` (which reads only the decoder's final
+72-dim output), this variant keeps and uses the *entire* trained LitePT-B
+network (encoder + decoder, all frozen) and concatenates the per-point
+feature produced at every decoder stage — each already upsampled to a
+progressively finer resolution as the decoder walks back up from the
+bottleneck — into one 1404-dim vector per point (72+108+216+432 decoder
+levels + the raw 576-dim encoder bottleneck). This mirrors what Sonata's
+probe (`sonata-v1m2-dales-lin_1.py`) does for its encoder levels via
+`enc_mode=True`, but here nothing is discarded: `enc_mode` stays False, so
+100% of the checkpoint's weights are loaded and frozen.
+
+Mechanism: `backbone.dec_traceable=True` (new `LitePT-v1` constructor kwarg,
+see pointcept/models/litept/litept_v1.py) makes each decoder-stage
+`GridUnpooling` record its coarser input's pre-fusion feature as
+`unpooling_parent` (mirroring the existing `pooling_parent` chain built by
+`GridPooling` on the encoder side). `DefaultSegmentorV2.forward`
+(pointcept/models/default.py) was generalized to walk this chain — a
+concat-and-gather pattern that already existed, unused, in the orphaned
+`DINOEnhancedSegmentor` class — before its existing encoder-side
+`pooling_parent` walk. Backward compatible: the new walk is a no-op for any
+backbone/config that never sets `dec_traceable=True` (every other config in
+this repo, including `_1.py`).
+
+Same DALES-has-no-RGB handling as `_1.py`: `FillMissingFeat` synthesizes a
+zero "color" channel + `color_mask`, and `feature_mask_values` makes the
+frozen model fill masked positions with its pretrained learned
+`color_mask_value`/`strength_mask_value` (also frozen by `freeze_backbone`)
+instead of a raw zero.
 """
 
 _base_ = ["../../../../_base_/default_runtime.py"]
 
 grp_exp = 1
-num_exp = 1
+num_exp = 6
 
 num_classes = 8
 ignore_index = 8
@@ -22,7 +44,7 @@ grid_size = 0.1
 point_max = 102400
 
 num_gpu = 1
-epoch = 10
+epoch = 100
 eval_epoch = 10
 lr = 2e-2
 patch_size = 1024
@@ -44,7 +66,7 @@ enable_amp = False
 dataset_type = "DALESDataset"
 data_root = "data/dales"
 
-weight = "/lustre/fsn1/projects/rech/unv/usi32yh/logs/pointcept_logs/slurm/862680/model/epoch_120.pth"
+weight = "/lustre/fswork/projects/rech/unv/usi32yh/Pointcept/logs/slurm/873542/model/model_best.pth"
 
 wandb_project = f"pointcept_{dataset_type[:-7].lower()}"
 
@@ -56,8 +78,7 @@ wandb_project = f"pointcept_{dataset_type[:-7].lower()}"
 hooks = [
     dict(
         type="CheckpointLoader",
-        keywords="module.student.backbone",
-        replacement="module.backbone",
+        exclude_keys=("seg_heads", "reg_heads", "cls_heads", "pixel_seg_heads", "cls_attn_pools"),
     ),
     dict(type="ModelHook"),
     dict(type="IterationTimer", warmup_iter=2),
@@ -81,6 +102,11 @@ names = [
     "Buildings",
     "Unknown",
 ]
+
+# Decoder levels (72, 108, 216, 432) + raw encoder bottleneck (576).
+dec_channels = (72, 108, 216, 432)
+bottleneck_channels = 576
+backbone_out_channels = sum(dec_channels) + bottleneck_channels  # 1404
 
 # -----------------------------------------------------------------------------
 # Grid-search probes — loss x lr x wd x input_norm (3 x 6 x 1 x 3 = 54 probes),
@@ -129,7 +155,7 @@ del _losses, _lrs, _wds, _norms, _loss_name, _criteria, _lr_name, _lr
 del _wd_name, _wd, _norm_name, _input_norm, _name
 
 wandb_run_name = (
-    f"Sonata GridProbe DALES {grp_exp}.{num_exp}) epoch_120, "
+    f"LitePT-B GridProbe DALES {grp_exp}.{num_exp}) decoder hypercolumn 1404ch, "
     f"{len(probes)} probes, epoch={epoch}"
 )
 
@@ -140,16 +166,26 @@ model = dict(
     num_classes=num_classes,
     ignore_index=ignore_index,
     target_key="segment",
-    backbone_out_channels=1232,
+    backbone_out_channels=backbone_out_channels,
     backbone=dict(
-        type="PT-v3m2",
-        in_channels=7,  # coord(3) + color(3, fake/zero) + strength(1)
+        type="LitePT-v1",
+        in_channels=7,  # coord(3) + color(3, fake) + strength(1)
         order=("z", "z-trans", "hilbert", "hilbert-trans"),
         stride=(3, 3, 3, 3),
         enc_depths=(3, 3, 3, 12, 3),
-        enc_channels=(48, 96, 192, 384, 512),
+        enc_channels=(54, 108, 216, 432, bottleneck_channels),
         enc_num_head=(3, 6, 12, 24, 32),
         enc_patch_size=(patch_size, patch_size, patch_size, patch_size, patch_size),
+        enc_conv=(True, True, True, False, False),
+        enc_attn=(False, False, False, True, True),
+        enc_rope_freq=(100.0, 100.0, 100.0, 100.0, 100.0),
+        dec_depths=(0, 0, 0, 0),
+        dec_channels=dec_channels,
+        dec_num_head=(4, 6, 12, 24),
+        dec_patch_size=(patch_size, patch_size, patch_size, patch_size),
+        dec_conv=(False, False, False, False),
+        dec_attn=(False, False, False, False),
+        dec_rope_freq=(100.0, 100.0, 100.0, 100.0),
         mlp_ratio=4,
         qkv_bias=True,
         qk_scale=None,
@@ -158,16 +194,14 @@ model = dict(
         drop_path=0.3,
         shuffle_orders=True,
         pre_norm=True,
-        enable_rpe=False,
-        enable_flash=True,
-        upcast_attention=False,
-        upcast_softmax=False,
-        traceable=False,
-        mask_token=False,
-        enc_mode=True,
-        freeze_encoder=False,
+        enc_mode=False,
+        dec_traceable=True,
     ),
     freeze_backbone=True,
+    feature_mask_values=dict(
+        enable=True,
+        masked_feat_keys=["color", "strength"],
+    ),
 )
 
 # trainer settings — GridProbeTrainer builds one optimizer/scheduler per probe
