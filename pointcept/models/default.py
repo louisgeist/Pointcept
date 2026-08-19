@@ -186,7 +186,16 @@ class DefaultSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
         if self.freeze_backbone:
             for p in self.backbone.parameters():
                 p.requires_grad = False
-    
+            # Learned masked-feat fill values (e.g. color_mask_value) are part of
+            # how raw features are prepared for the backbone, not part of the
+            # trainable head — freeze them too so a linear probe stays faithful
+            # to the representation the backbone was pretrained with.
+            if self.enable_learned_masked_feat:
+                for feat_key in self.learned_masked_feat_keys:
+                    mask_value = getattr(self, f"{feat_key}_mask_value", None)
+                    if mask_value is not None:
+                        mask_value.requires_grad = False
+
     def get_ignore_index(self) -> int:
         if self._ignore_index is not None:
             return self._ignore_index
