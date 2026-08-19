@@ -4,16 +4,20 @@ Preprocessing script for DALES dataset.
 Usage:
 1) unzip the DALESObjects.zip file
 
-2) python pointcept/datasets/preprocessing/dales/preprocess_dales.py \
+mkdir -p data/dales/raw 
+tar -xzf "$SCRATCH/DALESObjects.tar.gz" -C data/dales/raw
+
+2) 
+python pointcept/datasets/preprocessing/dales/preprocess_dales.py \
     --dataset_root data/dales/raw/DALESObjects \
     --output_root data/dales/ \
-    --num_workers 1
+    --num_workers 8
 
 or 
 python pointcept/datasets/preprocessing/dales/preprocess_dales.py \
     --dataset_root data/dales/raw \
     --output_root data/dales/ \
-    --num_workers 1
+    --num_workers 8
 
 This script converts raw DALES PLY files into Pointcept scene folders containing:
 - coord.npy
