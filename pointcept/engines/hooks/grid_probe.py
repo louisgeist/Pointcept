@@ -7,6 +7,7 @@ GridProbeTrainer (see pointcept/models/grid_probe.py,
 pointcept/engines/train.py).
 """
 
+import csv
 import json
 import os
 
@@ -52,6 +53,18 @@ def _atomic_write_json(path, payload):
     os.replace(tmp_path, path)
 
 
+_HISTORY_CSV_FIELDNAMES = ("epoch", "probe_name", "mIoU", "mIoU_best")
+
+
+def _atomic_write_history_csv(path, rows):
+    tmp_path = path + ".tmp"
+    with open(tmp_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=_HISTORY_CSV_FIELDNAMES)
+        writer.writeheader()
+        writer.writerows(rows)
+    os.replace(tmp_path, path)
+
+
 def _flatten_for_wandb(d, prefix):
     """Recursively flatten a (possibly nested) config dict into dotted-path
     wandb summary keys; lists (e.g. `criteria`) are JSON-stringified since
@@ -82,6 +95,12 @@ class GridProbeEvaluator(HookBase):
     exactly the eventual winning probe's own best value (max commutes over
     the epoch/probe axes). MetricsJsonWriter's existing best_val_mIoU output
     is therefore already correct for grid runs with zero changes to that hook.
+
+    Also writes save_path/grid_probe_miou_history.csv: one row per
+    (epoch, probe) with mIoU/mIoU_best, rewritten atomically after every eval
+    so the full per-epoch curve for every probe is on disk — unlike
+    grid_search_results.json (GridProbeWinnerSelector), which only keeps each
+    probe's single best value, not its trajectory.
     """
 
     def __init__(self, write_cls_iou=False):
@@ -91,12 +110,19 @@ class GridProbeEvaluator(HookBase):
         # GridProbeCheckpointSaver to decide which probes to save. Not
         # persisted across resume — recomputed every eval() call.
         self._last_miou_by_probe = {}
+        # Full (epoch, probe) history for grid_probe_miou_history.csv —
+        # persisted across resume (see state_dict/load_state_dict).
+        self._history = []
 
     def state_dict(self):
-        return {"best_miou_by_probe": dict(self._best_miou_by_probe)}
+        return {
+            "best_miou_by_probe": dict(self._best_miou_by_probe),
+            "history": list(self._history),
+        }
 
     def load_state_dict(self, state):
         self._best_miou_by_probe = dict(state.get("best_miou_by_probe", {}))
+        self._history = list(state.get("history", []))
 
     def after_epoch(self):
         if self.should_evaluate():
@@ -188,6 +214,21 @@ class GridProbeEvaluator(HookBase):
         for name, m_iou in m_iou_by_probe.items():
             prev = self._best_miou_by_probe.get(name, float("-inf"))
             self._best_miou_by_probe[name] = max(prev, m_iou)
+
+        if comm.is_main_process():
+            for name in probe_names:
+                self._history.append(
+                    {
+                        "epoch": current_epoch,
+                        "probe_name": name,
+                        "mIoU": float(m_iou_by_probe[name]),
+                        "mIoU_best": float(self._best_miou_by_probe[name]),
+                    }
+                )
+            history_path = os.path.join(
+                self.trainer.cfg.save_path, "grid_probe_miou_history.csv"
+            )
+            _atomic_write_history_csv(history_path, self._history)
 
         wandb_log = None
         if self.trainer.writer is not None:
