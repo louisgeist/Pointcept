@@ -188,6 +188,20 @@ class GridProbeSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
         point = Point(input_dict)
         point = self.backbone(point)
         if isinstance(point, Point):
+            # Decoder-side multiscale concat: only populated when the backbone's
+            # decoder was built with dec_traceable=True (e.g. LitePT's
+            # `dec_traceable`). See DefaultSegmentorV2.forward for the same
+            # pattern/rationale. No-op for any backbone that never sets
+            # dec_traceable=True.
+            point_list = [point]
+            while "unpooling_parent" in point_list[-1].keys():
+                point_list.append(point_list[-1].pop("unpooling_parent"))
+            for i in reversed(range(1, len(point_list))):
+                child, parent = point_list[i], point_list[i - 1]
+                assert "pooling_inverse" in child.keys()
+                parent.feat = torch.cat([parent.feat, child.feat[child.pooling_inverse]], dim=-1)
+            point = point_list[0]
+            # Encoder-side multiscale concat (enc_mode=True backbones).
             while "pooling_parent" in point.keys():
                 assert "pooling_inverse" in point.keys()
                 parent = point.pop("pooling_parent")
