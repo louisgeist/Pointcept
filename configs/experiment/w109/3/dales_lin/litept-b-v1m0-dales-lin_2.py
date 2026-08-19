@@ -44,8 +44,8 @@ grid_size = 0.1
 point_max = 102400
 
 num_gpu = 1
-epoch = 10
-eval_epoch = epoch // 1
+epoch = 50
+eval_epoch = 10
 lr = 2e-2
 patch_size = 1024
 
@@ -65,10 +65,13 @@ data_root = "data/dales"
 
 weight = "/lustre/fswork/projects/rech/unv/usi32yh/Pointcept/logs/slurm/873542/model/model_best.pth"
 
-wandb_run_name = f"LitePT-B Lin. DALES {grp_exp}.{num_exp}) decoder hypercolumn 1404ch, lr={lr}, epoch={epoch}"
 wandb_project = f"pointcept_{dataset_type[:-7].lower()}"
 
 # Hooks
+# Order matters: GridProbeEvaluator before GridProbeCheckpointSaver/CheckpointSaver;
+# GridProbeWinnerSelector last (frees the per-probe optimizers/schedulers, then runs
+# its own SemSegTester pass on the winning probe — replaces PreciseEvaluator, which
+# never sets raw_model.active_probe and would break under GridProbeSegmentorV2).
 hooks = [
     dict(
         type="CheckpointLoader",
@@ -77,22 +80,89 @@ hooks = [
     dict(type="ModelHook"),
     dict(type="IterationTimer", warmup_iter=2),
     dict(type="InformationWriter", log_interval=100),
-    dict(type="SemSegEvaluator", write_cls_iou=True),
-    dict(type="CheckpointSaver", save_freq=3),
-    dict(type="PreciseEvaluator", test_last=False),
+    dict(type="GridProbeEvaluator", write_cls_iou=True),
+    dict(type="GridProbeCheckpointSaver"),
+    dict(type="CheckpointSaver", save_freq=None),
+    dict(type="GridProbeWinnerSelector", skip_test=False),
 ]
 
 feat_keys = ["coord", "color", "strength"]
+
+names = [
+    "Ground",
+    "Vegetation",
+    "Cars",
+    "Trucks",
+    "Power lines",
+    "Fences",
+    "Poles",
+    "Buildings",
+    "Unknown",
+]
 
 # Decoder levels (72, 108, 216, 432) + raw encoder bottleneck (576).
 dec_channels = (72, 108, 216, 432)
 bottleneck_channels = 576
 backbone_out_channels = sum(dec_channels) + bottleneck_channels  # 1404
 
+# -----------------------------------------------------------------------------
+# Grid-search probes — loss x lr x wd x input_norm (3 x 6 x 2 x 3 = 108 probes),
+# each with its own AdamW + OneCycleLR (matches this config's original single-probe
+# schedule shape) and grad_clip=3.0 (only meaningful under GridProbeTrainer, which
+# has no top-level grad-clip equivalent to the classic Trainer's — added for
+# stability across the sweep, following the Flair3D grid-probe configs' pattern).
+# -----------------------------------------------------------------------------
+_losses = {
+    "ce": [dict(type="CrossEntropyLoss", loss_weight=1.0, ignore_index=ignore_index)],
+    "ce_lovasz": [
+        dict(type="CrossEntropyLoss", loss_weight=1.0, ignore_index=ignore_index),
+        dict(type="LovaszLoss", mode="multiclass", loss_weight=1.0, ignore_index=ignore_index),
+    ],
+    "focal_g2": [
+        dict(type="FocalLoss", gamma=2.0, loss_weight=1.0, ignore_index=ignore_index),
+    ],
+}
+_lrs = {"2e-3": 2e-3, "5e-3": 5e-3, "1e-2": 1e-2, "2e-2": 2e-2, "5e-2": 5e-2, "1e-1": 1e-1}
+_wds = {"0": 0.0, "5e-3": 0.005}
+_norms = {"none": None, "l2": "l2", "linf": "linf"}
+
+probes = {}
+for _loss_name, _criteria in _losses.items():
+    for _lr_name, _lr in _lrs.items():
+        for _wd_name, _wd in _wds.items():
+            for _norm_name, _input_norm in _norms.items():
+                _name = f"{_loss_name}_lr{_lr_name}_wd{_wd_name}_{_norm_name}"
+                probes[_name] = dict(
+                    criteria=_criteria,
+                    input_norm=_input_norm,
+                    feat_norm=None,
+                    dropout=0.0,
+                    optimizer=dict(type="AdamW", lr=_lr, weight_decay=_wd),
+                    scheduler=dict(
+                        type="OneCycleLR",
+                        max_lr=_lr,
+                        pct_start=0.05,
+                        anneal_strategy="cos",
+                        div_factor=10.0,
+                        final_div_factor=1000.0,
+                    ),
+                    grad_clip=3.0,
+                )
+del _losses, _lrs, _wds, _norms, _loss_name, _criteria, _lr_name, _lr
+del _wd_name, _wd, _norm_name, _input_norm, _name
+
+wandb_run_name = (
+    f"LitePT-B GridProbe DALES {grp_exp}.{num_exp}) decoder hypercolumn 1404ch, "
+    f"{len(probes)} probes, epoch={epoch}"
+)
+
 # model settings
 model = dict(
-    type="DefaultSegmentorV2",
+    type="GridProbeSegmentorV2",
+    probes=probes,
     num_classes=num_classes,
+    ignore_index=ignore_index,
+    target_key="segment",
     backbone_out_channels=backbone_out_channels,
     backbone=dict(
         type="LitePT-v1",
@@ -129,38 +199,25 @@ model = dict(
         enable=True,
         masked_feat_keys=["color", "strength"],
     ),
-    criteria=[
-        dict(type="CrossEntropyLoss", loss_weight=1.0, ignore_index=ignore_index),
-        dict(type="LovaszLoss", mode="multiclass", loss_weight=1.0, ignore_index=ignore_index),
-    ],
 )
 
-# scheduler settings
-optimizer = dict(type="AdamW", lr=lr, weight_decay=0.005)
-scheduler = dict(
-    type="OneCycleLR",
-    max_lr=[lr, lr / 10],
-    pct_start=0.05,
-    anneal_strategy="cos",
-    div_factor=10.0,
-    final_div_factor=1000.0,
-)
-param_dicts = [dict(keyword="block", lr=lr / 10)]
+# trainer settings — GridProbeTrainer builds one optimizer/scheduler per probe
+# (see probes above); no top-level optimizer/scheduler/param_dicts here.
+train = dict(type="GridProbeTrainer")
 
 data = dict(
     num_classes=num_classes,
     ignore_index=ignore_index,
-    names=[
-        "Ground",
-        "Vegetation",
-        "Cars",
-        "Trucks",
-        "Power lines",
-        "Fences",
-        "Poles",
-        "Buildings",
-        "Unknown",
-    ],
+    names=names,
+    task_configs={
+        name: dict(
+            task_type="semantic",
+            num_classes=num_classes,
+            ignore_index=ignore_index,
+            names=names,
+        )
+        for name in probes
+    },
     train=dict(
         type=dataset_type,
         split="train",
