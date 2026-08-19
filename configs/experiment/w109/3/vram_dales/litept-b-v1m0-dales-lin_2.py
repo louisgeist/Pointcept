@@ -1,26 +1,45 @@
 """
-LitePT-Base linear probing on DALES (transfer from Flair3D+ multitask
-supervised pretrain, job 873542 — see README_geist.md test invocation for
-the same job).
+VRAM / val smoke — LitePT-Base GridProbe on DALES (decoder hypercolumn).
 
-Frozen LitePT-v1 Base encoder+decoder (enc_mode=False, as trained). DALES has
-no RGB — this checkpoint was trained with `learned_masked_feat=True`, i.e.
-RandomDropColor/RandomDropStrength substituted a *learned* embedding
-(`color_mask_value` / `strength_mask_value`, stored in the checkpoint) rather
-than a literal zero wherever a modality was dropped. `FillMissingFeat`
-synthesizes the "color" channel + `color_mask` here, and
-`feature_mask_values` is re-enabled so the frozen model fills masked
-positions with its pretrained learned value instead of a raw zero — matching
-what the encoder actually saw at pretrain time. `freeze_backbone=True` also
-freezes `color_mask_value`/`strength_mask_value` (see
-pointcept/models/default.py DefaultSegmentorV2), so the whole frozen
-representation pipeline stays untouched by the probe's optimizer.
+Same model, probes, batch sizes and data pipeline as
+`../dales_lin/litept-b-v1m0-dales-lin_2.py`, but runs exactly 1 train
+optimizer step (`total_iters=1`, `iter_per_epoch=1`) then validation.
+`GridProbeWinnerSelector(skip_test=True)` skips the final test pass.
+
+Unlike `litept-b-v1m0-dales-lin_1.py` (which reads only the decoder's final
+72-dim output), this variant keeps and uses the *entire* trained LitePT-B
+network (encoder + decoder, all frozen) and concatenates the per-point
+feature produced at every decoder stage — each already upsampled to a
+progressively finer resolution as the decoder walks back up from the
+bottleneck — into one 1404-dim vector per point (72+108+216+432 decoder
+levels + the raw 576-dim encoder bottleneck). This mirrors what Sonata's
+probe (`sonata-v1m2-dales-lin_1.py`) does for its encoder levels via
+`enc_mode=True`, but here nothing is discarded: `enc_mode` stays False, so
+100% of the checkpoint's weights are loaded and frozen.
+
+Mechanism: `backbone.dec_traceable=True` (new `LitePT-v1` constructor kwarg,
+see pointcept/models/litept/litept_v1.py) makes each decoder-stage
+`GridUnpooling` record its coarser input's pre-fusion feature as
+`unpooling_parent` (mirroring the existing `pooling_parent` chain built by
+`GridPooling` on the encoder side). `DefaultSegmentorV2.forward`
+(pointcept/models/default.py) was generalized to walk this chain — a
+concat-and-gather pattern that already existed, unused, in the orphaned
+`DINOEnhancedSegmentor` class — before its existing encoder-side
+`pooling_parent` walk. Backward compatible: the new walk is a no-op for any
+backbone/config that never sets `dec_traceable=True` (every other config in
+this repo, including `_1.py`).
+
+Same DALES-has-no-RGB handling as `_1.py`: `FillMissingFeat` synthesizes a
+zero "color" channel + `color_mask`, and `feature_mask_values` makes the
+frozen model fill masked positions with its pretrained learned
+`color_mask_value`/`strength_mask_value` (also frozen by `freeze_backbone`)
+instead of a raw zero.
 """
 
 _base_ = ["../../../../_base_/default_runtime.py"]
 
 grp_exp = 1
-num_exp = 1
+num_exp = 2
 
 num_classes = 8
 ignore_index = 8
@@ -28,8 +47,9 @@ grid_size = 0.1
 point_max = 102400
 
 num_gpu = 1
-epoch = 50
-eval_epoch = 10
+total_iters = 1
+iter_per_epoch = 1
+eval_every = 1
 lr = 2e-2
 patch_size = 1024
 
@@ -65,12 +85,12 @@ hooks = [
         exclude_keys=("seg_heads", "reg_heads", "cls_heads", "pixel_seg_heads", "cls_attn_pools"),
     ),
     dict(type="ModelHook"),
-    dict(type="IterationTimer", warmup_iter=2),
-    dict(type="InformationWriter", log_interval=10),
+    dict(type="IterationTimer", warmup_iter=0),
+    dict(type="InformationWriter", log_interval=1),
     dict(type="GridProbeEvaluator", write_cls_iou=True),
     dict(type="GridProbeCheckpointSaver"),
     dict(type="CheckpointSaver", save_freq=None),
-    dict(type="GridProbeWinnerSelector", skip_test=False),
+    dict(type="GridProbeWinnerSelector", skip_test=True),
 ]
 
 feat_keys = ["coord", "color", "strength"]
@@ -86,6 +106,11 @@ names = [
     "Buildings",
     "Unknown",
 ]
+
+# Decoder levels (72, 108, 216, 432) + raw encoder bottleneck (576).
+dec_channels = (72, 108, 216, 432)
+bottleneck_channels = 576
+backbone_out_channels = sum(dec_channels) + bottleneck_channels  # 1404
 
 # -----------------------------------------------------------------------------
 # Grid-search probes — loss x lr x wd x input_norm (3 x 6 x 1 x 3 = 54 probes),
@@ -134,7 +159,8 @@ del _losses, _lrs, _wds, _norms, _loss_name, _criteria, _lr_name, _lr
 del _wd_name, _wd, _norm_name, _input_norm, _name
 
 wandb_run_name = (
-    f"LitePT-B GridProbe DALES {grp_exp}.{num_exp}) {len(probes)} probes, epoch={epoch}"
+    f"VRAM smoke | LitePT-B GridProbe DALES {grp_exp}.{num_exp}) "
+    f"decoder hypercolumn 1404ch, {len(probes)} probes, 1 train iter"
 )
 
 # model settings
@@ -144,21 +170,21 @@ model = dict(
     num_classes=num_classes,
     ignore_index=ignore_index,
     target_key="segment",
-    backbone_out_channels=72,
+    backbone_out_channels=backbone_out_channels,
     backbone=dict(
         type="LitePT-v1",
         in_channels=7,  # coord(3) + color(3, fake) + strength(1)
         order=("z", "z-trans", "hilbert", "hilbert-trans"),
         stride=(3, 3, 3, 3),
         enc_depths=(3, 3, 3, 12, 3),
-        enc_channels=(54, 108, 216, 432, 576),
+        enc_channels=(54, 108, 216, 432, bottleneck_channels),
         enc_num_head=(3, 6, 12, 24, 32),
         enc_patch_size=(patch_size, patch_size, patch_size, patch_size, patch_size),
         enc_conv=(True, True, True, False, False),
         enc_attn=(False, False, False, True, True),
         enc_rope_freq=(100.0, 100.0, 100.0, 100.0, 100.0),
         dec_depths=(0, 0, 0, 0),
-        dec_channels=(72, 108, 216, 432),
+        dec_channels=dec_channels,
         dec_num_head=(4, 6, 12, 24),
         dec_patch_size=(patch_size, patch_size, patch_size, patch_size),
         dec_conv=(False, False, False, False),
@@ -173,6 +199,7 @@ model = dict(
         shuffle_orders=True,
         pre_norm=True,
         enc_mode=False,
+        dec_traceable=True,
     ),
     freeze_backbone=True,
     feature_mask_values=dict(

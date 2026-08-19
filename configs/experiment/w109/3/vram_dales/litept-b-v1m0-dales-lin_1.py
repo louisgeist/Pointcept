@@ -1,7 +1,10 @@
 """
-LitePT-Base linear probing on DALES (transfer from Flair3D+ multitask
-supervised pretrain, job 873542 — see README_geist.md test invocation for
-the same job).
+VRAM / val smoke — LitePT-Base GridProbe on DALES.
+
+Same model, probes, batch sizes and data pipeline as
+`../dales_lin/litept-b-v1m0-dales-lin_1.py`, but runs exactly 1 train
+optimizer step (`total_iters=1`, `iter_per_epoch=1`) then validation.
+`GridProbeWinnerSelector(skip_test=True)` skips the final test pass.
 
 Frozen LitePT-v1 Base encoder+decoder (enc_mode=False, as trained). DALES has
 no RGB — this checkpoint was trained with `learned_masked_feat=True`, i.e.
@@ -28,8 +31,9 @@ grid_size = 0.1
 point_max = 102400
 
 num_gpu = 1
-epoch = 50
-eval_epoch = 10
+total_iters = 1
+iter_per_epoch = 1
+eval_every = 1
 lr = 2e-2
 patch_size = 1024
 
@@ -65,12 +69,12 @@ hooks = [
         exclude_keys=("seg_heads", "reg_heads", "cls_heads", "pixel_seg_heads", "cls_attn_pools"),
     ),
     dict(type="ModelHook"),
-    dict(type="IterationTimer", warmup_iter=2),
-    dict(type="InformationWriter", log_interval=10),
+    dict(type="IterationTimer", warmup_iter=0),
+    dict(type="InformationWriter", log_interval=1),
     dict(type="GridProbeEvaluator", write_cls_iou=True),
     dict(type="GridProbeCheckpointSaver"),
     dict(type="CheckpointSaver", save_freq=None),
-    dict(type="GridProbeWinnerSelector", skip_test=False),
+    dict(type="GridProbeWinnerSelector", skip_test=True),
 ]
 
 feat_keys = ["coord", "color", "strength"]
@@ -134,7 +138,8 @@ del _losses, _lrs, _wds, _norms, _loss_name, _criteria, _lr_name, _lr
 del _wd_name, _wd, _norm_name, _input_norm, _name
 
 wandb_run_name = (
-    f"LitePT-B GridProbe DALES {grp_exp}.{num_exp}) {len(probes)} probes, epoch={epoch}"
+    f"VRAM smoke | LitePT-B GridProbe DALES {grp_exp}.{num_exp}) "
+    f"{len(probes)} probes, 1 train iter"
 )
 
 # model settings

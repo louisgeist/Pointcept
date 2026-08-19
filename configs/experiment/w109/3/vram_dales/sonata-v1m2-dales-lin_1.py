@@ -1,20 +1,19 @@
 """
-LitePT-Base linear probing on DALES (transfer from Flair3D+ multitask
-supervised pretrain, job 873542 — see README_geist.md test invocation for
-the same job).
+VRAM / val smoke — Sonata-v1m2 GridProbe on DALES.
 
-Frozen LitePT-v1 Base encoder+decoder (enc_mode=False, as trained). DALES has
-no RGB — this checkpoint was trained with `learned_masked_feat=True`, i.e.
-RandomDropColor/RandomDropStrength substituted a *learned* embedding
-(`color_mask_value` / `strength_mask_value`, stored in the checkpoint) rather
-than a literal zero wherever a modality was dropped. `FillMissingFeat`
-synthesizes the "color" channel + `color_mask` here, and
-`feature_mask_values` is re-enabled so the frozen model fills masked
-positions with its pretrained learned value instead of a raw zero — matching
-what the encoder actually saw at pretrain time. `freeze_backbone=True` also
-freezes `color_mask_value`/`strength_mask_value` (see
-pointcept/models/default.py DefaultSegmentorV2), so the whole frozen
-representation pipeline stays untouched by the probe's optimizer.
+Same model, probes, batch sizes and data pipeline as
+`../dales_lin/sonata-v1m2-dales-lin_1.py`, but runs exactly 1 train
+optimizer step (`total_iters=1`, `iter_per_epoch=1`) then validation.
+`GridProbeWinnerSelector(skip_test=True)` skips the final test pass so you
+can inspect val VRAM/time without waiting for SemSegTester.
+
+Frozen PT-v3m2 encoder (enc_mode) from the Flair3D+ Sonata pretrain job
+862680, epoch_120. DALES has no RGB — Sonata was pretrained with scene-level
+RandomDropColor/RandomDropStrength (drop_value=0.0) specifically so the
+encoder tolerates all-zero color at transfer time, so `FillMissingFeat`
+synthesizes a zero "color" channel here to keep in_channels=7. No learned
+masked-feat mechanism was used at pretrain time (feature_mask_values unset),
+so a literal zero fill is faithful to what the encoder saw.
 """
 
 _base_ = ["../../../../_base_/default_runtime.py"]
@@ -28,8 +27,9 @@ grid_size = 0.1
 point_max = 102400
 
 num_gpu = 1
-epoch = 50
-eval_epoch = 10
+total_iters = 1
+iter_per_epoch = 1
+eval_every = 1
 lr = 2e-2
 patch_size = 1024
 
@@ -50,7 +50,7 @@ enable_amp = False
 dataset_type = "DALESDataset"
 data_root = "data/dales"
 
-weight = "/lustre/fswork/projects/rech/unv/usi32yh/Pointcept/logs/slurm/873542/model/model_best.pth"
+weight = "/lustre/fsn1/projects/rech/unv/usi32yh/logs/pointcept_logs/slurm/862680/model/epoch_120.pth"
 
 wandb_project = f"pointcept_{dataset_type[:-7].lower()}"
 
@@ -62,15 +62,16 @@ wandb_project = f"pointcept_{dataset_type[:-7].lower()}"
 hooks = [
     dict(
         type="CheckpointLoader",
-        exclude_keys=("seg_heads", "reg_heads", "cls_heads", "pixel_seg_heads", "cls_attn_pools"),
+        keywords="module.student.backbone",
+        replacement="module.backbone",
     ),
     dict(type="ModelHook"),
-    dict(type="IterationTimer", warmup_iter=2),
-    dict(type="InformationWriter", log_interval=10),
+    dict(type="IterationTimer", warmup_iter=0),
+    dict(type="InformationWriter", log_interval=1),
     dict(type="GridProbeEvaluator", write_cls_iou=True),
     dict(type="GridProbeCheckpointSaver"),
     dict(type="CheckpointSaver", save_freq=None),
-    dict(type="GridProbeWinnerSelector", skip_test=False),
+    dict(type="GridProbeWinnerSelector", skip_test=True),
 ]
 
 feat_keys = ["coord", "color", "strength"]
@@ -134,7 +135,8 @@ del _losses, _lrs, _wds, _norms, _loss_name, _criteria, _lr_name, _lr
 del _wd_name, _wd, _norm_name, _input_norm, _name
 
 wandb_run_name = (
-    f"LitePT-B GridProbe DALES {grp_exp}.{num_exp}) {len(probes)} probes, epoch={epoch}"
+    f"VRAM smoke | Sonata GridProbe DALES {grp_exp}.{num_exp}) epoch_120, "
+    f"{len(probes)} probes, 1 train iter"
 )
 
 # model settings
@@ -144,26 +146,16 @@ model = dict(
     num_classes=num_classes,
     ignore_index=ignore_index,
     target_key="segment",
-    backbone_out_channels=72,
+    backbone_out_channels=1232,
     backbone=dict(
-        type="LitePT-v1",
-        in_channels=7,  # coord(3) + color(3, fake) + strength(1)
+        type="PT-v3m2",
+        in_channels=7,  # coord(3) + color(3, fake/zero) + strength(1)
         order=("z", "z-trans", "hilbert", "hilbert-trans"),
         stride=(3, 3, 3, 3),
         enc_depths=(3, 3, 3, 12, 3),
-        enc_channels=(54, 108, 216, 432, 576),
+        enc_channels=(48, 96, 192, 384, 512),
         enc_num_head=(3, 6, 12, 24, 32),
         enc_patch_size=(patch_size, patch_size, patch_size, patch_size, patch_size),
-        enc_conv=(True, True, True, False, False),
-        enc_attn=(False, False, False, True, True),
-        enc_rope_freq=(100.0, 100.0, 100.0, 100.0, 100.0),
-        dec_depths=(0, 0, 0, 0),
-        dec_channels=(72, 108, 216, 432),
-        dec_num_head=(4, 6, 12, 24),
-        dec_patch_size=(patch_size, patch_size, patch_size, patch_size),
-        dec_conv=(False, False, False, False),
-        dec_attn=(False, False, False, False),
-        dec_rope_freq=(100.0, 100.0, 100.0, 100.0),
         mlp_ratio=4,
         qkv_bias=True,
         qk_scale=None,
@@ -172,13 +164,16 @@ model = dict(
         drop_path=0.3,
         shuffle_orders=True,
         pre_norm=True,
-        enc_mode=False,
+        enable_rpe=False,
+        enable_flash=True,
+        upcast_attention=False,
+        upcast_softmax=False,
+        traceable=False,
+        mask_token=False,
+        enc_mode=True,
+        freeze_encoder=False,
     ),
     freeze_backbone=True,
-    feature_mask_values=dict(
-        enable=True,
-        masked_feat_keys=["color", "strength"],
-    ),
 )
 
 # trainer settings — GridProbeTrainer builds one optimizer/scheduler per probe
