@@ -620,11 +620,13 @@ class LitePT(PointModule):
         pre_norm=True,
         shuffle_orders=True,
         enc_mode=False,
+        dec_traceable=False,
     ):
         super().__init__()
         self.num_stages = len(enc_depths)
         self.order = [order] if isinstance(order, str) else order
         self.enc_mode = enc_mode
+        self.dec_traceable = dec_traceable
         self.shuffle_orders = shuffle_orders
 
         self.enc_conv = enc_conv
@@ -725,6 +727,7 @@ class LitePT(PointModule):
                         out_channels=dec_channels[s],
                         norm_layer=bn_layer,
                         act_layer=act_layer,
+                        traceable=self.dec_traceable,
                     ),
                     name="up",
                 )
