@@ -117,6 +117,12 @@ class GridProbeSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
     Optimizer/scheduler/grad_clip may also live in each probe dict; they are
     consumed by GridProbeTrainer, not this class.
 
+    drop_leading_channels: model-level (not per-probe) — drops the first N
+    channels of the shared backbone feat before every probe head sees it.
+    For dec_traceable/enc_mode multiscale concat, the finest stage is always
+    concatenated first (see _forward_backbone), so this ablates that stage
+    out of every probe's input, e.g. drop_leading_channels=dec_channels[0].
+
     Unlike DefaultSegmentorV2/MultiTaskSegmentorV2 (whose freeze_backbone
     only sets requires_grad=False and otherwise lets the backbone follow the
     trainer's normal train()/eval() propagation), freeze_backbone=True here
@@ -150,6 +156,7 @@ class GridProbeSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
         bn_eval_mode=True,
         drop_path_eval_mode=True,
         feature_mask_values=None,
+        drop_leading_channels=0,
     ):
         super().__init__()
         if not isinstance(probes, Mapping) or len(probes) == 0:
@@ -161,12 +168,26 @@ class GridProbeSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
         self.ignore_index = int(ignore_index)
         self.active_probe = None  # None => all probes computed; set by winner-selection.
 
+        # For decoder-hypercolumn/encoder-multiscale backbones, the concat
+        # order in _forward_backbone always puts the finest stage first
+        # (see that method's docstring), so dropping the first N channels
+        # drops that stage from every probe's input — e.g. set this to the
+        # finest decoder stage's channel count to ablate it out of the
+        # hypercolumn without touching the backbone.
+        self.drop_leading_channels = int(drop_leading_channels)
+        if not 0 <= self.drop_leading_channels < backbone_out_channels:
+            raise ValueError(
+                f"drop_leading_channels must be in [0, {backbone_out_channels}), "
+                f"got {self.drop_leading_channels}."
+            )
+        probe_in_channels = backbone_out_channels - self.drop_leading_channels
+
         self.backbone = build_model(backbone)
         self.heads = nn.ModuleDict()
         self.criteria_by_task = {}
         for name, probe_cfg in self.probe_configs.items():
             self.heads[name] = ProbeHead(
-                in_channels=backbone_out_channels,
+                in_channels=probe_in_channels,
                 num_classes=probe_cfg.get("num_classes", self.num_classes),
                 input_norm=probe_cfg.get("input_norm"),
                 feat_norm=probe_cfg.get("feat_norm"),
@@ -251,6 +272,8 @@ class GridProbeSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
                 feat, point = self._forward_backbone(input_dict)
         else:
             feat, point = self._forward_backbone(input_dict)
+        if self.drop_leading_channels:
+            feat = feat[..., self.drop_leading_channels:]
         active = self._active_probe_names()
         feat = _prepare_shared_feat(feat)
         feat_by_norm = _input_norm_cache(feat, self.heads, active)
