@@ -4,6 +4,8 @@ LitePT-v1 on Flair3D+ (coord + RGB + strength in feat_keys).
 Mono-task Flair3D+ config for target ``forest``. Inherits only from default_runtime.
 """
 
+# NOT FOREST_2D
+
 # -----------------------------------------------------------------------------
 # Default
 # -----------------------------------------------------------------------------
