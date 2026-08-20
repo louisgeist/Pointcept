@@ -101,9 +101,8 @@ enc_channels = (54, 108, 216, 432, 576)
 backbone_out_channels = sum(enc_channels)
 
 # -----------------------------------------------------------------------------
-# Grid-search probes — ce_lovasz x lr x wd x dropout x input_norm x feat_norm x
-# optimizer (1 x 3 x 2 x 2 x 1 x 3 x 2 = 72 probes). Same grid as sibling
-# litept-b-v1m0-dales-lin_1.py.
+# Smoke probe: ce_lovasz x lr=2e-2 x wd=5e-3 x do=0 x input_norm=none x
+# feat_norm=layernorm x AdamW (1 probe).
 # -----------------------------------------------------------------------------
 _losses = {
     "ce_lovasz": [
@@ -149,6 +148,26 @@ for _loss_name, _criteria in _losses.items():
                                 ),
                                 grad_clip=3.0,
                             )
+# Extra smoke probe (see header comment): ce_lovasz x lr=2e-2 x wd=5e-3 x do=0 x
+# input_norm=none x feat_norm=layernorm x AdamW — not covered by the grid above,
+# which only sweeps feat_norm=none.
+probes["ce_lovasz_lr2e-2_wd5e-3_do0_none_fnln_adamw"] = dict(
+    criteria=_losses["ce_lovasz"],
+    input_norm=None,
+    feat_norm="layernorm",
+    dropout=0.0,
+    optimizer=dict(type="AdamW", lr=2e-2, weight_decay=0.005),
+    scheduler=dict(
+        type="OneCycleLR",
+        max_lr=2e-2,
+        pct_start=0.05,
+        anneal_strategy="cos",
+        div_factor=10.0,
+        final_div_factor=1000.0,
+    ),
+    grad_clip=3.0,
+)
+
 del _losses, _lrs, _wds, _dropouts, _norms, _feat_norms, _optimizers
 del _loss_name, _criteria, _lr_name, _lr, _wd_name, _wd, _do_name, _dropout
 del _norm_name, _input_norm, _fn_name, _feat_norm, _opt_name, _opt_type, _optimizer, _name
