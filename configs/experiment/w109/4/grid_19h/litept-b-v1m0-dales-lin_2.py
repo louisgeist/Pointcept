@@ -115,7 +115,7 @@ _lrs = {"1e-2": 1e-2, "2e-2": 2e-2, "5e-2": 5e-2}
 _wds = {"5e-3": 0.005}
 _dropouts = {"0": 0.0}
 _norms = {"none": None}
-_feat_norms = {"none": None},#,  "ln": "layernorm"} # "bn": "batchnorm",
+_feat_norms = {"none": None}  # , "ln": "layernorm", "bn": "batchnorm"
 _optimizers = {"adamw": "AdamW", "sgd": "SGD"}
 
 probes = {}
