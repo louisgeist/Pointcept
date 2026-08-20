@@ -210,7 +210,7 @@ data = dict(
         type=dataset_type,
         split="train",
         data_root=data_root,
-        loop=3,
+        loop=8,
         transform=[
             dict(type="FillMissingFeat", feat_key="strength", feat_dim=1, fill_value=0.0),
             dict(type="CenterShift", apply_z=True),
