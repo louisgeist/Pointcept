@@ -40,12 +40,13 @@ point_max = 102400  # keep pretrain SphereCrop budget; do not raise for denser H
 
 
 num_gpu = 1
-epoch = 50
+epoch = 150
 eval_epoch = 10
 lr = 5e-2
 patch_size = 1024
 
 test_single_fragment = True
+log_test_f1 = True
 
 # misc custom setting
 batch_size = 24
@@ -78,7 +79,7 @@ hooks = [
     ),
     dict(type="ModelHook"),
     dict(type="IterationTimer", warmup_iter=2),
-    dict(type="InformationWriter", log_interval=10),
+    dict(type="InformationWriter", log_interval=1),
     dict(type="GridProbeEvaluator", write_cls_iou=True),
     dict(type="GridProbeCheckpointSaver"),
     dict(type="CheckpointSaver", save_freq=None),
@@ -209,6 +210,7 @@ data = dict(
         type=dataset_type,
         split="train",
         data_root=data_root,
+        loop=3,
         transform=[
             dict(type="FillMissingFeat", feat_key="strength", feat_dim=1, fill_value=0.0),
             dict(type="CenterShift", apply_z=True),
