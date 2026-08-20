@@ -9,8 +9,12 @@ every decoder-stage feature + the encoder bottleneck into one 1024-dim vector
 per point (64+64+128+256 + 512). Same DALES-has-no-RGB handling as the other
 PTv3/LitePT DALES lin configs.
 
-Grid (24 probes): ce_lovasz x {5e-2, 1e-1, 2e-1, 5e-1} x {5e-3, 5e-2} wd x
-dropout {0, 0.3, 0.5} x input_norm=None. epoch=50 / eval_epoch=10.
+Grid (16 probes): ce_lovasz x {5e-2, 1e-1, 2e-1, 5e-1} x {5e-3, 5e-2} wd x
+dropout {0, 0.3} x input_norm=None. epoch=50 / eval_epoch=10. AMP enabled
+(fp16) and dropout=0.5 dropped — job 1200400 OOM'd in fp32 on the 1024ch
+hypercolumn feat shared across probes (see GridProbeTrainer docstring in
+pointcept/engines/train.py for why the single shared backward keeps every
+active probe's Dropout+Linear activations alive at once).
 `bn_eval_mode=True` is a no-op for PT-v3-malibu (LayerNorm only);
 `drop_path_eval_mode=True` keeps DropPath(0.3) inactive during probe training.
 """
@@ -25,6 +29,7 @@ ignore_index = 8
 grid_size = 0.1
 point_max = 102400
 coord_feat_scale = 0.01  # must match Flair3D multitask pretrain
+strength_feat_scale = 1 / 60000  # DALES raw intensity → Flair3D [0,1] convention
 
 num_gpu = 1
 epoch = 50
@@ -43,7 +48,7 @@ num_worker = 8 * num_gpu
 num_worker_test = 2
 mix_prob = 0.8
 empty_cache = False
-enable_amp = False
+enable_amp = True
 
 # dataset settings
 dataset_type = "DALESDataset"
@@ -103,7 +108,7 @@ _losses = {
 }
 _lrs = {"5e-2": 5e-2, "1e-1": 1e-1, "2e-1": 2e-1, "5e-1": 5e-1}
 _wds = {"5e-3": 0.005, "5e-2": 5e-2}
-_dropouts = {"0": 0.0, "03": 0.3, "05": 0.5}
+_dropouts = {"0": 0.0, "03": 0.3}
 _norms = {"none": None}
 
 probes = {}
@@ -226,7 +231,7 @@ data = dict(
                 type="Collect",
                 keys=("coord", "grid_coord", "segment", "grid_size"),
                 feat_keys=feat_keys,
-                feat_scales=dict(coord=coord_feat_scale),
+                feat_scales=dict(coord=coord_feat_scale, strength=strength_feat_scale),
             ),
         ],
         test_mode=False,
@@ -253,7 +258,7 @@ data = dict(
                 type="Collect",
                 keys=("coord", "grid_coord", "segment", "origin_segment", "inverse"),
                 feat_keys=feat_keys,
-                feat_scales=dict(coord=coord_feat_scale),
+                feat_scales=dict(coord=coord_feat_scale, strength=strength_feat_scale),
             ),
         ],
         test_mode=False,
@@ -285,7 +290,7 @@ data = dict(
                     keys=("coord", "grid_coord", "index"),
                     optional_keys=("inverse",),  # for test_single_fragment broadcast
                     feat_keys=feat_keys,
-                    feat_scales=dict(coord=coord_feat_scale),
+                    feat_scales=dict(coord=coord_feat_scale, strength=strength_feat_scale),
                 ),
             ],
             aug_transform=[[dict(type="RandomRotateTargetAngle", angle=[0], axis="z", center=[0, 0, 0], p=1)]],
