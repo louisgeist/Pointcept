@@ -16,6 +16,7 @@ from collections.abc import Mapping
 
 import torch
 import torch.nn as nn
+from timm.layers import DropPath
 
 from pointcept.models.losses import build_criteria
 from pointcept.models.utils.structure import Point
@@ -116,11 +117,24 @@ class GridProbeSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
     Optimizer/scheduler/grad_clip may also live in each probe dict; they are
     consumed by GridProbeTrainer, not this class.
 
-    Unlike DefaultSegmentorV2/MultiTaskSegmentorV2, freeze_backbone=True here
-    also wraps the backbone forward in torch.no_grad() and keeps it in eval()
-    mode (re-applied on every .train() call) — the actual mechanism that
-    makes the shared-forward VRAM/compute savings real, and keeps backbone
-    dropout/drop_path deterministic between train/val/test.
+    Unlike DefaultSegmentorV2/MultiTaskSegmentorV2 (whose freeze_backbone
+    only sets requires_grad=False and otherwise lets the backbone follow the
+    trainer's normal train()/eval() propagation), freeze_backbone=True here
+    also wraps the backbone forward in torch.no_grad() (the VRAM/compute
+    saving) and, by default, keeps the backbone's BatchNorm running stats and
+    DropPath both pinned to eval-mode behavior even while mode=True (i.e.
+    during training) — re-applied on every .train() call.
+
+    This eval-pinning turned out to matter a lot for backbones with
+    BatchNorm (e.g. LitePT-v1): DefaultSegmentorV2 never forces eval, so its
+    "frozen" backbone still lets BatchNorm running_mean/var drift toward the
+    downstream dataset on every training step (a free, gradient-free domain
+    recalibration — see project memory / README discussion), and DropPath
+    stays stochastically active. `freeze_bn_stats` / `freeze_drop_path` let
+    each of those two effects be toggled independently of the other, for
+    ablating which one actually drives a given backbone's linear-probe
+    quality gap against DefaultSegmentorV2 (both default True = original,
+    fully-eval-pinned behavior, unchanged from before these flags existed).
     """
 
     def __init__(
@@ -132,6 +146,8 @@ class GridProbeSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
         backbone=None,
         target_key="segment",
         freeze_backbone=True,
+        freeze_bn_stats=True,
+        freeze_drop_path=True,
         feature_mask_values=None,
     ):
         super().__init__()
@@ -159,6 +175,8 @@ class GridProbeSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
 
         self._init_learned_masked_feat(feature_mask_values=feature_mask_values)
         self.freeze_backbone = freeze_backbone
+        self.freeze_bn_stats = freeze_bn_stats
+        self.freeze_drop_path = freeze_drop_path
         if self.freeze_backbone:
             for p in self.backbone.parameters():
                 p.requires_grad = False
@@ -167,10 +185,21 @@ class GridProbeSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
     def train(self, mode=True):
         super().train(mode)
         if self.freeze_backbone:
-            # Undo the recursive re-flip nn.Module.train() just did to the
-            # backbone: it must stay in eval() (deterministic, no drop_path)
-            # in every mode, train included — that's what "frozen" means here.
-            self.backbone.eval()
+            # nn.Module.train() just recursively flipped every backbone
+            # submodule (BatchNorm, DropPath, LayerNorm, ...) to `mode`. Put
+            # back to eval() only the pieces this instance is configured to
+            # pin — independently, so BN running-stat drift and DropPath's
+            # stochastic depth can each be toggled on/off on its own (see
+            # class docstring). Everything else (LayerNorm, Linear, ...) is
+            # train/eval-invariant so leaving it at `mode` is harmless.
+            if self.freeze_bn_stats or self.freeze_drop_path:
+                for m in self.backbone.modules():
+                    if self.freeze_bn_stats and isinstance(
+                        m, nn.modules.batchnorm._BatchNorm
+                    ):
+                        m.eval()
+                    if self.freeze_drop_path and isinstance(m, DropPath):
+                        m.eval()
         return self
 
     def backbone_parameters(self):
