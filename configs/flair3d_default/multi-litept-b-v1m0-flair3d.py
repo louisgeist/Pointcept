@@ -12,6 +12,8 @@ LitePT-v1 Base backbone dims.
 This config is intentionally self-contained: it inherits only from
 default_runtime and can be read top-to-bottom without cross-referencing other
 Flair3D+ configs.
+
+Logs of the training : https://wandb.ai/louisgeist-ENPC/flair3d_multi/runs/uzhxltcv/overview?nw=nwuserlouisgeist
 """
 
 # -----------------------------------------------------------------------------
@@ -54,7 +56,7 @@ patch_size = 1024
 
 # Optimization parameters
 lr = 1e-3
-total_iters = 30_000
+total_iters = 200_000
 
 # Features
 learned_masked_feat = True

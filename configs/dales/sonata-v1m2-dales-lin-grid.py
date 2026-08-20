@@ -13,7 +13,7 @@ dropout {0, 0.3, 0.5} x input_norm=None. epoch=50 / eval_epoch=10.
 skip_test=True (val-only winner selection).
 """
 
-_base_ = ["../../../../_base_/default_runtime.py"]
+_base_ = ["../_base_/default_runtime.py"]
 
 grp_exp = 1
 num_exp = 4

@@ -1,12 +1,12 @@
 """
 LitePT-Base grid-search linear probing on DALES — decoder hypercolumn /
-multi-scale + BN-adapt variant (transfer from Flair3D+ multitask supervised
+multi-scale variant (transfer from Flair3D+ multitask supervised
 pretrain, job 873542).
 
 Same multi-scale mechanism as w109/3/dales_lin/litept-b-v1m0-dales-lin_5.py
-(`dec_traceable=True` → 1404ch concat of decoder stages + bottleneck), but
-with `bn_eval_mode=False` so BatchNorm running stats adapt to DALES during
-probe training (see w109/4/dales_debug/litept-b-v1m0-dales-lin_3.py).
+(`dec_traceable=True` → 1404ch concat of decoder stages + bottleneck).
+`bn_eval_mode=True` freezes BatchNorm running stats; for the BN-adapt
+variant see w109/4/grid_12h/litept-b-v1m0-dales-lin_1.py.
 `drop_path_eval_mode=True` keeps DropPath inactive.
 
 Grid (16 probes): ce_lovasz x {5e-2, 1e-1, 2e-1, 5e-1} x {5e-3, 5e-2} wd x
@@ -18,7 +18,7 @@ active probe's Dropout+Linear activations alive at once).
 Same DALES-has-no-RGB handling as the other LitePT-B DALES lin configs.
 """
 
-_base_ = ["../../../../_base_/default_runtime.py"]
+_base_ = ["../_base_/default_runtime.py"]
 
 grp_exp = 1
 num_exp = 1
@@ -180,7 +180,7 @@ model = dict(
         dec_traceable=True,
     ),
     freeze_backbone=True,
-    bn_eval_mode=True,  # let BatchNorm running stats adapt to DALES during training
+    bn_eval_mode=True,  # freeze BatchNorm running stats during probe training
     drop_path_eval_mode=True,  # keep DropPath inactive during probe training
     feature_mask_values=dict(
         enable=True,

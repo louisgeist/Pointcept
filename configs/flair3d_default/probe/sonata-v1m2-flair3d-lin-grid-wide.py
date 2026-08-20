@@ -31,6 +31,7 @@ batch_size = batch_size_per_gpu * num_gpu
 batch_size_val = 1
 batch_size_test = max(1, batch_size // 2)
 num_worker = 8 * num_gpu
+num_worker_test = 2  # packed grid-probe test loader OOMs above this locally/on JZ
 mix_prob = 0.8
 empty_cache = False
 enable_amp = True

@@ -19,7 +19,7 @@ active probe's Dropout+Linear activations alive at once).
 `drop_path_eval_mode=True` keeps DropPath(0.3) inactive during probe training.
 """
 
-_base_ = ["../../../../_base_/default_runtime.py"]
+_base_ = ["../_base_/default_runtime.py"]
 
 grp_exp = 1
 num_exp = 1
