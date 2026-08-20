@@ -19,9 +19,9 @@ DALES batch distribution (a free, gradient-free domain recalibration the
 classic config was getting "by accident"), and DropPath(0.3) stochastic
 depth is disabled.
 
-This config isolates the BatchNorm piece alone: `freeze_bn_stats=False`
+This config isolates the BatchNorm piece alone: `bn_eval_mode=False`
 (BN running stats adapt during training, exactly like the classic protocol)
-+ `freeze_drop_path=True` (DropPath stays inactive, exactly like the
++ `drop_path_eval_mode=True` (DropPath stays inactive, exactly like the
 original grid-probe runs). Everything else — optimizer/scheduler/loss/
 GridProbeTrainer machinery — is unchanged from the grid-probe path, with a
 single probe replicating that sweep's `ce_lovasz_lr2e-2_wd5e-3_none` point,
@@ -50,7 +50,9 @@ test_single_fragment = True
 batch_size_per_gpu = 24
 batch_size = batch_size_per_gpu * num_gpu
 batch_size_val = 1
-batch_size_test = max(1, batch_size // 2)
+batch_size_test = 1  # DALES test tiles are unchunked full scenes (~12M raw pts each);
+# batch_size // 2 packs multiple into one forward pass and crashes spconv (CUBLAS/illegal
+# memory access in the stem indice_conv). 1 mirrors batch_size_val, which already works.
 num_worker = 8 * num_gpu
 num_worker_test = 2
 mix_prob = 0.8
@@ -125,7 +127,7 @@ probes = {
 
 wandb_run_name = (
     f"LitePT-B GridProbe DALES {grp_exp}.{num_exp}) BN-only ablation "
-    f"(freeze_bn_stats=False, freeze_drop_path=True), decoder hypercolumn 1404ch, epoch={epoch}"
+    f"(bn_eval_mode=False, drop_path_eval_mode=True), decoder hypercolumn 1404ch, epoch={epoch}"
 )
 
 # model settings
@@ -167,8 +169,8 @@ model = dict(
         dec_traceable=True,
     ),
     freeze_backbone=True,
-    freeze_bn_stats=False,  # let BatchNorm running stats adapt to DALES during training
-    freeze_drop_path=True,  # keep DropPath inactive, like the original grid-probe runs
+    bn_eval_mode=False,  # let BatchNorm running stats adapt to DALES during training
+    drop_path_eval_mode=True,  # keep DropPath inactive, like the original grid-probe runs
     feature_mask_values=dict(
         enable=True,
         masked_feat_keys=["color", "strength"],

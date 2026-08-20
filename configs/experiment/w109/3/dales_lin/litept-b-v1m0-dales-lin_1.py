@@ -39,7 +39,9 @@ test_single_fragment = True
 batch_size_per_gpu = 24
 batch_size = batch_size_per_gpu * num_gpu
 batch_size_val = 1
-batch_size_test = max(1, batch_size // 2)
+batch_size_test = 1  # DALES test tiles are unchunked full scenes (~12M raw pts each);
+# batch_size // 2 packs multiple into one forward pass and crashes spconv (CUBLAS/illegal
+# memory access in the stem indice_conv). 1 mirrors batch_size_val, which already works.
 num_worker = 8 * num_gpu
 num_worker_test = 2
 mix_prob = 0.8
