@@ -103,6 +103,14 @@ if [ -z "${SOURCE_JOB_ID}" ]; then
     exit 1
 fi
 
+if [ -z "${SLURM_JOB_ID:-}" ]; then
+    echo "ERROR: no \$SLURM_JOB_ID -- this must be submitted via sbatch, not run directly:" >&2
+    echo "         sbatch $0 ${SOURCE_JOB_ID}" >&2
+    echo "       For a dry path check without Slurm, use --verify-only instead:" >&2
+    echo "         bash $0 --verify-only ${SOURCE_JOB_ID}" >&2
+    exit 1
+fi
+
 verify_paths
 
 RESUME_JOB_DIR="${REPO_ROOT}/logs/slurm/${SLURM_JOB_ID}"
