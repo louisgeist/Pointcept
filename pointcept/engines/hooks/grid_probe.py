@@ -25,6 +25,7 @@ from pointcept.utils.misc import (
 
 from .builder import HOOKS
 from .default import HookBase
+from .misc import InformationWriter
 from .evaluator import (
     begin_val_epoch_timing,
     finalize_val_epoch_timing,
@@ -106,6 +107,13 @@ class GridProbeEvaluator(HookBase):
     def __init__(self, write_cls_iou=False):
         self.write_cls_iou = write_cls_iou
         self._best_miou_by_probe = {}
+        # Per-class IoU/accuracy at each probe's own best epoch (i.e. the same
+        # epoch GridProbeCheckpointSaver saved probe_best_{name}.pth for), so
+        # GridProbeWinnerSelector can report the winner's per-class val
+        # breakdown without a separate re-evaluation pass. Persisted across
+        # resume (see state_dict/load_state_dict).
+        self._best_cls_iou_by_probe = {}
+        self._best_cls_acc_by_probe = {}
         # This epoch's raw (non-running-best) values; read by
         # GridProbeCheckpointSaver to decide which probes to save. Not
         # persisted across resume — recomputed every eval() call.
@@ -117,11 +125,15 @@ class GridProbeEvaluator(HookBase):
     def state_dict(self):
         return {
             "best_miou_by_probe": dict(self._best_miou_by_probe),
+            "best_cls_iou_by_probe": dict(self._best_cls_iou_by_probe),
+            "best_cls_acc_by_probe": dict(self._best_cls_acc_by_probe),
             "history": list(self._history),
         }
 
     def load_state_dict(self, state):
         self._best_miou_by_probe = dict(state.get("best_miou_by_probe", {}))
+        self._best_cls_iou_by_probe = dict(state.get("best_cls_iou_by_probe", {}))
+        self._best_cls_acc_by_probe = dict(state.get("best_cls_acc_by_probe", {}))
         self._history = list(state.get("history", []))
 
     def after_epoch(self):
@@ -189,6 +201,7 @@ class GridProbeEvaluator(HookBase):
         m_iou_by_probe = {}
         m_acc_by_probe = {}
         all_acc_by_probe = {}
+        cls_hist_by_probe = {}
         for name in probe_names:
             intersection, union, target_hist = local_task_confusion_hist_totals(
                 self.trainer.storage, name, num_classes
@@ -201,6 +214,7 @@ class GridProbeEvaluator(HookBase):
             all_acc_by_probe[name] = float(
                 np.sum(intersection) / (np.sum(target_hist) + 1e-10)
             )
+            cls_hist_by_probe[name] = (intersection, union, target_hist)
 
         if comm.is_main_process():
             for name in probe_names:
@@ -213,6 +227,18 @@ class GridProbeEvaluator(HookBase):
         self._last_miou_by_probe = dict(m_iou_by_probe)
         for name, m_iou in m_iou_by_probe.items():
             prev = self._best_miou_by_probe.get(name, float("-inf"))
+            if m_iou >= prev:
+                # Matches GridProbeCheckpointSaver's own tie-breaking (latest
+                # epoch wins ties), so the per-class snapshot here always
+                # corresponds to the epoch whose weights actually get saved
+                # as probe_best_{name}.pth.
+                intersection, union, target_hist = cls_hist_by_probe[name]
+                self._best_cls_iou_by_probe[name] = (
+                    intersection / (union + 1e-10)
+                ).tolist()
+                self._best_cls_acc_by_probe[name] = (
+                    intersection / (target_hist + 1e-10)
+                ).tolist()
             self._best_miou_by_probe[name] = max(prev, m_iou)
 
         if comm.is_main_process():
@@ -440,6 +466,38 @@ class GridProbeWinnerSelector(HookBase):
                     }
                 )
 
+            names = list(getattr(cfg.data, "names", []) or [])
+
+            # Same replay for the winner's train loss/mIoU (+ per-class IoU
+            # when InformationWriter(write_cls_iou=True)) — see
+            # InformationWriter.after_epoch, which intentionally skips
+            # per-probe train/* W&B logging during grid probing for the same
+            # reason as val/* above.
+            info_writer = _find_hook(self.trainer, InformationWriter)
+            if info_writer is not None:
+                train_history = sorted(
+                    (
+                        row
+                        for row in info_writer._grid_probe_train_history
+                        if row["task_name"] == winner_name
+                    ),
+                    key=lambda row: row["epoch"],
+                )
+                for row in train_history:
+                    log_row = {"Epoch": row["epoch"]}
+                    if row.get("loss") is not None:
+                        log_row["train/loss/winner"] = row["loss"]
+                    if row.get("mIoU") is not None:
+                        log_row["train/mIoU/winner"] = row["mIoU"]
+                    cls_iou = row.get("cls_iou")
+                    if cls_iou:
+                        for i, cls_name in enumerate(names):
+                            if i == raw_model.ignore_index or i >= len(cls_iou):
+                                continue
+                            log_row[f"train/iou_{cls_name}/winner"] = cls_iou[i]
+                    if len(log_row) > 1:
+                        wandb.log(log_row)
+
             summary = {
                 "winner/probe_name": winner_name,
                 "winner/best_val_mIoU": float(evaluator._best_miou_by_probe[winner_name]),
@@ -447,6 +505,17 @@ class GridProbeWinnerSelector(HookBase):
             summary.update(
                 _flatten_for_wandb(raw_model.probe_configs[winner_name], "winner/config")
             )
+            # Per-class val IoU/accuracy at the winner's own best epoch (see
+            # GridProbeEvaluator._best_cls_iou_by_probe / _best_cls_acc_by_probe).
+            cls_iou = evaluator._best_cls_iou_by_probe.get(winner_name)
+            cls_acc = evaluator._best_cls_acc_by_probe.get(winner_name)
+            if cls_iou is not None:
+                for i, cls_name in enumerate(names):
+                    if i == raw_model.ignore_index or i >= len(cls_iou):
+                        continue
+                    summary[f"winner/val/iou_{cls_name}"] = float(cls_iou[i])
+                    if cls_acc is not None:
+                        summary[f"winner/val/acc_{cls_name}"] = float(cls_acc[i])
             summary.update({f"winner/{k}": v for k, v in test_metrics.items()})
             for key, value in summary.items():
                 wandb.run.summary[key] = value

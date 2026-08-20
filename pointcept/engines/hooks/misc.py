@@ -118,6 +118,13 @@ class InformationWriter(HookBase):
         self._train_seg_stats = {}
         # task_name -> MultilabelStats (epoch accumulation, rank 0 only)
         self._train_multilabel_stats = {}
+        # GridProbeTrainer only: full (epoch, probe) train loss/mIoU/cls_iou
+        # history (rank 0 only), so GridProbeWinnerSelector can replay just the
+        # winning probe's train curve to W&B after training ends instead of
+        # every probe streaming its own live curve during training (see
+        # after_epoch below and grid_probe.py::GridProbeWinnerSelector).
+        # Persisted across resume (see state_dict/load_state_dict).
+        self._grid_probe_train_history = []
 
     def before_epoch(self):
         self._train_seg_stats = {}
@@ -215,6 +222,19 @@ class InformationWriter(HookBase):
                 yield iou_class_tag("train", slug, task=task_for_tag), float(
                     iou_class[class_idx]
                 )
+
+    def _is_grid_probe(self):
+        return isinstance(getattr(self.trainer, "optimizer", None), dict)
+
+    def state_dict(self):
+        if not self._grid_probe_train_history:
+            return {}
+        return {"grid_probe_train_history": list(self._grid_probe_train_history)}
+
+    def load_state_dict(self, state):
+        self._grid_probe_train_history = list(
+            state.get("grid_probe_train_history", [])
+        )
 
     @staticmethod
     def _optimizer_lrs(trainer):
@@ -540,6 +560,28 @@ class InformationWriter(HookBase):
             for task_name in self._train_seg_stats
         }
 
+        if self._is_grid_probe() and comm.is_main_process():
+            epoch_step = self.trainer.epoch + 1
+            epoch_key_set = getattr(self, "_epoch_scalar_key_set", set())
+            for task_name, task_miou in train_miou_by_task.items():
+                loss_key = f"loss/{task_name}"
+                row = {
+                    "epoch": epoch_step,
+                    "task_name": task_name,
+                    "loss": (
+                        float(self.trainer.storage.history(loss_key).avg)
+                        if loss_key in epoch_key_set
+                        else None
+                    ),
+                    "mIoU": task_miou,
+                }
+                if self.write_cls_iou and task_name in self._train_seg_stats:
+                    stats = self._train_seg_stats[task_name]
+                    intersection = stats["intersection"].cpu().numpy()
+                    union = stats["union"].cpu().numpy()
+                    row["cls_iou"] = (intersection / (union + 1e-10)).tolist()
+                self._grid_probe_train_history.append(row)
+
         epoch_info = "Train result: "
         epoch_keys = getattr(self, "_epoch_scalar_keys", None) or self.model_output_keys
         for key in epoch_keys:
@@ -608,30 +650,41 @@ class InformationWriter(HookBase):
             and self.trainer.cfg.enable_wandb
             and wandb.run is not None
         ):
-            lrs = self._optimizer_lrs(self.trainer)
             wandb_dict = {
                 "Epoch": epoch_step,
                 "Iter": self.curr_iter,
             }
-            for name, lr in lrs.items():
-                key = "params/lr" if name == "" else f"params/lr/{name}"
-                wandb_dict[key] = lr
-            for key in epoch_keys:
-                wandb_dict[f"train/{key}"] = self.trainer.storage.history(key).avg
-            if epoch_miou_main is not None:
-                wandb_dict["train/mIoU"] = float(epoch_miou_main)
-            for task_name, task_miou in train_miou_by_task.items():
-                if task_miou is not None:
-                    wandb_dict[metric_tag("train", "mIoU", task=task_name)] = float(
-                        task_miou
-                    )
-            for task_name, macro_f1 in train_multilabel_macro_f1.items():
-                wandb_dict[metric_tag("train", "macro_f1", task=task_name)] = macro_f1
-            if self.write_cls_iou:
-                for tag, value in self._train_per_cls_iou_items(
-                    data_cfg, tc, use_task_in_tag
-                ):
-                    wandb_dict[tag] = value
+            if self._is_grid_probe():
+                # GridProbeTrainer: N probes would otherwise fan out into
+                # N x (loss + mIoU + lr + num_classes*cls_iou) W&B metrics every
+                # epoch. Only the eventual winner's train curve is worth a
+                # dashboard line; GridProbeWinnerSelector replays it from
+                # _grid_probe_train_history once training ends (mirrors how
+                # GridProbeEvaluator already handles val/* below). Console
+                # (per-probe logger.info above) and TensorBoard (per-probe
+                # add_scalar above) keep the full per-probe detail.
+                pass
+            else:
+                lrs = self._optimizer_lrs(self.trainer)
+                for name, lr in lrs.items():
+                    key = "params/lr" if name == "" else f"params/lr/{name}"
+                    wandb_dict[key] = lr
+                for key in epoch_keys:
+                    wandb_dict[f"train/{key}"] = self.trainer.storage.history(key).avg
+                if epoch_miou_main is not None:
+                    wandb_dict["train/mIoU"] = float(epoch_miou_main)
+                for task_name, task_miou in train_miou_by_task.items():
+                    if task_miou is not None:
+                        wandb_dict[metric_tag("train", "mIoU", task=task_name)] = float(
+                            task_miou
+                        )
+                for task_name, macro_f1 in train_multilabel_macro_f1.items():
+                    wandb_dict[metric_tag("train", "macro_f1", task=task_name)] = macro_f1
+                if self.write_cls_iou:
+                    for tag, value in self._train_per_cls_iou_items(
+                        data_cfg, tc, use_task_in_tag
+                    ):
+                        wandb_dict[tag] = value
 
         finalize_epoch_wall_timing(
             self.trainer,
