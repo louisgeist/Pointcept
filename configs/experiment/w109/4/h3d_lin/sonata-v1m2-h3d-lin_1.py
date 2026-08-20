@@ -40,7 +40,7 @@ point_max = 102400  # keep pretrain SphereCrop budget; do not raise for denser H
 
 
 num_gpu = 1
-epoch = 150
+epoch = 800
 eval_epoch = 10
 lr = 5e-2
 patch_size = 1024
@@ -210,7 +210,6 @@ data = dict(
         type=dataset_type,
         split="train",
         data_root=data_root,
-        loop=8,
         transform=[
             dict(type="FillMissingFeat", feat_key="strength", feat_dim=1, fill_value=0.0),
             dict(type="CenterShift", apply_z=True),
