@@ -35,7 +35,7 @@
 #SBATCH --cpus-per-task=96
 #SBATCH --hint=nomultithread
 #SBATCH --job-name=flair3d-multi-resume
-#SBATCH --time=12:00:00
+#SBATCH --time=3:00:00
 
 # Do not use `set -u`: conda activate.d scripts (e.g. gdal) reference unset vars.
 set -eo pipefail
