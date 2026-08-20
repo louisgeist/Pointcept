@@ -242,10 +242,19 @@ class GridProbeEvaluator(HookBase):
                     current_epoch,
                 )
             if self.trainer.cfg.enable_wandb:
-                wandb_log = {"Epoch": current_epoch}
-                for name in probe_names:
-                    wandb_log[f"val/mIoU/{name}"] = m_iou_by_probe[name]
-                    wandb_log[f"val/mIoU_best/{name}"] = self._best_miou_by_probe[name]
+                # Per-probe curves would fan out into len(probe_names) * 2
+                # wandb metrics every epoch; only the eventual winner's own
+                # curve is worth a dashboard line, and GridProbeWinnerSelector
+                # replays that one from _history once training ends. Console
+                # (per-probe logger.info above) and TensorBoard (per-probe
+                # add_scalar above) keep the full per-probe detail.
+                wandb_log = {
+                    "Epoch": current_epoch,
+                    "val/mIoU/epoch_best": max(m_iou_by_probe.values()),
+                    "val/mIoU_best/running_best": max(
+                        self._best_miou_by_probe.values()
+                    ),
+                }
             finalize_val_epoch_timing(
                 self.trainer, val_start, current_epoch, wandb_dict=wandb_log
             )
@@ -413,6 +422,24 @@ class GridProbeWinnerSelector(HookBase):
         self.trainer.logger.info("Wrote grid search results to: %s", out_path)
 
         if getattr(cfg, "enable_wandb", False) and wandb.run is not None:
+            # Replay the winning probe's full per-epoch trajectory as its own
+            # clean wandb curve (val/* uses Epoch as step_metric, so this
+            # slots into the normal val chart, not a new x-axis) — this is
+            # the one per-probe curve GridProbeEvaluator intentionally didn't
+            # stream live, to avoid a wandb chart per probe during training.
+            winner_history = sorted(
+                (row for row in evaluator._history if row["probe_name"] == winner_name),
+                key=lambda row: row["epoch"],
+            )
+            for row in winner_history:
+                wandb.log(
+                    {
+                        "Epoch": row["epoch"],
+                        "val/mIoU/winner": row["mIoU"],
+                        "val/mIoU_best/winner": row["mIoU_best"],
+                    }
+                )
+
             summary = {
                 "winner/probe_name": winner_name,
                 "winner/best_val_mIoU": float(evaluator._best_miou_by_probe[winner_name]),
