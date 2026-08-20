@@ -868,7 +868,7 @@ class NetworkAPLSEvaluator(HookBase):
         tag = metric_tag("test", "network_apls_eval_time_s")
         if self.trainer.writer is not None:
             self.trainer.writer.add_scalar(tag, elapsed_s, current_epoch)
-        if self.trainer.cfg.enable_wandb:
+        if self.trainer.cfg.enable_wandb and is_main_process():
             wandb.log({"Epoch": current_epoch, tag: elapsed_s})
 
         if payload is None:
@@ -909,7 +909,7 @@ class NetworkAPLSEvaluator(HookBase):
         if self.trainer.writer is not None:
             for k, v in scalars.items():
                 self.trainer.writer.add_scalar(k, v, current_epoch)
-        if self.trainer.cfg.enable_wandb and scalars:
+        if self.trainer.cfg.enable_wandb and scalars and is_main_process():
             wandb.log({"Epoch": current_epoch, **scalars})
 
 
