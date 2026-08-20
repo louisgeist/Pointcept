@@ -24,6 +24,7 @@ num_classes = 8
 ignore_index = 8
 grid_size = 0.1
 point_max = 102400
+coord_feat_scale = 0.01  # must match Flair3D multitask pretrain
 
 num_gpu = 1
 epoch = 50
@@ -37,7 +38,7 @@ test_single_fragment = True
 batch_size_per_gpu = 24
 batch_size = batch_size_per_gpu * num_gpu
 batch_size_val = 1
-batch_size_test = max(1, batch_size // 2)
+batch_size_test = 1
 num_worker = 8 * num_gpu
 num_worker_test = 2
 mix_prob = 0.8
@@ -102,7 +103,7 @@ _losses = {
 }
 _lrs = {"5e-2": 5e-2, "1e-1": 1e-1, "2e-1": 2e-1, "5e-1": 5e-1}
 _wds = {"5e-3": 0.005, "5e-2": 5e-2}
-_dropouts = {"0": 0.0, "0.3": 0.3, "0.5": 0.5}
+_dropouts = {"0": 0.0, "03": 0.3, "05": 0.5}
 _norms = {"none": None}
 
 probes = {}
@@ -225,6 +226,7 @@ data = dict(
                 type="Collect",
                 keys=("coord", "grid_coord", "segment", "grid_size"),
                 feat_keys=feat_keys,
+                feat_scales=dict(coord=coord_feat_scale),
             ),
         ],
         test_mode=False,
@@ -251,6 +253,7 @@ data = dict(
                 type="Collect",
                 keys=("coord", "grid_coord", "segment", "origin_segment", "inverse"),
                 feat_keys=feat_keys,
+                feat_scales=dict(coord=coord_feat_scale),
             ),
         ],
         test_mode=False,
@@ -282,6 +285,7 @@ data = dict(
                     keys=("coord", "grid_coord", "index"),
                     optional_keys=("inverse",),  # for test_single_fragment broadcast
                     feat_keys=feat_keys,
+                    feat_scales=dict(coord=coord_feat_scale),
                 ),
             ],
             aug_transform=[[dict(type="RandomRotateTargetAngle", angle=[0], axis="z", center=[0, 0, 0], p=1)]],

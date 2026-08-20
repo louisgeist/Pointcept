@@ -35,7 +35,7 @@ test_single_fragment = True
 batch_size_per_gpu = 24
 batch_size = batch_size_per_gpu * num_gpu
 batch_size_val = 1
-batch_size_test = max(1, batch_size // 2)
+batch_size_test = 1
 num_worker = 8 * num_gpu
 num_worker_test = 2
 mix_prob = 0.8
@@ -99,7 +99,7 @@ _losses = {
 }
 _lrs = {"5e-2": 5e-2, "1e-1": 1e-1, "2e-1": 2e-1, "5e-1": 5e-1}
 _wds = {"5e-3": 0.005, "5e-2": 5e-2}
-_dropouts = {"0": 0.0, "0.3": 0.3, "0.5": 0.5}
+_dropouts = {"0": 0.0, "03": 0.3, "05": 0.5}
 _norms = {"none": None}
 
 probes = {}
