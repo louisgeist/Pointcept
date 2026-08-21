@@ -9,8 +9,8 @@ pretrain, job 873542).
 
 ECLAIR provides real RGB (NormalizeColor); strength uses 1/60000 like DALES.
 
-Grid (16 probes): ce_lovasz x {5e-2, 1e-1, 2e-1, 5e-1} x {5e-3, 5e-2} wd x
-dropout {0, 0.3} x input_norm=None. epoch=50 / eval_epoch=10.
+Grid (12 probes): ce_lovasz x 12 LRs x wd=0 x dropout=0 x
+input_norm=None x AdamW x warmup=5%. epoch=50 / eval_epoch=10.
 """
 
 _base_ = ["../_base_/default_runtime.py"]
@@ -86,8 +86,8 @@ backbone_out_channels = sum(dec_channels) + bottleneck_channels  # 1404
 
 # -----------------------------------------------------------------------------
 # Grid-search probes — AdamW / OneCycleLR: ce_lovasz x lr x wd=0 x dropout=0 x
-# input_norm=none x feat_norm=none x optimizer=AdamW x warmup{0%,5%}
-# (1 x 12 x 1 x 1 x 1 x 1 x 1 x 2 = 24 probes).
+# input_norm=none x feat_norm=none x optimizer=AdamW, warmup=5%
+# (1 x 12 x 1 x 1 x 1 x 1 x 1 = 12 probes).
 # -----------------------------------------------------------------------------
 _losses = {
     "ce_lovasz": [
@@ -114,7 +114,6 @@ _dropouts = {"0": 0.0}
 _norms = {"none": None}
 _feat_norms = {"none": None}
 _optimizers = {"adamw": "AdamW"}
-_warmups = {"w0": 0.0, "w5": 0.05}
 
 probes = {}
 for _loss_name, _criteria in _losses.items():
@@ -124,35 +123,34 @@ for _loss_name, _criteria in _losses.items():
                 for _norm_name, _input_norm in _norms.items():
                     for _fn_name, _feat_norm in _feat_norms.items():
                         for _opt_name, _opt_type in _optimizers.items():
-                            for _wu_name, _pct_start in _warmups.items():
-                                _name = (
-                                    f"{_loss_name}_lr{_lr_name}_wd{_wd_name}_do{_do_name}_"
-                                    f"{_norm_name}_fn{_fn_name}_{_opt_name}_{_wu_name}"
-                                )
-                                _optimizer = dict(type=_opt_type, lr=_lr, weight_decay=_wd)
-                                if _opt_type == "SGD":
-                                    _optimizer["momentum"] = 0.9
-                                probes[_name] = dict(
-                                    criteria=_criteria,
-                                    input_norm=_input_norm,
-                                    feat_norm=_feat_norm,
-                                    dropout=_dropout,
-                                    optimizer=_optimizer,
-                                    scheduler=dict(
-                                        type="OneCycleLR",
-                                        max_lr=_lr,
-                                        pct_start=_pct_start,
-                                        anneal_strategy="cos",
-                                        div_factor=10.0,
-                                        final_div_factor=1000.0,
-                                    ),
-                                    grad_clip=3.0,
-                                )
+                            _name = (
+                                f"{_loss_name}_lr{_lr_name}_wd{_wd_name}_do{_do_name}_"
+                                f"{_norm_name}_fn{_fn_name}_{_opt_name}"
+                            )
+                            _optimizer = dict(type=_opt_type, lr=_lr, weight_decay=_wd)
+                            if _opt_type == "SGD":
+                                _optimizer["momentum"] = 0.9
+                            probes[_name] = dict(
+                                criteria=_criteria,
+                                input_norm=_input_norm,
+                                feat_norm=_feat_norm,
+                                dropout=_dropout,
+                                optimizer=_optimizer,
+                                scheduler=dict(
+                                    type="OneCycleLR",
+                                    max_lr=_lr,
+                                    pct_start=0.05,
+                                    anneal_strategy="cos",
+                                    div_factor=10.0,
+                                    final_div_factor=1000.0,
+                                ),
+                                grad_clip=3.0,
+                            )
 
-del _losses, _lrs, _wds, _dropouts, _norms, _feat_norms, _optimizers, _warmups
+del _losses, _lrs, _wds, _dropouts, _norms, _feat_norms, _optimizers
 del _loss_name, _criteria, _lr_name, _lr, _wd_name, _wd, _do_name, _dropout
 del _norm_name, _input_norm, _fn_name, _feat_norm, _opt_name, _opt_type
-del _wu_name, _pct_start, _optimizer, _name
+del _optimizer, _name
 
 
 wandb_run_name = (
