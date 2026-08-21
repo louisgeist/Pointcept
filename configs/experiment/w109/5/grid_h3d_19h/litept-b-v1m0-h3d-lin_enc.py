@@ -4,7 +4,7 @@ LitePT-Base grid-search linear probing on H3D — encoder multiscale variant
 job 873542). `enc_mode=True` -> 1386ch concat of the 5 raw encoder stages
 (54+108+216+432+576).
 
-AdamW / wd=0 / OneCycleLR with warmup axis pct_start {0%, 5%}, lr swept over
+AdamW / wd=0 / OneCycleLR with warmup fixed at pct_start=5%, lr swept over
 {1e-4 .. 5e-1} (12 values), input_norm=none. Counterpart to the SGD/cosine
 DINOv2 sweep in 11h_grid_h3d; scheduler/optimizer family matches the DALES
 AdamW GridProbe configs (e.g. w109/4/grid_20h). Cosine anneal + warmup are
@@ -14,9 +14,9 @@ total_steps per eval_epoch window.
 Dataset-driven axes (num_worker/AMP/batch) match 11h_grid_h3d. epoch=2000
 / eval_epoch=10. H3D fill/aug/feature_mask_values unchanged from that ref.
 
-Grid (24 probes): ce_lovasz x lr{1e-4,2e-4,5e-4,1e-3,2e-3,5e-3,1e-2,2e-2,5e-2,
+Grid (12 probes): ce_lovasz x lr{1e-4,2e-4,5e-4,1e-3,2e-3,5e-3,1e-2,2e-2,5e-2,
 1e-1,2e-1,5e-1} x wd=0 x dropout=0 x input_norm=none x feat_norm=none x
-optimizer=AdamW x warmup{0%,5%}. skip_test=False, log_test_f1=True.
+optimizer=AdamW x warmup=5%. skip_test=False, log_test_f1=True.
 """
 
 _base_ = ["../../../../_base_/default_runtime.py"]
@@ -99,8 +99,8 @@ backbone_out_channels = sum(enc_channels)
 
 # -----------------------------------------------------------------------------
 # Grid-search probes — AdamW / OneCycleLR: ce_lovasz x lr x wd=0 x dropout=0 x
-# input_norm=none x feat_norm=none x optimizer=AdamW x warmup{0%,5%}
-# (1 x 12 x 1 x 1 x 1 x 1 x 1 x 2 = 24 probes).
+# input_norm=none x feat_norm=none x optimizer=AdamW, warmup=5%
+# (1 x 12 x 1 x 1 x 1 x 1 x 1 = 12 probes).
 # -----------------------------------------------------------------------------
 _losses = {
     "ce_lovasz": [

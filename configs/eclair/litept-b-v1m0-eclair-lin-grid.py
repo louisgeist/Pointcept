@@ -7,7 +7,9 @@ pretrain, job 873542).
 `bn_eval_mode=True` freezes BatchNorm running stats;
 `drop_path_eval_mode=True` keeps DropPath inactive.
 
-ECLAIR provides real RGB (NormalizeColor); strength uses 1/60000 like DALES.
+ECLAIR provides real RGB: ChromaticAutoContrast/Translation/Jitter (train)
++ NormalizeColor (like H3D / semseg-litept ECLAIR); strength uses 1/60000
+like DALES.
 
 Grid (12 probes): ce_lovasz x 12 LRs x wd=0 x dropout=0 x
 input_norm=None x AdamW x warmup=5%. epoch=50 / eval_epoch=10.
@@ -226,11 +228,16 @@ data = dict(
         include_pseudo=True,
         transform=[
             dict(type="CenterShift", apply_z=True),
+            dict(type="Z_MinShift"),
+            dict(type="Z_RandomOffset"),
             dict(type="RandomDropout", dropout_ratio=0.2, dropout_application_ratio=0.2),
             dict(type="RandomRotate", angle=[-1, 1], axis="z", center=[0, 0, 0], p=0.5),
             dict(type="RandomScale", scale=[0.9, 1.1]),
             dict(type="RandomFlip", p=0.5),
             dict(type="RandomJitter", sigma=0.005, clip=0.02),
+            dict(type="ChromaticAutoContrast", p=0.2, blend_factor=None),
+            dict(type="ChromaticTranslation", p=0.95, ratio=0.05),
+            dict(type="ChromaticJitter", p=0.95, std=0.05),
             dict(
                 type="GridSample",
                 grid_size=grid_size,
@@ -259,6 +266,7 @@ data = dict(
         include_pseudo=True,
         transform=[
             dict(type="CenterShift", apply_z=True),
+            dict(type="Z_MinShift"),
             dict(type="Copy", keys_dict={"segment": "origin_segment"}),
             dict(
                 type="GridSample",
@@ -287,6 +295,7 @@ data = dict(
         include_pseudo=True,
         transform=[
             dict(type="CenterShift", apply_z=True),
+            dict(type="Z_MinShift"),
             dict(type="NormalizeColor"),
         ],
         test_mode=True,

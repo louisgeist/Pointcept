@@ -6,14 +6,14 @@ Frozen PT-v3m2 encoder (enc_mode=True -> multi-scale concat 1232ch =
 48+96+192+384+512). No coord_feat_scale; zero color fill via FillMissingFeat;
 strength_feat_scale=1/60000 (DALES raw intensity).
 
-AdamW / wd=0 / OneCycleLR with warmup axis pct_start {0%, 5%}, lr swept over
+AdamW / wd=0 / OneCycleLR with warmup fixed at pct_start=5%, lr swept over
 {1e-4 .. 5e-1} (12 values), input_norm=none. DALES counterpart of
 w109/5/13h_adamw_h3d/sonata-v1m2-h3d-lin-grid_3.py; dataset/backbone/AMP/workers
 unchanged from grid_10h. epoch=400 / eval_epoch=10, num_worker=24 (H100).
 
-Grid (24 probes): ce_lovasz x lr{1e-4,2e-4,5e-4,1e-3,2e-3,5e-3,1e-2,2e-2,5e-2,
+Grid (12 probes): ce_lovasz x lr{1e-4,2e-4,5e-4,1e-3,2e-3,5e-3,1e-2,2e-2,5e-2,
 1e-1,2e-1,5e-1} x wd=0 x dropout=0 x input_norm=none x feat_norm=none x
-optimizer=AdamW x warmup{0%,5%}.
+optimizer=AdamW x warmup=5%.
 """
 
 _base_ = ["../../../../_base_/default_runtime.py"]
@@ -92,8 +92,8 @@ backbone_out_channels = 1232
 
 # -----------------------------------------------------------------------------
 # Grid-search probes — AdamW / OneCycleLR: ce_lovasz x lr x wd=0 x dropout=0 x
-# input_norm=none x feat_norm=none x optimizer=AdamW x warmup{0%,5%}
-# (1 x 12 x 1 x 1 x 1 x 1 x 1 x 2 = 24 probes).
+# input_norm=none x feat_norm=none x optimizer=AdamW, warmup=5%
+# (1 x 12 x 1 x 1 x 1 x 1 x 1 = 12 probes).
 # -----------------------------------------------------------------------------
 _losses = {
     "ce_lovasz": [
