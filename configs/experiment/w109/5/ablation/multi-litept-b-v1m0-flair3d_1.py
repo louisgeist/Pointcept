@@ -1,5 +1,5 @@
 """
-LitePT-Base on Flair3D+ multitask ablation: same recipe as
+LitePT-Base on Flair3D+ multitask ablation, 4x H100: same recipe as
 flair3d_default/multi-litept-b-v1m0-flair3d.py but with GradNormLite disabled
 (grad_norm_lite=False) and each nathab axis weighted 1/4 (joint weight 1).
 segment (v20) + forest_2d + elevation + 4 nathab tile_distribution axes +
@@ -28,8 +28,9 @@ grad_norm_lite_ema_alpha = 0.1
 grad_norm_lite_eps = 1e-3
 
 # Hardware parameters
-num_gpu = 1
-num_worker = 8 * num_gpu
+num_gpu = 4
+num_worker = 16  # H100: fixed 16 DataLoader workers (total, not 8 * num_gpu)
+sync_bn = True
 enable_amp = True
 
 # Data parameters
@@ -57,7 +58,7 @@ coord_feat_scale = 0.01
 
 # Wandb parameters
 wandb_run_name = (
-    f"LPT-B multi noGNL {grp_exp}.{num_exp}) iter={total_iters}"
+    f"4xH100 LPT-B multi noGNL {grp_exp}.{num_exp}) iter={total_iters}"
 )
 wandb_project = "flair3d_multi"
 
