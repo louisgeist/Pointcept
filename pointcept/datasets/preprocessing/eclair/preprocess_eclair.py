@@ -7,11 +7,11 @@ Raw layout (official release):
     pointclouds/pointcloud_*.laz
 
 Usage:
-  ln -sfn /data/geist/datasets/ECLAIR data/eclair/raw
-  python pointcept/datasets/preprocessing/eclair/preprocess_eclair.py \\
-      --dataset_root data/eclair/raw \\
-      --output_root data/eclair \\
-      --num_workers 8
+ln -sfn /data/geist/datasets/ECLAIR data/eclair/raw OU ln -sfn $SCRATCH/data/eclair-dataset data/eclair/raw
+python pointcept/datasets/preprocessing/eclair/preprocess_eclair.py \
+    --dataset_root data/eclair/raw \
+    --output_root data/eclair \
+    --num_workers 8
 
 Writes per-scene folders under output_root/{train,val,test}/<tile_id>/:
   coord.npy, color.npy, strength.npy, return_number.npy,
