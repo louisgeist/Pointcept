@@ -1,7 +1,7 @@
 """
 LitePT-Base on Flair3D+ (coord + RGB + strength in feat_keys).
 
-Mono-task ablation for target ``segment`` (v20). Standalone copy of
+Mono-task ablation for target ``segment`` (v20), 4x H100. Standalone copy of
 flair3d_default/segment/litept-b-v1m0-flair3d.py (Base backbone + schedule from
 multi-litept-b). Inherits only from default_runtime.
 """
@@ -20,8 +20,9 @@ grp_exp = 1
 num_exp = 1
 
 # Hardware parameters
-num_gpu = 1
-num_worker = 8 * num_gpu
+num_gpu = 4
+num_worker = 16  # H100: fixed 16 DataLoader workers (total, not 8 * num_gpu)
+sync_bn = True
 enable_amp = True
 
 # Data parameters
@@ -48,7 +49,7 @@ coord_feat_scale = 0.01
 
 # Wandb parameters
 wandb_run_name = (
-    f"LPT-B segment {grp_exp}.{num_exp}) iter={total_iters}"
+    f"4xH100 LPT-B segment {grp_exp}.{num_exp}) iter={total_iters}"
 )
 wandb_project = "flair3d_segment"
 
