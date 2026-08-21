@@ -1,5 +1,11 @@
 """
-KPConvX semantic segmentation on DALES (coord + strength LiDAR features).
+LitePT-Base semantic segmentation on DALES (coord + strength LiDAR features).
+
+Backbone dims and augmentation pipeline mirror the LitePT-Base backbone used
+in configs/flair3d_default/multi-litept-b-v1m0-flair3d.py, adapted to DALES
+single-task semseg (DefaultSegmentorV2, no multitask wiring) and trained from
+scratch (no pretrained weight). See configs/dales/semseg-litept-v1m0-dales.py
+for the LitePT-Small counterpart this config is derived from.
 
 This config is intentionally self-contained: it inherits only from
 default_runtime and can be read top-to-bottom without cross-referencing
@@ -22,19 +28,22 @@ num_exp = 1
 # Hardware parameters
 num_gpu = 1
 num_worker = 8 * num_gpu
-enable_amp = False
+enable_amp = True  # LitePT-Base is heavier than Small; matches multi-litept-b-v1m0-flair3d.py
 
 # Data parameters
-batch_size = 2 * num_gpu  # total batch size across all gpus
+batch_size = 12  # total batch size across all gpus; LitePT-Base convention (vs 24 for Small)
 
 grid_size = 0.1
-point_max = 40000
+point_max = 102400
 mix_prob = 0.8
+
+patch_size = 1024
 
 # Optimization parameters
 lr = 1e-3
-epoch = 800
-eval_epoch = 80
+epoch = 1000
+eval_epoch = 100
+
 
 # Dataset / task
 num_classes = 8
@@ -49,7 +58,7 @@ strength_feat_scale = 1/60000
 test_single_fragment = True
 
 # Wandb parameters
-wandb_run_name = f"DALES KPConvX semseg ({grp_exp}.{num_exp}) lr={lr}"
+wandb_run_name = f"DALES LitePT-B semseg ({grp_exp}.{num_exp}) lr={lr}"
 wandb_project = "pointcept_dales"
 
 # -----------------------------------------------------------------------------
@@ -71,40 +80,38 @@ test = dict(type="SemSegTester", verbose=True)
 # Model
 # -----------------------------------------------------------------------------
 model = dict(
-    type="DefaultSegmentor",
+    type="DefaultSegmentorV2",
+    num_classes=num_classes,
+    backbone_out_channels=72,
     backbone=dict(
-        type="kpconvx_base",
-        input_channels=4,  # coord (3) + strength (1)
-        num_classes=num_classes,
-        dim=3,
-        task="cloud_segmentation",
-        kp_mode="kpconvx",
-        shell_sizes=(1, 14, 28),
-        kp_radius=2.3,
-        kp_aggregation="nearest",
-        kp_influence="constant",
-        kp_sigma=2.3,
-        share_kp=False,
-        conv_groups=-1,
-        inv_groups=8,
-        inv_act="sigmoid",
-        inv_grp_norm=True,
-        kpx_upcut=False,
-        subsample_size=grid_size,
-        neighbor_limits=(12, 16, 20, 20, 20),
-        layer_blocks=(3, 3, 9, 12, 3),
-        init_channels=64,
-        channel_scaling=1.414,
-        radius_scaling=2.2,
-        decoder_layer=True,
-        grid_pool=True,
-        upsample_n=3,
-        first_inv_layer=1,
-        drop_path_rate=0.3,
-        norm="batch",
-        bn_momentum=0.1,
-        smooth_labels=False,
-        class_w=(),
+        type="LitePT-v1",
+        in_channels=4,  # coord (3) + strength (1) -- DALES has no color/RGB
+        order=("z", "z-trans", "hilbert", "hilbert-trans"),
+        # LitePT-Base dims (matches multi-litept-b-v1m0-flair3d.py backbone).
+        stride=(3, 3, 3, 3),
+        enc_depths=(3, 3, 3, 12, 3),
+        enc_channels=(54, 108, 216, 432, 576),
+        enc_num_head=(3, 6, 12, 24, 32),
+        enc_patch_size=(patch_size, patch_size, patch_size, patch_size, patch_size),
+        enc_conv=(True, True, True, False, False),
+        enc_attn=(False, False, False, True, True),
+        enc_rope_freq=(100.0, 100.0, 100.0, 100.0, 100.0),
+        dec_depths=(0, 0, 0, 0),
+        dec_channels=(72, 108, 216, 432),
+        dec_num_head=(4, 6, 12, 24),
+        dec_patch_size=(patch_size, patch_size, patch_size, patch_size),
+        dec_conv=(False, False, False, False),
+        dec_attn=(False, False, False, False),
+        dec_rope_freq=(100.0, 100.0, 100.0, 100.0),
+        mlp_ratio=4,
+        qkv_bias=True,
+        qk_scale=None,
+        attn_drop=0.0,
+        proj_drop=0.0,
+        drop_path=0.3,
+        shuffle_orders=True,
+        pre_norm=True,
+        enc_mode=False,
     ),
     criteria=[
         dict(type="CrossEntropyLoss", loss_weight=1.0, ignore_index=ignore_index),
@@ -115,15 +122,16 @@ model = dict(
 # -----------------------------------------------------------------------------
 # Optimizer / scheduler
 # -----------------------------------------------------------------------------
-optimizer = dict(type="AdamW", lr=lr, weight_decay=0.02)
+optimizer = dict(type="AdamW", lr=lr, weight_decay=0.005)
 scheduler = dict(
     type="OneCycleLR",
-    max_lr=lr,
+    max_lr=[lr, lr / 10],
     pct_start=0.05,
     anneal_strategy="cos",
-    div_factor=100.0,
+    div_factor=10.0,
     final_div_factor=1000.0,
 )
+param_dicts = [dict(keyword="block", lr=lr / 10)]
 
 # -----------------------------------------------------------------------------
 # Dataset
@@ -151,6 +159,13 @@ data = dict(
         type=dataset_type,
         split="train",
         data_root=data_root,
+        # Note: unlike multi-litept-b-v1m0-flair3d.py, this train pipeline does NOT
+        # add RandomDropColor/RandomDropStrength + learned_masked_feat/feature_mask_values.
+        # That masked-feature-learning mechanism is wired into MultiTaskSegmentorV2's
+        # forward (reconstruction/masking objective); DefaultSegmentorV2 (used here, as
+        # in semseg-litept-v1m0-dales.py) has no matching model-side support. Adding
+        # RandomDropStrength alone would just zero DALES's only real radiometric feature
+        # at random with no compensating mechanism, so it's intentionally left out.
         transform=[
             dict(type="CenterShift", apply_z=True),
             dict(type="Z_MinShift"),
@@ -168,16 +183,16 @@ data = dict(
                 grid_size=grid_size,
                 hash_type="fnv",
                 mode="train",
-                return_min_coord=True,
+                return_grid_coord=True,
             ),
             dict(type="SphereCrop", point_max=point_max, mode="random"),
             dict(type="CenterShift", apply_z=False),
             dict(type="NormalizeColor"),
-            dict(type="ShufflePoint"),
             dict(type="ToTensor"),
+            dict(type="Update", keys_dict={"grid_size": grid_size}),
             dict(
                 type="Collect",
-                keys=("coord", "segment"),
+                keys=("coord", "grid_coord", "segment", "grid_size"),
                 feat_keys=feat_keys,
                 feat_scales=dict(coord=coord_feat_scale, strength=strength_feat_scale),
             ),
@@ -197,7 +212,7 @@ data = dict(
                 grid_size=grid_size,
                 hash_type="fnv",
                 mode="train",
-                return_min_coord=True,
+                return_grid_coord=True,
                 return_inverse=True,
             ),
             dict(type="CenterShift", apply_z=False),
@@ -205,7 +220,7 @@ data = dict(
             dict(type="ToTensor"),
             dict(
                 type="Collect",
-                keys=("coord", "segment", "origin_segment", "inverse"),
+                keys=("coord", "grid_coord", "segment", "origin_segment", "inverse"),
                 feat_keys=feat_keys,
                 feat_scales=dict(coord=coord_feat_scale, strength=strength_feat_scale),
             ),
@@ -230,7 +245,6 @@ data = dict(
                 mode="test",
                 return_grid_coord=True,
                 test_single_fragment=test_single_fragment,
-                return_inverse=True,
             ),
             crop=None,
             post_transform=[
@@ -238,7 +252,7 @@ data = dict(
                 dict(type="ToTensor"),
                 dict(
                     type="Collect",
-                    keys=("coord", "index"),
+                    keys=("coord", "grid_coord", "index"),
                     optional_keys=("inverse",),
                     feat_keys=feat_keys,
                     feat_scales=dict(coord=coord_feat_scale, strength=strength_feat_scale),
