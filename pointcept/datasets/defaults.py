@@ -38,6 +38,8 @@ class DefaultDataset(Dataset):
         "color",
         "normal",
         "strength",
+        "return_number",
+        "number_of_returns",
         "segment",
         "instance",
         "pose",

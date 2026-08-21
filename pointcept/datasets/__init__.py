@@ -29,6 +29,7 @@ from .hk import HKDataset
 from .flair3d import Flair3DDataset
 from .flair3d_climatic_domain import Flair3DClimaticDomainDataset
 from .dales import DALESDataset
+from .eclair import ECLAIRDataset
 from .h3d import H3DDataset
 from .pureforest import PureForestDataset
 from .sensaturban import SensaturbanDataset
