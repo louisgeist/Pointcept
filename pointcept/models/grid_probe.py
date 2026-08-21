@@ -23,28 +23,68 @@ from pointcept.models.utils.structure import Point
 from .builder import MODELS, build_model
 from .default import LearnedMaskedFeatMixin
 
-_INPUT_NORM_P = {"l1": 1, "l2": 2, "linf": float("inf")}
+_INPUT_NORM_P = {
+    "l1": 1,
+    "l2": 2,
+    "linf": float("inf"),
+    "l1_block": 1,
+    "l2_block": 2,
+    "linf_block": float("inf"),
+}
 _FEAT_NORM_TYPES = frozenset((None, "batchnorm", "layernorm"))
 
 
-def _unitsphere(feat, kind, eps=1e-6):
-    """Row-wise unitsphere: None returns `feat` unchanged; l1/l2/linf divide
-    by the corresponding p-norm (clamped at `eps`). Shared by ProbeHead and
-    GridProbeSegmentorV2's per-kind cache so N heads with the same input_norm
-    do not each materialize a [P, C] copy."""
+def _pnorm_scale(x, p, eps):
+    """x / ||x||_p along the last dim (clamped at `eps`).
+
+    Under autocast, .norm() runs (and returns) in fp32 for numerical
+    stability; dividing fp16 x by an fp32 norm silently promotes the whole
+    result to fp32 instead of matching x's own dtype, hence the explicit
+    cast back.
+    """
+    norm = x.norm(p=p, dim=-1, keepdim=True).clamp_min(eps)
+    return x / norm.to(x.dtype)
+
+
+def _unitsphere(feat, kind, eps=1e-6, channel_blocks=None):
+    """Row-wise unitsphere rescale.
+
+    None returns `feat` unchanged. "l1"/"l2"/"linf" divide the whole feature
+    vector by its p-norm. "l1_block"/"l2_block"/"linf_block" instead split
+    `feat` into `channel_blocks` contiguous chunks along the last dim (sizes
+    in the same finest-stage-first order as _forward_backbone's concat, e.g.
+    dec_channels + (bottleneck_channels,)) and unit-sphere-rescale each chunk
+    independently before re-concatenating — normalizes each backbone
+    stage/level's own sub-vector instead of the pooled hypercolumn as a
+    whole. Shared by ProbeHead and GridProbeSegmentorV2's per-kind cache so N
+    heads with the same input_norm do not each materialize a [P, C] copy.
+    """
     if kind is None:
         return feat
     if kind not in _INPUT_NORM_P:
-        raise ValueError(f"input_norm must be one of None/l1/l2/linf, got {kind!r}.")
+        raise ValueError(
+            f"input_norm must be one of None/l1/l2/linf/l1_block/l2_block/linf_block, got {kind!r}."
+        )
     p = _INPUT_NORM_P[kind]
-    norm = feat.norm(p=p, dim=-1, keepdim=True).clamp_min(eps)
-    # Under autocast, .norm() runs (and returns) in fp32 for numerical
-    # stability; dividing fp16 feat by an fp32 norm silently promotes the
-    # whole result to fp32, doubling every l1/l2/linf cache entry in
-    # _input_norm_cache (and forcing an extra fp16-cast-for-Linear, saved
-    # for backward, on every probe that reads it) instead of matching
-    # feat's own dtype like the None branch already does.
-    return feat / norm.to(feat.dtype)
+    if kind.endswith("_block"):
+        if channel_blocks is None:
+            raise ValueError(
+                f"input_norm={kind!r} requires channel_blocks to be set on the model."
+            )
+        # Write each block's rescaled slice directly into a preallocated
+        # output instead of torch.cat-ing a list of per-block tensors: cat
+        # would need every per-block result alive at once *plus* its own
+        # freshly-allocated [P, C] output (~2x feat's memory, transient) —
+        # this keeps the extra cost at ~1x, matching the non-block path.
+        out = torch.empty_like(feat)
+        offset = 0
+        for size in channel_blocks:
+            out[..., offset : offset + size] = _pnorm_scale(
+                feat[..., offset : offset + size], p, eps
+            )
+            offset += size
+        return out
+    return _pnorm_scale(feat, p, eps)
 
 
 def _prepare_shared_feat(feat):
@@ -55,14 +95,14 @@ def _prepare_shared_feat(feat):
     return feat
 
 
-def _input_norm_cache(feat, heads, names):
+def _input_norm_cache(feat, heads, names, channel_blocks=None):
     """At most one unitsphere tensor per (input_norm, eps) among `names`."""
     cache = {}
     for name in names:
         head = heads[name]
         key = (head.input_norm, head.eps)
         if key not in cache:
-            cache[key] = _unitsphere(feat, head.input_norm, head.eps)
+            cache[key] = _unitsphere(feat, head.input_norm, head.eps, channel_blocks)
     return cache
 
 
@@ -80,14 +120,18 @@ class ProbeHead(nn.Module):
         feat_norm=None,
         dropout=0.0,
         eps=1e-6,
+        channel_blocks=None,
     ):
         super().__init__()
-        if input_norm not in (None, "l1", "l2", "linf"):
-            raise ValueError(f"input_norm must be one of None/l1/l2/linf, got {input_norm!r}.")
+        if input_norm not in (None,) and input_norm not in _INPUT_NORM_P:
+            raise ValueError(
+                f"input_norm must be one of None/l1/l2/linf/l1_block/l2_block/linf_block, got {input_norm!r}."
+            )
         if feat_norm not in _FEAT_NORM_TYPES:
             raise ValueError(f"feat_norm must be one of {sorted(str(x) for x in _FEAT_NORM_TYPES)}, got {feat_norm!r}.")
         self.input_norm = input_norm
         self.eps = eps
+        self.channel_blocks = channel_blocks
         if feat_norm == "batchnorm":
             self.norm = nn.BatchNorm1d(in_channels)
         elif feat_norm == "layernorm":
@@ -99,7 +143,7 @@ class ProbeHead(nn.Module):
 
     def forward(self, feat, apply_input_norm=True):
         if apply_input_norm:
-            feat = _unitsphere(feat, self.input_norm, self.eps)
+            feat = _unitsphere(feat, self.input_norm, self.eps, self.channel_blocks)
         feat = self.norm(feat)
         feat = self.dropout(feat)
         return self.linear(feat)
@@ -110,7 +154,12 @@ class GridProbeSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
     """N linear probe heads sharing one frozen-backbone forward pass.
 
     probes: Mapping[str, dict], each entry:
-      - input_norm: None | "l1" | "l2" | "linf" (applied to backbone feat)
+      - input_norm: None | "l1" | "l2" | "linf" | "l1_block" | "l2_block" |
+        "linf_block" (applied to backbone feat). The non-"_block" kinds
+        unit-sphere-rescale the whole concatenated feature vector; the
+        "_block" kinds instead rescale each channel_blocks chunk (e.g. each
+        decoder stage / encoder level of a hypercolumn) independently —
+        requires channel_blocks to be set (see below).
       - feat_norm: None | "batchnorm" | "layernorm"
       - dropout: float
       - criteria: list of loss cfgs (same shape as DefaultSegmentorV2.criteria)
@@ -122,6 +171,15 @@ class GridProbeSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
     For dec_traceable/enc_mode multiscale concat, the finest stage is always
     concatenated first (see _forward_backbone), so this ablates that stage
     out of every probe's input, e.g. drop_leading_channels=dec_channels[0].
+
+    channel_blocks: model-level (not per-probe) — sizes of each concatenated
+    stage/level in the shared backbone feat, in the same finest-first concat
+    order as _forward_backbone (e.g. dec_channels + (bottleneck_channels,)
+    for a decoder hypercolumn, or enc_channels for an encoder-multiscale
+    concat), AFTER accounting for drop_leading_channels — i.e.
+    sum(channel_blocks) must equal backbone_out_channels -
+    drop_leading_channels. Only required when at least one probe uses an
+    input_norm ending in "_block"; ignored otherwise.
 
     Unlike DefaultSegmentorV2/MultiTaskSegmentorV2 (whose freeze_backbone
     only sets requires_grad=False and otherwise lets the backbone follow the
@@ -157,6 +215,7 @@ class GridProbeSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
         drop_path_eval_mode=True,
         feature_mask_values=None,
         drop_leading_channels=0,
+        channel_blocks=None,
     ):
         super().__init__()
         if not isinstance(probes, Mapping) or len(probes) == 0:
@@ -182,6 +241,24 @@ class GridProbeSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
             )
         probe_in_channels = backbone_out_channels - self.drop_leading_channels
 
+        if channel_blocks is not None:
+            channel_blocks = tuple(int(c) for c in channel_blocks)
+            if any(c <= 0 for c in channel_blocks):
+                raise ValueError(f"channel_blocks entries must all be positive, got {channel_blocks}.")
+            if sum(channel_blocks) != probe_in_channels:
+                raise ValueError(
+                    f"sum(channel_blocks)={sum(channel_blocks)} must equal "
+                    f"backbone_out_channels - drop_leading_channels={probe_in_channels}."
+                )
+        self.channel_blocks = channel_blocks
+
+        uses_block_norm = any(
+            str(probe_cfg.get("input_norm")).endswith("_block")
+            for probe_cfg in self.probe_configs.values()
+        )
+        if uses_block_norm and self.channel_blocks is None:
+            raise ValueError("channel_blocks must be set when any probe uses a '*_block' input_norm.")
+
         self.backbone = build_model(backbone)
         self.heads = nn.ModuleDict()
         self.criteria_by_task = {}
@@ -192,6 +269,7 @@ class GridProbeSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
                 input_norm=probe_cfg.get("input_norm"),
                 feat_norm=probe_cfg.get("feat_norm"),
                 dropout=probe_cfg.get("dropout", 0.0),
+                channel_blocks=self.channel_blocks,
             )
             self.criteria_by_task[name] = build_criteria(probe_cfg.get("criteria"))
 
@@ -276,7 +354,7 @@ class GridProbeSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
             feat = feat[..., self.drop_leading_channels:]
         active = self._active_probe_names()
         feat = _prepare_shared_feat(feat)
-        feat_by_norm = _input_norm_cache(feat, self.heads, active)
+        feat_by_norm = _input_norm_cache(feat, self.heads, active, self.channel_blocks)
         return feat_by_norm, point, active
 
     def probe_logits(self, name, feat_by_norm):
