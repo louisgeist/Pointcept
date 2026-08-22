@@ -281,6 +281,13 @@ class GridProbeSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
             for p in self.backbone.parameters():
                 p.requires_grad = False
             self.backbone.eval()
+            # Learned masked-feat fill values (e.g. color_mask_value) are part of
+            # how raw features are prepared for the backbone.
+            if self.enable_learned_masked_feat:
+                for feat_key in self.learned_masked_feat_keys:
+                    mask_value = getattr(self, f"{feat_key}_mask_value", None)
+                    if mask_value is not None:
+                        mask_value.requires_grad = False
 
     def train(self, mode=True):
         super().train(mode)
