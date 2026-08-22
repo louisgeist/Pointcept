@@ -1,24 +1,21 @@
 """
-Sonata-v1m2 grid-search linear probing on H3D — Sonata counterpart of the
-LitePT AdamW configs in this directory (same frozen checkpoint as
-w109/5/11h_grid_h3d/sonata-v1m2-h3d-lin-grid_3.py, job 862680, epoch_120).
-Frozen PT-v3m2 encoder (enc_mode=True -> multi-scale concat 1232ch =
-48+96+192+384+512). No coord_feat_scale; zero strength fill via
-FillMissingFeat (see 11h_grid_h3d Sonata docstring).
+PT-v3-malibu grid-search linear probing on H3D — decoder hypercolumn variant
+(same frozen checkpoint as ptv3-v1m0-dales-lin-grid.py / ptv3-v1m0-h3d-lin-grid-enc.py,
+job 1095469, Flair3D+ multitask supervised pretrain at
+w109/2/ptv3_wd/multi-ptv3-v1m0-flair3d_5.py). `traceable=True` -> 1024ch
+concat of decoder stages (64+64+128+256) + encoder bottleneck (512).
 
-AdamW / wd=0 / OneCycleLR with warmup fixed at pct_start=0%, lr swept over
-{1e-4 .. 5e-1} (12 values), input_norm=none. Counterpart to the SGD/cosine
-DINOv2 sweep in 11h_grid_h3d; scheduler/optimizer family matches the DALES
-AdamW GridProbe configs (e.g. w109/4/grid_20h). Cosine anneal + warmup are
-owned by OneCycleLR (pct_start); GridProbeTrainer.build_scheduler injects
-total_steps per eval_epoch window.
+AdamW / wd=0 / OneCycleLR with warmup fixed at pct_start=5%, lr swept over
+{1e-4 .. 5e-1} (12 values), input_norm=none — same probe grid as
+litept-b-v1m0-h3d-lin_dec.py for cross-backbone comparability.
+Dataset-driven axes (num_worker/AMP/batch) match the LitePT-B H3D lin-grid
+configs. epoch=2000 / eval_epoch=10. H3D fill/aug/feature_mask_values
+unchanged from that ref (no real intensity -> FillMissingFeat "strength").
 
-Dataset-driven axes (num_worker/AMP/batch) match 11h_grid_h3d. epoch=2000
-/ eval_epoch=10.
-
-Grid (12 probes): ce_lovasz x lr{1e-4,2e-4,5e-4,1e-3,2e-3,5e-3,1e-2,2e-2,5e-2,
-1e-1,2e-1,5e-1} x wd=0 x dropout=0 x input_norm=none x feat_norm=none x
-optimizer=AdamW x warmup=0%. skip_test=False, log_test_f1=True.
+`bn_eval_mode=True` is a no-op for PT-v3-malibu (LayerNorm only, no
+BatchNorm); `drop_path_eval_mode=True` keeps DropPath(0.3) inactive during
+probe training. skip_test=False, log_test_f1=True (required for H3D
+lin-grid configs — see project convention).
 """
 
 _base_ = ["../_base_/default_runtime.py"]
@@ -30,6 +27,7 @@ num_classes = 11
 ignore_index = 11
 grid_size = 0.1
 point_max = 102400  # keep pretrain SphereCrop budget; do not raise for denser H3D
+coord_feat_scale = 0.01  # must match Flair3D multitask pretrain
 
 num_gpu = 1
 epoch = 2000
@@ -54,7 +52,7 @@ enable_amp = True
 dataset_type = "H3DDataset"
 data_root = "data/h3d"
 
-weight = "/lustre/fsn1/projects/rech/unv/usi32yh/logs/pointcept_logs/slurm/862680/model/epoch_120.pth"
+weight = "/lustre/fswork/projects/rech/unv/usi32yh/Pointcept/logs/slurm/1095469/model/model_best.pth"
 
 wandb_project = f"pointcept_{dataset_type[:-7].lower()}"
 
@@ -66,9 +64,9 @@ wandb_project = f"pointcept_{dataset_type[:-7].lower()}"
 hooks = [
     dict(
         type="CheckpointLoader",
-        keywords="module.student.backbone",
-        replacement="module.backbone",
+        exclude_keys=("seg_heads", "reg_heads", "cls_heads", "pixel_seg_heads", "cls_attn_pools"),
     ),
+    dict(type="ModelHook"),
     dict(type="IterationTimer", warmup_iter=2),
     dict(type="InformationWriter", log_interval=1),
     dict(type="GridProbeEvaluator", write_cls_iou=True),
@@ -94,12 +92,14 @@ names = [
     "Void",
 ]
 
-# Encoder levels (enc_mode): 48+96+192+384+512 = 1232
-backbone_out_channels = 1232
+# Decoder levels (64, 64, 128, 256) + raw encoder bottleneck (512).
+dec_channels = (64, 64, 128, 256)
+bottleneck_channels = 512
+backbone_out_channels = sum(dec_channels) + bottleneck_channels  # 1024
 
 # -----------------------------------------------------------------------------
 # Grid-search probes — AdamW / OneCycleLR: ce_lovasz x lr x wd=0 x dropout=0 x
-# input_norm=none x feat_norm=none x optimizer=AdamW, warmup=0%
+# input_norm=none x feat_norm=none x optimizer=AdamW, warmup=5%
 # (1 x 12 x 1 x 1 x 1 x 1 x 1 = 12 probes).
 # -----------------------------------------------------------------------------
 _losses = {
@@ -168,8 +168,8 @@ del _norm_name, _input_norm, _fn_name, _feat_norm, _opt_name, _opt_type
 del _wu_name, _pct_start, _optimizer, _name
 
 wandb_run_name = (
-    f"Sonata GridProbe H3D {grp_exp}.{num_exp}) w/o Z_transform, epoch_120, enc multiscale {backbone_out_channels}ch, "
-    f"AdamW/wd0/OneCycleLR warmup0%, {len(probes)} probes, epoch={epoch}"
+    f"PT-v3-malibu GridProbe H3D {grp_exp}.{num_exp}) decoder hypercolumn {backbone_out_channels}ch, "
+    f"AdamW/wd0/OneCycleLR warmup5%, {len(probes)} probes, epoch={epoch}"
 )
 
 # model settings
@@ -181,14 +181,18 @@ model = dict(
     target_key="segment",
     backbone_out_channels=backbone_out_channels,
     backbone=dict(
-        type="PT-v3m2",
+        type="PT-v3-malibu",
         in_channels=7,  # coord(3) + color(3) + strength(1, fake/zero)
         order=("z", "z-trans", "hilbert", "hilbert-trans"),
         stride=(3, 3, 3, 3),
-        enc_depths=(3, 3, 3, 12, 3),
-        enc_channels=(48, 96, 192, 384, 512),
-        enc_num_head=(3, 6, 12, 24, 32),
+        enc_depths=(2, 2, 2, 6, 2),
+        enc_channels=(32, 64, 128, 256, bottleneck_channels),
+        enc_num_head=(2, 4, 8, 16, 32),
         enc_patch_size=(patch_size, patch_size, patch_size, patch_size, patch_size),
+        dec_depths=(2, 2, 2, 2),
+        dec_channels=dec_channels,
+        dec_num_head=(4, 4, 8, 16),
+        dec_patch_size=(patch_size, patch_size, patch_size, patch_size),
         mlp_ratio=4,
         qkv_bias=True,
         qk_scale=None,
@@ -201,12 +205,16 @@ model = dict(
         enable_flash=True,
         upcast_attention=False,
         upcast_softmax=False,
-        traceable=False,
-        mask_token=False,
-        enc_mode=True,
-        freeze_encoder=False,
+        enc_mode=False,
+        traceable=True,
     ),
     freeze_backbone=True,
+    bn_eval_mode=True,  # no-op for PT-v3-malibu (LayerNorm only, no BatchNorm) — set explicitly anyway
+    drop_path_eval_mode=True,  # keep DropPath(0.3) inactive during probe training
+    feature_mask_values=dict(
+        enable=True,
+        masked_feat_keys=["color", "strength"],
+    ),
 )
 
 # trainer settings — GridProbeTrainer builds one optimizer/scheduler per probe
@@ -259,6 +267,7 @@ data = dict(
                 type="Collect",
                 keys=("coord", "grid_coord", "segment", "grid_size"),
                 feat_keys=feat_keys,
+                feat_scales=dict(coord=coord_feat_scale),
             ),
         ],
         test_mode=False,
@@ -287,6 +296,7 @@ data = dict(
                 type="Collect",
                 keys=("coord", "grid_coord", "segment", "origin_segment", "inverse"),
                 feat_keys=feat_keys,
+                feat_scales=dict(coord=coord_feat_scale),
             ),
         ],
         test_mode=False,
@@ -320,6 +330,7 @@ data = dict(
                     keys=("coord", "grid_coord", "index"),
                     optional_keys=("inverse",),  # for test_single_fragment broadcast
                     feat_keys=feat_keys,
+                    feat_scales=dict(coord=coord_feat_scale),
                 ),
             ],
             aug_transform=[[dict(type="RandomRotateTargetAngle", angle=[0], axis="z", center=[0, 0, 0], p=1)]],

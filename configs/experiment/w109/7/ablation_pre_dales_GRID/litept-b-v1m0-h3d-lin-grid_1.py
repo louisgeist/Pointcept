@@ -1,27 +1,47 @@
 """
-Sonata-v1m2 grid-search linear probing on H3D — Sonata counterpart of the
-LitePT AdamW configs in this directory (same frozen checkpoint as
-w109/5/11h_grid_h3d/sonata-v1m2-h3d-lin-grid_3.py, job 862680, epoch_120).
-Frozen PT-v3m2 encoder (enc_mode=True -> multi-scale concat 1232ch =
-48+96+192+384+512). No coord_feat_scale; zero strength fill via
-FillMissingFeat (see 11h_grid_h3d Sonata docstring).
+LitePT-Base grid-search linear probing on H3D — transfer from an upcoming
+DALES full-supervision checkpoint (successor to job 1258597,
+w109/5/ablation_2/litept-b-v1m0-dales-semseg_1.py) that additionally learns
+a fill value for strength: RandomDropStrength(keep_mask=True) masks
+intensity on some points/scenes during training and
+feature_mask_values=dict(enable=True, masked_feat_keys=["strength"])
+(LearnedMaskedFeatMixin, already present on DefaultSegmentorV2 — same
+mechanism as the Flair3D+ multitask pretrain's color/strength masking, just
+restricted to strength here since DALES still has no color feature at
+all). WEIGHT PATH IS A PLACEHOLDER (still 1258597, the non-masked
+checkpoint) — update it once the new job finishes.
 
-AdamW / wd=0 / OneCycleLR with warmup fixed at pct_start=0%, lr swept over
-{1e-4 .. 5e-1} (12 values), input_norm=none. Counterpart to the SGD/cosine
-DINOv2 sweep in 11h_grid_h3d; scheduler/optimizer family matches the DALES
-AdamW GridProbe configs (e.g. w109/4/grid_20h). Cosine anneal + warmup are
-owned by OneCycleLR (pct_start); GridProbeTrainer.build_scheduler injects
-total_steps per eval_epoch window.
+Still in_channels=4 (coord+strength), no color: color is dropped entirely
+(not faked/filled, not fed to the backbone; feat_keys=["coord", "strength"],
+no Chromatic*/NormalizeColor transforms), and CheckpointLoader excludes
+"seg_head" (this checkpoint's single linear head name).
 
-Dataset-driven axes (num_worker/AMP/batch) match 11h_grid_h3d. epoch=2000
-/ eval_epoch=10.
+feature_mask_values is now enabled here too (masked_feat_keys=["strength"]),
+so GridProbeSegmentorV2 builds its own strength_mask_value parameter and
+loads the checkpoint's trained one via CheckpointLoader (not excluded).
+H3D has no native intensity, so FillMissingFeat(feat_key="strength",
+fill_value=0.0) still runs first to create the field — but it already sets
+strength_mask=True for every point (see FillMissingFeat's implementation),
+which Collect propagates through to strength_feat_start/end, so the
+model's forward now overrides that zero placeholder with the learned
+constant instead of leaving it at a static zero. No data-pipeline change
+was needed for this — only the model-level feature_mask_values flag.
 
-Grid (12 probes): ce_lovasz x lr{1e-4,2e-4,5e-4,1e-3,2e-3,5e-3,1e-2,2e-2,5e-2,
-1e-1,2e-1,5e-1} x wd=0 x dropout=0 x input_norm=none x feat_norm=none x
-optimizer=AdamW x warmup=0%. skip_test=False, log_test_f1=True.
+Encoder multiscale (enc_mode=True): 1386ch concat of the 5 raw encoder
+stages (54+108+216+432+576) — same tap as the enc.py reference; the
+decoder-hypercolumn variant was intentionally not built alongside this one
+(only the encoder tap was requested for this ablation pair).
+
+AdamW / wd=0 / OneCycleLR with warmup fixed at pct_start=5%, lr swept over
+{1e-4 .. 5e-1} (12 values), input_norm=none — same probe grid as the
+existing H3D LitePT enc/dec references, so the two DALES-pretrain
+ablation runs (H3D + Flair3D) share settings and are comparable.
+
+epoch=2000 / eval_epoch=10. skip_test=False, log_test_f1=True (required for
+H3D per project convention: default_runtime.py defaults log_test_f1=False).
 """
 
-_base_ = ["../_base_/default_runtime.py"]
+_base_ = ["../../../../_base_/default_runtime.py"]
 
 grp_exp = 1
 num_exp = 1
@@ -30,6 +50,7 @@ num_classes = 11
 ignore_index = 11
 grid_size = 0.1
 point_max = 102400  # keep pretrain SphereCrop budget; do not raise for denser H3D
+coord_feat_scale = 0.01  # must match the DALES full-sup pretrain (ablation_2)
 
 num_gpu = 1
 epoch = 2000
@@ -54,7 +75,9 @@ enable_amp = True
 dataset_type = "H3DDataset"
 data_root = "data/h3d"
 
-weight = "/lustre/fsn1/projects/rech/unv/usi32yh/logs/pointcept_logs/slurm/862680/model/epoch_120.pth"
+# TODO: placeholder — still points at the non-masked-strength checkpoint (1258597).
+# Update to the new job's model_best.pth once the masked-strength DALES retrain finishes.
+weight = "/lustre/fswork/projects/rech/unv/usi32yh/Pointcept/logs/slurm/1258597/model/model_best.pth"
 
 wandb_project = f"pointcept_{dataset_type[:-7].lower()}"
 
@@ -66,9 +89,9 @@ wandb_project = f"pointcept_{dataset_type[:-7].lower()}"
 hooks = [
     dict(
         type="CheckpointLoader",
-        keywords="module.student.backbone",
-        replacement="module.backbone",
+        exclude_keys=("seg_head",),
     ),
+    dict(type="ModelHook"),
     dict(type="IterationTimer", warmup_iter=2),
     dict(type="InformationWriter", log_interval=1),
     dict(type="GridProbeEvaluator", write_cls_iou=True),
@@ -77,7 +100,7 @@ hooks = [
     dict(type="GridProbeWinnerSelector", skip_test=False),
 ]
 
-feat_keys = ["coord", "color", "strength"]
+feat_keys = ["coord", "strength"]
 
 names = [
     "Low Vegetation",
@@ -94,12 +117,13 @@ names = [
     "Void",
 ]
 
-# Encoder levels (enc_mode): 48+96+192+384+512 = 1232
-backbone_out_channels = 1232
+# Encoder levels (enc_mode): 54+108+216+432+576 = 1386
+enc_channels = (54, 108, 216, 432, 576)
+backbone_out_channels = sum(enc_channels)
 
 # -----------------------------------------------------------------------------
 # Grid-search probes — AdamW / OneCycleLR: ce_lovasz x lr x wd=0 x dropout=0 x
-# input_norm=none x feat_norm=none x optimizer=AdamW, warmup=0%
+# input_norm=none x feat_norm=none x optimizer=AdamW, warmup=5%
 # (1 x 12 x 1 x 1 x 1 x 1 x 1 = 12 probes).
 # -----------------------------------------------------------------------------
 _losses = {
@@ -168,8 +192,9 @@ del _norm_name, _input_norm, _fn_name, _feat_norm, _opt_name, _opt_type
 del _wu_name, _pct_start, _optimizer, _name
 
 wandb_run_name = (
-    f"Sonata GridProbe H3D {grp_exp}.{num_exp}) w/o Z_transform, epoch_120, enc multiscale {backbone_out_channels}ch, "
-    f"AdamW/wd0/OneCycleLR warmup0%, {len(probes)} probes, epoch={epoch}"
+    f"LitePT-B GridProbe H3D {grp_exp}.{num_exp}) DALES-fullsup pretrain w/ learned "
+    f"strength masking, enc multiscale {backbone_out_channels}ch, "
+    f"AdamW/wd0/OneCycleLR warmup5%, {len(probes)} probes, epoch={epoch}"
 )
 
 # model settings
@@ -181,14 +206,17 @@ model = dict(
     target_key="segment",
     backbone_out_channels=backbone_out_channels,
     backbone=dict(
-        type="PT-v3m2",
-        in_channels=7,  # coord(3) + color(3) + strength(1, fake/zero)
+        type="LitePT-v1",
+        in_channels=4,  # coord(3) + strength(1) — no color, matches DALES pretrain
         order=("z", "z-trans", "hilbert", "hilbert-trans"),
         stride=(3, 3, 3, 3),
         enc_depths=(3, 3, 3, 12, 3),
-        enc_channels=(48, 96, 192, 384, 512),
+        enc_channels=enc_channels,
         enc_num_head=(3, 6, 12, 24, 32),
         enc_patch_size=(patch_size, patch_size, patch_size, patch_size, patch_size),
+        enc_conv=(True, True, True, False, False),
+        enc_attn=(False, False, False, True, True),
+        enc_rope_freq=(100.0, 100.0, 100.0, 100.0, 100.0),
         mlp_ratio=4,
         qkv_bias=True,
         qk_scale=None,
@@ -197,16 +225,15 @@ model = dict(
         drop_path=0.3,
         shuffle_orders=True,
         pre_norm=True,
-        enable_rpe=False,
-        enable_flash=True,
-        upcast_attention=False,
-        upcast_softmax=False,
-        traceable=False,
-        mask_token=False,
         enc_mode=True,
-        freeze_encoder=False,
     ),
     freeze_backbone=True,
+    bn_eval_mode=True,  # freeze BatchNorm running stats during probe training
+    drop_path_eval_mode=True,  # keep DropPath inactive during probe training
+    feature_mask_values=dict(
+        enable=True,
+        masked_feat_keys=["strength"],
+    ),
 )
 
 # trainer settings — GridProbeTrainer builds one optimizer/scheduler per probe
@@ -240,9 +267,6 @@ data = dict(
             dict(type="RandomScale", scale=[0.9, 1.1]),
             dict(type="RandomFlip", p=0.5),
             dict(type="RandomJitter", sigma=0.005, clip=0.02),
-            dict(type="ChromaticAutoContrast", p=0.2, blend_factor=None),
-            dict(type="ChromaticTranslation", p=0.95, ratio=0.05),
-            dict(type="ChromaticJitter", p=0.95, std=0.05),
             dict(
                 type="GridSample",
                 grid_size=grid_size,
@@ -252,13 +276,13 @@ data = dict(
             ),
             dict(type="SphereCrop", point_max=point_max, mode="random"),
             dict(type="CenterShift", apply_z=False),
-            dict(type="NormalizeColor"),
             dict(type="ToTensor"),
             dict(type="Update", keys_dict={"grid_size": grid_size}),
             dict(
                 type="Collect",
                 keys=("coord", "grid_coord", "segment", "grid_size"),
                 feat_keys=feat_keys,
+                feat_scales=dict(coord=coord_feat_scale),
             ),
         ],
         test_mode=False,
@@ -281,12 +305,12 @@ data = dict(
                 return_inverse=True,
             ),
             dict(type="CenterShift", apply_z=False),
-            dict(type="NormalizeColor"),
             dict(type="ToTensor"),
             dict(
                 type="Collect",
                 keys=("coord", "grid_coord", "segment", "origin_segment", "inverse"),
                 feat_keys=feat_keys,
+                feat_scales=dict(coord=coord_feat_scale),
             ),
         ],
         test_mode=False,
@@ -299,7 +323,6 @@ data = dict(
             dict(type="FillMissingFeat", feat_key="strength", feat_dim=1, fill_value=0.0),
             dict(type="CenterShift", apply_z=True),
             dict(type="Z_MinShift"),
-            dict(type="NormalizeColor"),
         ],
         test_mode=True,
         test_cfg=dict(
@@ -320,6 +343,7 @@ data = dict(
                     keys=("coord", "grid_coord", "index"),
                     optional_keys=("inverse",),  # for test_single_fragment broadcast
                     feat_keys=feat_keys,
+                    feat_scales=dict(coord=coord_feat_scale),
                 ),
             ],
             aug_transform=[[dict(type="RandomRotateTargetAngle", angle=[0], axis="z", center=[0, 0, 0], p=1)]],

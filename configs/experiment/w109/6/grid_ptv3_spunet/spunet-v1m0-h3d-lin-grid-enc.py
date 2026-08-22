@@ -1,41 +1,50 @@
 """
-Sonata-v1m2 grid-search linear probing on H3D — Sonata counterpart of the
-LitePT AdamW configs in this directory (same frozen checkpoint as
-w109/5/11h_grid_h3d/sonata-v1m2-h3d-lin-grid_3.py, job 862680, epoch_120).
-Frozen PT-v3m2 encoder (enc_mode=True -> multi-scale concat 1232ch =
-48+96+192+384+512). No coord_feat_scale; zero strength fill via
-FillMissingFeat (see 11h_grid_h3d Sonata docstring).
+SpUNet-v1m1 grid-search linear probing on H3D — encoder multiscale variant
+(same frozen checkpoint as spunet-v1m0-h3d-lin-grid-dec.py, job 1052217,
+Flair3D+ multitask supervised pretrain: channels=(32,64,128,256,256,128,96,96),
+layers=(2,3,4,6,2,2,2,2), stride=3).
 
-AdamW / wd=0 / OneCycleLR with warmup fixed at pct_start=0%, lr swept over
-{1e-4 .. 5e-1} (12 values), input_norm=none. Counterpart to the SGD/cosine
-DINOv2 sweep in 11h_grid_h3d; scheduler/optimizer family matches the DALES
-AdamW GridProbe configs (e.g. w109/4/grid_20h). Cosine anneal + warmup are
-owned by OneCycleLR (pct_start); GridProbeTrainer.build_scheduler injects
-total_steps per eval_epoch window.
+SpUNetBase never returned a `Point` with `pooling_parent`/`unpooling_parent`
+links, and its pre-existing `enc_mode=True` is a *classification* mode
+(scatter-mean-pools every voxel to one feature per whole scene — see
+modelnet40/cls-spunet-v1m1-0-base.py) — unusable for a per-point segmentation
+probe (shape mismatch against `segment`).
 
-Dataset-driven axes (num_worker/AMP/batch) match 11h_grid_h3d. epoch=2000
-/ eval_epoch=10.
+Uses the new `point_mode=True` backbone flag (spconv_unet_v1m1_base.py) that
+instead builds a `Point` chain (stem -> stage0 -> ... -> bottleneck) with
+`pooling_parent`/`pooling_inverse` populated the same way PT-v3's GridPooling
+does, so GridProbeSegmentorV2's existing generic encoder-multiscale walk
+concatenates every stage's per-point feature broadcast up to the finest
+(stem) resolution — no scatter, no new trainable parameters (see
+tests/test_spunet_point_mode.py). Levels concatenated (finest first):
+stem(32) + stage0(32) + stage1(64) + stage2(128) + stage3/bottleneck(256) =
+512ch. Counterpart to the sibling decoder config (96ch, standard
+full-resolution U-Net output).
 
-Grid (12 probes): ce_lovasz x lr{1e-4,2e-4,5e-4,1e-3,2e-3,5e-3,1e-2,2e-2,5e-2,
-1e-1,2e-1,5e-1} x wd=0 x dropout=0 x input_norm=none x feat_norm=none x
-optimizer=AdamW x warmup=0%. skip_test=False, log_test_f1=True.
+Same probe grid as litept-b-v1m0-h3d-lin_enc.py (AdamW/wd0/OneCycleLR
+warmup5%, lr sweep over 12 values, epoch=2000/eval_epoch=10) for
+cross-backbone comparability. `bn_eval_mode=True` freezes SpUNet's BatchNorm
+running stats (real BatchNorm1d); `drop_path_eval_mode=True` is a no-op
+(SpUNet has no DropPath modules). H3D fill/aug/feature_mask_values unchanged
+from the LitePT-B H3D ref (no real intensity -> FillMissingFeat "strength").
+skip_test=False, log_test_f1=True (required for H3D lin-grid configs).
 """
 
-_base_ = ["../_base_/default_runtime.py"]
+_base_ = ["../../../../_base_/default_runtime.py"]
 
 grp_exp = 1
-num_exp = 1
+num_exp = 2
 
 num_classes = 11
 ignore_index = 11
 grid_size = 0.1
 point_max = 102400  # keep pretrain SphereCrop budget; do not raise for denser H3D
+coord_feat_scale = 0.01  # must match Flair3D multitask pretrain
 
 num_gpu = 1
 epoch = 2000
 eval_epoch = 10
 lr = 5e-2
-patch_size = 1024
 
 test_single_fragment = True
 log_test_f1 = True
@@ -54,7 +63,7 @@ enable_amp = True
 dataset_type = "H3DDataset"
 data_root = "data/h3d"
 
-weight = "/lustre/fsn1/projects/rech/unv/usi32yh/logs/pointcept_logs/slurm/862680/model/epoch_120.pth"
+weight = "/lustre/fswork/projects/rech/unv/usi32yh/Pointcept/logs/slurm/1052217/model/model_best.pth"
 
 wandb_project = f"pointcept_{dataset_type[:-7].lower()}"
 
@@ -66,9 +75,9 @@ wandb_project = f"pointcept_{dataset_type[:-7].lower()}"
 hooks = [
     dict(
         type="CheckpointLoader",
-        keywords="module.student.backbone",
-        replacement="module.backbone",
+        exclude_keys=("seg_heads", "reg_heads", "cls_heads", "pixel_seg_heads", "cls_attn_pools"),
     ),
+    dict(type="ModelHook"),
     dict(type="IterationTimer", warmup_iter=2),
     dict(type="InformationWriter", log_interval=1),
     dict(type="GridProbeEvaluator", write_cls_iou=True),
@@ -94,12 +103,13 @@ names = [
     "Void",
 ]
 
-# Encoder levels (enc_mode): 48+96+192+384+512 = 1232
-backbone_out_channels = 1232
+# point_mode multiscale concat: stem(32) + stage0(32) + stage1(64) + stage2(128) + stage3/bottleneck(256)
+backbone_channels = (32, 64, 128, 256, 256, 128, 96, 96)
+backbone_out_channels = 32 + sum(backbone_channels[:4])  # 512
 
 # -----------------------------------------------------------------------------
 # Grid-search probes — AdamW / OneCycleLR: ce_lovasz x lr x wd=0 x dropout=0 x
-# input_norm=none x feat_norm=none x optimizer=AdamW, warmup=0%
+# input_norm=none x feat_norm=none x optimizer=AdamW, warmup=5%
 # (1 x 12 x 1 x 1 x 1 x 1 x 1 = 12 probes).
 # -----------------------------------------------------------------------------
 _losses = {
@@ -168,8 +178,8 @@ del _norm_name, _input_norm, _fn_name, _feat_norm, _opt_name, _opt_type
 del _wu_name, _pct_start, _optimizer, _name
 
 wandb_run_name = (
-    f"Sonata GridProbe H3D {grp_exp}.{num_exp}) w/o Z_transform, epoch_120, enc multiscale {backbone_out_channels}ch, "
-    f"AdamW/wd0/OneCycleLR warmup0%, {len(probes)} probes, epoch={epoch}"
+    f"SpUNet GridProbe H3D {grp_exp}.{num_exp}) enc multiscale {backbone_out_channels}ch, "
+    f"AdamW/wd0/OneCycleLR warmup5%, {len(probes)} probes, epoch={epoch}"
 )
 
 # model settings
@@ -181,32 +191,21 @@ model = dict(
     target_key="segment",
     backbone_out_channels=backbone_out_channels,
     backbone=dict(
-        type="PT-v3m2",
+        type="SpUNet-v1m1",
         in_channels=7,  # coord(3) + color(3) + strength(1, fake/zero)
-        order=("z", "z-trans", "hilbert", "hilbert-trans"),
-        stride=(3, 3, 3, 3),
-        enc_depths=(3, 3, 3, 12, 3),
-        enc_channels=(48, 96, 192, 384, 512),
-        enc_num_head=(3, 6, 12, 24, 32),
-        enc_patch_size=(patch_size, patch_size, patch_size, patch_size, patch_size),
-        mlp_ratio=4,
-        qkv_bias=True,
-        qk_scale=None,
-        attn_drop=0.0,
-        proj_drop=0.0,
-        drop_path=0.3,
-        shuffle_orders=True,
-        pre_norm=True,
-        enable_rpe=False,
-        enable_flash=True,
-        upcast_attention=False,
-        upcast_softmax=False,
-        traceable=False,
-        mask_token=False,
-        enc_mode=True,
-        freeze_encoder=False,
+        num_classes=0,  # unused in point_mode (no final conv applied) — kept for checkpoint key compat
+        channels=backbone_channels,
+        layers=(2, 3, 4, 6, 2, 2, 2, 2),
+        stride=3,
+        point_mode=True,
     ),
     freeze_backbone=True,
+    bn_eval_mode=True,  # freeze BatchNorm running stats during probe training (real BN here)
+    drop_path_eval_mode=True,  # no-op — SpUNet has no DropPath modules
+    feature_mask_values=dict(
+        enable=True,
+        masked_feat_keys=["color", "strength"],
+    ),
 )
 
 # trainer settings — GridProbeTrainer builds one optimizer/scheduler per probe
@@ -259,6 +258,7 @@ data = dict(
                 type="Collect",
                 keys=("coord", "grid_coord", "segment", "grid_size"),
                 feat_keys=feat_keys,
+                feat_scales=dict(coord=coord_feat_scale),
             ),
         ],
         test_mode=False,
@@ -287,6 +287,7 @@ data = dict(
                 type="Collect",
                 keys=("coord", "grid_coord", "segment", "origin_segment", "inverse"),
                 feat_keys=feat_keys,
+                feat_scales=dict(coord=coord_feat_scale),
             ),
         ],
         test_mode=False,
@@ -320,6 +321,7 @@ data = dict(
                     keys=("coord", "grid_coord", "index"),
                     optional_keys=("inverse",),  # for test_single_fragment broadcast
                     feat_keys=feat_keys,
+                    feat_scales=dict(coord=coord_feat_scale),
                 ),
             ],
             aug_transform=[[dict(type="RandomRotateTargetAngle", angle=[0], axis="z", center=[0, 0, 0], p=1)]],
