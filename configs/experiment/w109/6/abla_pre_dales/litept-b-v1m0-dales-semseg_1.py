@@ -1,21 +1,16 @@
 """
 LitePT-Base semantic segmentation on DALES (coord + strength LiDAR features).
 
-Backbone dims and augmentation pipeline mirror the LitePT-Base backbone used
-in configs/flair3d_default/multi-litept-b-v1m0-flair3d.py, adapted to DALES
-single-task semseg (DefaultSegmentorV2, no multitask wiring) and trained from
-scratch (no pretrained weight). See configs/dales/semseg-litept-v1m0-dales.py
-for the LitePT-Small counterpart this config is derived from.
-
-This config is intentionally self-contained: it inherits only from
-default_runtime and can be read top-to-bottom without cross-referencing
-other DALES configs.
+Standalone experiment copy of configs/dales/semseg-litept-b-v1m0-dales.py
+(scratch, DefaultSegmentorV2, learned masked strength). Backbone dims and
+augmentation pipeline mirror the LitePT-Base used in multi-litept-b-v1m0-flair3d.py.
+Inherits only from default_runtime.
 """
 
 # -----------------------------------------------------------------------------
 # Default
 # -----------------------------------------------------------------------------
-_base_ = ["../_base_/default_runtime.py"]
+_base_ = ["../../../../_base_/default_runtime.py"]
 
 # -----------------------------------------------------------------------------
 # Run-level settings
