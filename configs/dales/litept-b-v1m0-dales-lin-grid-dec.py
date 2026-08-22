@@ -31,7 +31,7 @@ coord_feat_scale = 0.01  # must match Flair3D multitask pretrain
 strength_feat_scale = 1 / 60000  # DALES raw intensity → Flair3D [0,1] convention
 
 num_gpu = 1
-epoch = 50
+epoch = 400
 eval_epoch = 10
 lr = 5e-2
 patch_size = 1024
@@ -43,7 +43,7 @@ batch_size_per_gpu = 24
 batch_size = batch_size_per_gpu * num_gpu
 batch_size_val = 1
 batch_size_test = 1
-num_worker = 8 * num_gpu
+num_worker = 24 * num_gpu # H100 Jean-Zay
 num_worker_test = 2
 mix_prob = 0.8
 empty_cache = False
@@ -95,50 +95,50 @@ dec_channels = (72, 108, 216, 432)
 bottleneck_channels = 576
 backbone_out_channels = sum(dec_channels) + bottleneck_channels  # 1404
 
-# -----------------------------------------------------------------------------
-# Grid-search probes — ce_lovasz x lr x wd x dropout x input_norm
-# (1 x 4 x 2 x 3 x 1 = 24 probes). Same grid as sibling ptv3-v1m0-dales-lin_1.py.
-# -----------------------------------------------------------------------------
-_losses = {
-    "ce_lovasz": [
-        dict(type="CrossEntropyLoss", loss_weight=1.0, ignore_index=ignore_index),
-        dict(type="LovaszLoss", mode="multiclass", loss_weight=1.0, ignore_index=ignore_index),
-    ],
+# Grid-search probes — ce_lovasz, AdamW/wd0/OneCycleLR warmup5%, lr sweep only (12 probes).
+_criteria = [
+    dict(type="CrossEntropyLoss", loss_weight=1.0, ignore_index=ignore_index),
+    dict(type="LovaszLoss", mode="multiclass", loss_weight=1.0, ignore_index=ignore_index),
+]
+_lrs = {
+    "1e-4": 1e-4,
+    "2e-4": 2e-4,
+    "5e-4": 5e-4,
+    "1e-3": 1e-3,
+    "2e-3": 2e-3,
+    "5e-3": 5e-3,
+    "1e-2": 1e-2,
+    "2e-2": 2e-2,
+    "5e-2": 5e-2,
+    "1e-1": 1e-1,
+    "2e-1": 2e-1,
+    "5e-1": 5e-1,
 }
-_lrs = {"5e-2": 5e-2, "1e-1": 1e-1, "2e-1": 2e-1, "5e-1": 5e-1}
-_wds = {"5e-3": 0.005, "5e-2": 5e-2}
-_dropouts = {"0": 0.0, "03": 0.3}
-_norms = {"none": None}
 
-probes = {}
-for _loss_name, _criteria in _losses.items():
-    for _lr_name, _lr in _lrs.items():
-        for _wd_name, _wd in _wds.items():
-            for _do_name, _dropout in _dropouts.items():
-                for _norm_name, _input_norm in _norms.items():
-                    _name = f"{_loss_name}_lr{_lr_name}_wd{_wd_name}_do{_do_name}_{_norm_name}"
-                    probes[_name] = dict(
-                        criteria=_criteria,
-                        input_norm=_input_norm,
-                        feat_norm=None,
-                        dropout=_dropout,
-                        optimizer=dict(type="AdamW", lr=_lr, weight_decay=_wd),
-                        scheduler=dict(
-                            type="OneCycleLR",
-                            max_lr=_lr,
-                            pct_start=0.05,
-                            anneal_strategy="cos",
-                            div_factor=10.0,
-                            final_div_factor=1000.0,
-                        ),
-                        grad_clip=3.0,
-                    )
-del _losses, _lrs, _wds, _dropouts, _norms, _loss_name, _criteria, _lr_name, _lr
-del _wd_name, _wd, _do_name, _dropout, _norm_name, _input_norm, _name
+probes = {
+    f"ce_lovasz_lr{lr_name}": dict(
+        criteria=_criteria,
+        input_norm=None,
+        feat_norm=None,
+        dropout=0.0,
+        optimizer=dict(type="AdamW", lr=lr, weight_decay=0.0),
+        scheduler=dict(
+            type="OneCycleLR",
+            max_lr=lr,
+            pct_start=0.05,
+            anneal_strategy="cos",
+            div_factor=10.0,
+            final_div_factor=1000.0,
+        ),
+        grad_clip=3.0,
+    )
+    for lr_name, lr in _lrs.items()
+}
+del _criteria, _lrs
 
 wandb_run_name = (
     f"LitePT-B GridProbe DALES {grp_exp}.{num_exp}) decoder hypercolumn 1404ch, "
-    f"bn_eval_mode=True, {len(probes)} probes, epoch={epoch}"
+    f"{len(probes)} probes, epoch={epoch}"
 )
 
 # model settings
