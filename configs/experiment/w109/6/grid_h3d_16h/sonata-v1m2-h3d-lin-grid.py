@@ -24,7 +24,7 @@ optimizer=AdamW x warmup=0%. skip_test=False, log_test_f1=True.
 _base_ = ["../../../../_base_/default_runtime.py"]
 
 grp_exp = 6
-num_exp = 2
+num_exp = 3
 
 num_classes = 11
 ignore_index = 11
