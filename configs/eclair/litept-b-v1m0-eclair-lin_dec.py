@@ -9,10 +9,10 @@ pretrain, job 873542).
 
 ECLAIR provides real RGB: ChromaticAutoContrast/Translation/Jitter (train)
 + NormalizeColor (like H3D / semseg-litept ECLAIR); strength uses 1/60000
-like DALES.
+like DALES. Reference copy of w109/6/3_grid_eclair/litept-b-v1m0-eclair-lin_dec_200ep.py.
 
 Grid (12 probes): ce_lovasz x 12 LRs x wd=0 x dropout=0 x
-input_norm=None x AdamW x warmup=5%. epoch=50 / eval_epoch=10.
+input_norm=None x AdamW x warmup=5%. epoch=200 / eval_epoch=10.
 """
 
 _base_ = ["../_base_/default_runtime.py"]
@@ -28,7 +28,7 @@ coord_feat_scale = 0.01  # must match Flair3D multitask pretrain
 strength_feat_scale = 1 / 60000  # raw uint16 intensity → Flair3D [0,1] convention
 
 num_gpu = 1
-epoch = 50
+epoch = 200
 eval_epoch = 10
 lr = 5e-2
 patch_size = 1024
@@ -39,7 +39,7 @@ batch_size_per_gpu = 24
 batch_size = batch_size_per_gpu * num_gpu
 batch_size_val = 1
 batch_size_test = 1
-num_worker = 8 * num_gpu
+num_worker = 24  # H100 Jean-Zay
 num_worker_test = 2
 mix_prob = 0.8
 empty_cache = False
@@ -157,7 +157,7 @@ del _optimizer, _name
 
 wandb_run_name = (
     f"LitePT-B GridProbe ECLAIR {grp_exp}.{num_exp}) decoder hypercolumn 1404ch, "
-    f"bn_eval_mode=True, {len(probes)} probes, epoch={epoch}"
+    f"AdamW/wd0/OneCycleLR warmup5%, {len(probes)} probes, epoch={epoch}"
 )
 
 model = dict(

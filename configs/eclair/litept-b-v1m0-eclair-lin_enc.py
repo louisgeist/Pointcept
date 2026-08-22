@@ -1,27 +1,30 @@
 """
-Sonata-v1m2 grid-search linear probing on ECLAIR — Sonata counterpart of
-litept-b-v1m0-eclair-lin_enc.py in this directory (same probe grid).
+LitePT-Base grid-search linear probing on ECLAIR — encoder multiscale variant
+(transfer from Flair3D+ multitask supervised pretrain, job 873542).
 
-Frozen PT-v3m2 encoder (enc_mode=True → multi-scale concat 1232ch) from the
-Flair3D+ Sonata pretrain job 862680, epoch_120. ECLAIR provides real RGB
-(normalized via NormalizeColor); strength uses the same 1/60000 scale as DALES.
-No coord_feat_scale (Sonata pretrain does not use it). Reference copy of
-w109/6/3_grid_eclair/sonata-v1m2-eclair-lin-grid_200ep.py.
+`enc_mode=True` → 1386ch concat of the 5 raw encoder stages
+(54+108+216+432+576).
+`bn_eval_mode=True` freezes BatchNorm running stats;
+`drop_path_eval_mode=True` keeps DropPath inactive.
+
+ECLAIR provides real RGB: ChromaticAutoContrast/Translation/Jitter (train)
++ NormalizeColor (like H3D / semseg-litept ECLAIR); strength uses 1/60000
+like DALES. Reference copy of w109/6/3_grid_eclair/litept-b-v1m0-eclair-lin_enc_200ep.py.
 
 Grid (12 probes): ce_lovasz x 12 LRs x wd=0 x dropout=0 x
 input_norm=None x AdamW x warmup=5%. epoch=200 / eval_epoch=10.
-skip_test=False (matches LitePT sibling).
 """
 
 _base_ = ["../_base_/default_runtime.py"]
 
 grp_exp = 1
-num_exp = 1
+num_exp = 2
 
 num_classes = 11
 ignore_index = -1
 grid_size = 0.1
 point_max = 102400
+coord_feat_scale = 0.01  # must match Flair3D multitask pretrain
 strength_feat_scale = 1 / 60000  # raw uint16 intensity → Flair3D [0,1] convention
 
 num_gpu = 1
@@ -45,15 +48,14 @@ enable_amp = True
 dataset_type = "ECLAIRDataset"
 data_root = "data/eclair"
 
-weight = "/lustre/fsn1/projects/rech/unv/usi32yh/logs/pointcept_logs/slurm/862680/model/epoch_120.pth"
+weight = "/lustre/fswork/projects/rech/unv/usi32yh/Pointcept/logs/slurm/873542/model/model_best.pth"
 
 wandb_project = f"pointcept_{dataset_type[:-7].lower()}"
 
 hooks = [
     dict(
         type="CheckpointLoader",
-        keywords="module.student.backbone",
-        replacement="module.backbone",
+        exclude_keys=("seg_heads", "reg_heads", "cls_heads", "pixel_seg_heads", "cls_attn_pools"),
     ),
     dict(type="ModelHook"),
     dict(type="IterationTimer", warmup_iter=2),
@@ -80,12 +82,14 @@ names = [
     "Vehicle",
 ]
 
-backbone_out_channels = 1232  # enc_mode: 48+96+192+384+512
+# Encoder levels (enc_mode): 54+108+216+432+576 = 1386
+enc_channels = (54, 108, 216, 432, 576)
+backbone_out_channels = sum(enc_channels)
 
 # -----------------------------------------------------------------------------
 # Grid-search probes — AdamW / OneCycleLR: ce_lovasz x lr x wd=0 x dropout=0 x
 # input_norm=none x feat_norm=none x optimizer=AdamW, warmup=5%
-# (1 x 12 x 1 x 1 x 1 x 1 x 1 = 12 probes). Same grid as LitePT sibling.
+# (1 x 12 x 1 x 1 x 1 x 1 x 1 = 12 probes).
 # -----------------------------------------------------------------------------
 _losses = {
     "ce_lovasz": [
@@ -150,8 +154,9 @@ del _loss_name, _criteria, _lr_name, _lr, _wd_name, _wd, _do_name, _dropout
 del _norm_name, _input_norm, _fn_name, _feat_norm, _opt_name, _opt_type
 del _optimizer, _name
 
+
 wandb_run_name = (
-    f"Sonata GridProbe ECLAIR {grp_exp}.{num_exp}) epoch_120, enc multiscale 1232ch, "
+    f"LitePT-B GridProbe ECLAIR {grp_exp}.{num_exp}) enc multiscale {backbone_out_channels}ch, "
     f"AdamW/wd0/OneCycleLR warmup5%, {len(probes)} probes, epoch={epoch}"
 )
 
@@ -163,14 +168,17 @@ model = dict(
     target_key="segment",
     backbone_out_channels=backbone_out_channels,
     backbone=dict(
-        type="PT-v3m2",
+        type="LitePT-v1",
         in_channels=7,  # coord(3) + color(3) + strength(1)
         order=("z", "z-trans", "hilbert", "hilbert-trans"),
         stride=(3, 3, 3, 3),
         enc_depths=(3, 3, 3, 12, 3),
-        enc_channels=(48, 96, 192, 384, 512),
+        enc_channels=enc_channels,
         enc_num_head=(3, 6, 12, 24, 32),
         enc_patch_size=(patch_size, patch_size, patch_size, patch_size, patch_size),
+        enc_conv=(True, True, True, False, False),
+        enc_attn=(False, False, False, True, True),
+        enc_rope_freq=(100.0, 100.0, 100.0, 100.0, 100.0),
         mlp_ratio=4,
         qkv_bias=True,
         qk_scale=None,
@@ -179,16 +187,15 @@ model = dict(
         drop_path=0.3,
         shuffle_orders=True,
         pre_norm=True,
-        enable_rpe=False,
-        enable_flash=True,
-        upcast_attention=False,
-        upcast_softmax=False,
-        traceable=False,
-        mask_token=False,
         enc_mode=True,
-        freeze_encoder=False,
     ),
     freeze_backbone=True,
+    bn_eval_mode=True,
+    drop_path_eval_mode=True,
+    feature_mask_values=dict(
+        enable=True,
+        masked_feat_keys=["color", "strength"],
+    ),
 )
 
 train = dict(type="GridProbeTrainer")
@@ -213,11 +220,16 @@ data = dict(
         include_pseudo=True,
         transform=[
             dict(type="CenterShift", apply_z=True),
+            dict(type="Z_MinShift"),
+            dict(type="Z_RandomOffset"),
             dict(type="RandomDropout", dropout_ratio=0.2, dropout_application_ratio=0.2),
             dict(type="RandomRotate", angle=[-1, 1], axis="z", center=[0, 0, 0], p=0.5),
             dict(type="RandomScale", scale=[0.9, 1.1]),
             dict(type="RandomFlip", p=0.5),
             dict(type="RandomJitter", sigma=0.005, clip=0.02),
+            dict(type="ChromaticAutoContrast", p=0.2, blend_factor=None),
+            dict(type="ChromaticTranslation", p=0.95, ratio=0.05),
+            dict(type="ChromaticJitter", p=0.95, std=0.05),
             dict(
                 type="GridSample",
                 grid_size=grid_size,
@@ -234,7 +246,7 @@ data = dict(
                 type="Collect",
                 keys=("coord", "grid_coord", "segment", "grid_size"),
                 feat_keys=feat_keys,
-                feat_scales=dict(strength=strength_feat_scale),
+                feat_scales=dict(coord=coord_feat_scale, strength=strength_feat_scale),
             ),
         ],
         test_mode=False,
@@ -246,6 +258,7 @@ data = dict(
         include_pseudo=True,
         transform=[
             dict(type="CenterShift", apply_z=True),
+            dict(type="Z_MinShift"),
             dict(type="Copy", keys_dict={"segment": "origin_segment"}),
             dict(
                 type="GridSample",
@@ -262,7 +275,7 @@ data = dict(
                 type="Collect",
                 keys=("coord", "grid_coord", "segment", "origin_segment", "inverse"),
                 feat_keys=feat_keys,
-                feat_scales=dict(strength=strength_feat_scale),
+                feat_scales=dict(coord=coord_feat_scale, strength=strength_feat_scale),
             ),
         ],
         test_mode=False,
@@ -274,6 +287,7 @@ data = dict(
         include_pseudo=True,
         transform=[
             dict(type="CenterShift", apply_z=True),
+            dict(type="Z_MinShift"),
             dict(type="NormalizeColor"),
         ],
         test_mode=True,
@@ -295,7 +309,7 @@ data = dict(
                     keys=("coord", "grid_coord", "index"),
                     optional_keys=("inverse",),
                     feat_keys=feat_keys,
-                    feat_scales=dict(strength=strength_feat_scale),
+                    feat_scales=dict(coord=coord_feat_scale, strength=strength_feat_scale),
                 ),
             ],
             aug_transform=[[dict(type="RandomRotateTargetAngle", angle=[0], axis="z", center=[0, 0, 0], p=1)]],
