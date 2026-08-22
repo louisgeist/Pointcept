@@ -8,9 +8,7 @@ pretrained with scene-level RandomDropColor/RandomDropStrength (drop_value=0.0)
 so `FillMissingFeat` synthesizes a zero "color" channel (in_channels=7). No
 learned masked-feat at pretrain time, so literal zero fill is faithful.
 
-Grid (24 probes): ce_lovasz x {5e-2, 1e-1, 2e-1, 5e-1} x {5e-3, 5e-2} wd x
-dropout {0, 0.3, 0.5} x input_norm=None. epoch=50 / eval_epoch=10.
-skip_test=True (val-only winner selection).
+Grid (12 probes).
 """
 
 _base_ = ["../_base_/default_runtime.py"]
@@ -25,7 +23,7 @@ point_max = 102400
 strength_feat_scale = 1 / 60000  # DALES raw intensity → Flair3D [0,1] convention
 
 num_gpu = 1
-epoch = 50
+epoch = 400
 eval_epoch = 10
 lr = 5e-2
 patch_size = 1024
@@ -37,7 +35,7 @@ batch_size_per_gpu = 24
 batch_size = batch_size_per_gpu * num_gpu
 batch_size_val = 1
 batch_size_test = 1
-num_worker = 8 * num_gpu
+num_worker = 24  # H100 Jean-Zay
 num_worker_test = 2
 mix_prob = 0.8
 empty_cache = False
@@ -88,46 +86,47 @@ names = [
 # Encoder levels (enc_mode): 48+96+192+384+512 = 1232
 backbone_out_channels = 1232
 
-# -----------------------------------------------------------------------------
-# Grid-search probes — ce_lovasz x lr x wd x dropout x input_norm
-# (1 x 4 x 2 x 3 x 1 = 24 probes). Same grid as w109/4/grid_12h.
-# -----------------------------------------------------------------------------
-_losses = {
-    "ce_lovasz": [
-        dict(type="CrossEntropyLoss", loss_weight=1.0, ignore_index=ignore_index),
-        dict(type="LovaszLoss", mode="multiclass", loss_weight=1.0, ignore_index=ignore_index),
-    ],
+# Grid-search probes — ce_lovasz, AdamW/wd0/OneCycleLR warmup5%, lr sweep only (12 probes).
+_criteria = [
+    dict(type="CrossEntropyLoss", loss_weight=1.0, ignore_index=ignore_index),
+    dict(type="LovaszLoss", mode="multiclass", loss_weight=1.0, ignore_index=ignore_index),
+]
+_lrs = {
+    "1e-4": 1e-4,
+    "2e-4": 2e-4,
+    "5e-4": 5e-4,
+    "1e-3": 1e-3,
+    "2e-3": 2e-3,
+    "5e-3": 5e-3,
+    "1e-2": 1e-2,
+    "2e-2": 2e-2,
+    "5e-2": 5e-2,
+    "1e-1": 1e-1,
+    "2e-1": 2e-1,
+    "5e-1": 5e-1,
 }
-_lrs = {"5e-2": 5e-2, "1e-1": 1e-1, "2e-1": 2e-1, "5e-1": 5e-1}
-_wds = {"5e-3": 0.005, "5e-2": 5e-2}
-_dropouts = {"0": 0.0, "03": 0.3}#, "05": 0.5}
-_norms = {"none": None}
 
-probes = {}
-for _loss_name, _criteria in _losses.items():
-    for _lr_name, _lr in _lrs.items():
-        for _wd_name, _wd in _wds.items():
-            for _do_name, _dropout in _dropouts.items():
-                for _norm_name, _input_norm in _norms.items():
-                    _name = f"{_loss_name}_lr{_lr_name}_wd{_wd_name}_do{_do_name}_{_norm_name}"
-                    probes[_name] = dict(
-                        criteria=_criteria,
-                        input_norm=_input_norm,
-                        feat_norm=None,
-                        dropout=_dropout,
-                        optimizer=dict(type="AdamW", lr=_lr, weight_decay=_wd),
-                        scheduler=dict(
-                            type="OneCycleLR",
-                            max_lr=_lr,
-                            pct_start=0.05,
-                            anneal_strategy="cos",
-                            div_factor=10.0,
-                            final_div_factor=1000.0,
-                        ),
-                        grad_clip=3.0,
-                    )
-del _losses, _lrs, _wds, _dropouts, _norms, _loss_name, _criteria, _lr_name, _lr
-del _wd_name, _wd, _do_name, _dropout, _norm_name, _input_norm, _name
+probes = {
+    f"ce_lovasz_lr{lr_name}": dict(
+        criteria=_criteria,
+        input_norm=None,
+        feat_norm=None,
+        dropout=0.0,
+        optimizer=dict(type="AdamW", lr=lr, weight_decay=0.0),
+        scheduler=dict(
+            type="OneCycleLR",
+            max_lr=lr,
+            pct_start=0.05,
+            anneal_strategy="cos",
+            div_factor=10.0,
+            final_div_factor=1000.0,
+        ),
+        grad_clip=3.0,
+    )
+    for lr_name, lr in _lrs.items()
+}
+del _criteria, _lrs
+
 
 wandb_run_name = (
     f"Sonata GridProbe DALES {grp_exp}.{num_exp}) epoch_120, enc multiscale 1232ch, "
