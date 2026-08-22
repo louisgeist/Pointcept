@@ -329,7 +329,7 @@ class ClsEvaluator(HookBase):
                     f"val/{self.metric}_best", metric_best, current_epoch
                 )
         wandb_log = None
-        if self.trainer.cfg.enable_wandb:
+        if self.trainer.cfg.enable_wandb and comm.is_main_process():
             wandb_log = {
                 "Epoch": current_epoch,
                 "val/loss": loss_avg,
@@ -641,7 +641,11 @@ class RegressionEvaluator(HookBase):
         elif writer is not None:
             writer.add_scalar("val/loss", loss_avg, current_epoch)
 
-        wandb_log = reg_wandb if enable_wandb and len(reg_wandb) > 1 else None
+        wandb_log = (
+            reg_wandb
+            if enable_wandb and comm.is_main_process() and len(reg_wandb) > 1
+            else None
+        )
         finalize_val_epoch_timing(
             self.trainer, val_start, current_epoch, wandb_dict=wandb_log
         )
