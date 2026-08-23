@@ -80,8 +80,8 @@ enable_amp = True
 # Short probe: 1000 steps / 100 per epoch -> 10 trainer epochs (iter-limited
 # mode; see CLAUDE.md training-schedule section — Flair3D's national manifest
 # is too large for classic full-epoch mode).
-total_iters = 1000
-iter_per_epoch = 100
+total_iters = 10000
+iter_per_epoch = 1000
 eval_every = 2
 
 # dataset settings
