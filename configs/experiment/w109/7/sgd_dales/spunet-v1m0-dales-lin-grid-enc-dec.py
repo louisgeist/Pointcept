@@ -1,60 +1,76 @@
 """
-SGD variant of the homologous GridProbe config in configs/h3d/.
+SGD variant of the homologous GridProbe config in configs/dales/.
 
-Sonata-v1m2 grid-search linear probing on H3D — Sonata counterpart of the
-configs/h3d/ GridProbe configs (same frozen checkpoint as
-w109/5/11h_grid_h3d/sonata-v1m2-h3d-lin-grid_3.py, job 862680, epoch_120).
-Frozen PT-v3m2 encoder (enc_mode=True -> multi-scale concat 1232ch =
-48+96+192+384+512). No coord_feat_scale; zero strength fill via
-FillMissingFeat (see 11h_grid_h3d Sonata docstring).
+SpUNet-v1m1 grid-search linear probing on DALES — combined encoder+decoder
+hypercolumn variant (same frozen checkpoint as
+spunet-v1m0-dales-lin-grid-{enc,dec}.py, job 1052217, Flair3D+ multitask
+supervised pretrain: channels=(32,64,128,256,256,128,96,96),
+layers=(2,3,4,6,2,2,2,2), stride=3).
 
-SGD / wd=0 / CosineAnnealingLR (no warmup), lr swept over
-{1e-4 .. 5e-1} (12 values), input_norm=none. SGD counterpart of the AdamW config in configs/h3d/.
-CosineAnnealingLR (eta_min=0) per eval_epoch window; GridProbeTrainer.build_scheduler injects
-total_steps per eval_epoch window.
+Sets `point_mode=True` AND `dec_point_mode=True` together
+(spconv_unet_v1m1_base.py): the decoder hypercolumn chain
+(dec0(96)+dec1(96)+dec2(128)+dec3(256)+bottleneck(256) = 832ch, built by
+`dec_point_mode` alone, mirroring LitePT/PT-v3's dec_traceable/traceable
+convention of "decoder stages + encoder bottleneck") is concatenated with the
+raw encoder multiscale (stem(32)+stage0(32)+stage1(64)+stage2(128) = 256ch,
+bottleneck dropped here since dec_point_mode already carries it, to avoid
+duplicating an identical 256ch block) — 832 + 256 = 1088ch total. Note there
+is no standalone `spunet-v1m0-dales-lin-grid-dec_hc.py` (decoder-hypercolumn
+only, 832ch) config yet — only this combined variant plus the plain
+single-scale decoder (spunet-v1m0-dales-lin-grid-dec.py, 96ch) and
+encoder-only (spunet-v1m0-dales-lin-grid-enc.py, 512ch) exist. This closes
+most of the channel-budget gap against LitePT-B's enc/dec hypercolumns
+(1386/1404ch) and PT-v3-malibu's/Sonata's (992/1024/1232ch): SpUNet's
+per-stage widths are simply narrower in this checkpoint, so tapping every
+level of both the encoder and decoder (instead of the encoder XOR decoder) is
+the way to reach a comparable feature budget without retraining. See
+tests/test_spunet_point_mode.py (`test_combined_point_mode_and_dec_point_mode_shape_and_alignment`)
+for the shape/row-alignment correctness check.
 
-Dataset-driven axes (num_worker/AMP/batch) match 11h_grid_h3d. epoch=2000
-/ eval_epoch=10.
-
-Grid (12 probes): ce_lovasz x lr{1e-4,2e-4,5e-4,1e-3,2e-3,5e-3,1e-2,2e-2,5e-2,
-1e-1,2e-1,5e-1} x wd=0 x dropout=0 x input_norm=none x feat_norm=none x
-optimizer=SGD x no warmup. skip_test=False, log_test_f1=True.
+Same probe grid as litept-b-v1m0-dales-lin-grid-enc.py (ce_lovasz x 12 LRs,
+SGD/wd0/CosineAnnealingLR (no warmup), epoch=400/eval_epoch=10) for cross-backbone
+comparability. `bn_eval_mode=True` freezes SpUNet's BatchNorm running stats
+(real BatchNorm1d); `drop_path_eval_mode=True` is a no-op (SpUNet has no
+DropPath modules). Z_MinShift/Z_RandomOffset included in train/val/test per
+the H3D/ECLAIR lin-grid convention. Same DALES-has-no-RGB handling as the
+other DALES lin configs.
 """
 
 _base_ = ["../../../../_base_/default_runtime.py"]
 
 grp_exp = 7
-num_exp = 1
+num_exp = 9
 
-num_classes = 11
-ignore_index = 11
+num_classes = 8
+ignore_index = 8
 grid_size = 0.1
-point_max = 102400  # keep pretrain SphereCrop budget; do not raise for denser H3D
+point_max = 102400
+coord_feat_scale = 0.01  # must match Flair3D multitask pretrain
+strength_feat_scale = 1 / 60000  # DALES raw intensity → Flair3D [0,1] convention
 
 num_gpu = 1
-epoch = 2000
+epoch = 400
 eval_epoch = 10
 lr = 5e-2
-patch_size = 1024
 
 test_single_fragment = True
-log_test_f1 = True
 
 # misc custom setting
-batch_size = 24
+batch_size_per_gpu = 24
+batch_size = batch_size_per_gpu * num_gpu
 batch_size_val = 1
 batch_size_test = 1
-num_worker = 24 * num_gpu
+num_worker = 24 * num_gpu  # H100 Jean-Zay
 num_worker_test = 2
 mix_prob = 0.8
 empty_cache = False
 enable_amp = True
 
 # dataset settings
-dataset_type = "H3DDataset"
-data_root = "data/h3d"
+dataset_type = "DALESDataset"
+data_root = "data/dales"
 
-weight = "/lustre/fsn1/projects/rech/unv/usi32yh/logs/pointcept_logs/slurm/862680/model/epoch_120.pth"
+weight = "/lustre/fswork/projects/rech/unv/usi32yh/Pointcept/logs/slurm/1052217/model/model_best.pth"
 
 wandb_project = f"pointcept_{dataset_type[:-7].lower()}"
 
@@ -66,36 +82,36 @@ wandb_project = f"pointcept_{dataset_type[:-7].lower()}"
 hooks = [
     dict(
         type="CheckpointLoader",
-        keywords="module.student.backbone",
-        replacement="module.backbone",
+        exclude_keys=("seg_heads", "reg_heads", "cls_heads", "pixel_seg_heads", "cls_attn_pools"),
     ),
+    dict(type="ModelHook"),
     dict(type="IterationTimer", warmup_iter=2),
-    dict(type="InformationWriter", log_interval=1),
+    dict(type="InformationWriter", log_interval=10),
     dict(type="GridProbeEvaluator", write_cls_iou=True),
     dict(type="GridProbeCheckpointSaver"),
     dict(type="CheckpointSaver", save_freq=None),
-    dict(type="GridProbeWinnerSelector", skip_test=False),
+    dict(type="GridProbeWinnerSelector", skip_test=True),
 ]
 
 feat_keys = ["coord", "color", "strength"]
 
 names = [
-    "Low Vegetation",
-    "Impervious Surface",
-    "Vehicle",
-    "Urban Furniture",
-    "Roof",
-    "Façade",
-    "Shrub",
-    "Tree",
-    "Soil or Gravel",
-    "Vertical Surface",
-    "Chimney",
-    "Void",
+    "Ground",
+    "Vegetation",
+    "Cars",
+    "Trucks",
+    "Power lines",
+    "Fences",
+    "Poles",
+    "Buildings",
+    "Unknown",
 ]
 
-# Encoder levels (enc_mode): 48+96+192+384+512 = 1232
-backbone_out_channels = 1232
+# dec_point_mode chain (dec0+dec1+dec2+dec3+bottleneck = 832) + point_mode's
+# raw encoder levels with the (already-counted) bottleneck dropped (stem+
+# stage0+stage1+stage2 = 256) = 1088.
+backbone_channels = (32, 64, 128, 256, 256, 128, 96, 96)
+backbone_out_channels = (96 + 96 + 128 + 256 + 256) + (32 + 32 + 64 + 128)
 
 # -----------------------------------------------------------------------------
 # Grid-search probes — SGD / CosineAnnealingLR: ce_lovasz x lr x wd=0 x dropout=0 x
@@ -159,7 +175,7 @@ del _norm_name, _input_norm, _fn_name, _feat_norm, _opt_name, _opt_type
 del _optimizer, _name
 
 wandb_run_name = (
-    f"Sonata GridProbe H3D {grp_exp}.{num_exp}) epoch_120, enc multiscale {backbone_out_channels}ch, "
+    f"SpUNet GridProbe DALES {grp_exp}.{num_exp}) enc+dec combined {backbone_out_channels}ch, "
     f"SGD/wd0/CosineAnnealingLR, {len(probes)} probes, epoch={epoch}"
 )
 
@@ -172,32 +188,22 @@ model = dict(
     target_key="segment",
     backbone_out_channels=backbone_out_channels,
     backbone=dict(
-        type="PT-v3m2",
-        in_channels=7,  # coord(3) + color(3) + strength(1, fake/zero)
-        order=("z", "z-trans", "hilbert", "hilbert-trans"),
-        stride=(3, 3, 3, 3),
-        enc_depths=(3, 3, 3, 12, 3),
-        enc_channels=(48, 96, 192, 384, 512),
-        enc_num_head=(3, 6, 12, 24, 32),
-        enc_patch_size=(patch_size, patch_size, patch_size, patch_size, patch_size),
-        mlp_ratio=4,
-        qkv_bias=True,
-        qk_scale=None,
-        attn_drop=0.0,
-        proj_drop=0.0,
-        drop_path=0.3,
-        shuffle_orders=True,
-        pre_norm=True,
-        enable_rpe=False,
-        enable_flash=True,
-        upcast_attention=False,
-        upcast_softmax=False,
-        traceable=False,
-        mask_token=False,
-        enc_mode=True,
-        freeze_encoder=False,
+        type="SpUNet-v1m1",
+        in_channels=7,  # coord(3) + color(3, fake) + strength(1)
+        num_classes=0,  # unused in point_mode/dec_point_mode (no final conv applied) — kept for checkpoint key compat
+        channels=backbone_channels,
+        layers=(2, 3, 4, 6, 2, 2, 2, 2),
+        stride=3,
+        point_mode=True,
+        dec_point_mode=True,
     ),
     freeze_backbone=True,
+    bn_eval_mode=True,  # freeze BatchNorm running stats during probe training (real BN here)
+    drop_path_eval_mode=True,  # no-op — SpUNet has no DropPath modules
+    feature_mask_values=dict(
+        enable=True,
+        masked_feat_keys=["color", "strength"],
+    ),
 )
 
 # trainer settings — GridProbeTrainer builds one optimizer/scheduler per probe
@@ -222,7 +228,6 @@ data = dict(
         split="train",
         data_root=data_root,
         transform=[
-            dict(type="FillMissingFeat", feat_key="strength", feat_dim=1, fill_value=0.0),
             dict(type="CenterShift", apply_z=True),
             dict(type="Z_MinShift"),
             dict(type="Z_RandomOffset"),
@@ -231,9 +236,6 @@ data = dict(
             dict(type="RandomScale", scale=[0.9, 1.1]),
             dict(type="RandomFlip", p=0.5),
             dict(type="RandomJitter", sigma=0.005, clip=0.02),
-            dict(type="ChromaticAutoContrast", p=0.2, blend_factor=None),
-            dict(type="ChromaticTranslation", p=0.95, ratio=0.05),
-            dict(type="ChromaticJitter", p=0.95, std=0.05),
             dict(
                 type="GridSample",
                 grid_size=grid_size,
@@ -243,23 +245,23 @@ data = dict(
             ),
             dict(type="SphereCrop", point_max=point_max, mode="random"),
             dict(type="CenterShift", apply_z=False),
-            dict(type="NormalizeColor"),
+            dict(type="FillMissingFeat", feat_key="color", feat_dim=3),
             dict(type="ToTensor"),
             dict(type="Update", keys_dict={"grid_size": grid_size}),
             dict(
                 type="Collect",
                 keys=("coord", "grid_coord", "segment", "grid_size"),
                 feat_keys=feat_keys,
+                feat_scales=dict(coord=coord_feat_scale, strength=strength_feat_scale),
             ),
         ],
         test_mode=False,
     ),
     val=dict(
         type=dataset_type,
-        split="val",
+        split="test",
         data_root=data_root,
         transform=[
-            dict(type="FillMissingFeat", feat_key="strength", feat_dim=1, fill_value=0.0),
             dict(type="CenterShift", apply_z=True),
             dict(type="Z_MinShift"),
             dict(type="Copy", keys_dict={"segment": "origin_segment"}),
@@ -272,12 +274,13 @@ data = dict(
                 return_inverse=True,
             ),
             dict(type="CenterShift", apply_z=False),
-            dict(type="NormalizeColor"),
+            dict(type="FillMissingFeat", feat_key="color", feat_dim=3),
             dict(type="ToTensor"),
             dict(
                 type="Collect",
                 keys=("coord", "grid_coord", "segment", "origin_segment", "inverse"),
                 feat_keys=feat_keys,
+                feat_scales=dict(coord=coord_feat_scale, strength=strength_feat_scale),
             ),
         ],
         test_mode=False,
@@ -287,10 +290,9 @@ data = dict(
         split="test",
         data_root=data_root,
         transform=[
-            dict(type="FillMissingFeat", feat_key="strength", feat_dim=1, fill_value=0.0),
             dict(type="CenterShift", apply_z=True),
             dict(type="Z_MinShift"),
-            dict(type="NormalizeColor"),
+            dict(type="FillMissingFeat", feat_key="color", feat_dim=3),
         ],
         test_mode=True,
         test_cfg=dict(
@@ -311,6 +313,7 @@ data = dict(
                     keys=("coord", "grid_coord", "index"),
                     optional_keys=("inverse",),  # for test_single_fragment broadcast
                     feat_keys=feat_keys,
+                    feat_scales=dict(coord=coord_feat_scale, strength=strength_feat_scale),
                 ),
             ],
             aug_transform=[[dict(type="RandomRotateTargetAngle", angle=[0], axis="z", center=[0, 0, 0], p=1)]],
