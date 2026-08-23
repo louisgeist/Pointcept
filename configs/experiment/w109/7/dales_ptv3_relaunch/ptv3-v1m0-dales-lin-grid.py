@@ -97,8 +97,9 @@ bottleneck_channels = 512
 backbone_out_channels = sum(dec_channels) + bottleneck_channels  # 1024
 
 # -----------------------------------------------------------------------------
-# Grid-search probes — ce_lovasz x lr x wd x dropout x input_norm
-# (1 x 4 x 2 x 3 x 1 = 24 probes).
+# Grid-search probes — AdamW / OneCycleLR: ce_lovasz x lr x wd=0 x dropout=0 x
+# input_norm=none x feat_norm=none x optimizer=AdamW, warmup=5%
+# (1 x 12 x 1 x 1 x 1 x 1 x 1 = 12 probes).
 # -----------------------------------------------------------------------------
 _losses = {
     "ce_lovasz": [
@@ -106,10 +107,26 @@ _losses = {
         dict(type="LovaszLoss", mode="multiclass", loss_weight=1.0, ignore_index=ignore_index),
     ],
 }
-_lrs = {"5e-2": 5e-2, "1e-1": 1e-1, "2e-1": 2e-1, "5e-1": 5e-1}
-_wds = {"5e-3": 0.005, "5e-2": 5e-2}
-_dropouts = {"0": 0.0, "03": 0.3}
+_lrs = {
+    "1e-4": 1e-4,
+    "2e-4": 2e-4,
+    "5e-4": 5e-4,
+    "1e-3": 1e-3,
+    "2e-3": 2e-3,
+    "5e-3": 5e-3,
+    "1e-2": 1e-2,
+    "2e-2": 2e-2,
+    "5e-2": 5e-2,
+    "1e-1": 1e-1,
+    "2e-1": 2e-1,
+    "5e-1": 5e-1,
+}
+_wds = {"0": 0.0}
+_dropouts = {"0": 0.0}
 _norms = {"none": None}
+_feat_norms = {"none": None}
+_optimizers = {"adamw": "AdamW"}
+_warmups = {"w05": 0.05}
 
 probes = {}
 for _loss_name, _criteria in _losses.items():
@@ -117,25 +134,37 @@ for _loss_name, _criteria in _losses.items():
         for _wd_name, _wd in _wds.items():
             for _do_name, _dropout in _dropouts.items():
                 for _norm_name, _input_norm in _norms.items():
-                    _name = f"{_loss_name}_lr{_lr_name}_wd{_wd_name}_do{_do_name}_{_norm_name}"
-                    probes[_name] = dict(
-                        criteria=_criteria,
-                        input_norm=_input_norm,
-                        feat_norm=None,
-                        dropout=_dropout,
-                        optimizer=dict(type="AdamW", lr=_lr, weight_decay=_wd),
-                        scheduler=dict(
-                            type="OneCycleLR",
-                            max_lr=_lr,
-                            pct_start=0.05,
-                            anneal_strategy="cos",
-                            div_factor=10.0,
-                            final_div_factor=1000.0,
-                        ),
-                        grad_clip=3.0,
-                    )
-del _losses, _lrs, _wds, _dropouts, _norms, _loss_name, _criteria, _lr_name, _lr
-del _wd_name, _wd, _do_name, _dropout, _norm_name, _input_norm, _name
+                    for _fn_name, _feat_norm in _feat_norms.items():
+                        for _opt_name, _opt_type in _optimizers.items():
+                            for _wu_name, _pct_start in _warmups.items():
+                                _name = (
+                                    f"{_loss_name}_lr{_lr_name}_wd{_wd_name}_do{_do_name}_"
+                                    f"{_norm_name}_fn{_fn_name}_{_opt_name}_{_wu_name}"
+                                )
+                                _optimizer = dict(type=_opt_type, lr=_lr, weight_decay=_wd)
+                                if _opt_type == "SGD":
+                                    _optimizer["momentum"] = 0.9
+                                probes[_name] = dict(
+                                    criteria=_criteria,
+                                    input_norm=_input_norm,
+                                    feat_norm=_feat_norm,
+                                    dropout=_dropout,
+                                    optimizer=_optimizer,
+                                    scheduler=dict(
+                                        type="OneCycleLR",
+                                        max_lr=_lr,
+                                        pct_start=_pct_start,
+                                        anneal_strategy="cos",
+                                        div_factor=10.0,
+                                        final_div_factor=1000.0,
+                                    ),
+                                    grad_clip=3.0,
+                                )
+
+del _losses, _lrs, _wds, _dropouts, _norms, _feat_norms, _optimizers, _warmups
+del _loss_name, _criteria, _lr_name, _lr, _wd_name, _wd, _do_name, _dropout
+del _norm_name, _input_norm, _fn_name, _feat_norm, _opt_name, _opt_type
+del _wu_name, _pct_start, _optimizer, _name
 
 wandb_run_name = (
     f"PT-v3-malibu GridProbe DALES {grp_exp}.{num_exp}) decoder hypercolumn 1024ch, "
