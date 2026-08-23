@@ -77,7 +77,7 @@ data_root = "data/h3d"
 
 # TODO: placeholder — still points at the non-masked-strength checkpoint (1258597).
 # Update to the new job's model_best.pth once the masked-strength DALES retrain finishes.
-weight = "/lustre/fswork/projects/rech/unv/usi32yh/Pointcept/logs/slurm/1258597/model/model_best.pth"
+weight = "/lustre/fswork/projects/rech/unv/usi32yh/Pointcept/logs/slurm/1274136/model/model_best.pth"
 
 wandb_project = f"pointcept_{dataset_type[:-7].lower()}"
 

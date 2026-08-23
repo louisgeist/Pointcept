@@ -93,7 +93,7 @@ val_stratified_subset_manifest = "data/flair3d_plus/manifests/val_dev_subset_200
 
 # TODO: placeholder — still points at the non-masked-strength checkpoint (1258597).
 # Update to the new job's model_best.pth once the masked-strength DALES retrain finishes.
-weight = "/lustre/fswork/projects/rech/unv/usi32yh/Pointcept/logs/slurm/1258597/model/model_best.pth"
+weight = "/lustre/fswork/projects/rech/unv/usi32yh/Pointcept/logs/slurm/1274136/model/model_best.pth"
 
 wandb_project = "flair3d_segment"
 
