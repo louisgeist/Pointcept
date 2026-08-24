@@ -1,5 +1,5 @@
 """
-KPConvX grid-search linear probing on H3D — encoder multiscale variant
+KPConvX grid-search linear probing on ECLAIR — encoder multiscale variant
 (Flair3D+ multitask supervised pretrain, configs/flair3d_default/multi-kpconvx-v1m0-flair3d.py
 recipe: input_channels=7, kp_radius=3.2, radius_scaling=3.0,
 neighbor_limits=(12,16,20,20,20), layer_blocks=(3,3,9,12,3), init_channels=64,
@@ -50,35 +50,35 @@ probe forward is far cheaper than full multitask training, so this has not
 been formally verified against a find_max_batch_size.py run at this batch
 size, only inferred from that gap.
 
-Same probe grid as litept-b-v1m0-h3d-lin_enc.py / spunet-v1m0-h3d-lin-grid-enc.py
-(ce_lovasz, AdamW/wd0/OneCycleLR warmup5%, lr sweep {1e-4 … 5e-1}) for
-cross-backbone comparability. epoch=2000 / eval_epoch=10. H3D has no real
-intensity (FillMissingFeat strength=0.0), no strength_feat_scale, and
-requires log_test_f1=True / skip_test=False on GridProbeEvaluator/
-GridProbeWinnerSelector (required for H3D lin-grid configs).
+ECLAIR provides real RGB: ChromaticAutoContrast/Translation/Jitter (train) +
+NormalizeColor (like H3D / semseg-litept ECLAIR); strength uses 1/60000 like
+DALES. Same probe grid as litept-b-v1m0-eclair-lin_enc.py /
+ptv3-v1m0-eclair-lin-grid-enc.py (ce_lovasz x 12 LRs x wd=0 x dropout=0 x
+input_norm=None x AdamW x warmup=5%) for cross-backbone comparability.
+epoch=200 / eval_epoch=10.
 """
 
-_base_ = ["../_base_/default_runtime.py"]
+_base_ = ["../../../../_base_/default_runtime.py"]
 
 grp_exp = 1
-num_exp = 1
+num_exp = 3
 
 num_classes = 11
-ignore_index = 11
+ignore_index = -1
 grid_size = 0.1
 point_max = 100_000  # deliberately > pretrain's 40000 SphereCrop budget — see docstring
 coord_feat_scale = 0.01  # must match Flair3D multitask pretrain
+strength_feat_scale = 1 / 60000  # raw uint16 intensity → Flair3D [0,1] convention
 kp_radius = 3.2
 kp_sigma = kp_radius
 radius_scaling = 3.0
 
 num_gpu = 1
-epoch = 2000
+epoch = 200
 eval_epoch = 10
 lr = 5e-2
 
 test_single_fragment = True
-log_test_f1 = True
 
 # misc custom setting — see docstring above (set by hand, not calibrated).
 batch_size_per_gpu = 24
@@ -91,19 +91,13 @@ mix_prob = 0.8
 empty_cache = False
 enable_amp = True
 
-# dataset settings
-dataset_type = "H3DDataset"
-data_root = "data/h3d"
+dataset_type = "ECLAIRDataset"
+data_root = "data/eclair"
 
 weight = "/lustre/fswork/projects/rech/unv/usi32yh/Pointcept/logs/slurm/1159986/model/model_best.pth"
 
 wandb_project = f"pointcept_{dataset_type[:-7].lower()}"
 
-# Hooks
-# Order matters: GridProbeEvaluator before GridProbeCheckpointSaver/CheckpointSaver;
-# GridProbeWinnerSelector last (frees the per-probe optimizers/schedulers, then runs
-# its own SemSegTester pass on the winning probe — replaces PreciseEvaluator, which
-# never sets raw_model.active_probe and would break under GridProbeSegmentorV2).
 hooks = [
     dict(
         type="CheckpointLoader",
@@ -111,7 +105,7 @@ hooks = [
     ),
     dict(type="ModelHook"),
     dict(type="IterationTimer", warmup_iter=2),
-    dict(type="InformationWriter", log_interval=1),
+    dict(type="InformationWriter", log_interval=10),
     dict(type="GridProbeEvaluator", write_cls_iou=True),
     dict(type="GridProbeCheckpointSaver"),
     dict(type="CheckpointSaver", save_freq=None),
@@ -121,18 +115,17 @@ hooks = [
 feat_keys = ["coord", "color", "strength"]
 
 names = [
-    "Low Vegetation",
-    "Impervious Surface",
+    "Unassigned",
+    "Ground",
+    "Vegetation",
+    "Buildings",
+    "Noise",
+    "Transmission Wires",
+    "Distribution Wires",
+    "Poles",
+    "Transmission Towers",
+    "Fence",
     "Vehicle",
-    "Urban Furniture",
-    "Roof",
-    "Façade",
-    "Shrub",
-    "Tree",
-    "Soil or Gravel",
-    "Vertical Surface",
-    "Chimney",
-    "Void",
 ]
 
 # Encoder levels (enc_mode): actual captured widths, see docstring — NOT layer_C.
@@ -169,7 +162,6 @@ _dropouts = {"0": 0.0}
 _norms = {"none": None}
 _feat_norms = {"none": None}
 _optimizers = {"adamw": "AdamW"}
-_warmups = {"w05": 0.05}
 
 probes = {}
 for _loss_name, _criteria in _losses.items():
@@ -179,42 +171,41 @@ for _loss_name, _criteria in _losses.items():
                 for _norm_name, _input_norm in _norms.items():
                     for _fn_name, _feat_norm in _feat_norms.items():
                         for _opt_name, _opt_type in _optimizers.items():
-                            for _wu_name, _pct_start in _warmups.items():
-                                _name = (
-                                    f"{_loss_name}_lr{_lr_name}_wd{_wd_name}_do{_do_name}_"
-                                    f"{_norm_name}_fn{_fn_name}_{_opt_name}_{_wu_name}"
-                                )
-                                _optimizer = dict(type=_opt_type, lr=_lr, weight_decay=_wd)
-                                if _opt_type == "SGD":
-                                    _optimizer["momentum"] = 0.9
-                                probes[_name] = dict(
-                                    criteria=_criteria,
-                                    input_norm=_input_norm,
-                                    feat_norm=_feat_norm,
-                                    dropout=_dropout,
-                                    optimizer=_optimizer,
-                                    scheduler=dict(
-                                        type="OneCycleLR",
-                                        max_lr=_lr,
-                                        pct_start=_pct_start,
-                                        anneal_strategy="cos",
-                                        div_factor=10.0,
-                                        final_div_factor=1000.0,
-                                    ),
-                                    grad_clip=3.0,
-                                )
+                            _name = (
+                                f"{_loss_name}_lr{_lr_name}_wd{_wd_name}_do{_do_name}_"
+                                f"{_norm_name}_fn{_fn_name}_{_opt_name}"
+                            )
+                            _optimizer = dict(type=_opt_type, lr=_lr, weight_decay=_wd)
+                            if _opt_type == "SGD":
+                                _optimizer["momentum"] = 0.9
+                            probes[_name] = dict(
+                                criteria=_criteria,
+                                input_norm=_input_norm,
+                                feat_norm=_feat_norm,
+                                dropout=_dropout,
+                                optimizer=_optimizer,
+                                scheduler=dict(
+                                    type="OneCycleLR",
+                                    max_lr=_lr,
+                                    pct_start=0.05,
+                                    anneal_strategy="cos",
+                                    div_factor=10.0,
+                                    final_div_factor=1000.0,
+                                ),
+                                grad_clip=3.0,
+                            )
 
-del _losses, _lrs, _wds, _dropouts, _norms, _feat_norms, _optimizers, _warmups
+del _losses, _lrs, _wds, _dropouts, _norms, _feat_norms, _optimizers
 del _loss_name, _criteria, _lr_name, _lr, _wd_name, _wd, _do_name, _dropout
 del _norm_name, _input_norm, _fn_name, _feat_norm, _opt_name, _opt_type
-del _wu_name, _pct_start, _optimizer, _name
+del _optimizer, _name
+
 
 wandb_run_name = (
-    f"KPConvX GridProbe H3D {grp_exp}.{num_exp}) enc multiscale {backbone_out_channels}ch, "
+    f"KPConvX GridProbe ECLAIR {grp_exp}.{num_exp}) enc multiscale {backbone_out_channels}ch, "
     f"AdamW/wd0/OneCycleLR warmup5%, {len(probes)} probes, epoch={epoch}"
 )
 
-# model settings
 model = dict(
     type="GridProbeSegmentorV2",
     probes=probes,
@@ -225,7 +216,7 @@ model = dict(
     channel_blocks=enc_channels,
     backbone=dict(
         type="kpconvx_base",
-        input_channels=7,  # coord(3) + color(3) + strength(1, fake/zero)
+        input_channels=7,  # coord(3) + color(3) + strength(1)
         num_classes=0,
         dim=3,
         task="cloud_segmentation",
@@ -267,8 +258,6 @@ model = dict(
     ),
 )
 
-# trainer settings — GridProbeTrainer builds one optimizer/scheduler per probe
-# (see probes above); no top-level optimizer/scheduler/param_dicts here.
 train = dict(type="GridProbeTrainer")
 
 data = dict(
@@ -288,8 +277,8 @@ data = dict(
         type=dataset_type,
         split="train",
         data_root=data_root,
+        include_pseudo=True,
         transform=[
-            dict(type="FillMissingFeat", feat_key="strength", feat_dim=1, fill_value=0.0),
             dict(type="CenterShift", apply_z=True),
             dict(type="Z_MinShift"),
             dict(type="Z_RandomOffset"),
@@ -317,7 +306,7 @@ data = dict(
                 type="Collect",
                 keys=("coord", "grid_coord", "segment", "grid_size"),
                 feat_keys=feat_keys,
-                feat_scales=dict(coord=coord_feat_scale),
+                feat_scales=dict(coord=coord_feat_scale, strength=strength_feat_scale),
             ),
         ],
         test_mode=False,
@@ -326,8 +315,8 @@ data = dict(
         type=dataset_type,
         split="val",
         data_root=data_root,
+        include_pseudo=True,
         transform=[
-            dict(type="FillMissingFeat", feat_key="strength", feat_dim=1, fill_value=0.0),
             dict(type="CenterShift", apply_z=True),
             dict(type="Z_MinShift"),
             dict(type="Copy", keys_dict={"segment": "origin_segment"}),
@@ -346,7 +335,7 @@ data = dict(
                 type="Collect",
                 keys=("coord", "grid_coord", "segment", "origin_segment", "inverse"),
                 feat_keys=feat_keys,
-                feat_scales=dict(coord=coord_feat_scale),
+                feat_scales=dict(coord=coord_feat_scale, strength=strength_feat_scale),
             ),
         ],
         test_mode=False,
@@ -355,8 +344,8 @@ data = dict(
         type=dataset_type,
         split="test",
         data_root=data_root,
+        include_pseudo=True,
         transform=[
-            dict(type="FillMissingFeat", feat_key="strength", feat_dim=1, fill_value=0.0),
             dict(type="CenterShift", apply_z=True),
             dict(type="Z_MinShift"),
             dict(type="NormalizeColor"),
@@ -378,9 +367,9 @@ data = dict(
                 dict(
                     type="Collect",
                     keys=("coord", "grid_coord", "index"),
-                    optional_keys=("inverse",),  # for test_single_fragment broadcast
+                    optional_keys=("inverse",),
                     feat_keys=feat_keys,
-                    feat_scales=dict(coord=coord_feat_scale),
+                    feat_scales=dict(coord=coord_feat_scale, strength=strength_feat_scale),
                 ),
             ],
             aug_transform=[[dict(type="RandomRotateTargetAngle", angle=[0], axis="z", center=[0, 0, 0], p=1)]],

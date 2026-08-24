@@ -58,10 +58,10 @@ requires log_test_f1=True / skip_test=False on GridProbeEvaluator/
 GridProbeWinnerSelector (required for H3D lin-grid configs).
 """
 
-_base_ = ["../_base_/default_runtime.py"]
+_base_ = ["../../../../_base_/default_runtime.py"]
 
 grp_exp = 1
-num_exp = 1
+num_exp = 2
 
 num_classes = 11
 ignore_index = 11

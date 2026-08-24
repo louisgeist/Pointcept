@@ -31,21 +31,24 @@ drop_path_rate=0 makes every block use `nn.Identity()` instead (no
 learnable params either way, so this is checkpoint-compatible with the
 drop_path_rate=0.3 pretrain).
 
-point_max=40000 matches the KPConvX pretrain's own SphereCrop budget — NOT
-the 102400 used by the LitePT/PT-v3/SpUNet/Sonata pretrains referenced
-elsewhere in this repo's GridProbe configs.
+point_max=100_000 — deliberately larger than the KPConvX pretrain's own
+SphereCrop budget (40000); roughly matches the ~102400 convention used by
+the other backbones' GridProbe configs (LitePT/PT-v3/SpUNet/Sonata). Set by
+user instruction. SphereCrop point_max is a data-pipeline parameter, not
+part of the backbone architecture/checkpoint, so this doesn't break
+checkpoint loading — but the frozen backbone was never trained on scenes
+this large, so its features at this crop scale are unverified.
 
 weight = Jean Zay job 1159986 (KPConvX multitask Flair3D+, same recipe as
 configs/flair3d_default/multi-kpconvx-v1m0-flair3d.py) — not reachable from
 Hecate (Jean-Zay-only lustre path, see CLAUDE.md local-vs-JZ data note), so
 CheckpointLoader can only be exercised on Jean Zay.
 
-batch_size mirrors the pretrain's own batch_size=2*num_gpu (point_max=40000
-is much smaller than the other backbones' 102400, and KPConvX's per-point
-neighbor-search cost is higher) — this has NOT been recalibrated for the
-probe's cheaper (frozen-backbone, no backward through backbone) VRAM profile;
-run scripts/find_max_batch_size.py / sbatch_find_max_batch_size.sh before a
-real launch (mix-prob must match this config's mix_prob=0.8).
+batch_size=24 on a single GPU (vs. the pretrain's global 24 spread over 6-8
+GPUs) — set by hand per user instruction; the frozen-backbone, no-backward
+probe forward is far cheaper than full multitask training, so this has not
+been formally verified against a find_max_batch_size.py run at this batch
+size, only inferred from that gap.
 
 Same probe grid as litept-b-v1m0-dales-lin-grid-enc.py (ce_lovasz, AdamW/wd0/
 OneCycleLR warmup5%, lr sweep {1e-4 … 5e-1}) for cross-backbone comparability.
@@ -60,7 +63,7 @@ num_exp = 1
 num_classes = 8
 ignore_index = 8
 grid_size = 0.1
-point_max = 40000  # KPConvX pretrain's own SphereCrop budget (NOT 102400)
+point_max = 100_000  # deliberately > pretrain's 40000 SphereCrop budget — see docstring
 coord_feat_scale = 0.01  # must match Flair3D multitask pretrain
 strength_feat_scale = 1 / 60000  # DALES raw intensity → Flair3D [0,1] convention
 kp_radius = 3.2
@@ -74,13 +77,12 @@ lr = 5e-2
 
 test_single_fragment = True
 
-# misc custom setting — mirrors the KPConvX multitask pretrain's own batch
-# size (see docstring above); recalibrate with find_max_batch_size.py.
-batch_size_per_gpu = 2
+# misc custom setting — see docstring above (set by hand, not calibrated).
+batch_size_per_gpu = 24
 batch_size = batch_size_per_gpu * num_gpu
 batch_size_val = 1
 batch_size_test = 1
-num_worker = 8 * num_gpu
+num_worker = 24 * num_gpu
 num_worker_test = 2
 mix_prob = 0.8
 empty_cache = False
