@@ -33,15 +33,19 @@ grad_norm_lite_ema_alpha = 0.1
 grad_norm_lite_eps = 1e-3
 
 # Hardware parameters
-num_gpu = 1
-num_worker = 8 * num_gpu
+num_gpu = 6
+num_worker = 8 * num_gpu  # A100: 8 workers per GPU
+sync_bn = True  # required for DDP: syncs GradNormLite EMA and BatchNorm
 enable_amp = True
 
 # Data parameters
-batch_size = 2 * num_gpu  # total batch size across all gpus
+# Train batch_size is the global effective batch (4 per GPU when num_gpu=6).
+# val/test caps are 8 * num_gpu so per-GPU occupancy stays 8 after
+# default_setup // world_size. Voxel budgets are already per-rank.
+batch_size = 24  # total across GPUs (4 per GPU when num_gpu=6)
 batch_size_val = 8 * num_gpu
 val_voxel_budget = 2_000_000
-batch_size_test = batch_size // 2
+batch_size_test = 8 * num_gpu
 test_voxel_budget = 2_000_000
 
 grid_size = 0.1
@@ -52,8 +56,8 @@ kp_sigma = kp_radius
 radius_scaling = 3.0
 
 # Optimization parameters
-lr = 1e-3
-total_iters = 30_000
+lr = 5e-3
+total_iters = 200_000
 
 # Features (RGB + XYZ + strength concatenated into feat)
 learned_masked_feat = True
@@ -62,7 +66,7 @@ coord_feat_scale = 0.01
 
 # Wandb parameters
 wandb_run_name = (
-    f"KPConvX multi {grp_exp}.{num_exp}) iter={total_iters}"
+    f"6xA100  KPConvX multi {grp_exp}.{num_exp}) iter={total_iters}"
 )
 wandb_project = "flair3d_multi"
 
