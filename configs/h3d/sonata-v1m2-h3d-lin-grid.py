@@ -21,6 +21,7 @@ Grid (12 probes): ce_lovasz x lr{1e-4,2e-4,5e-4,1e-3,2e-3,5e-3,1e-2,2e-2,5e-2,
 optimizer=AdamW x warmup=0%. skip_test=False, log_test_f1=True.
 """
 
+
 _base_ = ["../_base_/default_runtime.py"]
 
 grp_exp = 1
@@ -168,7 +169,7 @@ del _norm_name, _input_norm, _fn_name, _feat_norm, _opt_name, _opt_type
 del _wu_name, _pct_start, _optimizer, _name
 
 wandb_run_name = (
-    f"Sonata GridProbe H3D {grp_exp}.{num_exp}) w/o Z_transform, epoch_120, enc multiscale {backbone_out_channels}ch, "
+    f"Sonata GridProbe H3D {grp_exp}.{num_exp}) epoch_120, enc multiscale {backbone_out_channels}ch, "
     f"AdamW/wd0/OneCycleLR warmup0%, {len(probes)} probes, epoch={epoch}"
 )
 
