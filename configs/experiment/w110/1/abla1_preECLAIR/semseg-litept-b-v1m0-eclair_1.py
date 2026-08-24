@@ -1,0 +1,302 @@
+"""
+LitePT-Base full-supervision semantic segmentation on ECLAIR, trained from
+scratch (no pretrained weight). Ablation baseline (abla1_preECLAIR) against
+the Sonata / Flair3D-multitask-pretrained ECLAIR probes in sibling
+w110 folders (abla_grid_on_eclair, grid_eclair_18h, ...): this config
+measures what full end-to-end supervised training on ECLAIR alone reaches,
+with no pretraining.
+
+Architecture, hooks and augmentation pipeline mirror
+configs/flair3d_default/multi-litept-b-v1m0-flair3d.py / segment/litept-b-v1m0-flair3d.py
+(LitePT-Base backbone dims, MultiTaskSegmentorV2 wired for the single
+"segment" task, MultiTaskEvaluator/MultiTaskTester) rather than the plainer
+DefaultSegmentorV2 used in configs/dales/semseg-litept-b-v1m0-dales.py, so
+this stays directly comparable to the Flair3D multitask recipe. ECLAIR has
+real RGB (unlike DALES), so ChromaticAutoContrast/Translation/Jitter +
+RandomDropColor are kept, and strength uses 1/60000 (raw uint16 intensity ->
+Flair3D [0,1] convention), matching configs/eclair/litept-b-v1m0-eclair-lin_enc.py.
+
+This config is intentionally self-contained: it inherits only from
+default_runtime and can be read top-to-bottom without cross-referencing
+other Flair3D / ECLAIR configs (task_configs/criteria are hand-written here
+rather than going through pointcept.datasets.flair3d_config_utils, which is
+tied to the Flair3D label taxonomy).
+"""
+
+# -----------------------------------------------------------------------------
+# Default
+# -----------------------------------------------------------------------------
+_base_ = ["../../../../_base_/default_runtime.py"]
+
+# -----------------------------------------------------------------------------
+# Run-level settings
+# -----------------------------------------------------------------------------
+
+# Logging parameters
+grp_exp = 1
+num_exp = 1
+
+# Hardware parameters
+num_gpu = 1
+num_worker = 24  # H100
+enable_amp = True
+
+# Data parameters
+batch_size = 12  # total batch size across all gpus; LitePT-Base convention (vs 24 for Small)
+
+grid_size = 0.1
+point_max = 102400
+mix_prob = 0.8
+
+patch_size = 1024
+
+# Optimization parameters
+lr = 1e-3
+epoch = 400
+eval_epoch = 40
+
+# Features
+learned_masked_feat = True
+feat_keys = ["coord", "color", "strength"]
+coord_feat_scale = 0.01
+strength_feat_scale = 1 / 60000  # raw uint16 intensity -> Flair3D [0,1] convention
+
+# Wandb parameters
+wandb_run_name = f"ECLAIR LitePT-B semseg from-scratch ({grp_exp}.{num_exp}) H100 epoch={epoch}"
+wandb_project = "pointcept_eclair"
+
+# -----------------------------------------------------------------------------
+# Task configuration (single "segment" task, MultiTaskSegmentorV2 wiring)
+# -----------------------------------------------------------------------------
+main_task = "segment"
+target_keys = (main_task,)
+
+num_classes = 11
+ignore_index = -1
+names = [
+    "Unassigned",
+    "Ground",
+    "Vegetation",
+    "Buildings",
+    "Noise",
+    "Transmission Wires",
+    "Distribution Wires",
+    "Poles",
+    "Transmission Towers",
+    "Fence",
+    "Vehicle",
+]
+
+task_configs = {
+    main_task: dict(
+        task_type="semantic",
+        num_classes=num_classes,
+        ignore_index=ignore_index,
+        names=names,
+    ),
+}
+task_criteria = {
+    main_task: [
+        dict(type="CrossEntropyLoss", loss_weight=1.0, ignore_index=ignore_index),
+        dict(type="LovaszLoss", mode="multiclass", loss_weight=1.0, ignore_index=ignore_index),
+    ],
+}
+task_weights = {main_task: 1.0}
+
+# -----------------------------------------------------------------------------
+# Hooks
+# -----------------------------------------------------------------------------
+hooks = [
+    dict(type="CheckpointLoader"),
+    dict(type="ModelHook"),
+    dict(type="IterationTimer", warmup_iter=2),
+    dict(type="InformationWriter", log_interval=100),
+    dict(type="MultiTaskEvaluator", write_cls_iou=True),
+    dict(type="CheckpointSaver", save_freq=None),
+    dict(type="PreciseEvaluator", test_last=False),
+]
+
+test_single_fragment = True
+test = dict(type="MultiTaskTester", verbose=True, write_cls_iou=True)
+
+# -----------------------------------------------------------------------------
+# Model
+# -----------------------------------------------------------------------------
+# LitePT-Base official dims (matches multi-litept-b-v1m0-flair3d.py backbone).
+model = dict(
+    type="MultiTaskSegmentorV2",
+    backbone_out_channels=72,
+    backbone=dict(
+        type="LitePT-v1",
+        in_channels=7,  # coord (3) + color (3) + strength (1)
+        order=("z", "z-trans", "hilbert", "hilbert-trans"),
+        stride=(3, 3, 3, 3),
+        enc_depths=(3, 3, 3, 12, 3),
+        enc_channels=(54, 108, 216, 432, 576),
+        enc_num_head=(3, 6, 12, 24, 32),
+        enc_patch_size=(patch_size, patch_size, patch_size, patch_size, patch_size),
+        enc_conv=(True, True, True, False, False),
+        enc_attn=(False, False, False, True, True),
+        enc_rope_freq=(100.0, 100.0, 100.0, 100.0, 100.0),
+        dec_depths=(0, 0, 0, 0),
+        dec_channels=(72, 108, 216, 432),
+        dec_num_head=(4, 6, 12, 24),
+        dec_patch_size=(patch_size, patch_size, patch_size, patch_size),
+        dec_conv=(False, False, False, False),
+        dec_attn=(False, False, False, False),
+        dec_rope_freq=(100.0, 100.0, 100.0, 100.0),
+        mlp_ratio=4,
+        qkv_bias=True,
+        qk_scale=None,
+        attn_drop=0.0,
+        proj_drop=0.0,
+        drop_path=0.3,
+        shuffle_orders=True,
+        pre_norm=True,
+        enc_mode=False,
+    ),
+    feature_mask_values=dict(
+        enable=learned_masked_feat,
+        masked_feat_keys=["color", "strength"],
+    ),
+    task_configs=task_configs,
+    main_task=main_task,
+    task_criteria=task_criteria,
+    task_weights=task_weights,
+)
+
+# -----------------------------------------------------------------------------
+# Optimizer / scheduler
+# -----------------------------------------------------------------------------
+optimizer = dict(type="AdamW", lr=lr, weight_decay=0.005)
+scheduler = dict(
+    type="OneCycleLR",
+    max_lr=[lr, lr / 10],
+    pct_start=0.05,
+    anneal_strategy="cos",
+    div_factor=10.0,
+    final_div_factor=1000.0,
+)
+param_dicts = [dict(keyword="block", lr=lr / 10)]
+
+# -----------------------------------------------------------------------------
+# Dataset
+# -----------------------------------------------------------------------------
+dataset_type = "ECLAIRDataset"
+data_root = "data/eclair"
+
+data = dict(
+    num_classes=num_classes,
+    ignore_index=ignore_index,
+    names=names,
+    task_configs=task_configs,
+    main_task=main_task,
+    train=dict(
+        type=dataset_type,
+        split="train",
+        data_root=data_root,
+        include_pseudo=True,
+        transform=[
+            dict(type="CenterShift", apply_z=True),
+            dict(type="Z_MinShift"),
+            dict(type="Z_RandomOffset"),
+            dict(type="RandomDropout", dropout_ratio=0.2, dropout_application_ratio=0.2),
+            dict(type="RandomRotate", angle=[-1, 1], axis="z", center=[0, 0, 0], p=0.5),
+            dict(type="RandomScale", scale=[0.9, 1.1]),
+            dict(type="RandomFlip", p=0.5),
+            dict(type="RandomJitter", sigma=0.005, clip=0.02),
+            dict(type="ChromaticAutoContrast", p=0.2, blend_factor=None),
+            dict(type="ChromaticTranslation", p=0.95, ratio=0.05),
+            dict(type="ChromaticJitter", p=0.95, std=0.05),
+            dict(
+                type="GridSample",
+                grid_size=grid_size,
+                hash_type="fnv",
+                mode="train",
+                return_grid_coord=True,
+            ),
+            dict(type="SphereCrop", point_max=point_max, mode="random"),
+            dict(type="CenterShift", apply_z=False),
+            dict(type="NormalizeColor"),
+            dict(type="RandomDropColor", drop_ratio=1.0, drop_application_ratio=0.2, keep_mask=True),
+            dict(type="RandomDropColor", drop_ratio=0.1, drop_application_ratio=0.5, keep_mask=True),
+            dict(type="RandomDropStrength", drop_ratio=1.0, drop_application_ratio=0.2, keep_mask=True),
+            dict(type="RandomDropStrength", drop_ratio=0.1, drop_application_ratio=0.5, keep_mask=True),
+            dict(type="ToTensor"),
+            dict(type="Update", keys_dict={"grid_size": grid_size}),
+            dict(
+                type="Collect",
+                keys=("coord", "grid_coord", "segment", "grid_size"),
+                feat_keys=feat_keys,
+                feat_scales=dict(coord=coord_feat_scale, strength=strength_feat_scale),
+            ),
+        ],
+        test_mode=False,
+    ),
+    val=dict(
+        type=dataset_type,
+        split="val",
+        data_root=data_root,
+        include_pseudo=True,
+        transform=[
+            dict(type="CenterShift", apply_z=True),
+            dict(type="Z_MinShift"),
+            dict(type="Copy", keys_dict={"segment": "origin_segment"}),
+            dict(
+                type="GridSample",
+                grid_size=grid_size,
+                hash_type="fnv",
+                mode="train",
+                return_grid_coord=True,
+                return_inverse=True,
+            ),
+            dict(type="CenterShift", apply_z=False),
+            dict(type="NormalizeColor"),
+            dict(type="ToTensor"),
+            dict(
+                type="Collect",
+                keys=("coord", "grid_coord", "segment", "origin_segment", "inverse"),
+                feat_keys=feat_keys,
+                feat_scales=dict(coord=coord_feat_scale, strength=strength_feat_scale),
+            ),
+        ],
+        test_mode=False,
+    ),
+    test=dict(
+        type=dataset_type,
+        split="test",
+        data_root=data_root,
+        include_pseudo=True,
+        transform=[
+            dict(type="CenterShift", apply_z=True),
+            dict(type="Z_MinShift"),
+            dict(type="NormalizeColor"),
+        ],
+        test_mode=True,
+        test_cfg=dict(
+            voxelize=dict(
+                type="GridSample",
+                grid_size=grid_size,
+                hash_type="fnv",
+                mode="test",
+                return_grid_coord=True,
+                test_single_fragment=test_single_fragment,
+            ),
+            crop=None,
+            post_transform=[
+                dict(type="CenterShift", apply_z=False),
+                dict(type="ToTensor"),
+                dict(
+                    type="Collect",
+                    keys=("coord", "grid_coord", "index"),
+                    optional_keys=("inverse",),
+                    feat_keys=feat_keys,
+                    feat_scales=dict(coord=coord_feat_scale, strength=strength_feat_scale),
+                ),
+            ],
+            aug_transform=[
+                [dict(type="RandomRotateTargetAngle", angle=[0], axis="z", center=[0, 0, 0], p=1)]
+            ],
+        ),
+    ),
+)
