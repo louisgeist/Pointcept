@@ -19,6 +19,14 @@ workers then die with ``signal: Killed`` (host RAM OOM), which is *not* a VRAM
 verdict. Recommended: ``--num-worker 8`` (or ``0`` / ``2`` for a pure VRAM
 smoke). ``sbatch_find_max_batch_size.sh`` already defaults ``NUM_WORKER=8``.
 
+**--point-max** (alias ``--point_max``) overrides SphereCrop ``point_max`` via
+overlay keys ``point_max`` + ``override_point_max``. A top-level ``point_max``
+assignment alone does *not* rewrite already-baked SphereCrop dicts;
+``default_config_parser`` walks the merged pipeline when
+``override_point_max`` is set. Default None inherits the source config.
+Does not change GridSample packing. No-op (trainer warning) if the config
+has no SphereCrop (Sonata SSL ``max_size``, most val/test pipelines).
+
 Probe overlays replace ``hooks`` entirely (see ``build_hooks``), so side-effect
 hooks such as ``LinProbeSbatchHook`` from the source config are never run.
 

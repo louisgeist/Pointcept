@@ -154,11 +154,10 @@ def default_config_parser(file_path, options):
     if options is not None:
         cfg.merge_from_dict(options)
 
-    override_point_max = getattr(cfg, "override_point_max", None)
-    if override_point_max is not None:
-        point_max = int(override_point_max)
+    cfg_dict = object.__getattribute__(cfg, "_cfg_dict")
+    if "override_point_max" in cfg_dict:
+        point_max = int(cfg_dict["override_point_max"])
         cfg.point_max = point_max
-        cfg_dict = object.__getattribute__(cfg, "_cfg_dict")
         n_patched = _apply_sphere_crop_point_max(cfg_dict, point_max)
         if n_patched == 0:
             warnings.warn(
