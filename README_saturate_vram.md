@@ -71,6 +71,7 @@ python scripts/find_max_batch_size.py \
 | `--probe-steps` | Train steps **per dichotomie trial** (phase 1) |
 | `--soak-steps` | Train steps for **confirmation** on the best BS (phase 2); `0` = skip. For val/test, used as a larger `max_sample` floor |
 | `--mix-prob` | Train only; default `1.0` for worst-case Mix3D |
+| `--point-max` / `--point_max` | Override SphereCrop `point_max` (default: inherit config). Does not change GridSample packing |
 | `--even-bs` / `--no-even-bs` | Even BS in train (default on) |
 | `--work-dir` / `--csv` | Where to write temp configs, logs, results |
 
@@ -114,6 +115,7 @@ CONFIG=configs/experiment/w105/2/10h/litept-v1m0-flair3d_12.py \
 | `MAX_SAMPLE` | `128` | Val/test sample cap |
 | `SOAK_STEPS_EVAL` | `0` | Eval soak (`max_sample` floor) |
 | `NUM_WORKER` | `8` | DataLoader workers |
+| `POINT_MAX` | unset (inherit config) | Override SphereCrop `point_max` |
 | `EXTRA_OPTIONS` | empty | Extra Pointcept `key=value` options |
 
 Env setup matches other H100 jobs (`arch/h100`, `cuda/12.4.1`, `pointcept_124`, H100 `pointops` on `PYTHONPATH`).

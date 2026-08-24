@@ -21,7 +21,7 @@
 #     sbatch sbatch_find_max_batch_size.sh
 #
 #   # Linear probe — Mix3D as in *-lin config
-#   CONFIG=configs/flair3d_default/segment/sonata-v1m2-flair3d-lin.py \
+#   CONFIG=configs/flair3d_default/probe/sonata-v1m2-flair3d-lin.py \
 #     MODE=train MIX_PROB=0.8 \
 #     MIN_BS_TRAIN=1 MAX_BS_TRAIN=8 \
 #     PROBE_STEPS=32 SOAK_STEPS_TRAIN=200 \
@@ -33,6 +33,10 @@
 # without the override the 1-GPU probe inherits hundreds of DataLoader workers
 # → host RAM OOM ("worker ... Killed"), not a VRAM result. Use NUM_WORKER=0/2
 # for a pure VRAM smoke if needed.
+#
+# POINT_MAX (optional) is passed as --point-max: overrides SphereCrop point_max
+# for the probe. Unset = inherit the source config. Does not change GridSample
+# packing. No-op on configs without SphereCrop (e.g. Sonata SSL max_size).
 #
 # Defaults match the recommended local commands (H100, 1 GPU).
 # Probe overlays replace hooks (LinProbeSbatchHook disabled during search).
@@ -85,6 +89,7 @@ SOAK_STEPS_EVAL="${SOAK_STEPS_EVAL:-0}"
 
 NUM_WORKER="${NUM_WORKER:-8}"
 EXTRA_OPTIONS="${EXTRA_OPTIONS:-}"
+POINT_MAX="${POINT_MAX:-}"
 
 JOB_DIR=${REPO_ROOT}/logs/slurm/${SLURM_JOB_ID}
 mkdir -p "${JOB_DIR}"
@@ -103,6 +108,12 @@ cp "$0" "${JOB_DIR}/script.slurm"
   echo "MIN/MAX eval:  ${MIN_BS_EVAL}/${MAX_BS_EVAL}"
   echo "PROBE_STEPS=${PROBE_STEPS} SOAK_STEPS_TRAIN=${SOAK_STEPS_TRAIN} MIX_PROB=${MIX_PROB}"
   echo "MAX_SAMPLE=${MAX_SAMPLE} SOAK_STEPS_EVAL=${SOAK_STEPS_EVAL}"
+  echo "NUM_WORKER=${NUM_WORKER}"
+  if [ -n "${POINT_MAX}" ]; then
+    echo "POINT_MAX=${POINT_MAX}"
+  else
+    echo "POINT_MAX=<inherit config>"
+  fi
   echo "Starting job at: $(date)"
   echo "Running on host: $(hostname)"
   nvidia-smi
@@ -156,6 +167,10 @@ run_mode() {
     --work-dir "${work_dir}"
     --csv "${work_dir}/results.csv"
   )
+
+  if [ -n "${POINT_MAX}" ]; then
+    cmd+=(--point-max "${POINT_MAX}")
+  fi
 
   if [ "${mode}" = "train" ]; then
     cmd+=(

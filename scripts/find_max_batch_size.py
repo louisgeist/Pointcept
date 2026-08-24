@@ -38,13 +38,13 @@ Examples (JeanZay / local GPU)::
 
   # Sonata linear probe (Mix3D as in config)
   python scripts/find_max_batch_size.py \\
-    --config-file configs/flair3d_default/segment/sonata-v1m2-flair3d-lin.py \\
+    --config-file configs/flair3d_default/probe/sonata-v1m2-flair3d-lin.py \\
     --mode train --min-bs 1 --max-bs 8 --probe-steps 32 --soak-steps 200 \\
     --mix-prob 0.8 --num-gpus 1 --num-worker 8
 
   # Sonata linear probe, only reasonable batch sizes (4..32), not a bisection
   python scripts/find_max_batch_size.py \\
-    --config-file configs/flair3d_default/segment/sonata-v1m2-flair3d-lin.py \\
+    --config-file configs/flair3d_default/probe/sonata-v1m2-flair3d-lin.py \\
     --mode train --candidates 4 8 12 16 20 24 32 \\
     --probe-steps 32 --soak-steps 200 --mix-prob 0.8 --num-gpus 1 \\
     --num-worker 8
@@ -60,6 +60,12 @@ Examples (JeanZay / local GPU)::
     --config-file configs/experiment/w105/2/10h/litept-v1m0-flair3d_13.py \\
     --mode test --min-bs 1 --max-bs 16 --max-sample 128 --soak-steps 0 \\
     --num-worker 8
+
+  # Override SphereCrop budget (does not change GridSample packing)
+  python scripts/find_max_batch_size.py \\
+    --config-file configs/experiment/w101/1/grid_kpconvx/kpconvx-v1m0-dales-lin-grid-enc_1.py \\
+    --mode train --min-bs 2 --max-bs 32 --probe-steps 32 --soak-steps 200 \\
+    --mix-prob 0.8 --num-gpus 1 --num-worker 8 --point-max 102400
 """
 
 from __future__ import annotations
@@ -165,6 +171,19 @@ def write_probe_config(
         lines.append(f"{key} = {repr(value)}")
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def apply_point_max_overrides(overrides: dict, args: argparse.Namespace) -> None:
+    """Patch SphereCrop via overlay ``override_point_max`` (see default_config_parser).
+
+    Top-level ``point_max`` alone is not enough: parent configs bake the integer
+    into ``data.*.transform`` SphereCrop dicts at import time.
+    """
+    if args.point_max is None:
+        return
+    point_max = int(args.point_max)
+    overrides["point_max"] = point_max
+    overrides["override_point_max"] = point_max
 
 
 def parse_peak_mem_mb(text: str) -> float | None:
@@ -294,6 +313,7 @@ def probe_train(
     }
     if args.num_worker is not None:
         overrides["num_worker"] = int(args.num_worker)
+    apply_point_max_overrides(overrides, args)
     if batch_size_val is not None:
         overrides["batch_size_val"] = int(batch_size_val)
     if evaluate:
@@ -351,6 +371,7 @@ def probe_test(
     }
     if args.num_worker is not None:
         overrides["num_worker"] = int(args.num_worker)
+    apply_point_max_overrides(overrides, args)
     write_probe_config(src_config=Path(args.config_file), dest=cfg_path, overrides=overrides)
 
     options: list[str] = [f"weight={weight}", f"save_path={save_path}"]
@@ -752,6 +773,7 @@ def write_csv(path: Path, args: argparse.Namespace, result: dict) -> None:
         "confirmed_bs",
         "peak_mem_mb",
         "mix_prob",
+        "point_max",
         "probe_steps",
         "soak_steps",
         "trial",
@@ -762,6 +784,7 @@ def write_csv(path: Path, args: argparse.Namespace, result: dict) -> None:
         "trial_peak_mem_mb",
     ]
     gpu_name = _gpu_name()
+    point_max = args.point_max if args.point_max is not None else ""
     rows = []
     if not result["trials"]:
         rows.append(
@@ -773,6 +796,7 @@ def write_csv(path: Path, args: argparse.Namespace, result: dict) -> None:
                 "confirmed_bs": result["confirmed_bs"],
                 "peak_mem_mb": result["peak_mem_mb"],
                 "mix_prob": args.mix_prob,
+                "point_max": point_max,
                 "probe_steps": args.probe_steps,
                 "soak_steps": args.soak_steps,
                 "trial": "",
@@ -794,6 +818,7 @@ def write_csv(path: Path, args: argparse.Namespace, result: dict) -> None:
                     "confirmed_bs": result["confirmed_bs"],
                     "peak_mem_mb": result["peak_mem_mb"],
                     "mix_prob": args.mix_prob if args.mode == "train" else 0,
+                    "point_max": point_max,
                     "probe_steps": args.probe_steps,
                     "soak_steps": args.soak_steps,
                     "trial": t["trial"],
@@ -877,6 +902,21 @@ def parse_args() -> argparse.Namespace:
         help="Train Mix3D probability for probes (default 1.0 = worst case)",
     )
     p.add_argument(
+        "--point-max",
+        "--point_max",
+        type=int,
+        default=None,
+        dest="point_max",
+        help=(
+            "Override SphereCrop point_max for this probe (default: inherit the "
+            "source config). Sets overlay point_max + override_point_max so "
+            "default_config_parser rewrites every SphereCrop in the merged "
+            "pipeline. Does not change GridSample packing. No-op (with a "
+            "warning from the trainer) if the config has no SphereCrop — e.g. "
+            "Sonata SSL max_size, or most val/test pipelines."
+        ),
+    )
+    p.add_argument(
         "--even-bs",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -922,6 +962,8 @@ def parse_args() -> argparse.Namespace:
         help="Extra Pointcept --options key=value pairs",
     )
     args = p.parse_args()
+    if args.point_max is not None and args.point_max <= 0:
+        p.error("--point-max must be a positive integer")
     # Internal flag used by seed checkpoint creation.
     if not hasattr(args, "save_checkpoint"):
         args.save_checkpoint = False
@@ -958,6 +1000,11 @@ def main() -> int:
     log(f"Work dir: {work_dir}")
     log(f"Config: {config_file}")
     log(f"GPU: {_gpu_name()}")
+    if args.point_max is not None:
+        log(
+            f"Override point_max={args.point_max} "
+            "(patches every SphereCrop via override_point_max)"
+        )
     if source_has_lin_probe_sbatch_hook(config_file):
         log(
             "NOTE: source config has LinProbeSbatchHook; probe overlays replace "

@@ -10,6 +10,7 @@ Please cite our work if the code is helpful to you.
 import os
 import sys
 import argparse
+import warnings
 import multiprocessing as mp
 from torch.nn.parallel import DistributedDataParallel
 
@@ -105,6 +106,25 @@ def default_argument_parser(epilog=None):
     return parser
 
 
+def _apply_sphere_crop_point_max(obj, point_max: int) -> int:
+    """Recursively set ``point_max`` on every ``type=="SphereCrop"`` dict.
+
+    Used when ``override_point_max`` is set (VRAM probes). Real training
+    configs do not set that key, so this is a no-op outside probes.
+    """
+    n = 0
+    if isinstance(obj, dict):
+        if obj.get("type") == "SphereCrop":
+            obj["point_max"] = int(point_max)
+            n += 1
+        for value in obj.values():
+            n += _apply_sphere_crop_point_max(value, point_max)
+    elif isinstance(obj, (list, tuple)):
+        for value in obj:
+            n += _apply_sphere_crop_point_max(value, point_max)
+    return n
+
+
 def default_config_parser(file_path, options):
     """Load a config file and resolve training-schedule parameters.
 
@@ -133,6 +153,22 @@ def default_config_parser(file_path, options):
 
     if options is not None:
         cfg.merge_from_dict(options)
+
+    override_point_max = getattr(cfg, "override_point_max", None)
+    if override_point_max is not None:
+        point_max = int(override_point_max)
+        cfg.point_max = point_max
+        cfg_dict = object.__getattribute__(cfg, "_cfg_dict")
+        n_patched = _apply_sphere_crop_point_max(cfg_dict, point_max)
+        if n_patched == 0:
+            warnings.warn(
+                f"override_point_max={point_max} was set but no SphereCrop "
+                "transform was found in the config; crop size is unchanged "
+                "(e.g. Sonata SSL uses max_size, and most val/test pipelines "
+                "have no SphereCrop).",
+                UserWarning,
+                stacklevel=2,
+            )
 
     if cfg.seed is None:
         cfg.seed = get_random_seed()
