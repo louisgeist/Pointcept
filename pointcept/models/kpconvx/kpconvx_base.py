@@ -69,6 +69,7 @@ class KPConvXBase(nn.Module):
                  bn_momentum=0.1,
                  smooth_labels=False,  # True only for classification
                  class_w=(),
+                 enc_mode=False,
                  ):
         super(KPConvXBase, self).__init__()
 
@@ -97,6 +98,7 @@ class KPConvXBase(nn.Module):
         self.upsample_n = upsample_n
         self.task = task
         self.grid_pool = grid_pool
+        self.enc_mode = enc_mode
         self.add_decoder_layer = decoder_layer
         self.first_inv_layer = first_inv_layer
         self.share_kp = share_kp
@@ -451,7 +453,22 @@ class KPConvXBase(nn.Module):
                 else:
                     feats = layer_pool(in_dict.points[l+1], in_dict.points[l], feats, in_dict.pools[l])
 
-         
+        if self.enc_mode:
+            # Encoder-only multiscale hypercolumn (for frozen-backbone linear
+            # probing, e.g. GridProbeSegmentorV2): gather every stage's raw
+            # (pre-decoder) feature back onto the original (level-0) points
+            # and concatenate, finest stage first. Requires grid_pool=True:
+            # in_dict.upsamples[i] only holds adjacent-level cluster indices,
+            # so a stage living at level `s` is chain-gathered down through
+            # levels s-1, s-2, ..., 0.
+            stage_feats = skip_feats + [feats]
+            gathered = []
+            for level, stage_feat in enumerate(stage_feats):
+                f = stage_feat
+                for i in range(level - 1, -1, -1):
+                    f = f[in_dict.upsamples[i][:, 0]]
+                gathered.append(f)
+            return torch.cat(gathered, dim=1)
 
         if self.task == 'classification':
             
