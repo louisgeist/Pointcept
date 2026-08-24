@@ -22,7 +22,7 @@ optimizer=AdamW x warmup=0%. skip_test=False, log_test_f1=True.
 """
 
 
-_base_ = ["../_base_/default_runtime.py"]
+_base_ = ["../../../../_base_/default_runtime.py"]
 
 grp_exp = 6
 num_exp = 7
