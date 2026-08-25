@@ -1,51 +1,56 @@
 """
-Sonata-v1m2 seed-ensemble linear probing on DALES — 10 probes with IDENTICAL
-hyperparameters (the best lr from the earlier lr-grid sweep), differing only
-by random init, to report test mIoU/mAcc/allAcc as mean±std across seeds
-instead of a single point estimate. Reuses the GridProbe machinery (shared
-frozen-backbone forward across all probes) purely to avoid paying the
-backbone cost 10x, not for hyperparameter search.
+DEBUG / SMOKE TEST -- not a real experiment, do not compare its mIoU numbers
+to anything. Purpose: check that the seed-ensemble wandb rendering (mean/std/
+max/min scalars + the per-probe wandb.Table added to GridProbeSeedEnsembleTester)
+actually looks right in the UI, in a couple of minutes, fully local.
 
-Frozen PT-v3m2 encoder (enc_mode=True → multi-scale concat 1232ch) from the
-Flair3D+ Sonata pretrain job 862680, epoch_120. DALES has no RGB — Sonata was
-pretrained with scene-level RandomDropColor/RandomDropStrength (drop_value=0.0)
-so `FillMissingFeat` synthesizes a zero "color" channel (in_channels=7). No
-learned masked-feat at pretrain time, so literal zero fill is faithful.
-
-10 probes, identical config, each getting its own random Linear init from
-sequential construction in GridProbeSegmentorV2.__init__ (no seed field
-needed). Test-set aggregation: GridProbeSeedEnsembleTester (in place of
-GridProbeWinnerSelector) + GridProbeSemSegTester (test = dict(...) below)
-reload every probe's best-val checkpoint, run one shared-backbone test pass
-across all 10, and write save_path/seed_ensemble_results.json with
-mean/std of test_mIoU/test_mAcc/test_allAcc.
+Derived from configs/experiment/w110/2/grid_seed_dales/spunet-v1m0-dales-lin-grid-seed_5.py
+with everything shrunk for speed:
+  - RANDOM-INIT backbone: no CheckpointLoader hook. SpUNet's real checkpoint
+    (job 1052217) isn't mirrored locally (only 862680/873542 are) -- fine
+    here since we only care about whether metrics/artifacts reach wandb, not
+    whether they're any good. Swap in a CheckpointLoader + real `weight=` to
+    also sanity-check against real features.
+  - data.{train,val,test}.max_sample=2 -- a couple of DALES tiles instead of
+    29 train / 11 test.
+  - epoch=4, eval_epoch=2 -> loop=2 (classic mode, cfg.epoch % cfg.eval_epoch
+    == 0 required) -- 2 short training epochs, 2 validations, so
+    GridProbeCheckpointSaver/GridProbeEvaluator's resume-safe bookkeeping and
+    GridProbeSeedEnsembleTester's best-checkpoint reload both actually get
+    exercised before the final test pass.
+  - batch_size_per_gpu=2, num_worker(_test)=2, log_interval=1: matched to the
+    tiny sample counts above.
+  - Still 10 probes / seeds -- that's the actual thing being smoke-tested.
+  - wandb_project has a "_debug" suffix so this doesn't mix into the real
+    pointcept_dales project history.
 """
 
-_base_ = ["../_base_/default_runtime.py"]
+_base_ = ["../../../../_base_/default_runtime.py"]
 
-grp_exp = 1
-num_exp = 4
+grp_exp = 2
+num_exp = 1
 
 num_classes = 8
 ignore_index = 8
 grid_size = 0.1
 point_max = 102400
+coord_feat_scale = 0.01  # must match Flair3D multitask pretrain (irrelevant here -- random init)
 strength_feat_scale = 1 / 60000  # DALES raw intensity → Flair3D [0,1] convention
 
 num_gpu = 1
-epoch = 400
-eval_epoch = 10
-lr = 0.02  # best lr from the earlier 12-value lr-grid sweep on DALES/Sonata
+epoch = 4
+eval_epoch = 2
+lr = 0.005  # same fixed lr as the real spunet-v1m0-dales-lin-grid-seed_5.py
 patch_size = 1024
 
 test_single_fragment = True
 
-# misc custom setting
-batch_size_per_gpu = 24
+# misc custom setting -- shrunk for a tiny local smoke test
+batch_size_per_gpu = 2
 batch_size = batch_size_per_gpu * num_gpu
 batch_size_val = 1
 batch_size_test = 1
-num_worker = 24  # H100 Jean-Zay
+num_worker = 2
 num_worker_test = 2
 mix_prob = 0.8
 empty_cache = False
@@ -55,27 +60,25 @@ enable_amp = True
 dataset_type = "DALESDataset"
 data_root = "data/dales"
 
-weight = "/lustre/fsn1/projects/rech/unv/usi32yh/logs/pointcept_logs/slurm/862680/model/epoch_120.pth"
+# No weight= / CheckpointLoader -- deliberately random-init backbone, see docstring.
 
-wandb_project = f"pointcept_{dataset_type[:-7].lower()}"
+wandb_project = f"pointcept_{dataset_type[:-7].lower()}_debug"
 
 # Hooks
-# Order matters: GridProbeEvaluator before GridProbeCheckpointSaver/CheckpointSaver;
-# GridProbeSeedEnsembleTester last (frees the per-probe optimizers/schedulers, then
-# runs one shared-backbone GridProbeSemSegTester pass across ALL 10 probes and
-# aggregates mean/std — replaces PreciseEvaluator, which never sets
-# raw_model.active_probe and would break under GridProbeSegmentorV2, and replaces
-# GridProbeWinnerSelector, which only tests a single "winner" — there is no winner
-# concept for a seed ensemble).
+# No CheckpointLoader: fresh random-init backbone (see docstring). Order
+# otherwise matches every other seed-ensemble config: GridProbeEvaluator
+# before GridProbeCheckpointSaver/CheckpointSaver; GridProbeSeedEnsembleTester
+# last (frees the per-probe optimizers/schedulers, then runs one
+# shared-backbone GridProbeSemSegTester pass across ALL 10 probes and
+# aggregates mean/std/max/min).
 hooks = [
-    dict(
-        type="CheckpointLoader",
-        keywords="module.student.backbone",
-        replacement="module.backbone",
-    ),
+    # Local-only: hecate's spconv autotuner crashes on SpUNet's 2nd distinct
+    # conv shape (see SpconvNativeConvAlgo docstring) -- not needed on JZ,
+    # not present in the real (non-debug) spunet-*-lin-grid-seed_*.py configs.
+    dict(type="SpconvNativeConvAlgo"),
     dict(type="ModelHook"),
-    dict(type="IterationTimer", warmup_iter=2),
-    dict(type="InformationWriter", log_interval=10),
+    dict(type="IterationTimer", warmup_iter=1),
+    dict(type="InformationWriter", log_interval=1),
     dict(type="GridProbeEvaluator", write_cls_iou=True),
     dict(type="GridProbeCheckpointSaver"),
     dict(type="CheckpointSaver", save_freq=None),
@@ -100,18 +103,18 @@ names = [
     "Unknown",
 ]
 
-# Encoder levels (enc_mode): 48+96+192+384+512 = 1232
-backbone_out_channels = 1232
+# point_mode multiscale concat: stem(32) + stage0(32) + stage1(64) + stage2(128) + stage3/bottleneck(256)
+backbone_channels = (32, 64, 128, 256, 256, 128, 96, 96)
+backbone_out_channels = 32 + sum(backbone_channels[:4])  # 512
 
-# Seed-ensemble probes — ce_lovasz, AdamW/wd0/OneCycleLR warmup5%, lr fixed at the
-# best value from the earlier lr-grid sweep; only the random init differs across
-# probes (each ProbeHead.linear draws its own init from sequential construction in
-# GridProbeSegmentorV2.__init__ — no explicit seed field needed).
+# Seed-ensemble probes — ce_lovasz, AdamW/wd0/OneCycleLR warmup5%, lr fixed;
+# only the random init differs across probes (each ProbeHead.linear draws its
+# own init from sequential construction in GridProbeSegmentorV2.__init__ —
+# no explicit seed field needed). Same 10-probe pattern as the real config.
 _criteria = [
     dict(type="CrossEntropyLoss", loss_weight=1.0, ignore_index=ignore_index),
     dict(type="LovaszLoss", mode="multiclass", loss_weight=1.0, ignore_index=ignore_index),
 ]
-num_seeds = 10
 
 probes = {
     f"ce_lovasz_init{i}": dict(
@@ -130,14 +133,13 @@ probes = {
         ),
         grad_clip=3.0,
     )
-    for i in range(num_seeds)
+    for i in range(10)
 }
 del _criteria
 
-
 wandb_run_name = (
-    f"Sonata SeedEnsemble DALES {grp_exp}.{num_exp}) epoch_120, enc multiscale 1232ch, "
-    f"{len(probes)} inits, lr={lr}, epoch={epoch}"
+    f"[DEBUG] SpUNet SeedEnsemble DALES {grp_exp}.{num_exp}) RANDOM INIT, "
+    f"max_sample=2, epoch={epoch} -- wandb render smoke test"
 )
 
 # model settings
@@ -149,32 +151,21 @@ model = dict(
     target_key="segment",
     backbone_out_channels=backbone_out_channels,
     backbone=dict(
-        type="PT-v3m2",
-        in_channels=7,  # coord(3) + color(3, fake/zero) + strength(1)
-        order=("z", "z-trans", "hilbert", "hilbert-trans"),
-        stride=(3, 3, 3, 3),
-        enc_depths=(3, 3, 3, 12, 3),
-        enc_channels=(48, 96, 192, 384, 512),
-        enc_num_head=(3, 6, 12, 24, 32),
-        enc_patch_size=(patch_size, patch_size, patch_size, patch_size, patch_size),
-        mlp_ratio=4,
-        qkv_bias=True,
-        qk_scale=None,
-        attn_drop=0.0,
-        proj_drop=0.0,
-        drop_path=0.3,
-        shuffle_orders=True,
-        pre_norm=True,
-        enable_rpe=False,
-        enable_flash=True,
-        upcast_attention=False,
-        upcast_softmax=False,
-        traceable=False,
-        mask_token=False,
-        enc_mode=True,
-        freeze_encoder=False,
+        type="SpUNet-v1m1",
+        in_channels=7,  # coord(3) + color(3, fake) + strength(1)
+        num_classes=0,  # unused in point_mode (no final conv applied)
+        channels=backbone_channels,
+        layers=(2, 3, 4, 6, 2, 2, 2, 2),
+        stride=3,
+        point_mode=True,
     ),
     freeze_backbone=True,
+    bn_eval_mode=True,  # freeze BatchNorm running stats during probe training (real BN here)
+    drop_path_eval_mode=True,  # no-op — SpUNet has no DropPath modules
+    feature_mask_values=dict(
+        enable=True,
+        masked_feat_keys=["color", "strength"],
+    ),
 )
 
 # trainer settings — GridProbeTrainer builds one optimizer/scheduler per probe
@@ -198,6 +189,7 @@ data = dict(
         type=dataset_type,
         split="train",
         data_root=data_root,
+        max_sample=2,
         transform=[
             dict(type="CenterShift", apply_z=True),
             dict(type="Z_MinShift"),
@@ -223,7 +215,7 @@ data = dict(
                 type="Collect",
                 keys=("coord", "grid_coord", "segment", "grid_size"),
                 feat_keys=feat_keys,
-                feat_scales=dict(strength=strength_feat_scale),
+                feat_scales=dict(coord=coord_feat_scale, strength=strength_feat_scale),
             ),
         ],
         test_mode=False,
@@ -232,6 +224,7 @@ data = dict(
         type=dataset_type,
         split="test",
         data_root=data_root,
+        max_sample=2,
         transform=[
             dict(type="CenterShift", apply_z=True),
             dict(type="Z_MinShift"),
@@ -251,7 +244,7 @@ data = dict(
                 type="Collect",
                 keys=("coord", "grid_coord", "segment", "origin_segment", "inverse"),
                 feat_keys=feat_keys,
-                feat_scales=dict(strength=strength_feat_scale),
+                feat_scales=dict(coord=coord_feat_scale, strength=strength_feat_scale),
             ),
         ],
         test_mode=False,
@@ -260,6 +253,7 @@ data = dict(
         type=dataset_type,
         split="test",
         data_root=data_root,
+        max_sample=2,
         transform=[
             dict(type="CenterShift", apply_z=True),
             dict(type="Z_MinShift"),
@@ -284,7 +278,7 @@ data = dict(
                     keys=("coord", "grid_coord", "index"),
                     optional_keys=("inverse",),  # for test_single_fragment broadcast
                     feat_keys=feat_keys,
-                    feat_scales=dict(strength=strength_feat_scale),
+                    feat_scales=dict(coord=coord_feat_scale, strength=strength_feat_scale),
                 ),
             ],
             aug_transform=[[dict(type="RandomRotateTargetAngle", angle=[0], axis="z", center=[0, 0, 0], p=1)]],

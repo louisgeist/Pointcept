@@ -10,6 +10,7 @@ pointcept/engines/train.py).
 import csv
 import json
 import os
+import traceback
 
 import numpy as np
 import torch
@@ -520,3 +521,187 @@ class GridProbeWinnerSelector(HookBase):
             for key, value in summary.items():
                 wandb.run.summary[key] = value
             wandb.log(summary)
+
+
+@HOOKS.register_module()
+class GridProbeSeedEnsembleTester(HookBase):
+    """For a "same hyperparameters, different random init" grid rather than a
+    hyperparameter search: there is no single winner to pick, just N
+    replicate probes to average. Reloads each probe's own best-val checkpoint
+    (already saved individually by GridProbeCheckpointSaver for every probe,
+    not just a winner), runs ONE shared-backbone test pass across all of them
+    (GridProbeSemSegTester -- one backbone forward per fragment, N heads),
+    and writes mean/std of the per-probe test metrics to
+    save_path/seed_ensemble_results.json.
+
+    Use in place of GridProbeWinnerSelector, last in the hooks list, with
+    cfg.test = dict(type="GridProbeSemSegTester", ...).
+
+    Robustness: per_probe always has one entry per probe in raw_model.probe_names
+    (probe_config + best_val_mIoU are always populated from in-memory state that
+    can't be missing; test metrics are filled in whenever the tester produced
+    them for that probe, null otherwise) and the JSON is written even if the
+    test pass raises partway through -- a crash/OOM on the shared test forward
+    must not also destroy the val-only results that already exist for every
+    probe. mean/std/max/min are computed only over probes that actually have a
+    numeric test/mIoU, so one missing/NaN probe can't crash the whole write.
+    """
+
+    def after_train(self):
+        raw_model = _raw_model(self.trainer)
+        model_dir = os.path.join(self.trainer.cfg.save_path, "model")
+        for name in raw_model.probe_names:
+            ckpt_path = os.path.join(model_dir, f"probe_best_{name}.pth")
+            if os.path.isfile(ckpt_path):
+                state = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+                raw_model.heads[name].load_state_dict(state)
+            else:
+                self.trainer.logger.warning(
+                    "No probe_best_%s.pth found; testing with the probe's "
+                    "last-epoch weights instead of its best-epoch weights.",
+                    name,
+                )
+        raw_model.active_probe = None  # all-probes mode, required by GridProbeSemSegTester
+
+        if getattr(self.trainer, "optimizer", None) is not None:
+            del self.trainer.optimizer
+            self.trainer.optimizer = None
+        if getattr(self.trainer, "scheduler", None) is not None:
+            del self.trainer.scheduler
+            self.trainer.scheduler = None
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        from pointcept.engines.test import TESTERS
+
+        cfg = self.trainer.cfg
+        metrics_by_probe = {}
+        test_error = None
+        try:
+            test_cfg = dict(cfg=cfg, model=self.trainer.model, **cfg.test)
+            tester = TESTERS.build(test_cfg)
+            tester.test()
+            metrics_by_probe = getattr(tester, "test_metrics_by_probe", None) or {}
+        except Exception:
+            # Whatever happened (OOM on the shared test forward, a bad scene,
+            # ...), every probe's val-only results (best_val_mIoU, checkpoint)
+            # already exist and must still make it to disk below -- only the
+            # test/* fields end up null instead of losing the whole write.
+            test_error = traceback.format_exc()
+            self.trainer.logger.error(
+                "GridProbeSeedEnsembleTester: test pass failed, writing "
+                "val-only results for all probes instead of crashing.\n%s",
+                test_error,
+            )
+
+        if not is_main_process():
+            return
+
+        evaluator = _find_hook(self.trainer, GridProbeEvaluator)
+        best_val_by_probe = evaluator._best_miou_by_probe if evaluator is not None else {}
+
+        missing = [name for name in raw_model.probe_names if name not in metrics_by_probe]
+        if missing:
+            self.trainer.logger.warning(
+                "GridProbeSeedEnsembleTester: %d/%d probes have no test metrics "
+                "(missing: %s) -- mean/std/max/min computed over the rest only.",
+                len(missing), len(raw_model.probe_names), missing,
+            )
+
+        def _stats(metric_key):
+            values = [
+                m[metric_key] for m in metrics_by_probe.values() if metric_key in m
+            ]
+            if not values:
+                return dict(mean=None, std=None, max=None, min=None)
+            arr = np.array(values, dtype=float)
+            return dict(
+                mean=float(arr.mean()), std=float(arr.std()),
+                max=float(arr.max()), min=float(arr.min()),
+            )
+
+        miou_stats = _stats("test/mIoU")
+        macc_stats = _stats("test/mAcc")
+        allacc_stats = _stats("test/allAcc")
+
+        summary = {
+            "num_probes": len(raw_model.probe_names),
+            "num_probes_with_test_metrics": len(metrics_by_probe),
+            "test_error": test_error,
+            "test_mIoU_mean": miou_stats["mean"],
+            "test_mIoU_std": miou_stats["std"],
+            "test_mIoU_max": miou_stats["max"],
+            "test_mIoU_min": miou_stats["min"],
+            "test_mAcc_mean": macc_stats["mean"],
+            "test_mAcc_std": macc_stats["std"],
+            "test_mAcc_max": macc_stats["max"],
+            "test_mAcc_min": macc_stats["min"],
+            "test_allAcc_mean": allacc_stats["mean"],
+            "test_allAcc_std": allacc_stats["std"],
+            "test_allAcc_max": allacc_stats["max"],
+            "test_allAcc_min": allacc_stats["min"],
+            "per_probe": {
+                name: {
+                    "probe_config": dict(raw_model.probe_configs[name]),
+                    "best_val_mIoU": (
+                        float(best_val_by_probe[name])
+                        if name in best_val_by_probe
+                        else None
+                    ),
+                    **metrics_by_probe.get(name, {}),
+                }
+                for name in raw_model.probe_names
+            },
+        }
+        out_path = os.path.join(cfg.save_path, "seed_ensemble_results.json")
+        _atomic_write_json(out_path, summary)
+        self.trainer.logger.info(
+            "Seed-ensemble test result (%d/%d probes with test metrics): "
+            "mIoU=%.4f+/-%.4f [%.4f, %.4f], mAcc=%.4f+/-%.4f, allAcc=%.4f+/-%.4f. Wrote %s",
+            summary["num_probes_with_test_metrics"], summary["num_probes"],
+            summary["test_mIoU_mean"] or float("nan"),
+            summary["test_mIoU_std"] or float("nan"),
+            summary["test_mIoU_min"] or float("nan"),
+            summary["test_mIoU_max"] or float("nan"),
+            summary["test_mAcc_mean"] or float("nan"),
+            summary["test_mAcc_std"] or float("nan"),
+            summary["test_allAcc_mean"] or float("nan"),
+            summary["test_allAcc_std"] or float("nan"),
+            out_path,
+        )
+
+        if getattr(cfg, "enable_wandb", False) and wandb.run is not None:
+            wandb_summary = {
+                "seed_ensemble/num_probes": summary["num_probes"],
+                "seed_ensemble/num_probes_with_test_metrics": summary["num_probes_with_test_metrics"],
+                "seed_ensemble/test_mIoU_mean": summary["test_mIoU_mean"],
+                "seed_ensemble/test_mIoU_std": summary["test_mIoU_std"],
+                "seed_ensemble/test_mIoU_max": summary["test_mIoU_max"],
+                "seed_ensemble/test_mIoU_min": summary["test_mIoU_min"],
+                "seed_ensemble/test_mAcc_mean": summary["test_mAcc_mean"],
+                "seed_ensemble/test_mAcc_std": summary["test_mAcc_std"],
+                "seed_ensemble/test_mAcc_max": summary["test_mAcc_max"],
+                "seed_ensemble/test_mAcc_min": summary["test_mAcc_min"],
+                "seed_ensemble/test_allAcc_mean": summary["test_allAcc_mean"],
+                "seed_ensemble/test_allAcc_std": summary["test_allAcc_std"],
+                "seed_ensemble/test_allAcc_max": summary["test_allAcc_max"],
+                "seed_ensemble/test_allAcc_min": summary["test_allAcc_min"],
+            }
+            for key, value in wandb_summary.items():
+                wandb.run.summary[key] = value
+            wandb.log(wandb_summary)
+
+            # Per-seed test mIoU as a small wandb Table -- the summary above
+            # only ever gives 4 numbers (mean/std/max/min); this is what lets
+            # the actual 10-point distribution be inspected/plotted in the UI.
+            table = wandb.Table(columns=["probe_name", "test_mIoU", "test_mAcc", "test_allAcc", "best_val_mIoU"])
+            for name in raw_model.probe_names:
+                row = summary["per_probe"][name]
+                table.add_data(
+                    name,
+                    row.get("test/mIoU"),
+                    row.get("test/mAcc"),
+                    row.get("test/allAcc"),
+                    row["best_val_mIoU"],
+                )
+            wandb.log({"seed_ensemble/per_probe_table": table})

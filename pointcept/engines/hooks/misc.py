@@ -1189,6 +1189,46 @@ class WeightDecaySchedular(HookBase):
 
 
 @HOOKS.register_module()
+class SpconvNativeConvAlgo(HookBase):
+    """Force every spconv layer to ConvAlgo.Native (plain gather-scatter)
+    instead of the default auto-tuned MaskImplicitGemm path.
+
+    Local-machine workaround: on this machine's spconv-cu118 2.3.8 /
+    cumm-cu118 0.7.11 combo, the auto-tuner's kernel search comes up empty as
+    soon as a second distinct (in_channels, out_channels, kernel_size)
+    SubMConv3d shape is used in the same process, crashing a few layers in
+    with an "illegal memory access" (see scripts/_grid_probe_extract_common.py's
+    force_native_conv_algo, which this mirrors for the training path instead
+    of a standalone extraction script). Not needed on Jean-Zay's spconv
+    build; harmless there regardless since ConvAlgo.Native is always
+    numerically correct, just slower than the fused kernel.
+
+    No rank-gating: every DDP rank holds the same module graph and must end
+    up with the same .algo, so this runs identically on all ranks (structural
+    model mutation, not an I/O side effect).
+    """
+
+    def before_train(self):
+        import spconv.pytorch as spconv
+        from spconv.pytorch.core import ConvAlgo
+
+        model = (
+            self.trainer.model.module
+            if hasattr(self.trainer.model, "module")
+            else self.trainer.model
+        )
+        n = 0
+        for m in model.modules():
+            if isinstance(m, spconv.conv.SparseConvolution):
+                m.algo = ConvAlgo.Native
+                n += 1
+        if n:
+            self.trainer.logger.info(
+                "SpconvNativeConvAlgo: forced ConvAlgo.Native on %d spconv layer(s).", n
+            )
+
+
+@HOOKS.register_module()
 class GarbageHandler(HookBase):
     def __init__(self, interval=150, disable_auto=True, empty_cache=False):
         self.interval = interval

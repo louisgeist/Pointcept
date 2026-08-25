@@ -10,6 +10,7 @@ from contextlib import nullcontext
 from uuid import uuid4
 import os
 import time
+import traceback
 import numpy as np
 import wandb
 from collections import OrderedDict
@@ -769,6 +770,239 @@ class SemSegTester(TesterBase):
                 m_iou=m_iou,
             )
         )
+
+    @staticmethod
+    def collate_fn(batch):
+        return batch
+
+
+@TESTERS.register_module()
+class GridProbeSemSegTester(TesterBase):
+    """SemSegTester variant for GridProbeSegmentorV2: one shared backbone
+    forward per fragment produces logits for every probe head at once
+    (raw_model.active_probe must be None -- "all probes" mode, see
+    GridProbeSegmentorV2.forward's seg_logits_by_task), instead of the usual
+    one-model-call-per-probe a plain SemSegTester would need if rerun once
+    per probe. Mirrors GridProbeEvaluator's val loop
+    (pointcept/engines/hooks/grid_probe.py), applied to the test-time
+    fragment-voting loop instead.
+
+    Only supports the unpacked (batch_size_test_per_gpu == 1) path -- every
+    grid-probe downstream config already uses that (see CLAUDE.md: DALES/H3D
+    batch_size_test=1) -- and skips the dataset-specific submission-file
+    writers (ScanNet/S3DIS/SemanticKITTI/NuScenes), since grid-probe configs
+    never target those.
+
+    Produces self.test_metrics_by_probe: dict[probe_name -> log_dict], each
+    log_dict shaped like SemSegTester's self.test_metrics
+    ("test/mIoU"/"test/mAcc"/"test/allAcc"/"test/iou_<cls>"/...).
+    """
+
+    def test(self):
+        logger = get_root_logger()
+        if self._uses_multi_scene_batches():
+            raise NotImplementedError(
+                "GridProbeSemSegTester only supports batch_size_test_per_gpu=1 "
+                "(packed multi-scene batches not implemented)."
+            )
+        raw_model = self.model.module if hasattr(self.model, "module") else self.model
+        if raw_model.active_probe is not None:
+            raise RuntimeError(
+                "GridProbeSemSegTester requires raw_model.active_probe=None "
+                "(all-probes mode), got %r." % (raw_model.active_probe,)
+            )
+        probe_names = raw_model.probe_names
+        num_classes = self.cfg.data.num_classes
+        log_test_f1 = getattr(self.cfg, "log_test_f1", False)
+
+        logger.info(
+            ">>>>>>>>>>>>>>>> Start Evaluation (GridProbe, %d probes) >>>>>>>>>>>>>>>>",
+            len(probe_names),
+        )
+        self.begin_test_timing()
+
+        batch_time = AverageMeter()
+        self.model.eval()
+
+        record = {name: {} for name in probe_names}
+        skipped_scenes = []
+        for idx, data_dict in enumerate(self.test_loader):
+            start = time.time()
+            data_dict = data_dict[0]  # batch size 1 (asserted above)
+            data_name_hint = data_dict.get("name", f"scene_idx_{idx}")
+            try:
+                fragment_list = data_dict.pop("fragment_list")
+                segment = data_dict.pop("segment")
+                data_name = data_dict.pop("name")
+
+                pred = {
+                    name: torch.zeros((segment.size, num_classes)).cuda()
+                    for name in probe_names
+                }
+                use_voxel_broadcast = "inverse" in fragment_list[0]
+                for i in range(len(fragment_list)):
+                    input_dict = collate_fn(fragment_list[i : i + 1])
+                    for key in input_dict.keys():
+                        if isinstance(input_dict[key], torch.Tensor):
+                            input_dict[key] = input_dict[key].cuda(non_blocking=True)
+                    idx_part = input_dict["index"]
+                    with torch.no_grad():
+                        logits_by_task = self.model(input_dict)["seg_logits_by_task"]
+                    if self.cfg.empty_cache:
+                        torch.cuda.empty_cache()
+                    if use_voxel_broadcast:
+                        inv = fragment_list[i]["inverse"]
+                        inv = (
+                            torch.from_numpy(inv).long().cuda()
+                            if isinstance(inv, np.ndarray)
+                            else inv.long().cuda()
+                        )
+                        for name in probe_names:
+                            pred_part = F.softmax(logits_by_task[name], -1)
+                            pred[name] += pred_part[inv, :]
+                    else:
+                        for name in probe_names:
+                            pred_part = F.softmax(logits_by_task[name], -1)
+                            bs = 0
+                            for be in input_dict["offset"]:
+                                pred[name][idx_part[bs:be], :] += pred_part[bs:be]
+                                bs = be
+
+                    logger.info(
+                        "Test: {}/{}-{data_name}, Batch: {batch_idx}/{batch_num}".format(
+                            idx + 1,
+                            len(self.test_loader),
+                            data_name=data_name,
+                            batch_idx=i,
+                            batch_num=len(fragment_list),
+                        )
+                    )
+
+                if "origin_segment" in data_dict.keys():
+                    assert "inverse" in data_dict.keys()
+                    segment = data_dict["origin_segment"]
+
+                for name in probe_names:
+                    pred_name = pred[name].max(1)[1].data.cpu().numpy()
+                    if "origin_segment" in data_dict.keys():
+                        pred_name = pred_name[data_dict["inverse"]]
+                    intersection, union, target = intersection_and_union(
+                        pred_name, segment, num_classes, self.cfg.data.ignore_index
+                    )
+                    record[name][data_name] = dict(
+                        intersection=intersection, union=union, target=target
+                    )
+
+                batch_time.update(time.time() - start)
+                logger.info(
+                    "Test: {} [{}/{}]-{} Batch {batch_time.val:.3f} ({batch_time.avg:.3f})".format(
+                        data_name,
+                        idx + 1,
+                        len(self.test_loader),
+                        segment.size,
+                        batch_time=batch_time,
+                    )
+                )
+            except Exception:
+                # One scene's forward/accumulation failing (e.g. OOM -- the N-probe
+                # accumulation buffers scale with probe count) must not lose every
+                # other scene's and every other probe's already-computed results;
+                # log it, drop this scene from the confusion-matrix totals, and
+                # keep going. See GridProbeSeedEnsembleTester for the matching
+                # all-or-nothing-avoidance on the aggregation side.
+                logger.error(
+                    "GridProbeSemSegTester: scene %r failed (%d/%d), skipping -- "
+                    "results for other scenes/probes are kept.\n%s",
+                    data_name_hint,
+                    idx + 1,
+                    len(self.test_loader),
+                    traceback.format_exc(),
+                )
+                skipped_scenes.append(data_name_hint)
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                continue
+
+        if skipped_scenes:
+            logger.warning(
+                "GridProbeSemSegTester: %d/%d scene(s) skipped due to errors: %s",
+                len(skipped_scenes), len(self.test_loader), skipped_scenes,
+            )
+        self.skipped_scenes = skipped_scenes
+
+        logger.info("Syncing ...")
+        comm.synchronize()
+        record_sync = comm.gather(record, dst=0)
+
+        test_metrics_by_probe = None
+        if comm.is_main_process():
+            merged_record = {name: {} for name in probe_names}
+            for _ in range(len(record_sync)):
+                r = record_sync.pop()
+                for name in probe_names:
+                    merged_record[name].update(r[name])
+                del r
+
+            test_metrics_by_probe = {}
+            for name in probe_names:
+                per_scene = merged_record[name]
+                if not per_scene:
+                    # Every scene that reached this point failed for every probe
+                    # (all-or-nothing per scene, see the try/except above) -- no
+                    # confusion-matrix totals to sum, leave this probe out of
+                    # test_metrics_by_probe rather than crashing on an empty sum.
+                    logger.error(
+                        "[probe=%s] No scenes produced results (all %d skipped) -- "
+                        "no test metrics for this probe.",
+                        name, len(skipped_scenes),
+                    )
+                    continue
+                intersection = np.sum(
+                    [m["intersection"] for m in per_scene.values()], axis=0
+                )
+                union = np.sum([m["union"] for m in per_scene.values()], axis=0)
+                target = np.sum([m["target"] for m in per_scene.values()], axis=0)
+
+                iou_class = intersection / (union + 1e-10)
+                accuracy_class = intersection / (target + 1e-10)
+                mIoU = np.mean(iou_class)
+                mAcc = np.mean(accuracy_class)
+                allAcc = sum(intersection) / (sum(target) + 1e-10)
+
+                logger.info(
+                    "[probe=%s] Test result: mIoU/mAcc/allAcc %.4f/%.4f/%.4f",
+                    name,
+                    mIoU,
+                    mAcc,
+                    allAcc,
+                )
+
+                log_dict = {
+                    "test/mIoU": float(mIoU),
+                    "test/mAcc": float(mAcc),
+                    "test/allAcc": float(allAcc),
+                }
+                for i in range(num_classes):
+                    cls_name = self.cfg.data.names[i]
+                    log_dict[f"test/iou_{cls_name}"] = float(iou_class[i])
+                    log_dict[f"test/acc_{cls_name}"] = float(accuracy_class[i])
+                if log_test_f1:
+                    f1_class, macro_f1 = f1_scores_from_hist(intersection, union, target)
+                    log_dict["test/f1_macro"] = float(macro_f1)
+                    for i in range(num_classes):
+                        cls_name = self.cfg.data.names[i]
+                        log_dict[f"test/f1_{cls_name}"] = float(f1_class[i])
+                test_metrics_by_probe[name] = log_dict
+
+        # Additive: lets a caller that builds this tester in-process (e.g. a
+        # seed-ensemble aggregation hook) read the final per-probe metrics
+        # without reparsing the log. None on non-main ranks, same convention
+        # as SemSegTester.test_metrics.
+        self.test_metrics_by_probe = test_metrics_by_probe
+
+        self.end_test_timing_and_log()
+        if comm.is_main_process():
+            logger.info("<<<<<<<<<<<<<<<<< End Evaluation <<<<<<<<<<<<<<<<<")
 
     @staticmethod
     def collate_fn(batch):
