@@ -54,7 +54,7 @@ data_root = "data/dales"
 
 weight = "/lustre/fswork/projects/rech/unv/usi32yh/Pointcept/logs/slurm/873542/model/model_best.pth"
 
-wandb_project = f"pointcept_{dataset_type[:-7].lower()}_ablation"
+wandb_project = f"pointcept_{dataset_type[:-7].lower()}"
 
 # Hooks
 # Order matters: GridProbeEvaluator before GridProbeCheckpointSaver/CheckpointSaver;

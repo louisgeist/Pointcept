@@ -157,7 +157,12 @@ ROWS = [
     # (num_exp, slug, dataset, ref, lr)
     (1, "sonata-v1m2", "h3d", "configs/h3d/sonata-v1m2-h3d-lin-grid.py", 0.02),
     (1, "sonata-v1m2", "eclair", "configs/eclair/sonata-v1m2-eclair-lin-grid.py", 0.02),
-    (1, "sonata-v1m2", "dales", "git:HEAD:configs/dales/sonata-v1m2-dales-lin-grid.py", 0.02),
+    # 72ef97e is the last commit before this file was hand-converted to the
+    # seed-ensemble shape earlier this session -- HEAD no longer has the
+    # original lr-grid sweep text, so this ref must stay pinned to that SHA
+    # (not "HEAD") or this row breaks again the next time this repo's HEAD
+    # moves past a commit touching this file.
+    (1, "sonata-v1m2", "dales", "git:72ef97e:configs/dales/sonata-v1m2-dales-lin-grid.py", 0.02),
     (2, "litept-b-v1m0", "h3d", "configs/h3d/litept-b-v1m0-h3d-lin_enc.py", 0.005),
     (2, "litept-b-v1m0", "eclair", "configs/eclair/litept-b-v1m0-eclair-lin_enc.py", 0.01),
     (2, "litept-b-v1m0", "dales", "configs/dales/litept-b-v1m0-dales-lin-grid-enc.py", 0.02),
@@ -180,6 +185,7 @@ ROWS = [
     (8, "litept-b-v1m0-monoElev", "eclair", "configs/experiment/w110/1/abla_grid_on_eclair/litept-b-v1m0-eclair-lin_enc_3.py", 0.005),
     (8, "litept-b-v1m0-monoElev", "dales", "configs/experiment/w110/1/abla_grid_on_dales/litept-b-v1m0-dales-lin-grid-enc_3.py", 0.02),
     (9, "litept-b-v1m0-SS", "h3d", "configs/h3d/litept-b-v1m0-h3d-lin_dec_ss.py", 0.1),
+    (9, "litept-b-v1m0-SS", "eclair", "configs/eclair/litept-b-v1m0-eclair-lin_dec_ss.py", 0.1),
     (9, "litept-b-v1m0-SS", "dales", "configs/dales/litept-b-v1m0-dales-lin-grid-dec-ss.py", 0.1),
 ]
 
@@ -223,95 +229,6 @@ def main():
         out_path = out_dir / NAME_TEMPLATES[(num_exp, dataset)]
         out_path.write_text(out_text)
         print(f"wrote {out_path.relative_to(REPO_ROOT)}  (lr={lr}, ref={ref})")
-
-    # Row 9 / ECLAIR: no existing SS reference config -- derive from the
-    # ECLAIR "encoder" reference (dataset transforms/feat_scales/names) with
-    # the SS backbone dict swapped in (same job 873542, dec_traceable=False
-    # single-scale 72ch tap instead of the 1386ch encoder concat) — see
-    # configs/h3d/litept-b-v1m0-h3d-lin_dec_ss.py /
-    # configs/dales/litept-b-v1m0-dales-lin-grid-dec-ss.py for the pattern.
-    # DERIVED, UNVERIFIED — double check before a JZ launch.
-    eclair_enc_ref = REPO_ROOT / "configs/eclair/litept-b-v1m0-eclair-lin_enc.py"
-    text = eclair_enc_ref.read_text()
-    text = transform(text, lr=0.1, num_exp=9)
-
-    old_backbone_out = (
-        "# Encoder levels (enc_mode): 54+108+216+432+576 = 1386\n"
-        "enc_channels = (54, 108, 216, 432, 576)\n"
-        "backbone_out_channels = sum(enc_channels)"
-    )
-    new_backbone_out = (
-        "# Final decoder stage only (dec_traceable=False): dec_channels[0]=72ch.\n"
-        "# DERIVED/UNVERIFIED — no existing ECLAIR SS reference config; ported from\n"
-        "# configs/h3d/litept-b-v1m0-h3d-lin_dec_ss.py & configs/dales/litept-b-v1m0-\n"
-        "# dales-lin-grid-dec-ss.py (same job 873542 checkpoint). Double-check before launch.\n"
-        "dec_channels = (72, 108, 216, 432)\n"
-        "bottleneck_channels = 576\n"
-        "backbone_out_channels = dec_channels[0]  # 72"
-    )
-    assert old_backbone_out in text, "ECLAIR encoder backbone_out_channels block shape changed"
-    text = text.replace(old_backbone_out, new_backbone_out)
-
-    old_backbone = """backbone=dict(
-        type="LitePT-v1",
-        in_channels=7,  # coord(3) + color(3) + strength(1)
-        order=("z", "z-trans", "hilbert", "hilbert-trans"),
-        stride=(3, 3, 3, 3),
-        enc_depths=(3, 3, 3, 12, 3),
-        enc_channels=enc_channels,
-        enc_num_head=(3, 6, 12, 24, 32),
-        enc_patch_size=(patch_size, patch_size, patch_size, patch_size, patch_size),
-        enc_conv=(True, True, True, False, False),
-        enc_attn=(False, False, False, True, True),
-        enc_rope_freq=(100.0, 100.0, 100.0, 100.0, 100.0),
-        mlp_ratio=4,
-        qkv_bias=True,
-        qk_scale=None,
-        attn_drop=0.0,
-        proj_drop=0.0,
-        drop_path=0.3,
-        shuffle_orders=True,
-        pre_norm=True,
-        enc_mode=True,
-    ),"""
-    new_backbone = """backbone=dict(
-        type="LitePT-v1",
-        in_channels=7,  # coord(3) + color(3) + strength(1)
-        order=("z", "z-trans", "hilbert", "hilbert-trans"),
-        stride=(3, 3, 3, 3),
-        enc_depths=(3, 3, 3, 12, 3),
-        enc_channels=(54, 108, 216, 432, bottleneck_channels),
-        enc_num_head=(3, 6, 12, 24, 32),
-        enc_patch_size=(patch_size, patch_size, patch_size, patch_size, patch_size),
-        enc_conv=(True, True, True, False, False),
-        enc_attn=(False, False, False, True, True),
-        enc_rope_freq=(100.0, 100.0, 100.0, 100.0, 100.0),
-        dec_depths=(0, 0, 0, 0),
-        dec_channels=dec_channels,
-        dec_num_head=(4, 6, 12, 24),
-        dec_patch_size=(patch_size, patch_size, patch_size, patch_size),
-        dec_conv=(False, False, False, False),
-        dec_attn=(False, False, False, False),
-        dec_rope_freq=(100.0, 100.0, 100.0, 100.0),
-        mlp_ratio=4,
-        qkv_bias=True,
-        qk_scale=None,
-        attn_drop=0.0,
-        proj_drop=0.0,
-        drop_path=0.3,
-        shuffle_orders=True,
-        pre_norm=True,
-        enc_mode=False,
-        dec_traceable=False,
-    ),"""
-    assert old_backbone in text, "ECLAIR encoder backbone dict shape changed"
-    text = text.replace(old_backbone, new_backbone)
-
-    out_dir = REPO_ROOT / "configs/experiment/w110/2/grid_seed_eclair"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / NAME_TEMPLATES[(9, "eclair")]
-    out_path.write_text(text)
-    print(f"wrote {out_path.relative_to(REPO_ROOT)}  (lr=0.1, DERIVED — no reference file)")
 
 
 if __name__ == "__main__":
