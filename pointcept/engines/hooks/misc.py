@@ -803,63 +803,70 @@ class CheckpointLoader(HookBase):
 
     def before_train(self):
         self.trainer.logger.info("=> Loading checkpoint & weight ...")
-        if self.trainer.cfg.weight and os.path.isfile(self.trainer.cfg.weight):
-            self.trainer.logger.info(f"Loading weight at: {self.trainer.cfg.weight}")
-            checkpoint = torch.load(
-                self.trainer.cfg.weight,
-                map_location=lambda storage, loc: storage.cuda(),
-                weights_only=False,
+        weight_path = self.trainer.cfg.weight
+        if self.trainer.cfg.resume and not weight_path:
+            raise RuntimeError(
+                "resume=True but cfg.weight is empty; cannot restore a checkpoint."
             )
+        if not weight_path:
+            self.trainer.logger.info("No weight specified; training from scratch.")
+            return
+        if not os.path.isfile(weight_path):
+            raise RuntimeError(f"=> No checkpoint found at '{weight_path}'")
+        self.trainer.logger.info(f"Loading weight at: {weight_path}")
+        checkpoint = torch.load(
+            weight_path,
+            map_location=lambda storage, loc: storage.cuda(),
+            weights_only=False,
+        )
+        self.trainer.logger.info(
+            f"Loading layer weights with keyword: {self.keywords}, "
+            f"replace keyword with: {self.replacement}"
+        )
+        if self.exclude_keys:
             self.trainer.logger.info(
-                f"Loading layer weights with keyword: {self.keywords}, "
-                f"replace keyword with: {self.replacement}"
+                f"Excluding checkpoint keys containing: {self.exclude_keys}"
             )
-            if self.exclude_keys:
-                self.trainer.logger.info(
-                    f"Excluding checkpoint keys containing: {self.exclude_keys}"
-                )
-            weight = OrderedDict()
-            for key, value in checkpoint["state_dict"].items():
-                if not key.startswith("module."):
-                    key = "module." + key  # xxx.xxx -> module.xxx.xxx
-                # Now all keys contain "module." no matter DDP or not.
-                if self.exclude_keys and any(k in key for k in self.exclude_keys):
-                    continue # the key is not stored in `weight`
-                if self.keywords in key:
-                    key = key.replace(self.keywords, self.replacement, 1)
-                if comm.get_world_size() == 1:
-                    key = key[7:]  # module.xxx.xxx -> xxx.xxx
-                weight[key] = value
-            load_state_info = self.trainer.model.load_state_dict(
-                weight, strict=self.strict
+        weight = OrderedDict()
+        for key, value in checkpoint["state_dict"].items():
+            if not key.startswith("module."):
+                key = "module." + key  # xxx.xxx -> module.xxx.xxx
+            # Now all keys contain "module." no matter DDP or not.
+            if self.exclude_keys and any(k in key for k in self.exclude_keys):
+                continue # the key is not stored in `weight`
+            if self.keywords in key:
+                key = key.replace(self.keywords, self.replacement, 1)
+            if comm.get_world_size() == 1:
+                key = key[7:]  # module.xxx.xxx -> xxx.xxx
+            weight[key] = value
+        load_state_info = self.trainer.model.load_state_dict(
+            weight, strict=self.strict
+        )
+        self.trainer.logger.info(f"Missing keys: {load_state_info[0]}")
+        if self.trainer.cfg.resume:
+            self.trainer.logger.info(
+                f"Resuming train at eval epoch: {checkpoint['epoch']}"
             )
-            self.trainer.logger.info(f"Missing keys: {load_state_info[0]}")
-            if self.trainer.cfg.resume:
-                self.trainer.logger.info(
-                    f"Resuming train at eval epoch: {checkpoint['epoch']}"
-                )
-                self.trainer.start_epoch = checkpoint["epoch"]
-                self.trainer.best_metric_value = checkpoint["best_metric_value"]
-                if isinstance(self.trainer.optimizer, dict):
-                    # GridProbeTrainer: one optimizer/scheduler per probe head.
-                    for name, o in self.trainer.optimizer.items():
-                        o.load_state_dict(checkpoint["optimizer"][name])
-                    for name, s in self.trainer.scheduler.items():
-                        s.load_state_dict(checkpoint["scheduler"][name])
-                else:
-                    self.trainer.optimizer.load_state_dict(checkpoint["optimizer"])
-                    self.trainer.scheduler.load_state_dict(checkpoint["scheduler"])
-                if self.trainer.cfg.enable_amp:
-                    self.trainer.scaler.load_state_dict(checkpoint["scaler"])
-                # Restore per-hook running state (older checkpoints predate this key,
-                # hence .get) — see HookBase.state_dict / CheckpointSaver.after_epoch.
-                hook_states = checkpoint.get("hook_states", {})
-                for h in self.trainer.hooks:
-                    state = hook_states.get(h.__class__.__name__)
-                    if state:
-                        h.load_state_dict(state)
-        else:
-            self.trainer.logger.info(f"No weight found at: {self.trainer.cfg.weight}")
+            self.trainer.start_epoch = checkpoint["epoch"]
+            self.trainer.best_metric_value = checkpoint["best_metric_value"]
+            if isinstance(self.trainer.optimizer, dict):
+                # GridProbeTrainer: one optimizer/scheduler per probe head.
+                for name, o in self.trainer.optimizer.items():
+                    o.load_state_dict(checkpoint["optimizer"][name])
+                for name, s in self.trainer.scheduler.items():
+                    s.load_state_dict(checkpoint["scheduler"][name])
+            else:
+                self.trainer.optimizer.load_state_dict(checkpoint["optimizer"])
+                self.trainer.scheduler.load_state_dict(checkpoint["scheduler"])
+            if self.trainer.cfg.enable_amp:
+                self.trainer.scaler.load_state_dict(checkpoint["scaler"])
+            # Restore per-hook running state (older checkpoints predate this key,
+            # hence .get) — see HookBase.state_dict / CheckpointSaver.after_epoch.
+            hook_states = checkpoint.get("hook_states", {})
+            for h in self.trainer.hooks:
+                state = hook_states.get(h.__class__.__name__)
+                if state:
+                    h.load_state_dict(state)
 
 
 @HOOKS.register_module()
