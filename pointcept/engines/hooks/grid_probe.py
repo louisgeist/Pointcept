@@ -531,7 +531,8 @@ class GridProbeSeedEnsembleTester(HookBase):
     (already saved individually by GridProbeCheckpointSaver for every probe,
     not just a winner), runs ONE shared-backbone test pass across all of them
     (GridProbeSemSegTester -- one backbone forward per fragment, N heads),
-    and writes mean/std of the per-probe test metrics to
+    and writes mean/std of the per-probe test metrics (mIoU/mAcc/allAcc,
+    plus f1_macro and per-class f1_mean when log_test_f1=True) to
     save_path/seed_ensemble_results.json.
 
     Use in place of GridProbeWinnerSelector, last in the hooks list, with
@@ -623,6 +624,31 @@ class GridProbeSeedEnsembleTester(HookBase):
         miou_stats = _stats("test/mIoU")
         macc_stats = _stats("test/mAcc")
         allacc_stats = _stats("test/allAcc")
+        f1_macro_stats = _stats("test/f1_macro")
+
+        # Per-class F1 means: discover test/f1_{cls} keys (present only when
+        # log_test_f1=True). Prefer cfg.data.names order; fall back to first
+        # probe's key insertion order so this stays dataset-agnostic.
+        f1_cls_keys = []
+        names = getattr(cfg.data, "names", None) or []
+        for cls_name in names:
+            key = f"test/f1_{cls_name}"
+            if any(key in m for m in metrics_by_probe.values()):
+                f1_cls_keys.append(key)
+        if not f1_cls_keys:
+            seen = set()
+            for m in metrics_by_probe.values():
+                for key in m:
+                    if (
+                        key.startswith("test/f1_")
+                        and key != "test/f1_macro"
+                        and key not in seen
+                    ):
+                        seen.add(key)
+                        f1_cls_keys.append(key)
+        f1_cls_means = {
+            key: _stats(key)["mean"] for key in f1_cls_keys
+        }
 
         summary = {
             "num_probes": len(raw_model.probe_names),
@@ -640,6 +666,14 @@ class GridProbeSeedEnsembleTester(HookBase):
             "test_allAcc_std": allacc_stats["std"],
             "test_allAcc_max": allacc_stats["max"],
             "test_allAcc_min": allacc_stats["min"],
+            "test_f1_macro_mean": f1_macro_stats["mean"],
+            "test_f1_macro_std": f1_macro_stats["std"],
+            "test_f1_macro_max": f1_macro_stats["max"],
+            "test_f1_macro_min": f1_macro_stats["min"],
+            **{
+                f"test_f1_{key[len('test/f1_'):]}_mean": mean
+                for key, mean in f1_cls_means.items()
+            },
             "per_probe": {
                 name: {
                     "probe_config": dict(raw_model.probe_configs[name]),
@@ -657,7 +691,8 @@ class GridProbeSeedEnsembleTester(HookBase):
         _atomic_write_json(out_path, summary)
         self.trainer.logger.info(
             "Seed-ensemble test result (%d/%d probes with test metrics): "
-            "mIoU=%.4f+/-%.4f [%.4f, %.4f], mAcc=%.4f+/-%.4f, allAcc=%.4f+/-%.4f. Wrote %s",
+            "mIoU=%.4f+/-%.4f [%.4f, %.4f], mAcc=%.4f+/-%.4f, "
+            "allAcc=%.4f+/-%.4f, f1_macro=%.4f+/-%.4f [%.4f, %.4f]. Wrote %s",
             summary["num_probes_with_test_metrics"], summary["num_probes"],
             summary["test_mIoU_mean"] or float("nan"),
             summary["test_mIoU_std"] or float("nan"),
@@ -667,6 +702,10 @@ class GridProbeSeedEnsembleTester(HookBase):
             summary["test_mAcc_std"] or float("nan"),
             summary["test_allAcc_mean"] or float("nan"),
             summary["test_allAcc_std"] or float("nan"),
+            summary["test_f1_macro_mean"] or float("nan"),
+            summary["test_f1_macro_std"] or float("nan"),
+            summary["test_f1_macro_min"] or float("nan"),
+            summary["test_f1_macro_max"] or float("nan"),
             out_path,
         )
 
@@ -686,7 +725,14 @@ class GridProbeSeedEnsembleTester(HookBase):
                 "seed_ensemble/test_allAcc_std": summary["test_allAcc_std"],
                 "seed_ensemble/test_allAcc_max": summary["test_allAcc_max"],
                 "seed_ensemble/test_allAcc_min": summary["test_allAcc_min"],
+                "seed_ensemble/test_f1_macro_mean": summary["test_f1_macro_mean"],
+                "seed_ensemble/test_f1_macro_std": summary["test_f1_macro_std"],
+                "seed_ensemble/test_f1_macro_max": summary["test_f1_macro_max"],
+                "seed_ensemble/test_f1_macro_min": summary["test_f1_macro_min"],
             }
+            for key, mean in f1_cls_means.items():
+                cls_name = key[len("test/f1_"):]
+                wandb_summary[f"seed_ensemble/test_f1_{cls_name}_mean"] = mean
             for key, value in wandb_summary.items():
                 wandb.run.summary[key] = value
             wandb.log(wandb_summary)
@@ -694,7 +740,12 @@ class GridProbeSeedEnsembleTester(HookBase):
             # Per-seed test mIoU as a small wandb Table -- the summary above
             # only ever gives 4 numbers (mean/std/max/min); this is what lets
             # the actual 10-point distribution be inspected/plotted in the UI.
-            table = wandb.Table(columns=["probe_name", "test_mIoU", "test_mAcc", "test_allAcc", "best_val_mIoU"])
+            table = wandb.Table(
+                columns=[
+                    "probe_name", "test_mIoU", "test_mAcc", "test_allAcc",
+                    "test_f1_macro", "best_val_mIoU",
+                ]
+            )
             for name in raw_model.probe_names:
                 row = summary["per_probe"][name]
                 table.add_data(
@@ -702,6 +753,13 @@ class GridProbeSeedEnsembleTester(HookBase):
                     row.get("test/mIoU"),
                     row.get("test/mAcc"),
                     row.get("test/allAcc"),
+                    row.get("test/f1_macro"),
                     row["best_val_mIoU"],
                 )
             wandb.log({"seed_ensemble/per_probe_table": table})
+
+            if f1_cls_means:
+                cls_table = wandb.Table(columns=["class", "f1_mean"])
+                for key, mean in f1_cls_means.items():
+                    cls_table.add_data(key[len("test/f1_"):], mean)
+                wandb.log({"seed_ensemble/per_class_f1_table": cls_table})
