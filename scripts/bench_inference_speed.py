@@ -1,33 +1,38 @@
 #!/usr/bin/env python3
-"""Inference-speed benchmark: LitePT-B / PTv3 / KPConvX / SpUNet on Flair3D+.
+"""Inference-speed benchmark: LitePT-B / PTv3 / KPConvX / SpUNet / Sonata on Flair3D+.
 
-Measures batch_size=1 test-time throughput (points/sec) for the 4 backbones
+Measures batch_size=1 test-time throughput (points/sec) for the 5 models
 currently used on Flair3D, on an identical set of tiles, breaking the per-tile
 cost into CPU (dataset load + transform pipeline), CPU->GPU transfer, and
-"true" GPU compute -- reproducing exactly what `MultiTaskTester` does per
-fragment (pointcept/engines/test.py), but instrumented and without the
-mIoU/APLS bookkeeping.
+"true" GPU compute -- reproducing exactly what the tester does per fragment
+(pointcept/engines/test.py), but instrumented and without the mIoU/APLS
+bookkeeping.
 
 Reference configs (already harmonized on data_root="data/flair3d_plus",
 segment="v20", feat_keys=["coord","color","strength"], grid_size=0.1,
-test_single_fragment=True, crop=None, MultiTaskSegmentorV2) -- see
-configs/flair3d_default/multi-{litept-b,ptv3,kpconvx,spunet}-v1m0-flair3d.py.
-No config is copied or modified; they are loaded via Config.fromfile exactly
-like tools/train.py / tools/test.py.
+test_single_fragment=True, crop=None) -- see
+configs/flair3d_default/multi-{litept-b,ptv3,kpconvx,spunet}-v1m0-flair3d.py
+(MultiTaskSegmentorV2) and configs/flair3d_default/probe/sonata-v1m2-flair3d-lin.py
+(DefaultSegmentorV2, PT-v3m2 encoder + linear head). The single-probe Sonata
+config has no data.test (val-only periodic probes); its test pipeline is
+borrowed from sonata-v1m2-flair3d-lin-grid.py (same tiles / voxelize, no
+config file is edited). No config is copied or modified; they are loaded via
+Config.fromfile exactly like tools/train.py / tools/test.py.
 
 Weights are randomly initialized (no --weight / CheckpointLoader): none of
-the 4 architectures branch on weight *values*, only on point-cloud geometry,
+the architectures branch on weight *values*, only on point-cloud geometry,
 so a trained checkpoint isn't needed for a pure speed comparison.
 
 The full post-transform fragment dict (coord, grid_coord, feat, offset, plus
-the network_*/forest_2d_* pixel-head raster metadata + labels) is passed to
-the model unmodified, matching real test-time behavior: the network/forest_2d
-pixel-semantic heads in these multitask configs only run their forward pass
-when their raster raster metadata is present in input_dict (see
-MultiTaskSegmentorV2._compute_pixel_logits), so stripping "targets" out would
-silently skip part of the real per-tile GPU cost.
+the network_*/forest_2d_* pixel-head raster metadata + labels on the 4
+multitask configs) is passed to the model unmodified, matching real test-time
+behavior: the network/forest_2d pixel-semantic heads in these multitask
+configs only run their forward pass when their raster metadata is present in
+input_dict (see MultiTaskSegmentorV2._compute_pixel_logits), so stripping
+"targets" out would silently skip part of the real per-tile GPU cost. The
+Sonata lin-probe Collect is segment-only (no pixel heads).
 
-Same tiles across all 4 backbones are pinned once via `include_names`
+Same tiles across all backbones are pinned once via `include_names`
 (pointcept/datasets/subset_utils.py) so a fair, apples-to-apples comparison
 is guaranteed regardless of manifest/split overrides.
 
@@ -68,6 +73,15 @@ DEFAULT_CONFIGS = {
     "ptv3": "configs/flair3d_default/multi-ptv3-v1m0-flair3d.py",
     "kpconvx": "configs/flair3d_default/multi-kpconvx-v1m0-flair3d.py",
     "spunet": "configs/flair3d_default/multi-spunet-v1m0-flair3d.py",
+    # PT-v3m2 encoder (enc_mode=True, 1232-ch concat) + linear head. Not the
+    # SSL MultiView graph, and not PT-v3-malibu (`ptv3` above, decoder + multitask).
+    "sonata": "configs/flair3d_default/probe/sonata-v1m2-flair3d-lin.py",
+}
+
+# sonata-v1m2-flair3d-lin.py has train/val only; reuse the grid-probe test split
+# (same Flair3D+ tiles, test_single_fragment=True, no max_sample).
+TEST_PIPELINE_FALLBACK = {
+    "sonata": "configs/flair3d_default/probe/sonata-v1m2-flair3d-lin-grid.py",
 }
 
 PER_TILE_FIELDS = [
@@ -93,7 +107,7 @@ def parse_args():
         nargs="+",
         default=list(DEFAULT_CONFIGS.keys()),
         choices=list(DEFAULT_CONFIGS.keys()),
-        help="Subset of backbones to benchmark (default: all 4).",
+        help="Subset of backbones to benchmark (default: all 5).",
     )
     parser.add_argument(
         "--configs",
@@ -101,7 +115,7 @@ def parse_args():
         default=None,
         metavar="NAME=PATH",
         help="Override one or more config paths, e.g. ptv3=configs/foo.py (default: "
-        "the 4 flair3d_default multi-task configs, unmodified).",
+        "the 4 flair3d_default multi-task configs + Sonata lin-probe, unmodified).",
     )
     parser.add_argument(
         "--csv-manifest",
@@ -163,12 +177,26 @@ def resolve_config_paths(args):
     return {name: paths[name] for name in args.backbones}
 
 
-def build_test_dataset(cfg_path, csv_manifest, split, include_names=None):
+def build_test_dataset(cfg_path, csv_manifest, split, include_names=None, name=None):
     from pointcept.utils.config import Config
     from pointcept.datasets.builder import build_dataset
 
     cfg = Config.fromfile(str(cfg_path))
-    test_cfg = copy.deepcopy(cfg.data.test)
+    if "test" in cfg.data:
+        test_cfg = cfg.data.test
+    else:
+        fallback = TEST_PIPELINE_FALLBACK.get(name)
+        if not fallback:
+            raise ValueError(
+                f"config {cfg_path} has no data.test and no TEST_PIPELINE_FALLBACK "
+                f"for name={name!r}"
+            )
+        print(
+            f"[bench][{name}] no data.test in {cfg_path}; "
+            f"using test pipeline from {fallback}"
+        )
+        test_cfg = Config.fromfile(str(fallback)).data.test
+    test_cfg = copy.deepcopy(test_cfg)
     if csv_manifest is not None:
         test_cfg["csv_manifest"] = csv_manifest
     if split is not None:
@@ -179,8 +207,8 @@ def build_test_dataset(cfg_path, csv_manifest, split, include_names=None):
     return cfg, dataset
 
 
-def pick_tile_names(cfg_path, csv_manifest, split, num_tiles):
-    _, dataset = build_test_dataset(cfg_path, csv_manifest, split)
+def pick_tile_names(cfg_path, csv_manifest, split, num_tiles, name=None):
+    _, dataset = build_test_dataset(cfg_path, csv_manifest, split, name=name)
     if len(dataset.data_list) < num_tiles:
         raise ValueError(
             f"Only {len(dataset.data_list)} tiles available for split={split!r} "
@@ -195,13 +223,17 @@ def benchmark_backbone(name, cfg_path, tile_names, args):
     from pointcept.models.builder import build_model
 
     cfg, dataset = build_test_dataset(
-        cfg_path, args.csv_manifest, args.split, include_names=tile_names
+        cfg_path,
+        args.csv_manifest,
+        args.split,
+        include_names=tile_names,
+        name=name,
     )
     if len(dataset.data_list) != len(tile_names):
         raise RuntimeError(
             f"[{name}] pinned tile list resolved to {len(dataset.data_list)} scenes, "
             f"expected {len(tile_names)} -- some patch_ids didn't match under this "
-            "backbone's data_root/csv_manifest (are all 4 configs really unified?)."
+            "backbone's data_root/csv_manifest (are all configs really unified?)."
         )
 
     torch.manual_seed(args.seed)
@@ -383,7 +415,9 @@ def main():
         f"[bench] resolving {args.num_tiles} pinned tiles from '{first_name}' "
         f"({cfg_paths[first_name]}, split={args.split!r}) ..."
     )
-    tile_names = pick_tile_names(cfg_paths[first_name], args.csv_manifest, args.split, args.num_tiles)
+    tile_names = pick_tile_names(
+        cfg_paths[first_name], args.csv_manifest, args.split, args.num_tiles, name=first_name
+    )
     print(f"[bench] pinned {len(tile_names)} tiles (first 3: {tile_names[:3]})")
 
     all_records = []

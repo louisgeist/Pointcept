@@ -1,14 +1,14 @@
 #!/bin/bash
 
-# Inference-speed bench: LitePT-B / PTv3 / KPConvX / SpUNet on Flair3D+ (1× A100).
-# Calls scripts/bench_inference_speed.py with the "real run" defaults
+# Inference-speed bench: LitePT-B / PTv3 / KPConvX / SpUNet / Sonata on Flair3D+
+# (1× A100). Calls scripts/bench_inference_speed.py with the "real run" defaults
 # (national manifest, test split, 200 tiles). Weights are randomly initialized.
 #
 # Usage:
 #   sbatch sbatch_bench_inference_speed.sh
 #
 # Optional env overrides (examples):
-#   NUM_TILES=50 BACKBONES="litept_b ptv3" sbatch sbatch_bench_inference_speed.sh
+#   NUM_TILES=50 BACKBONES="litept_b ptv3 sonata" sbatch sbatch_bench_inference_speed.sh
 #   AMP=true sbatch sbatch_bench_inference_speed.sh
 #
 # Jean-Zay compute-accounting tags (IMAGINE wrapper):
@@ -20,7 +20,7 @@
 #SBATCH --output=/lustre/fswork/projects/rech/unv/usi32yh/Pointcept/logs/slurm/%j/slurm.out
 #SBATCH --error=/lustre/fswork/projects/rech/unv/usi32yh/Pointcept/logs/slurm/%j/slurm.err
 
-#SBATCH --time=06:00:00
+#SBATCH --time=08:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:1
@@ -54,7 +54,7 @@ cp $0 ${JOB_DIR}/script.slurm
     echo "CSV_MANIFEST: ${CSV_MANIFEST}"
     echo "SPLIT: ${SPLIT}"
     echo "NUM_TILES: ${NUM_TILES}  NUM_WARMUP: ${NUM_WARMUP}"
-    echo "BACKBONES: ${BACKBONES:-<all 4>}"
+    echo "BACKBONES: ${BACKBONES:-<all 5>}"
     echo "AMP: ${AMP}"
     echo "OUT_DIR: ${OUT_DIR}"
     echo "EXTRA_ARGS: ${EXTRA_ARGS:-<none>}"
