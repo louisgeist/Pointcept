@@ -586,6 +586,46 @@ python -m tools.train \
 
 
 
+#### Inference-speed benchmark (LitePT-B / PTv3 / KPConvX / SpUNet)
+
+`scripts/bench_inference_speed.py` measures batch_size=1 test-time throughput (pts/s) for the 4
+backbones, loading the real multi-task configs
+(`configs/flair3d_default/multi-{litept-b,ptv3,kpconvx,spunet}-v1m0-flair3d.py`) unmodified, on an
+identical pinned tile set for all 4. Random-init weights (no checkpoint needed). Splits per-tile
+cost into CPU (dataset load + transform) / CPU→GPU transfer / GPU compute via `torch.cuda.Event`,
+logs each tile to console, and writes `per_tile.csv` + `summary.json` under
+`stats/flair3d/inference_speed_bench/<timestamp>/`.
+
+These configs require `forest_2d.npy` per tile (network/forest_2d pixel-semantic heads) — a
+standalone backfill, not part of the original preprocessing, see
+[pointcept/datasets/preprocessing/flair3d_plus/rasterize_forest.py](pointcept/datasets/preprocessing/flair3d_plus/rasterize_forest.py).
+Run it first if a department is missing it (`FileNotFoundError: ... forest_2d.npy missing`):
+
+```bash
+python pointcept/datasets/preprocessing/flair3d_plus/rasterize_forest.py \
+    --data_root data/flair3d_plus \
+    --source_dataset_root data/flair3d_plus/raw \
+    --split_manifest_csv data/flair3d_plus/raw/scene_split_manifest_D067.csv \
+    --pixel_m 0.5 \
+    --num_workers 8
+```
+
+```bash
+export PYTHONPATH=$PWD
+
+# Local dry run (Hecate, D067 val — no local test split). LitePT-B/PTv3 need flash_attn
+# (not installed on Hecate as of 2026-08-26: hard ImportError/AssertionError, no SDPA
+# fallback for these two) -- restrict to kpconvx/spunet locally.
+python scripts/bench_inference_speed.py \
+  --csv-manifest data/flair3d_plus/raw/scene_split_manifest_D067.csv --split val \
+  --num-tiles 60 --num-warmup 10 --device cuda:0 --backbones kpconvx spunet
+
+# Real run on A100 (Jean Zay, full national manifest, test split, all 4 backbones).
+python scripts/bench_inference_speed.py \
+  --csv-manifest data/flair3d_plus/raw/scene_split_manifest.csv --split test \
+  --num-tiles 200 --num-warmup 10 --device cuda:0
+```
+
 ### Sonata pretrain + periodic linear probe (Flair3D+)
 
 See [README_sonata_geist.md](README_sonata_geist.md).
