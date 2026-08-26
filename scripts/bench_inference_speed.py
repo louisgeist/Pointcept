@@ -32,9 +32,10 @@ input_dict (see MultiTaskSegmentorV2._compute_pixel_logits), so stripping
 "targets" out would silently skip part of the real per-tile GPU cost. The
 Sonata lin-probe Collect is segment-only (no pixel heads).
 
-Same tiles across all backbones are pinned once via `include_names`
-(pointcept/datasets/subset_utils.py) so a fair, apples-to-apples comparison
-is guaranteed regardless of manifest/split overrides.
+Same tiles across all backbones: each config's `data.test` is built like
+TesterBase (CSV + LIDARHD filter, no `include_names` re-pin) and the first
+`--num-tiles` scenes in `data_list` order are used. Names are asserted
+identical across backbones so a diverging `data.test` fails loudly.
 
 Examples::
 
@@ -177,7 +178,7 @@ def resolve_config_paths(args):
     return {name: paths[name] for name in args.backbones}
 
 
-def build_test_dataset(cfg_path, csv_manifest, split, include_names=None, name=None):
+def build_test_dataset(cfg_path, csv_manifest, split, name=None):
     from pointcept.utils.config import Config
     from pointcept.datasets.builder import build_dataset
 
@@ -201,14 +202,11 @@ def build_test_dataset(cfg_path, csv_manifest, split, include_names=None, name=N
         test_cfg["csv_manifest"] = csv_manifest
     if split is not None:
         test_cfg["split"] = split
-    if include_names is not None:
-        test_cfg["include_names"] = list(include_names)
     dataset = build_dataset(test_cfg)
     return cfg, dataset
 
 
-def pick_tile_names(cfg_path, csv_manifest, split, num_tiles, name=None):
-    _, dataset = build_test_dataset(cfg_path, csv_manifest, split, name=name)
+def first_n_tile_names(dataset, num_tiles, *, cfg_path, csv_manifest, split):
     if len(dataset.data_list) < num_tiles:
         raise ValueError(
             f"Only {len(dataset.data_list)} tiles available for split={split!r} "
@@ -218,23 +216,9 @@ def pick_tile_names(cfg_path, csv_manifest, split, num_tiles, name=None):
     return [dataset.get_data_name(i) for i in range(num_tiles)]
 
 
-def benchmark_backbone(name, cfg_path, tile_names, args):
+def benchmark_backbone(name, cfg, dataset, tile_names, args):
     from pointcept.datasets.utils import collate_fn
     from pointcept.models.builder import build_model
-
-    cfg, dataset = build_test_dataset(
-        cfg_path,
-        args.csv_manifest,
-        args.split,
-        include_names=tile_names,
-        name=name,
-    )
-    if len(dataset.data_list) != len(tile_names):
-        raise RuntimeError(
-            f"[{name}] pinned tile list resolved to {len(dataset.data_list)} scenes, "
-            f"expected {len(tile_names)} -- some patch_ids didn't match under this "
-            "backbone's data_root/csv_manifest (are all configs really unified?)."
-        )
 
     torch.manual_seed(args.seed)
     model = build_model(cfg.model).to(args.device)
@@ -412,19 +396,39 @@ def main():
 
     first_name = args.backbones[0]
     print(
-        f"[bench] resolving {args.num_tiles} pinned tiles from '{first_name}' "
-        f"({cfg_paths[first_name]}, split={args.split!r}) ..."
+        f"[bench] using first {args.num_tiles} tiles of data.test "
+        f"(split={args.split!r}, CSV order, LIDARHD filter) ..."
     )
-    tile_names = pick_tile_names(
-        cfg_paths[first_name], args.csv_manifest, args.split, args.num_tiles, name=first_name
-    )
-    print(f"[bench] pinned {len(tile_names)} tiles (first 3: {tile_names[:3]})")
 
     all_records = []
     summaries = {}
+    tile_names = None
     for name in args.backbones:
         print(f"\n[bench] === {name} ({cfg_paths[name]}) ===")
-        records = benchmark_backbone(name, cfg_paths[name], tile_names, args)
+        cfg, dataset = build_test_dataset(
+            cfg_paths[name], args.csv_manifest, args.split, name=name
+        )
+        names = first_n_tile_names(
+            dataset,
+            args.num_tiles,
+            cfg_path=cfg_paths[name],
+            csv_manifest=args.csv_manifest,
+            split=args.split,
+        )
+        if tile_names is None:
+            tile_names = names
+            print(f"[bench] {len(tile_names)} tiles (first 3: {tile_names[:3]})")
+        elif names != tile_names:
+            diff_i = next(
+                i for i, (a, b) in enumerate(zip(names, tile_names)) if a != b
+            )
+            raise RuntimeError(
+                f"[{name}] first {args.num_tiles} data.test names differ from "
+                f"'{first_name}' -- data.test is not unified across configs "
+                f"(csv_manifest/split/data_root). "
+                f"index {diff_i}: {names[diff_i]!r} vs {tile_names[diff_i]!r}"
+            )
+        records = benchmark_backbone(name, cfg, dataset, tile_names, args)
         all_records.extend(records)
         summaries[name] = summarize(records)
 
