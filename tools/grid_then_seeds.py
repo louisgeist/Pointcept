@@ -64,7 +64,9 @@ SUMMARY_FIELDS = [
     "grid_config",
     "weight",
     "winner_probe_name",
+    "winner_select_metric",
     "winner_val_mIoU",
+    "winner_val_f1_macro",
     "n_seeds",
     "val_split",
     "test_split",
@@ -146,16 +148,25 @@ def read_split_info(config_path: Path) -> dict:
         return {"val_split": None, "test_split": None, "val_eq_test_split": False}
 
 
-def read_winner(grid_dir: Path) -> tuple[str, dict, float]:
+def read_winner(grid_dir: Path) -> tuple[str, dict, dict]:
     path = grid_dir / GRID_RESULT
     data = json.loads(path.read_text(encoding="utf-8"))
     winner = data.get("winner") or {}
     name = winner.get("probe_name")
     probe_config = winner.get("probe_config")
-    val = winner.get("best_val_mIoU")
     if not name or not probe_config:
         raise ValueError(f"{path}: no usable 'winner' entry ({winner!r})")
-    return str(name), dict(probe_config), (float(val) if val is not None else float("nan"))
+
+    def _f(v):
+        return float(v) if v is not None else float("nan")
+
+    # select_metric is absent in pre-macro-F1 grid_search_results.json -> "mIoU".
+    stats = {
+        "select_metric": data.get("select_metric") or "mIoU",
+        "mIoU": _f(winner.get("best_val_mIoU")),
+        "macro_f1": _f(winner.get("best_val_macro_f1")),
+    }
+    return str(name), dict(probe_config), stats
 
 
 def build_seed_ensemble_config(
@@ -311,7 +322,7 @@ def report(
     grid_config: Path,
     weight: str | None,
     winner_name: str,
-    winner_val: float,
+    winner_val: dict,
     n_seeds: int,
     grid_dir: Path,
     seed_dir: Path,
@@ -340,7 +351,12 @@ def report(
     print("=" * 72, flush=True)
     print(f"  grid config          : {grid_config}", flush=True)
     print(f"  winner probe         : {winner_name}", flush=True)
-    print(f"  winner best val mIoU : {winner_val:.4f}  (split {split.get('val_split')!r})", flush=True)
+    print(
+        f"  winner best val      : select_metric={winner_val['select_metric']}  "
+        f"mIoU={winner_val['mIoU']:.4f}  macro_f1={winner_val['macro_f1']:.4f}  "
+        f"(split {split.get('val_split')!r})",
+        flush=True,
+    )
     print(
         f"  seeds w/ test metrics: "
         f"{g('num_probes_with_test_metrics')}/{g('num_probes')}",
@@ -369,7 +385,9 @@ def report(
         "grid_config": str(grid_config),
         "weight": weight or "",
         "winner_probe_name": winner_name,
-        "winner_val_mIoU": _fmt(winner_val),
+        "winner_select_metric": winner_val["select_metric"],
+        "winner_val_mIoU": _fmt(winner_val["mIoU"]),
+        "winner_val_f1_macro": _fmt(winner_val["macro_f1"]),
         "n_seeds": n_seeds,
         "val_split": split.get("val_split") or "",
         "test_split": split.get("test_split") or "",
@@ -457,7 +475,11 @@ def main() -> int:
             return 3
 
     winner_name, winner_cfg, winner_val = read_winner(grid_dir)
-    log(f"winner: {winner_name!r}  best_val_mIoU={winner_val:.4f}")
+    log(
+        f"winner: {winner_name!r}  select_metric={winner_val['select_metric']}  "
+        f"best_val_mIoU={winner_val['mIoU']:.4f}  "
+        f"best_val_macro_f1={winner_val['macro_f1']:.4f}"
+    )
     log("winner probe_config:\n" + json.dumps(winner_cfg, indent=2, default=str))
 
     # ---------------- seed-ensemble config ----------------

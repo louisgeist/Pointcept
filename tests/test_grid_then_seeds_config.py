@@ -144,6 +144,23 @@ class TestBuildSeedEnsembleConfig(unittest.TestCase):
         self.assertTrue(info["val_eq_test_split"])
         self.assertTrue(self._last_info["val_eq_test_split"])
 
+    def test_select_metric_propagates_into_seed_config(self):
+        # build_seed_ensemble_config copies every hook dict through verbatim
+        # (only WinnerSelector -> SeedEnsembleTester is swapped), so a grid
+        # config that selects on macro-F1 yields a seed config that does too.
+        src = Config.fromfile(GRID_CONFIG)
+        for hook in src.hooks:
+            if hook["type"] == "GridProbeEvaluator":
+                hook["select_metric"] = "macro_f1"
+        tmp = tempfile.mkdtemp()
+        patched = os.path.join(tmp, "grid_macro_f1.py")
+        src.dump(patched)
+
+        cfg, _ = self._generate(patched, n_seeds=4)
+        evaluators = [h for h in cfg.hooks if h["type"] == "GridProbeEvaluator"]
+        self.assertEqual(len(evaluators), 1)
+        self.assertEqual(evaluators[0]["select_metric"], "macro_f1")
+
     def test_missing_winner_selector_raises(self):
         tmp = tempfile.mkdtemp()
         # a config file with a hooks list that has no GridProbeWinnerSelector
