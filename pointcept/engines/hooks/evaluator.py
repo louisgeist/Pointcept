@@ -958,6 +958,28 @@ class MultiTaskEvaluator(HookBase):
                         getattr(model, "task_weights", {}),
                         scales,
                     )
+                elif (
+                    getattr(self.trainer.cfg, "grad_norm", False)
+                    and getattr(self.trainer, "_grad_norm_state", None) is not None
+                    and isinstance(loss_by_task, dict)
+                    and loss_by_task
+                ):
+                    # Real GradNorm: report val/loss under the learned weights so
+                    # it tracks the training objective.
+                    model = self.trainer.model
+                    if hasattr(model, "module"):
+                        model = model.module
+                    task_groups = getattr(
+                        self.trainer.cfg, "grad_norm_task_groups", None
+                    )
+                    scales = self.trainer._grad_norm_state.per_task_scales(
+                        loss_by_task.keys(), task_groups
+                    )
+                    loss, _ = combine_weighted_task_losses(
+                        loss_by_task,
+                        getattr(model, "task_weights", {}),
+                        scales,
+                    )
 
                 logits_by_task = output_dict.get("seg_logits_by_task", None)
                 if not isinstance(logits_by_task, dict):

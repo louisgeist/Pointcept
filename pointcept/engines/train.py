@@ -43,9 +43,11 @@ from pointcept.utils.wandb_resume import bump_wandb_step_on_resume, read_local_l
 from pointcept.utils.gradient_norm import (
     GradNormLiteEMA,
     all_reduce_mean_task_norms,
+    build_grad_norm_state,
     combine_weighted_task_losses,
     compute_task_gradient_norms,
     compute_task_last_layer_grad_norms,
+    group_task_losses,
     resolve_grad_norm_lite_scales,
     l2_model_grad_norm,
     l2_model_update_norm,
@@ -241,6 +243,16 @@ class Trainer(TrainerBase):
         self.register_hooks(self.cfg.hooks)
         self._gradient_accumulation_counter = 0
         self._grad_norm_lite_ema = None
+        # Real GradNorm (Chen et al. 2018): learnable per-group loss weights +
+        # their Adam state + L_g(0) anchors. Built eagerly so CheckpointLoader
+        # can restore into it before the first step. Mutually exclusive with
+        # grad_norm_lite (enforced in default_config_parser).
+        self._grad_norm_state = None
+        if getattr(cfg, "grad_norm", False):
+            _gn_model = (
+                self.model.module if hasattr(self.model, "module") else self.model
+            )
+            self._grad_norm_state = build_grad_norm_state(cfg, _gn_model)
 
     def before_train(self):
         if comm.is_main_process():
@@ -376,6 +388,67 @@ class Trainer(TrainerBase):
                 self.comm_info.pop("grad_norm_lite", None)
         else:
             self.comm_info.pop("grad_norm_lite", None)
+
+        # Real GradNorm (Chen et al. 2018): learn per-group loss weights w_g by
+        # gradient descent on the GradNorm L1 objective, then reweight the main
+        # loss with w_g.detach() before the normal backward.
+        if getattr(self.cfg, "grad_norm", False):
+            if isinstance(loss_by_task, dict) and loss_by_task:
+                if not hasattr(model, "last_backbone_layer_parameters"):
+                    raise AttributeError(
+                        "grad_norm requires a model with "
+                        "last_backbone_layer_parameters() (e.g. MultiTaskSegmentorV2)."
+                    )
+                if self._grad_norm_state is None:
+                    self._grad_norm_state = build_grad_norm_state(self.cfg, model)
+                gn_state = self._grad_norm_state
+                task_groups = getattr(self.cfg, "grad_norm_task_groups", None)
+                interval = int(getattr(self.cfg, "grad_norm_interval", 1))
+                amp_probe_scale = float(
+                    getattr(
+                        self.cfg,
+                        "grad_norm_amp_probe_scale",
+                        1024.0 if self.cfg.enable_amp else 1.0,
+                    )
+                )
+                iter_idx = int(self.comm_info["iter"])
+                gn_info = {}
+                if interval > 0 and iter_idx % interval == 0:
+                    grad_norms = compute_task_last_layer_grad_norms(
+                        model,
+                        loss_by_task,
+                        probe_scale=amp_probe_scale,
+                        task_groups=task_groups,
+                    )
+                    loss_by_group = group_task_losses(loss_by_task, task_groups)
+                    # Keep w_g bit-identical across ranks: average the scalar
+                    # inputs (not gated on sync_bn -- unlike GradNormLite, the
+                    # weights themselves must not diverge).
+                    order = gn_state.group_names
+                    grad_norms = all_reduce_mean_task_norms(
+                        grad_norms, task_names=order
+                    )
+                    loss_by_group = all_reduce_mean_task_norms(
+                        loss_by_group, task_names=order
+                    )
+                    gn_state.capture_initial(loss_by_group)
+                    gn_info = gn_state.update(grad_norms, loss_by_group)
+                    gn_info["last_layer_norms"] = grad_norms
+
+                scales = gn_state.per_task_scales(loss_by_task.keys(), task_groups)
+                total_loss, scales = combine_weighted_task_losses(
+                    loss_by_task,
+                    getattr(model, "task_weights", {}),
+                    scales,
+                )
+                loss = total_loss / self.cfg.gradient_accumulation_steps
+                output_dict["loss"] = total_loss
+                gn_info["loss_scales"] = scales
+                self.comm_info["grad_norm"] = gn_info
+            else:
+                self.comm_info.pop("grad_norm", None)
+        else:
+            self.comm_info.pop("grad_norm", None)
 
         if getattr(self.cfg, "log_task_gradient_norms", False):
             if isinstance(loss_by_task, dict) and loss_by_task:

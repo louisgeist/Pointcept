@@ -69,6 +69,20 @@ grad_norm_lite_interval = 100
 grad_norm_lite_ema_alpha = 0.1
 grad_norm_lite_eps = 1e-3
 
+# Real GradNorm (Chen et al. 2018, "GradNorm: Gradient Normalization for
+# Adaptive Loss Balancing in Deep Multitask Networks"). Mutually exclusive with
+# grad_norm_lite. Learns one loss weight per task (or per group, via
+# grad_norm_task_groups) by gradient descent on the GradNorm L1 objective,
+# renormalized to sum to the number of groups. The weights + their Adam state +
+# the per-group initial-loss anchors L_g(0) are checkpointed. Logged keys
+# grad_norm/weight/*, grad_norm/gw/*, grad_norm/target/*, grad_norm/loss_ratio/*
+# and grad_norm/loss reach TB/W&B per step when grad_norm=True. Cross-rank the
+# scalar inputs are always averaged so the weights stay identical on every rank.
+grad_norm = False
+grad_norm_alpha = 1.5  # restoring-force / asymmetry exponent
+grad_norm_weight_lr = 1e-2  # Adam lr for the learnable weights
+grad_norm_interval = 1  # update the weights every N optimizer steps (1 = faithful)
+
 sync_bn = False
 enable_amp = False
 amp_dtype = "float16"

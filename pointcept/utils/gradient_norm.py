@@ -374,3 +374,214 @@ class GradNormLiteEMA:
     def scales(self, task_names=None):
         names = task_names if task_names is not None else list(self.ema.keys())
         return {name: self.scale(name) for name in names}
+
+
+def group_task_losses(loss_by_task, task_groups=None):
+    """Sum raw (graph-attached) task losses within each group.
+
+    Returns ``{group_name: float(L_group)}`` (detached). Mirrors the grouping
+    that ``compute_task_last_layer_grad_norms`` applies to the gradient probe,
+    so the per-group loss ratio L_g(t)/L_g(0) lines up with the per-group norm.
+    Tasks whose loss is detached / constant (all-ignore batch) are skipped.
+    """
+    out = {}
+    for task_name, task_loss in loss_by_task.items():
+        if not isinstance(task_loss, torch.Tensor) or not task_loss.requires_grad:
+            continue
+        group = task_groups.get(task_name, task_name) if task_groups else task_name
+        out[group] = out.get(group, 0.0) + float(task_loss.detach())
+    return out
+
+
+class GradNormState:
+    """Real GradNorm (Chen et al. 2018) learnable loss weights.
+
+    One learnable weight per task group, trained by gradient descent on the
+    GradNorm L1 objective and renormalized after every step so the weights sum
+    to the number of groups. Unlike :class:`GradNormLiteEMA` this keeps genuine
+    learnable parameters plus their Adam optimizer state and the per-group
+    initial-loss anchors ``L_g(0)`` -- all checkpointed via
+    ``CheckpointSaver`` / ``CheckpointLoader`` so a Slurm requeue does not reset
+    the learned balance.
+
+    Weight update (per :meth:`update` call, driven every ``grad_norm_interval``
+    optimizer steps from ``Trainer.run_step``):
+
+    * ``G_W^{(g)}(t) = w_g(t) * ||dL_g/dW||_2`` -- with ``w_g >= 0`` after the
+      renorm this equals ``||d(w_g L_g)/dW||_2`` without a second-order graph,
+      so the grad norm is probed on the detached raw loss and multiplied by the
+      (differentiable) weight.
+    * target ``Gbar(t) * r_g(t) ** alpha`` with ``r_g = L~_g / mean_h L~_h`` and
+      ``L~_g = L_g(t) / L_g(0)`` -- treated as a constant.
+    * ``L_grad = sum_g | G_W^{(g)}(t) - target_g |`` ; one Adam step on the
+      weights; then ``clamp(min=clamp_min)`` and rescale to ``sum = num_groups``.
+    """
+
+    def __init__(
+        self,
+        group_names,
+        alpha=1.5,
+        weight_lr=1e-2,
+        device=None,
+        clamp_min=0.0,
+    ):
+        self.group_names = list(group_names)
+        if len(self.group_names) < 2:
+            raise ValueError(
+                f"GradNormState needs >= 2 task groups, got {self.group_names}."
+            )
+        self.alpha = float(alpha)
+        self.clamp_min = float(clamp_min)
+        device = torch.device(device) if device is not None else torch.device("cpu")
+        self.weights = torch.ones(
+            len(self.group_names),
+            device=device,
+            dtype=torch.float32,
+            requires_grad=True,
+        )
+        self.optimizer = torch.optim.Adam([self.weights], lr=float(weight_lr))
+        self.L0 = {}
+
+    @property
+    def num_groups(self):
+        return len(self.group_names)
+
+    def _index(self, group):
+        return self.group_names.index(group)
+
+    def capture_initial(self, loss_by_group):
+        """Record ``L_g(0)`` for groups not seen yet (finite, > 0)."""
+        for group, value in loss_by_group.items():
+            v = float(value)
+            if group in self.L0 or not math.isfinite(v) or v <= 0.0:
+                continue
+            self.L0[group] = v
+
+    def update(self, grad_norms, loss_by_group):
+        """One GradNorm step on the learnable weights.
+
+        ``grad_norms``: ``{group: ||dL_g/dW||_2}`` detached floats.
+        ``loss_by_group``: ``{group: current raw L_g}`` detached floats.
+        Groups missing a grad norm or an ``L0`` anchor are skipped for the
+        gradient this step but still take part in the sum-to-T renorm.
+        Returns a dict of scalars for logging.
+        """
+        active = [
+            g
+            for g in self.group_names
+            if g in grad_norms
+            and g in loss_by_group
+            and g in self.L0
+            and math.isfinite(float(grad_norms[g]))
+            and float(grad_norms[g]) > 0.0
+        ]
+        info = {
+            "weights": {},
+            "gw": {},
+            "targets": {},
+            "loss_ratio": {},
+            "grad_norm_loss": float("nan"),
+        }
+        if len(active) >= 2:
+            device = self.weights.device
+            idx = torch.tensor(
+                [self._index(g) for g in active], device=device, dtype=torch.long
+            )
+            g_vec = torch.tensor(
+                [float(grad_norms[g]) for g in active],
+                device=device,
+                dtype=torch.float32,
+            )
+            loss_ratio = torch.tensor(
+                [float(loss_by_group[g]) / self.L0[g] for g in active],
+                device=device,
+                dtype=torch.float32,
+            )
+            r = loss_ratio / loss_ratio.mean().clamp_min(1e-12)
+            w_active = self.weights[idx]
+            gw = w_active * g_vec  # G_W^{(g)}(t), differentiable in the weights
+            target = (gw.detach().mean() * r.pow(self.alpha)).detach()
+            grad_loss = (gw - target).abs().sum()
+            self.optimizer.zero_grad(set_to_none=True)
+            grad_loss.backward()
+            self.optimizer.step()
+            with torch.no_grad():
+                self.weights.data.clamp_(min=self.clamp_min)
+                total = self.weights.data.sum().clamp_min(1e-12)
+                self.weights.data.mul_(self.num_groups / total)
+            info["grad_norm_loss"] = float(grad_loss.detach())
+            for j, g in enumerate(active):
+                info["gw"][g] = float(gw[j].detach())
+                info["targets"][g] = float(target[j])
+                info["loss_ratio"][g] = float(loss_ratio[j])
+        with torch.no_grad():
+            for g in self.group_names:
+                info["weights"][g] = float(self.weights[self._index(g)])
+        return info
+
+    def per_task_scales(self, task_names, task_groups=None):
+        """Per-task loss multiplier = the learned weight of the task's group."""
+        out = {}
+        with torch.no_grad():
+            for t in task_names:
+                g = task_groups.get(t, t) if task_groups else t
+                out[t] = (
+                    float(self.weights[self._index(g)])
+                    if g in self.group_names
+                    else 1.0
+                )
+        return out
+
+    def state_dict(self):
+        return {
+            "weights": self.weights.detach().cpu(),
+            "optimizer": self.optimizer.state_dict(),
+            "L0": dict(self.L0),
+            "group_names": list(self.group_names),
+            "alpha": self.alpha,
+            "clamp_min": self.clamp_min,
+        }
+
+    def load_state_dict(self, state):
+        saved = list(state.get("group_names", self.group_names))
+        if saved != self.group_names:
+            raise ValueError(
+                "GradNormState group set/order changed since checkpoint: "
+                f"{saved} -> {self.group_names}"
+            )
+        with torch.no_grad():
+            self.weights.data.copy_(
+                state["weights"].to(self.weights.device, dtype=self.weights.dtype)
+            )
+        self.optimizer.load_state_dict(state["optimizer"])
+        self.L0 = {k: float(v) for k, v in dict(state.get("L0", {})).items()}
+        self.alpha = float(state.get("alpha", self.alpha))
+        self.clamp_min = float(state.get("clamp_min", self.clamp_min))
+
+
+def build_grad_norm_state(cfg, model, device=None):
+    """Construct a :class:`GradNormState` from a config + a multi-task model.
+
+    Group names are derived from ``model.tasks`` and ``cfg.grad_norm_task_groups``
+    -- no data batch needed, so this works from both ``Trainer.__init__`` and
+    ``CheckpointLoader`` before the first step.
+    """
+    tasks = list(getattr(model, "tasks", []) or [])
+    if not tasks:
+        raise ValueError(
+            "build_grad_norm_state: model has no `tasks` "
+            "(grad_norm needs MultiTaskSegmentorV2)."
+        )
+    task_groups = getattr(cfg, "grad_norm_task_groups", None)
+    groups = sorted(
+        set(task_groups.get(t, t) if task_groups else t for t in tasks)
+    )
+    if device is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    return GradNormState(
+        group_names=groups,
+        alpha=getattr(cfg, "grad_norm_alpha", 1.5),
+        weight_lr=getattr(cfg, "grad_norm_weight_lr", 1e-2),
+        device=device,
+        clamp_min=getattr(cfg, "grad_norm_clamp_min", 0.0),
+    )

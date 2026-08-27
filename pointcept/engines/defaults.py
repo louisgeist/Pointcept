@@ -172,6 +172,12 @@ def default_config_parser(file_path, options):
     if cfg.seed is None:
         cfg.seed = get_random_seed()
 
+    if getattr(cfg, "grad_norm", False) and getattr(cfg, "grad_norm_lite", False):
+        raise ValueError(
+            "grad_norm (real GradNorm) and grad_norm_lite are mutually "
+            "exclusive multitask loss-balancing schemes; enable at most one."
+        )
+
     if "data" not in cfg:
         cfg.data = ConfigDict()
     elif not isinstance(cfg.data, ConfigDict):

@@ -278,7 +278,7 @@ class InformationWriter(HookBase):
 
     @classmethod
     def _wandb_step_keys(
-        cls, model_output_keys, log_all_steps, log_task_grads, log_lite
+        cls, model_output_keys, log_all_steps, log_task_grads, log_lite, log_gn=False
     ):
         """Select keys for per-step W&B train_batch logging."""
         if log_all_steps:
@@ -291,6 +291,9 @@ class InformationWriter(HookBase):
         for key in model_output_keys:
             if key in cls._GLOBAL_GRAD_STEP_KEYS:
                 if log_task_grads:
+                    step_keys.append(key)
+            elif key.startswith("grad_norm/"):
+                if log_gn:
                     step_keys.append(key)
             elif key.startswith("gradient/last_layer/") or key.startswith(
                 "loss_scale/"
@@ -394,6 +397,33 @@ class InformationWriter(HookBase):
                             subkey = f"loss_scale/{task_name}"
                             self.trainer.storage.put_scalar(subkey, value)
                             scalar_keys.append(subkey)
+
+            grad_norm = self.trainer.comm_info.get("grad_norm")
+            if isinstance(grad_norm, dict):
+                _gn_groups = (
+                    ("weights", "grad_norm/weight"),
+                    ("gw", "grad_norm/gw"),
+                    ("targets", "grad_norm/target"),
+                    ("loss_ratio", "grad_norm/loss_ratio"),
+                    ("last_layer_norms", "grad_norm/last_layer"),
+                )
+                for src_key, prefix in _gn_groups:
+                    sub = grad_norm.get(src_key)
+                    if not isinstance(sub, dict):
+                        continue
+                    for group_name, value in sub.items():
+                        if value is None:
+                            continue
+                        value = float(value)
+                        if not math.isfinite(value):
+                            continue
+                        subkey = f"{prefix}/{group_name}"
+                        self.trainer.storage.put_scalar(subkey, value)
+                        scalar_keys.append(subkey)
+                gn_loss = grad_norm.get("grad_norm_loss")
+                if gn_loss is not None and math.isfinite(float(gn_loss)):
+                    self.trainer.storage.put_scalar("grad_norm/loss", float(gn_loss))
+                    scalar_keys.append("grad_norm/loss")
 
             global_diag = self.trainer.comm_info.get("global_gradient_diag")
             if isinstance(global_diag, dict):
@@ -515,6 +545,7 @@ class InformationWriter(HookBase):
                 self.trainer.cfg, "log_task_gradient_norms", False
             )
             log_lite = getattr(self.trainer.cfg, "grad_norm_lite", False)
+            log_gn = getattr(self.trainer.cfg, "grad_norm", False)
             for name, lr in lrs.items():
                 tag = "params/lr" if name == "" else f"params/lr/{name}"
                 self.trainer.writer.add_scalar(tag, lr, self.curr_iter)
@@ -528,7 +559,7 @@ class InformationWriter(HookBase):
                 )
             if self.trainer.cfg.enable_wandb:
                 log_all_steps = self.wandb_log_every_step
-                if log_all_steps or log_task_grads or log_lite:
+                if log_all_steps or log_task_grads or log_lite or log_gn:
                     wandb_payload = {"Iter": self.curr_iter}
                     if log_all_steps:
                         for name, lr in lrs.items():
@@ -539,6 +570,7 @@ class InformationWriter(HookBase):
                         log_all_steps,
                         log_task_grads,
                         log_lite,
+                        log_gn,
                     )
                     for key in step_keys:
                         wandb_payload[f"train_batch/{key}"] = (
@@ -766,6 +798,11 @@ class CheckpointSaver(HookBase):
                     ),
                     "best_metric_value": self.trainer.best_metric_value,
                     "hook_states": hook_states,
+                    "grad_norm_state": (
+                        self.trainer._grad_norm_state.state_dict()
+                        if getattr(self.trainer, "_grad_norm_state", None) is not None
+                        else None
+                    ),
                 },
                 filename + ".tmp",
             )
@@ -867,6 +904,15 @@ class CheckpointLoader(HookBase):
                 state = hook_states.get(h.__class__.__name__)
                 if state:
                     h.load_state_dict(state)
+            # Real GradNorm learnable weights + Adam state + L_g(0) anchors
+            # (older checkpoints predate this key, hence .get).
+            grad_norm_state = checkpoint.get("grad_norm_state")
+            if (
+                grad_norm_state
+                and getattr(self.trainer, "_grad_norm_state", None) is not None
+            ):
+                self.trainer._grad_norm_state.load_state_dict(grad_norm_state)
+                self.trainer.logger.info("=> Restored GradNorm state from checkpoint")
 
 
 @HOOKS.register_module()
