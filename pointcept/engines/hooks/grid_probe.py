@@ -177,6 +177,18 @@ class GridProbeEvaluator(HookBase):
             else self._last_miou_by_probe
         )
 
+    def best_miou(self, name):
+        """Probe's running-best val mIoU, or nan if not tracked yet (e.g. a
+        pre-macro-F1 checkpoint resumed under select_metric='mIoU' with no eval
+        since — _best_miou_by_probe is populated, _best_f1_by_probe is not)."""
+        v = self._best_miou_by_probe.get(name)
+        return float(v) if v is not None else float("nan")
+
+    def best_macro_f1(self, name):
+        """Probe's running-best val macro-F1, or nan if not tracked yet."""
+        v = self._best_f1_by_probe.get(name)
+        return float(v) if v is not None else float("nan")
+
     def _update_bests(
         self, m_iou_by_probe, macro_f1_by_probe, f1_cls_by_probe, cls_hist_by_probe
     ):
@@ -255,6 +267,33 @@ class GridProbeEvaluator(HookBase):
         self._best_cls_acc_by_probe = dict(state.get("best_cls_acc_by_probe", {}))
         self._best_cls_f1_by_probe = dict(state.get("best_cls_f1_by_probe", {}))
         self._history = list(state.get("history", []))
+
+    def before_train(self):
+        # Finding: a checkpoint whose hook_states has no "GridProbeEvaluator"
+        # entry (predates this hook's state tracking) is resumed WITHOUT
+        # load_state_dict ever running (CheckpointLoader guards `if state:`), so
+        # the select_metric consistency check is bypassed while
+        # trainer.best_metric_value has already been restored in the OLD metric's
+        # scale. Reset it here so best-checkpoint selection restarts cleanly on
+        # the configured metric. (A fresh run has resume=False; a resume that DID
+        # restore evaluator state either populated _best_f1_by_probe or already
+        # hard-failed in load_state_dict.)
+        best = getattr(self.trainer, "best_metric_value", None)
+        if (
+            getattr(self.trainer.cfg, "resume", False)
+            and self.select_metric != "mIoU"
+            and not self._best_f1_by_probe
+            and best is not None
+            and best != float("-inf")
+        ):
+            self.trainer.logger.warning(
+                "GridProbeEvaluator: resumed a checkpoint with no macro-F1 "
+                "tracking state; resetting trainer.best_metric_value (%.4f, "
+                "likely mIoU-scale) to -inf so selection restarts on %s.",
+                best,
+                self.select_metric,
+            )
+            self.trainer.best_metric_value = float("-inf")
 
     def after_epoch(self):
         if self.should_evaluate():
@@ -454,8 +493,8 @@ class GridProbeEvaluator(HookBase):
             self.select_metric,
             {k: round(v, 4) for k, v in sel_best.items()},
             winner,
-            self._best_miou_by_probe[winner],
-            self._best_f1_by_probe[winner],
+            self.best_miou(winner),
+            self.best_macro_f1(winner),
         )
 
 
@@ -537,8 +576,8 @@ class GridProbeWinnerSelector(HookBase):
             "best val macro_f1=%.4f)",
             winner_name,
             evaluator.select_metric,
-            evaluator._best_miou_by_probe[winner_name],
-            evaluator._best_f1_by_probe[winner_name],
+            evaluator.best_miou(winner_name),
+            evaluator.best_macro_f1(winner_name),
         )
 
         raw_model = _raw_model(self.trainer)
@@ -582,11 +621,18 @@ class GridProbeWinnerSelector(HookBase):
             return
 
         cfg = self.trainer.cfg
+
+        def _num(d, name):
+            # None (not nan) for JSON when a probe's value isn't tracked yet
+            # (pre-macro-F1 checkpoint resumed under select_metric="mIoU").
+            v = d.get(name)
+            return float(v) if v is not None else None
+
         leaderboard = {
             name: {
                 "probe_config": dict(raw_model.probe_configs[name]),
-                "best_val_mIoU": float(evaluator._best_miou_by_probe[name]),
-                "best_val_macro_f1": float(evaluator._best_f1_by_probe[name]),
+                "best_val_mIoU": _num(evaluator._best_miou_by_probe, name),
+                "best_val_macro_f1": _num(evaluator._best_f1_by_probe, name),
             }
             for name in evaluator._best_miou_by_probe
         }
@@ -596,8 +642,8 @@ class GridProbeWinnerSelector(HookBase):
             "winner": {
                 "probe_name": winner_name,
                 "probe_config": dict(raw_model.probe_configs[winner_name]),
-                "best_val_mIoU": float(evaluator._best_miou_by_probe[winner_name]),
-                "best_val_macro_f1": float(evaluator._best_f1_by_probe[winner_name]),
+                "best_val_mIoU": _num(evaluator._best_miou_by_probe, winner_name),
+                "best_val_macro_f1": _num(evaluator._best_f1_by_probe, winner_name),
                 "test_mIoU": test_metrics.get("test/mIoU"),
                 "test_mAcc": test_metrics.get("test/mAcc"),
                 "test_allAcc": test_metrics.get("test/allAcc"),
@@ -668,16 +714,18 @@ class GridProbeWinnerSelector(HookBase):
             summary = {
                 "winner/probe_name": winner_name,
                 "winner/select_metric": evaluator.select_metric,
-                "winner/best_val_mIoU": float(evaluator._best_miou_by_probe[winner_name]),
-                "winner/best_val_macro_f1": float(
-                    evaluator._best_f1_by_probe[winner_name]
-                ),
+                "winner/best_val_mIoU": evaluator.best_miou(winner_name),
+                "winner/best_val_macro_f1": evaluator.best_macro_f1(winner_name),
             }
             summary.update(
                 _flatten_for_wandb(raw_model.probe_configs[winner_name], "winner/config")
             )
-            # Per-class val IoU/accuracy/F1 at the winner's own best epoch (see
-            # GridProbeEvaluator._best_cls_{iou,acc,f1}_by_probe).
+            # Per-class val IoU/accuracy/F1 snapshotted at the winner's best
+            # *select_metric* epoch (see _best_cls_{iou,acc,f1}_by_probe). NB
+            # winner/best_val_{mIoU,macro_f1} above are all-time running maxes:
+            # under select_metric="macro_f1" the F1 pair is consistent (snapshot
+            # taken on the peak-F1 epoch); under "mIoU" the per-class F1 here is
+            # from the peak-mIoU epoch and can differ from best_val_macro_f1.
             cls_iou = evaluator._best_cls_iou_by_probe.get(winner_name)
             cls_acc = evaluator._best_cls_acc_by_probe.get(winner_name)
             cls_f1 = evaluator._best_cls_f1_by_probe.get(winner_name)
