@@ -538,6 +538,12 @@ class Trainer(TrainerBase):
             )
             if tags:
                 init_kw["tags"] = tags
+            # Optional run grouping (e.g. tools/grid_then_seeds.py puts the grid
+            # sweep and its seed-ensemble follow-up in one group). No-op for
+            # configs that don't set wandb_group.
+            wandb_group = getattr(self.cfg, "wandb_group", None)
+            if wandb_group:
+                init_kw["group"] = str(wandb_group)
             if run_id:
                 init_kw["id"] = run_id
                 init_kw["resume"] = "allow"

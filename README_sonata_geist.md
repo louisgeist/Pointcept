@@ -152,6 +152,13 @@ CSV columns: `pretrain_epoch`, `best_val_mIoU`, `best_config`, `probe_job_dir`,
 `status`, `timestamp`. `best_config` is the winning probe name (e.g. `ce_lr2e-3_wd0_none`).
 Per-job leaderboard: `$JOB_DIR/grid_search_results.json`.
 
+### Grid probe → seed-ensemble in one pass
+
+To chain a full grid sweep into the 10-init robustness run (winner picked dynamically from
+`grid_search_results.json`, not a hardcoded lr table), see
+**README_geist.md § Grid probe → seed-ensemble in one pass**
+(`sbatch sbatch_grid_then_seeds.sh <grid_config> <weight>`, [tools/grid_then_seeds.py](tools/grid_then_seeds.py)).
+
 ### Local smoke (no Slurm)
 
 `LinProbeSbatchHook` is a no-op without `sbatch`. Use the watcher in local mode:

@@ -700,6 +700,46 @@ Scope limits: precision (AMP) is one global run setting, not per probe; no per-p
 (all probes train for the same number of iterations); no automatic full-cartesian-expansion beyond
 the axes you actually cross with `cartesian_probes`.
 
+#### Grid probe → seed-ensemble in one pass
+
+Once a grid sweep picks a winner, the robustness number comes from re-running **that config with
+N different inits** (`GridProbeSeedEnsembleTester`: 10 heads, identical hyperparameters, one shared
+frozen-backbone forward → `seed_ensemble_results.json` with test mIoU/mAcc/allAcc/f1_macro
+mean ± std). [tools/gen_grid_seed_configs.py](tools/gen_grid_seed_configs.py) bakes each sweep's
+winning lr into a hardcoded table; [tools/grid_then_seeds.py](tools/grid_then_seeds.py) does it
+**dynamically** — run the grid, read `grid_search_results.json`, generate the 10-init config from
+the winner's *full* `probe_config` (loss/optimizer/scheduler/norms/dropout/grad_clip, not just lr),
+run it, aggregate. Generic: any `*-lin-grid*` config, any dataset/backbone.
+
+```bash
+# Jean Zay — chained in one job (grid phase + seed phase, sequential, 1 GPU)
+sbatch sbatch_grid_then_seeds.sh <grid_config> <weight.pth>          # A100, 40h
+sbatch sbatch_grid_then_seeds_h100.sh <grid_config> <weight.pth>     # H100, 40h
+
+# grid already ran (e.g. the 336-probe wide sweep, 48h on its own): only winner → seeds
+EXTRA_ARGS="--skip-grid --grid-dir logs/slurm/<gridjob>" \
+  sbatch sbatch_grid_then_seeds.sh <grid_config> <weight.pth>
+
+# just regenerate the seed-ensemble config from a finished grid dir (no GPU)
+python tools/grid_then_seeds.py --make-config-only --grid-config <cfg> \
+  --grid-dir <grid_dir> --save-root <out>
+```
+
+Output under `$JOB_DIR/`: `grid/` (phase 1), `seeds/` (phase 2, has `seed_ensemble_results.json`),
+`seed_ensemble_config.py` (generated), `grid_then_seeds_summary.csv` (one mean ± std row).
+Idempotent — a finished phase is skipped and an interrupted one resumes from `model_last.pth`, so a
+Slurm requeue just re-runs the driver. Wandb: two runs (grid sweep + seed ensemble), both put in a
+shared `wandb_group` (`gts-<jobid>`); the seeds run carries `seed_ensemble/test_mIoU_mean|std…` in
+its summary (needs the `wandb_group` support added to `build_writer`).
+
+The "test pass" here is **not** the heavy protocol: these grid configs set `test_single_fragment=True`
+and `aug_transform=[[angle=[0]]]`, so it's one forward per scene, no sliding-window voting, no TTA
+(voxel preds are still broadcast back to full points, same as validation). On **DALES** (no held-out
+val) every config points `data.val` and `data.test` at `split="test"`, so the seed-ensemble `test_*`
+numbers are on the same tiles the winner was selected on — essentially validation re-measured. The
+driver records `val_split` / `test_split` / `val_eq_test_split` in the CSV and flags it in the console
+report rather than presenting it as held-out test.
+
 ### Other datasets
 
 
