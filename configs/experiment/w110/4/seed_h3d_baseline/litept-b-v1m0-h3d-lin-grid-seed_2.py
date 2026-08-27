@@ -35,7 +35,7 @@ coord_feat_scale = 0.01  # must match Flair3D multitask pretrain
 num_gpu = 1
 epoch = 2000
 eval_epoch = 10
-lr = 0.005  # fixed at the lr-grid sweep winner (see docstring)
+lr = 0.02  # fixed at the lr-grid sweep winner (see docstring)
 patch_size = 1024
 
 test_single_fragment = True
