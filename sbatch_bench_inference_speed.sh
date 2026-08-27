@@ -10,6 +10,7 @@
 # Optional env overrides (examples):
 #   NUM_TILES=50 BACKBONES="litept_b ptv3 sonata" sbatch sbatch_bench_inference_speed.sh
 #   AMP=true sbatch sbatch_bench_inference_speed.sh
+#   SEED=42 TILE_SAMPLE=random CACHE_WARMUP=true NUM_WORKERS=8 sbatch sbatch_bench_inference_speed.sh
 #
 # Jean-Zay compute-accounting tags (IMAGINE wrapper):
 #   https://github.com/Archiel19/compute-accounting
@@ -41,6 +42,10 @@ SPLIT="${SPLIT:-test}"
 CSV_MANIFEST="${CSV_MANIFEST:-data/flair3d_plus/raw/scene_split_manifest.csv}"
 BACKBONES="${BACKBONES:-}"
 AMP="${AMP:-false}"
+SEED="${SEED:-42}"
+TILE_SAMPLE="${TILE_SAMPLE:-random}"
+CACHE_WARMUP="${CACHE_WARMUP:-true}"
+NUM_WORKERS="${NUM_WORKERS:-}"
 OUT_DIR="${OUT_DIR:-${REPO_ROOT}/stats/flair3d/inference_speed_bench/${SLURM_JOB_ID}}"
 EXTRA_ARGS="${EXTRA_ARGS:-}"
 
@@ -54,6 +59,8 @@ cp $0 ${JOB_DIR}/script.slurm
     echo "CSV_MANIFEST: ${CSV_MANIFEST}"
     echo "SPLIT: ${SPLIT}"
     echo "NUM_TILES: ${NUM_TILES}  NUM_WARMUP: ${NUM_WARMUP}"
+    echo "SEED: ${SEED}  TILE_SAMPLE: ${TILE_SAMPLE}  CACHE_WARMUP: ${CACHE_WARMUP}"
+    echo "NUM_WORKERS: ${NUM_WORKERS:-<cfg.num_worker_per_gpu>}"
     echo "BACKBONES: ${BACKBONES:-<all 5>}"
     echo "AMP: ${AMP}"
     echo "OUT_DIR: ${OUT_DIR}"
@@ -87,6 +94,8 @@ cmd=(
   --split "${SPLIT}"
   --num-tiles "${NUM_TILES}"
   --num-warmup "${NUM_WARMUP}"
+  --seed "${SEED}"
+  --tile-sample "${TILE_SAMPLE}"
   --device cuda:0
   --out-dir "${OUT_DIR}"
 )
@@ -98,6 +107,14 @@ fi
 
 if [ "${AMP}" = "true" ]; then
   cmd+=(--amp)
+fi
+
+if [ "${CACHE_WARMUP}" != "true" ]; then
+  cmd+=(--no-cache-warmup)
+fi
+
+if [ -n "${NUM_WORKERS}" ]; then
+  cmd+=(--num-workers "${NUM_WORKERS}")
 fi
 
 if [ -n "${EXTRA_ARGS}" ]; then
