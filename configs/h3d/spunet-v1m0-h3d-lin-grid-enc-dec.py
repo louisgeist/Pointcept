@@ -12,11 +12,10 @@ Sets `point_mode=True` AND `dec_point_mode=True` together
 convention of "decoder stages + encoder bottleneck") is concatenated with the
 raw encoder multiscale (stem(32)+stage0(32)+stage1(64)+stage2(128) = 256ch,
 bottleneck dropped here since dec_point_mode already carries it, to avoid
-duplicating an identical 256ch block) — 832 + 256 = 1088ch total. Note there
-is no standalone `spunet-v1m0-h3d-lin-grid-dec_hc.py` (decoder-hypercolumn
-only, 832ch) config yet — only this combined variant plus the plain
-single-scale decoder (spunet-v1m0-h3d-lin-grid-dec.py, 96ch) and
-encoder-only (spunet-v1m0-h3d-lin-grid-enc.py, 512ch) exist. This closes
+duplicating an identical 256ch block) — 832 + 256 = 1088ch total. Decoder-
+hypercolumn only (832ch) is spunet-v1m0-h3d-lin-grid-dec-hc.py; plain
+single-scale decoder is spunet-v1m0-h3d-lin-grid-dec.py (96ch); encoder-only
+is spunet-v1m0-h3d-lin-grid-enc.py (512ch). This closes
 most of the channel-budget gap against LitePT-B's enc/dec hypercolumns
 (1386/1404ch) and PT-v3-malibu's/Sonata's (992/1024/1232ch): SpUNet's
 per-stage widths are simply narrower in this checkpoint, so tapping every

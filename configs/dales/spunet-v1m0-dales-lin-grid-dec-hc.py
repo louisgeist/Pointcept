@@ -1,28 +1,19 @@
 """
-SpUNet-v1m1 grid-search linear probing on DALES — combined encoder+decoder
-hypercolumn variant (same frozen checkpoint as
-spunet-v1m0-dales-lin-grid-{enc,dec}.py, job 1052217, Flair3D+ multitask
+SpUNet-v1m1 grid-search linear probing on DALES — decoder hypercolumn /
+multi-scale variant (same frozen checkpoint as
+spunet-v1m0-dales-lin-grid-{enc,dec,enc-dec}.py, job 1052217, Flair3D+ multitask
 supervised pretrain: channels=(32,64,128,256,256,128,96,96),
 layers=(2,3,4,6,2,2,2,2), stride=3).
 
-Sets `point_mode=True` AND `dec_point_mode=True` together
-(spconv_unet_v1m1_base.py): the decoder hypercolumn chain
-(dec0(96)+dec1(96)+dec2(128)+dec3(256)+bottleneck(256) = 832ch, built by
-`dec_point_mode` alone, mirroring LitePT/PT-v3's dec_traceable/traceable
-convention of "decoder stages + encoder bottleneck") is concatenated with the
-raw encoder multiscale (stem(32)+stage0(32)+stage1(64)+stage2(128) = 256ch,
-bottleneck dropped here since dec_point_mode already carries it, to avoid
-duplicating an identical 256ch block) — 832 + 256 = 1088ch total. Decoder-
-hypercolumn only (832ch) is spunet-v1m0-dales-lin-grid-dec-hc.py; plain
-single-scale decoder is spunet-v1m0-dales-lin-grid-dec.py (96ch); encoder-only
-is spunet-v1m0-dales-lin-grid-enc.py (512ch). This closes
-most of the channel-budget gap against LitePT-B's enc/dec hypercolumns
-(1386/1404ch) and PT-v3-malibu's/Sonata's (992/1024/1232ch): SpUNet's
-per-stage widths are simply narrower in this checkpoint, so tapping every
-level of both the encoder and decoder (instead of the encoder XOR decoder) is
-the way to reach a comparable feature budget without retraining. See
-tests/test_spunet_point_mode.py (`test_combined_point_mode_and_dec_point_mode_shape_and_alignment`)
-for the shape/row-alignment correctness check.
+Sets `dec_point_mode=True` alone (spconv_unet_v1m1_base.py): the decoder
+hypercolumn chain (dec0(96)+dec1(96)+dec2(128)+dec3(256)+bottleneck(256) =
+832ch), mirroring LitePT/PT-v3's dec_traceable/traceable convention of
+"decoder stages + encoder bottleneck". Counterpart to the plain single-scale
+decoder (spunet-v1m0-dales-lin-grid-dec.py, 96ch), encoder-only
+(spunet-v1m0-dales-lin-grid-enc.py, 512ch), and combined enc+dec
+(spunet-v1m0-dales-lin-grid-enc-dec.py, 1088ch). See
+tests/test_spunet_point_mode.py (`test_dec_point_mode_forward_shape`) for the
+shape/row-alignment correctness check.
 
 Same probe grid as litept-b-v1m0-dales-lin-grid-enc.py (ce_lovasz x 12 LRs,
 AdamW/wd0/OneCycleLR warmup5%, epoch=400/eval_epoch=10) for cross-backbone
@@ -36,7 +27,7 @@ other DALES lin configs.
 _base_ = ["../_base_/default_runtime.py"]
 
 grp_exp = 1
-num_exp = 3
+num_exp = 4
 
 num_classes = 8
 ignore_index = 8
@@ -104,11 +95,9 @@ names = [
     "Unknown",
 ]
 
-# dec_point_mode chain (dec0+dec1+dec2+dec3+bottleneck = 832) + point_mode's
-# raw encoder levels with the (already-counted) bottleneck dropped (stem+
-# stage0+stage1+stage2 = 256) = 1088.
+# dec_point_mode chain: dec0+dec1+dec2+dec3+bottleneck = 832.
 backbone_channels = (32, 64, 128, 256, 256, 128, 96, 96)
-backbone_out_channels = (96 + 96 + 128 + 256 + 256) + (32 + 32 + 64 + 128)
+backbone_out_channels = 96 + 96 + 128 + 256 + 256
 
 # Grid-search probes — ce_lovasz, AdamW/wd0/OneCycleLR warmup5%, lr sweep only (12 probes).
 _criteria = [
@@ -152,7 +141,7 @@ probes = {
 del _criteria, _lrs
 
 wandb_run_name = (
-    f"SpUNet GridProbe DALES {grp_exp}.{num_exp}) enc+dec combined {backbone_out_channels}ch, "
+    f"SpUNet GridProbe DALES {grp_exp}.{num_exp}) decoder hypercolumn {backbone_out_channels}ch, "
     f"{len(probes)} probes, epoch={epoch}"
 )
 
@@ -167,11 +156,11 @@ model = dict(
     backbone=dict(
         type="SpUNet-v1m1",
         in_channels=7,  # coord(3) + color(3, fake) + strength(1)
-        num_classes=0,  # unused in point_mode/dec_point_mode (no final conv applied) — kept for checkpoint key compat
+        num_classes=0,  # unused in dec_point_mode (no final conv applied) — kept for checkpoint key compat
         channels=backbone_channels,
         layers=(2, 3, 4, 6, 2, 2, 2, 2),
         stride=3,
-        point_mode=True,
+        point_mode=False,
         dec_point_mode=True,
     ),
     freeze_backbone=True,
