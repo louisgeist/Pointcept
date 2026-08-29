@@ -12,7 +12,8 @@
 #          f1_macro mean +/- std) and <jobdir>/grid_then_seeds_summary.csv.
 #
 # Usage:
-#   sbatch sbatch_grid_then_seeds.sh <grid_config> <weight.pth> [exp_name]
+#   ./submit_grid_then_seeds.sh <grid_config> <weight.pth> [exp_name]
+#   (sets Slurm --time from config path: H3D 4h / DALES 8h / ECLAIR 12h)
 #   GRID_CONFIG=... WEIGHT=... [N_SEEDS=10] sbatch sbatch_grid_then_seeds.sh
 #
 # For the 336-probe wide flair3d grid (48h on its own): run that grid with
@@ -28,7 +29,7 @@
 #SBATCH --output=/lustre/fswork/projects/rech/unv/usi32yh/Pointcept/logs/slurm/%j/slurm.out
 #SBATCH --error=/lustre/fswork/projects/rech/unv/usi32yh/Pointcept/logs/slurm/%j/slurm.err
 
-#SBATCH --time=05:00:00
+#SBATCH --time=12:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:1
@@ -56,6 +57,7 @@ cp $0 ${JOB_DIR}/script.slurm
     echo "Grid config: $GRID_CONFIG"
     echo "Weight: $WEIGHT"
     echo "N seeds: $N_SEEDS"
+    echo "Slurm time limit: ${SLURM_TIME:-12:00:00}"
     echo "Extra args: ${EXTRA_ARGS:-<none>}"
     echo "Starting job at: $(date)"
     echo "Running on host: $(hostname)"
