@@ -82,7 +82,7 @@ conda deactivate && while [ -n "${CONDA_DEFAULT_ENV:-}" ]; do conda deactivate; 
 module purge
 module load arch/h100
 module load miniforge/24.9.0
-conda activate pointcept
+conda activate pointcept_124
 
 cd "${REPO_ROOT}"
 export PYTHONPATH="${REPO_ROOT}"
