@@ -331,6 +331,12 @@ python tools/test.py \
     data.test.include_names=[D075-2021_AA-S2-2,D075-2021_UU-S1-4,D068-2021_UF-S1-23,D068-2021_UU-S1-12,D075_UF-S1-2,D068_FA-S1-26,D068_UN-S1-28]
 ```
 
+**Elevation parity plot** (pred vs GT scatter/density, MAE/RMSE/R² per zone, TikZ export for
+Overleaf): see [README_elevation_parity_geist.md](README_elevation_parity_geist.md)
+(`scripts/export_elevation_parity.py` for the data dump, `scripts/visualize_elevation_scatter.py`
+for the matplotlib hexbin, `scripts/rank_elevation_mae.py` / `sbatch_rank_elevation_mae.sh`
+to rank ROIs by MAE, all off the `873542` dumps above).
+
 **Network test predictions** (`{tile}_logits_network.npy`): shape `(r, H, W)` with
 `r=3` (ROADS / RAILROADS / TRANSMISSION_LINES), same grid as `network.npy` /
 `meta.network`. Values are soft foreground probabilities in `[0, 1]`. Cells with
@@ -586,14 +592,27 @@ python -m tools.train \
 
 
 
-#### Inference-speed benchmark (LitePT-B / PTv3 / KPConvX / SpUNet)
+#### Inference-speed benchmark (LitePT-B / PTv3 / KPConvX / SpUNet / Sonata)
 
-`scripts/bench_inference_speed.py` measures batch_size=1 test-time throughput (pts/s) for the 4
-backbones, loading the real multi-task configs
-(`configs/flair3d_default/multi-{litept-b,ptv3,kpconvx,spunet}-v1m0-flair3d.py`) unmodified, on an
-identical pinned tile set for all 4. Random-init weights (no checkpoint needed). Splits per-tile
-cost into CPU (dataset load + transform) / CPU→GPU transfer / GPU compute via `torch.cuda.Event`,
-logs each tile to console, and writes `per_tile.csv` + `summary.json` under
+`scripts/bench_inference_speed.py` measures batch_size=1 test-time throughput (pts/s) for the 5
+models (LitePT-B / PTv3 / KPConvX / SpUNet / Sonata lin-probe), loading the real multi-task
+configs (`configs/flair3d_default/multi-{litept-b,ptv3,kpconvx,spunet}-v1m0-flair3d.py`) plus
+the Sonata probe, unmodified. Random-init weights (no checkpoint needed).
+
+Tiles are sampled **once** (`--tile-sample random`, `--seed 42`) from the first config's
+`data.test` and looked up by name for every backbone — not the first N rows of the CSV
+(which clustered on D012). A CPU-only page-cache warmup runs before the first backbone so
+LitePT is not the only one paying cold Lustre I/O.
+
+Two passes per backbone:
+
+- **sequential** (diag): exclusive CPU (load + transform) / H2D / GPU via `torch.cuda.Event`.
+  Compare backbones on `pts/s(GPU)`.
+- **pipeline** (throughput): DataLoader workers + `prefetch_factor=1`, `batch_size=1` (no
+  voxel-budget packing). Cite `pts/s(pipeline)`. `stall_ms` is time spent waiting on
+  `next(loader)`.
+
+Writes `per_tile.csv` (column `mode`) + `summary.json` under
 `stats/flair3d/inference_speed_bench/<timestamp>/`.
 
 These configs require `forest_2d.npy` per tile (network/forest_2d pixel-semantic heads) — a
@@ -620,10 +639,12 @@ python scripts/bench_inference_speed.py \
   --csv-manifest data/flair3d_plus/raw/scene_split_manifest_D067.csv --split val \
   --num-tiles 60 --num-warmup 10 --device cuda:0 --backbones kpconvx spunet
 
-# Real run on A100 (Jean Zay, full national manifest, test split, all 4 backbones).
+# Real run on A100 (Jean Zay, full national manifest, test split, all 5 backbones).
+# Or: sbatch sbatch_bench_inference_speed.sh
+# Optional env: SEED TILE_SAMPLE CACHE_WARMUP NUM_WORKERS NUM_TILES BACKBONES AMP
 python scripts/bench_inference_speed.py \
   --csv-manifest data/flair3d_plus/raw/scene_split_manifest.csv --split test \
-  --num-tiles 200 --num-warmup 10 --device cuda:0
+  --num-tiles 200 --num-warmup 10 --tile-sample random --seed 42 --device cuda:0
 ```
 
 ### Sonata pretrain + periodic linear probe (Flair3D+)
@@ -713,12 +734,12 @@ run it, aggregate. Generic: any `*-lin-grid*` config, any dataset/backbone.
 
 ```bash
 # Jean Zay — chained in one job (grid phase + seed phase, sequential, 1 GPU)
-sbatch sbatch_grid_then_seeds.sh <grid_config> <weight.pth>          # A100, 40h
-sbatch sbatch_grid_then_seeds_h100.sh <grid_config> <weight.pth>     # H100, 40h
+./submit_grid_then_seeds.sh <grid_config> <weight.pth>          # A100; auto --time H3D 4h / DALES 8h / ECLAIR 12h
+./submit_grid_then_seeds_h100.sh <grid_config> <weight.pth>     # H100; same time rules
 
 # grid already ran (e.g. the 336-probe wide sweep, 48h on its own): only winner → seeds
 EXTRA_ARGS="--skip-grid --grid-dir logs/slurm/<gridjob>" \
-  sbatch sbatch_grid_then_seeds.sh <grid_config> <weight.pth>
+  ./submit_grid_then_seeds_h100.sh <grid_config> <weight.pth>
 
 # just regenerate the seed-ensemble config from a finished grid dir (no GPU)
 python tools/grid_then_seeds.py --make-config-only --grid-config <cfg> \
@@ -756,12 +777,40 @@ python pointcept/datasets/preprocessing/dales/preprocess_dales.py \
   --chunking 4
 ```
 
+#### ECLAIR
+
+Raw dump on Hecate: `/data/geist/datasets/ECLAIR/` (`labels.json` + `pointclouds/*.laz`).
+Only the 1246 tiles in `labels.json` are used (118 extra LAZ files are ignored).
+Preprocess needs `laspy` + a LAZ backend (`lazrs`).
+
+```bash
+mkdir -p data/eclair
+ln -sfn /data/geist/datasets/ECLAIR data/eclair/raw
+
+python pointcept/datasets/preprocessing/eclair/preprocess_eclair.py \
+  --dataset_root data/eclair/raw \
+  --output_root data/eclair \
+  --num_workers 8
+# GT-only train write (optional): add --no-include_pseudo
+```
+
+Train defaults to GT + pseudo (`include_pseudo=True`). Override without re-preprocess:
+
+```bash
+sh scripts/train.sh -g 1 -d eclair -c semseg-litept-b-v1m0-eclair -n eclair_liteptb \
+  # or with CLI options: --options data.train.include_pseudo=False
+```
+
+Configs under `configs/eclair/`:
+- `semseg-litept-b-v1m0-eclair.py` — scratch LitePT-B
+- `sonata-v1m2-eclair-lin-grid.py` — Sonata GridProbe (Flair3D+ ckpt 862680)
+- `litept-b-v1m0-eclair-lin-grid.py` — LitePT-B GridProbe (Flair3D+ ckpt 873542)
+
 
 
 # Brouillon
 
-python -m tools.train  
-  --config-file configs/experiment/w108/3/debug/sonata-v1m2-flair3d-lin-grid_20.py
+python -m tools.train  --config-file configs/experiment/w108/3/debug/sonata-v1m2-flair3d-lin-grid_20.py
   --num-gpus 1  
   --num-machines 1  
   --machine-rank 0  
@@ -776,3 +825,9 @@ python -m tools.train
   --machine-rank 0  
   --dist-url auto  
   --options epoch=1 eval_epoch=1 data.train.max_sample=300 data.test.max_sample=30 data.val.max_sample=30
+
+
+
+sh scripts/train.sh -g 1 -d flair3d \
+-c experiment/w109/2/kpconv_bs/multi-kpconvx-v1m0-flair3d_1 \
+-n $SCRATCH/log_debug/kpconv_bs_1
