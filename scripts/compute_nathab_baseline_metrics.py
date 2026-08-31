@@ -1,13 +1,21 @@
 #!/usr/bin/env python3
 """
 Compute the two naive baselines (uniform, dataset-wide static) for the nathab
-tile-distribution axes, per the spec:
+tile-distribution axes, for both evaluation divergences used in training/testing:
 
-    m_a(pi_hat) = (1 / N_T^a) * sum_t N_t^a * KL(q_t^a || pi_hat^a)
+    m_a^KL (pi_hat) = (1 / N_T^a) * sum_t N_t^a * KL(q_t^a || pi_hat^a)
+    m_a^TV (pi_hat) = (1 / N_T^a) * sum_t N_t^a * TV(q_t^a,  pi_hat^a)
 
-for pi_hat = uniform (m_unif) and pi_hat = q_bar, the global marginal (m_static == H_a,
-the intra-dataset heterogeneity term). Ln is natural log (nats), matching
-torch.nn.functional.kl_div.
+for pi_hat = uniform (m_unif) and pi_hat = q_bar, the global marginal
+(m_static_KL == H_a, the intra-dataset heterogeneity term; m_static_TV == H_a^TV).
+
+KL uses natural log (nats), matching torch.nn.functional.kl_div.
+TV matches the evaluator convention in pointcept.utils.misc.tv_from_abs_errors:
+    TV(q, p) = sum_c |q_c - p_c|   (= L1 = 2 * classical total-variation distance).
+
+Unlike KL, TV has no exact Pythagorean identity m(pi_hat) = H_a + D(q_bar, pi_hat);
+only the triangle inequality m_TV(pi_hat) <= H_a^TV + TV(q_bar, pi_hat) holds.
+Aggregate TV(q_bar, *) is still reported separately (same layout as KL(q_bar, *)).
 
 Per-tile, per-axis class counts (points with non-void natural_habitat annotation,
 fanned out to each axis exactly like Flair3DLabelRemap / count_flair3d_train_label_distribution.py)
@@ -25,13 +33,29 @@ manifest rows with no local scene directory (reported explicitly in the output) 
 than treating them as errors -- run on Jean Zay with the full manifest for the true
 national test-set numbers.
 
-Example:
+Example (two steps -- step 1 provides the "train" pi_hat for the KL/TV(qbar_test, pi_hat_train)
+columns in step 2's output; skip it and drop --extra_pi_hat_csv_dir/--extra_pi_hat_name from
+step 2 if you only want H_a / H_a^TV and D(qbar_test, U)):
+
+# 1) train's global per-axis marginal (pi_hat_train) -- cheap, only aggregate counts needed.
+python scripts/count_flair3d_train_label_distribution.py \
+    --data_root data/flair3d_plus \
+    --csv_manifest data/flair3d_plus/raw/scene_split_manifest.csv \
+    --split train \
+    --num_workers 24 \
+    --output_dir stats/flair3d/label_distribution_national/train
+
+# 2) main computation on the test split (KL + TV tables).
 python scripts/compute_nathab_baseline_metrics.py \
     --data_root data/flair3d_plus \
     --csv_manifest data/flair3d_plus/raw/scene_split_manifest.csv \
     --split test \
-    --num_workers 8 \
+    --num_workers 24 \
+    --extra_pi_hat_csv_dir stats/flair3d/label_distribution_national/train \
+    --extra_pi_hat_name train \
     --output_dir stats/flair3d/nathab_baseline_metrics
+# (--output_dir gets the split name appended automatically -> results land in
+#  stats/flair3d/nathab_baseline_metrics/test/, no need to add "/test" yourself)
 """
 
 from __future__ import annotations
@@ -163,6 +187,11 @@ def kl(q: np.ndarray, p: np.ndarray, eps: float = 1e-12) -> float:
     return float(np.sum(q[mask] * np.log(q[mask] / np.clip(p[mask], eps, None))))
 
 
+def tv(q: np.ndarray, p: np.ndarray) -> float:
+    """L1 total variation matching evaluator TV: sum_c |q - p| (in [0, 2])."""
+    return float(np.sum(np.abs(q - p)))
+
+
 def load_axis_marginal_from_csv(csv_path: str, num_classes: int) -> np.ndarray:
     """Read the per-class 'count' column (bucket=='class', in class_id order) from a
     {axis}_label_distribution.csv produced by count_flair3d_train_label_distribution.py.
@@ -203,11 +232,17 @@ def compute_axis_metrics(
         f"class present in a tile but q_bar==0 (should be impossible): {zero_qbar_but_present[:5]}"
     )
 
-    def m_a(pi_hat: np.ndarray) -> float:
+    def m_a_kl(pi_hat: np.ndarray) -> float:
         return sum(N_t[t] * kl(q_t[t], pi_hat) for t in tile_ids) / N_T
 
-    m_static = m_a(q_bar)
-    m_unif = m_a(U)
+    def m_a_tv(pi_hat: np.ndarray) -> float:
+        return sum(N_t[t] * tv(q_t[t], pi_hat) for t in tile_ids) / N_T
+
+    m_static = m_a_kl(q_bar)
+    m_unif = m_a_kl(U)
+    m_static_tv = m_a_tv(q_bar)
+    m_unif_tv = m_a_tv(U)
+    tv_qbar_unif = tv(q_bar, U)
 
     H_qbar = -float(np.sum(q_bar[q_bar > 0] * np.log(q_bar[q_bar > 0])))
     lnC = float(np.log(C_a))
@@ -219,30 +254,49 @@ def compute_axis_metrics(
         -1e-9 <= m_static <= H_qbar + 1e-9
         and gap_analytic - 1e-9 <= m_unif <= lnC + 1e-9
     )
+    # TV analogue of the KL gap: no exact identity, but triangle inequality must hold.
+    sanity_tv_triangle_unif_ok = m_unif_tv <= m_static_tv + tv_qbar_unif + 1e-6
+    sanity_tv_bounds_ok = (
+        -1e-9 <= m_static_tv <= 2.0 + 1e-9
+        and -1e-9 <= m_unif_tv <= 2.0 + 1e-9
+        and -1e-9 <= tv_qbar_unif <= 2.0 + 1e-9
+    )
 
-    # For any fixed (non-tile-dependent) pi_hat: m_a(pi_hat) = H_a + KL(q_bar || pi_hat).
+    # For any fixed (non-tile-dependent) pi_hat: m_a_KL(pi_hat) = H_a + KL(q_bar || pi_hat).
     # Same identity as the uniform gap check above, generalized; kept as a sanity check.
+    # For TV only the triangle inequality is checked (no exact decomposition).
     extra: Dict[str, dict] = {}
     for name, raw in (extra_pi_hats or {}).items():
         pi_hat_extra = raw / raw.sum()
-        m_extra = m_a(pi_hat_extra)
+        m_extra = m_a_kl(pi_hat_extra)
         kl_qbar_extra = kl(q_bar, pi_hat_extra)
+        m_extra_tv = m_a_tv(pi_hat_extra)
+        tv_qbar_extra = tv(q_bar, pi_hat_extra)
         extra[name] = dict(
             m_a=m_extra,
             kl_qbar=kl_qbar_extra,
             sanity_decomp_ok=abs((m_extra - m_static) - kl_qbar_extra) < 1e-6,
+            m_a_tv=m_extra_tv,
+            tv_qbar=tv_qbar_extra,
+            sanity_tv_triangle_ok=m_extra_tv <= m_static_tv + tv_qbar_extra + 1e-6,
         )
 
     return dict(
         H_a=m_static,
         m_static=m_static,
         m_unif=m_unif,
+        H_a_tv=m_static_tv,
+        m_static_tv=m_static_tv,
+        m_unif_tv=m_unif_tv,
+        tv_qbar_U=tv_qbar_unif,
         H_qbar=H_qbar,
         lnC=lnC,
         gap_direct=gap_direct,
         gap_analytic=gap_analytic,
         sanity_gap_ok=sanity_gap_ok,
         sanity_bounds_ok=sanity_bounds_ok,
+        sanity_tv_triangle_unif_ok=sanity_tv_triangle_unif_ok,
+        sanity_tv_bounds_ok=sanity_tv_bounds_ok,
         q_bar=q_bar.tolist(),
         class_names=list(class_names),
         N_T=N_T,
@@ -449,10 +503,15 @@ def main() -> None:
     m_static_total = sum(r["m_static"] for r in results.values())
     m_unif_total = sum(r["m_unif"] for r in results.values())
     kl_unif_total = sum(r["gap_analytic"] for r in results.values())  # = sum KL(q_bar||U)
+    m_static_tv_total = sum(r["m_static_tv"] for r in results.values())
+    m_unif_tv_total = sum(r["m_unif_tv"] for r in results.values())
+    tv_unif_total = sum(r["tv_qbar_U"] for r in results.values())  # = sum TV(q_bar, U)
     extra_totals = {}
     if extra_name:
         extra_totals["m_a"] = sum(r["extra"][extra_name]["m_a"] for r in results.values())
         extra_totals["kl_qbar"] = sum(r["extra"][extra_name]["kl_qbar"] for r in results.values())
+        extra_totals["m_a_tv"] = sum(r["extra"][extra_name]["m_a_tv"] for r in results.values())
+        extra_totals["tv_qbar"] = sum(r["extra"][extra_name]["tv_qbar"] for r in results.values())
 
     # Main table, per the requested layout: H_a (heterogeneity term) alongside the two
     # AGGREGATE-level divergences KL(q_bar_test, pi_hat_train) and KL(q_bar_test, U) --
@@ -462,6 +521,7 @@ def main() -> None:
     kl_train_header = f" {'KL(qbar,train)':>15s}" if extra_name else ""
     width = 96 + (16 if extra_name else 0)
     print("\n" + "=" * width)
+    print("KL baselines (nats)")
     print(
         f"{'axis':20s} {'C_a':>4s} {'n_tiles':>8s} {'N_T':>10s} {'H_a':>10s}"
         f"{kl_train_header} {'KL(qbar,U)':>11s} {'lnC':>7s} {'H_a/lnC':>8s}"
@@ -495,19 +555,70 @@ def main() -> None:
             f"(see sanity_decomp_ok below)."
         )
 
+    # TV table (same layout; TV = L1 in [0, 2], matching evaluator logging).
+    tv_train_header = f" {'TV(qbar,train)':>15s}" if extra_name else ""
+    width_tv = 88 + (16 if extra_name else 0)
+    print("\n" + "=" * width_tv)
+    print("TV baselines (L1 = sum_c |pi - q|, matching val/test TV)")
+    print(
+        f"{'axis':20s} {'C_a':>4s} {'n_tiles':>8s} {'N_T':>10s} {'H_a^TV':>10s}"
+        f"{tv_train_header} {'TV(qbar,U)':>11s} {'m_unif^TV':>10s}"
+    )
+    print("-" * width_tv)
+    for axis in NATHAB_AXIS_TASKS:
+        r = results[axis]
+        tv_train_col = f" {r['extra'][extra_name]['tv_qbar']:>15.4f}" if extra_name else ""
+        print(
+            f"{AXIS_DISPLAY_NAMES[axis]:20s} {len(r['class_names']):>4d} {r['n_tiles']:>8d} "
+            f"{r['N_T']:>10d} {r['H_a_tv']:>10.4f}{tv_train_col} {r['tv_qbar_U']:>11.4f} "
+            f"{r['m_unif_tv']:>10.4f}"
+        )
+    print("-" * width_tv)
+    tv_train_total_col = f" {extra_totals['tv_qbar']:>15.4f}" if extra_name else ""
+    print(
+        f"{'TOTAL':20s} {'':>4s} {'':>8s} {'':>10s} {m_static_tv_total:>10.4f}"
+        f"{tv_train_total_col} {tv_unif_total:>11.4f} {m_unif_tv_total:>10.4f}"
+    )
+    print("=" * width_tv)
+    print(
+        "H_a^TV = m_static_TV = intra-test heterogeneity (tile-weighted avg TV(q_t, q_bar_test)); "
+        "TV(qbar,*) = single L1 between the AGGREGATE test distribution and the reference "
+        "(not tile-weighted). TV(qbar,pi_hat_test) omitted: 0 by construction. "
+        "No exact KL-style decomposition; triangle: m(pi) <= H_a^TV + TV(qbar, pi)."
+    )
+    if extra_name:
+        print(
+            f"m_{extra_name}^TV (tile-weighted avg TV(q_t, {extra_name} marginal)) = "
+            f"{extra_totals['m_a_tv']:.4f} total; this is the TV a static-{extra_name}-prior "
+            f"predictor would incur on test."
+        )
+
     for axis in NATHAB_AXIS_TASKS:
         r = results[axis]
         if not (r["sanity_gap_ok"] and r["sanity_bounds_ok"]):
             print(
-                f"WARNING: uniform sanity check failed for {axis}: "
+                f"WARNING: uniform KL sanity check failed for {axis}: "
                 f"gap_direct={r['gap_direct']:.6f} gap_analytic={r['gap_analytic']:.6f} "
                 f"H_qbar={r['H_qbar']:.6f} lnC={r['lnC']:.6f}"
+            )
+        if not (r["sanity_tv_triangle_unif_ok"] and r["sanity_tv_bounds_ok"]):
+            print(
+                f"WARNING: uniform TV sanity check failed for {axis}: "
+                f"m_unif_tv={r['m_unif_tv']:.6f} H_a_tv={r['H_a_tv']:.6f} "
+                f"TV(qbar,U)={r['tv_qbar_U']:.6f}"
             )
         if extra_name and not r["extra"][extra_name]["sanity_decomp_ok"]:
             e = r["extra"][extra_name]
             print(
-                f"WARNING: {extra_name} decomposition check failed for {axis}: "
+                f"WARNING: {extra_name} KL decomposition check failed for {axis}: "
                 f"m_a - H_a = {e['m_a'] - r['H_a']:.6f}, KL(qbar,{extra_name}) = {e['kl_qbar']:.6f}"
+            )
+        if extra_name and not r["extra"][extra_name]["sanity_tv_triangle_ok"]:
+            e = r["extra"][extra_name]
+            print(
+                f"WARNING: {extra_name} TV triangle check failed for {axis}: "
+                f"m_a_tv={e['m_a_tv']:.6f} H_a_tv={r['H_a_tv']:.6f} "
+                f"TV(qbar,{extra_name})={e['tv_qbar']:.6f}"
             )
 
     output_dir = _count_script.resolve_repo_path(args.output_dir)
@@ -534,6 +645,9 @@ def main() -> None:
                 "axes": results,
                 "m_static_total": m_static_total,
                 "m_unif_total": m_unif_total,
+                "m_static_tv_total": m_static_tv_total,
+                "m_unif_tv_total": m_unif_tv_total,
+                "tv_qbar_U_total": tv_unif_total,
                 "extra_pi_hat_name": args.extra_pi_hat_name if args.extra_pi_hat_csv_dir else None,
                 "extra_pi_hat_csv_dir": args.extra_pi_hat_csv_dir or None,
                 "extra_totals": extra_totals,
@@ -548,9 +662,13 @@ def main() -> None:
             "axis", "C_a", "n_tiles", "N_T",
             "H_a", "KL_qbar_U", "lnC", "H_a_over_lnC",
             "m_unif",
+            "H_a_TV", "TV_qbar_U", "m_unif_TV",
         ]
         if extra_name:
-            header += [f"KL_qbar_{extra_name}", f"m_{extra_name}", f"sanity_decomp_ok_{extra_name}"]
+            header += [
+                f"KL_qbar_{extra_name}", f"m_{extra_name}", f"sanity_decomp_ok_{extra_name}",
+                f"TV_qbar_{extra_name}", f"m_{extra_name}_TV", f"sanity_tv_triangle_ok_{extra_name}",
+            ]
         writer.writerow(header)
         for axis in NATHAB_AXIS_TASKS:
             r = results[axis]
@@ -558,17 +676,25 @@ def main() -> None:
                 AXIS_DISPLAY_NAMES[axis], len(r["class_names"]), r["n_tiles"], r["N_T"],
                 f"{r['H_a']:.6f}", f"{r['gap_analytic']:.6f}", f"{r['lnC']:.6f}",
                 f"{r['H_a'] / r['lnC']:.6f}", f"{r['m_unif']:.6f}",
+                f"{r['H_a_tv']:.6f}", f"{r['tv_qbar_U']:.6f}", f"{r['m_unif_tv']:.6f}",
             ]
             if extra_name:
                 e = r["extra"][extra_name]
-                row += [f"{e['kl_qbar']:.6f}", f"{e['m_a']:.6f}", str(e["sanity_decomp_ok"])]
+                row += [
+                    f"{e['kl_qbar']:.6f}", f"{e['m_a']:.6f}", str(e["sanity_decomp_ok"]),
+                    f"{e['tv_qbar']:.6f}", f"{e['m_a_tv']:.6f}", str(e["sanity_tv_triangle_ok"]),
+                ]
             writer.writerow(row)
         total_row = [
             "TOTAL", "", "", "",
             f"{m_static_total:.6f}", f"{kl_unif_total:.6f}", "", "", f"{m_unif_total:.6f}",
+            f"{m_static_tv_total:.6f}", f"{tv_unif_total:.6f}", f"{m_unif_tv_total:.6f}",
         ]
         if extra_name:
-            total_row += [f"{extra_totals['kl_qbar']:.6f}", f"{extra_totals['m_a']:.6f}", ""]
+            total_row += [
+                f"{extra_totals['kl_qbar']:.6f}", f"{extra_totals['m_a']:.6f}", "",
+                f"{extra_totals['tv_qbar']:.6f}", f"{extra_totals['m_a_tv']:.6f}", "",
+            ]
         writer.writerow(total_row)
 
     print(f"\nSaved: {out_dir}/results.json, {out_dir}/summary.csv")
