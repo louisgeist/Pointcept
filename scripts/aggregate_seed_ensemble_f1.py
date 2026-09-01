@@ -6,9 +6,8 @@ re-run the test pass.
 
 Matches GridProbeSeedEnsembleTester aggregation (np.std ddof=0).
 
-Example (Jean Zay, after cd to the Pointcept checkout):
+Example (cluster, after cd to the Pointcept checkout):
   python scripts/aggregate_seed_ensemble_f1.py --inplace \\
-    /lustre/fsn1/projects/rech/unv/usi32yh/logs/pointcept_logs/slurm/*/seed_ensemble_results.json
   python scripts/aggregate_seed_ensemble_f1.py --inplace \\
     $WORK/Pointcept/logs/slurm/*/seed_ensemble_results.json
 """

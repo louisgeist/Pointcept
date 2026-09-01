@@ -1,5 +1,5 @@
 """
-Point Transformer V3 — Malibu (in-house Flair3D+ / Malibu3D variant)
+Point Transformer V3 — Malibu (in-house Malibu3D+ / Malibu3D variant)
 
 PT-v3m2 (GridPooling, any integer stride) with the PT-v3m1 SubMConv3d stem.
 Forward sparsifies before embedding so the conv stem can read sparse_conv_feat.

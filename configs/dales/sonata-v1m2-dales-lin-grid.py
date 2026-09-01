@@ -7,7 +7,7 @@ frozen-backbone forward across all probes) purely to avoid paying the
 backbone cost 10x, not for hyperparameter search.
 
 Frozen PT-v3m2 encoder (enc_mode=True → multi-scale concat 1232ch) from the
-Flair3D+ Sonata pretrain job 862680, epoch_120. DALES has no RGB — Sonata was
+Malibu3D+ Sonata pretrain job sonata_outdoor, epoch_120. DALES has no RGB — Sonata was
 pretrained with scene-level RandomDropColor/RandomDropStrength (drop_value=0.0)
 so `FillMissingFeat` synthesizes a zero "color" channel (in_channels=7). No
 learned masked-feat at pretrain time, so literal zero fill is faithful.
@@ -30,7 +30,7 @@ num_classes = 8
 ignore_index = 8
 grid_size = 0.1
 point_max = 102400
-strength_feat_scale = 1 / 60000  # DALES raw intensity → Flair3D [0,1] convention
+strength_feat_scale = 1 / 60000  # DALES raw intensity → Malibu3D [0,1] convention
 
 num_gpu = 1
 epoch = 400
@@ -45,8 +45,7 @@ batch_size_per_gpu = 24
 batch_size = batch_size_per_gpu * num_gpu
 batch_size_val = 1
 batch_size_test = 1
-num_worker = 24  # H100 Jean-Zay
-num_worker_test = 2
+num_worker = 24  num_worker_test = 2
 mix_prob = 0.8
 empty_cache = False
 enable_amp = True
@@ -55,7 +54,7 @@ enable_amp = True
 dataset_type = "DALESDataset"
 data_root = "data/dales"
 
-weight = "/lustre/fsn1/projects/rech/unv/usi32yh/logs/pointcept_logs/slurm/862680/model/epoch_120.pth"
+weight = "ckpt/malibu3d/sonata_outdoor/epoch_120.pth"
 
 wandb_project = f"pointcept_{dataset_type[:-7].lower()}"
 

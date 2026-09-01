@@ -2,7 +2,7 @@
 LitePT-Base semantic segmentation on DALES (coord + strength LiDAR features).
 
 Backbone dims and augmentation pipeline mirror the LitePT-Base backbone used
-in configs/flair3d_default/multi-litept-b-v1m0-flair3d.py, adapted to DALES
+in configs/malibu3d_default/multi-litept-b-v1m0-malibu3d.py, adapted to DALES
 single-task semseg (DefaultSegmentorV2, no multitask wiring) and trained from
 scratch (no pretrained weight). See configs/dales/semseg-litept-v1m0-dales.py
 for the LitePT-Small counterpart this config is derived from.
@@ -28,7 +28,7 @@ num_exp = 1
 # Hardware parameters
 num_gpu = 1
 num_worker = 8 * num_gpu
-enable_amp = True  # LitePT-Base is heavier than Small; matches multi-litept-b-v1m0-flair3d.py
+enable_amp = True  # LitePT-Base is heavier than Small; matches multi-litept-b-v1m0-malibu3d.py
 
 # Data parameters
 batch_size = 12  # total batch size across all gpus; LitePT-Base convention (vs 24 for Small)
@@ -88,7 +88,7 @@ model = dict(
         type="LitePT-v1",
         in_channels=4,  # coord (3) + strength (1) -- DALES has no color/RGB
         order=("z", "z-trans", "hilbert", "hilbert-trans"),
-        # LitePT-Base dims (matches multi-litept-b-v1m0-flair3d.py backbone).
+        # LitePT-Base dims (matches multi-litept-b-v1m0-malibu3d.py backbone).
         stride=(3, 3, 3, 3),
         enc_depths=(3, 3, 3, 12, 3),
         enc_channels=(54, 108, 216, 432, 576),

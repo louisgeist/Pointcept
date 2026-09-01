@@ -4,7 +4,7 @@ Used by both the standalone `tools/test.py` entrypoint and the `NetworkAPLSEvalu
 hook (`pointcept/engines/hooks/misc.py`) so the config/guard/error-handling logic lives in one
 place. `tools/eval_network_apls.py` is a standalone script (not a package module, no
 `__init__.py` under `tools/`), so it's imported here via a `sys.path` insert -- the same pattern
-`eval_network_apls.py` itself uses to import its `pointcept/datasets/preprocessing/flair3d_plus/`
+`eval_network_apls.py` itself uses to import its `pointcept/datasets/preprocessing/malibu3d_plus/`
 dependencies.
 """
 

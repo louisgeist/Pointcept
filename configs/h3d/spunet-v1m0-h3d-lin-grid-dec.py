@@ -1,7 +1,7 @@
 """
 SpUNet-v1m1 grid-search linear probing on H3D — decoder (standard U-Net
-forward) variant, transfer from Flair3D+ multitask supervised pretrain (job
-1052217, w109/1/sp_final/multi-spunet-v1m0-flair3d_1.py: channels=(32,64,128,
+forward) variant, transfer from Malibu3D+ multitask supervised pretrain (job
+spunet_multitask, w109/1/sp_final/multi-spunet-v1m0-malibu3d_1.py: channels=(32,64,128,
 256,256,128,96,96), layers=(2,3,4,6,2,2,2,2), stride=3).
 
 Unlike LitePT/PT-v3-malibu, SpUNetBase's forward never returns a `Point`
@@ -31,7 +31,7 @@ num_classes = 11
 ignore_index = 11
 grid_size = 0.1
 point_max = 102400  # keep pretrain SphereCrop budget; do not raise for denser H3D
-coord_feat_scale = 0.01  # must match Flair3D multitask pretrain
+coord_feat_scale = 0.01  # must match Malibu3D multitask pretrain
 
 num_gpu = 1
 epoch = 2000
@@ -55,7 +55,7 @@ enable_amp = True
 dataset_type = "H3DDataset"
 data_root = "data/h3d"
 
-weight = "/lustre/fswork/projects/rech/unv/usi32yh/Pointcept/logs/slurm/1052217/model/model_best.pth"
+weight = "ckpt/malibu3d/spunet_multitask/model_best.pth"
 
 wandb_project = f"pointcept_{dataset_type[:-7].lower()}"
 

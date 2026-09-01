@@ -1,5 +1,5 @@
 """
-Slurm timeout requeue for Jean Zay and similar clusters.
+Slurm timeout requeue for cluster and similar clusters.
 
 Activated when POINTCEPT_SLURM_REQUEUE=1 and SLURM_JOB_ID are set.
 

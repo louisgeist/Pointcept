@@ -3,7 +3,7 @@ Sonata-v1m2 grid-search linear probing on ECLAIR — Sonata counterpart of
 litept-b-v1m0-eclair-lin_enc.py in this directory (same probe grid).
 
 Frozen PT-v3m2 encoder (enc_mode=True → multi-scale concat 1232ch) from the
-Flair3D+ Sonata pretrain job 862680, epoch_120. ECLAIR provides real RGB
+Malibu3D+ Sonata pretrain job sonata_outdoor, epoch_120. ECLAIR provides real RGB
 (normalized via NormalizeColor); strength uses the same 1/60000 scale as DALES.
 No coord_feat_scale (Sonata pretrain does not use it). Reference copy of
 w109/6/3_grid_eclair/sonata-v1m2-eclair-lin-grid_200ep.py.
@@ -22,7 +22,7 @@ num_classes = 11
 ignore_index = -1
 grid_size = 0.1
 point_max = 102400
-strength_feat_scale = 1 / 60000  # raw uint16 intensity → Flair3D [0,1] convention
+strength_feat_scale = 1 / 60000  # raw uint16 intensity → Malibu3D [0,1] convention
 
 num_gpu = 1
 epoch = 200
@@ -36,8 +36,7 @@ batch_size_per_gpu = 24
 batch_size = batch_size_per_gpu * num_gpu
 batch_size_val = 1
 batch_size_test = 1
-num_worker = 24  # H100 Jean-Zay
-num_worker_test = 2
+num_worker = 24  num_worker_test = 2
 mix_prob = 0.8
 empty_cache = False
 enable_amp = True
@@ -45,7 +44,7 @@ enable_amp = True
 dataset_type = "ECLAIRDataset"
 data_root = "data/eclair"
 
-weight = "/lustre/fsn1/projects/rech/unv/usi32yh/logs/pointcept_logs/slurm/862680/model/epoch_120.pth"
+weight = "ckpt/malibu3d/sonata_outdoor/epoch_120.pth"
 
 wandb_project = f"pointcept_{dataset_type[:-7].lower()}"
 

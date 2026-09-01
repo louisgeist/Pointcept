@@ -13,10 +13,10 @@ Voxel count applies CenterShift(z) + Z_MinShift then FNV unique keys, matching
 the test voxelize input. If ``per_tile.csv`` is in ``--bench-dir``, the bench's
 own ``num_points`` is also reported (ground truth for the published pts/s).
 
-Examples (Jean Zay, national test tiles)::
+Examples (cluster, national test tiles)::
 
   python scripts/count_bench_tile_points_voxels.py \\
-    --bench-dir stats/flair3d/inference_speed_bench/<jobid>
+    --bench-dir stats/malibu3d/inference_speed_bench/<jobid>
 
   python scripts/count_bench_tile_points_voxels.py --resample --num_workers 8
 """
@@ -40,7 +40,7 @@ if str(REPO_ROOT) not in sys.path:
 if str(REPO_ROOT / "scripts") not in sys.path:
     sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
-from analyze_flair3d_test_point_voxel_counts import (  # noqa: E402
+from analyze_malibu3d_test_point_voxel_counts import (  # noqa: E402
     build_scene_path,
     count_voxels,
     parse_manifest_bool,
@@ -176,9 +176,9 @@ def convert_summaries(payload: dict, ratio: float) -> dict:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--data_root", default="data/flair3d_plus")
+    parser.add_argument("--data_root", default="data/malibu3d_plus")
     parser.add_argument(
-        "--csv_manifest", default="data/flair3d_plus/raw/scene_split_manifest.csv"
+        "--csv_manifest", default="data/malibu3d_plus/raw/scene_split_manifest.csv"
     )
     parser.add_argument("--split", default="test")
     parser.add_argument("--grid_size", type=float, default=0.1)
@@ -198,7 +198,7 @@ def main() -> None:
     parser.add_argument("--num_workers", type=int, default=8)
     parser.add_argument(
         "--output_dir",
-        default="stats/flair3d/inference_speed_bench/point_voxel_ratio",
+        default="stats/malibu3d/inference_speed_bench/point_voxel_ratio",
     )
     args = parser.parse_args()
 

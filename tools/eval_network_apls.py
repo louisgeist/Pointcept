@@ -6,7 +6,7 @@ probability rasters (``{patch_id}_logits_network.npy``) already written to ``sav
 ``MultiTaskTester``/``PreciseEvaluator`` (see pointcept/engines/test.py), stitches them into
 per-ROI rasters, builds a predicted graph per network channel by reusing the same
 mask -> graph post-processing pipeline used to export the ground-truth graphs, and computes
-APLS (Average Path Length Similarity) against the GT graphs exported by Flair3D-build.
+APLS (Average Path Length Similarity) against the GT graphs exported by Malibu3D-build.
 
 By default also writes ``{stem}_{NETWORK}_pred_graph.gpkg`` (same schema as GT) and
 ``{stem}_{NETWORK}_apls.json`` (score, G→G', G'→G) next to the dataset-wide metrics.
@@ -15,12 +15,12 @@ Pass ``--no_save_pred_gpkg`` / ``network_apls_eval.save_pred_gpkg=False`` to ski
 Example::
 
     python tools/eval_network_apls.py \\
-        --data_root data/flair3d_plus \\
-        --save_path exp/flair3d/network_run/result \\
-        --network_graphs_root /data/geist/Flair3D-build/data/network_graphs \\
-        --split_manifest_csv data/flair3d_plus/raw/scene_split_manifest_D067.csv \\
+        --data_root data/malibu3d_plus \\
+        --save_path exp/malibu3d/network_run/result \\
+        --network_graphs_root data/malibu3d_build/data/network_graphs \\
+        --split_manifest_csv data/malibu3d_plus/raw/scene_split_manifest_D067.csv \\
         --split val --threshold 0.5 \\
-        --out_dir exp/flair3d/network_run/result
+        --out_dir exp/malibu3d/network_run/result
 """
 
 from __future__ import annotations
@@ -45,7 +45,7 @@ _PREPROC_DIR = (
     / "pointcept"
     / "datasets"
     / "preprocessing"
-    / "flair3d_plus"
+    / "malibu3d_plus"
 )
 if str(_PREPROC_DIR) not in sys.path:
     sys.path.insert(0, str(_PREPROC_DIR))
@@ -332,7 +332,7 @@ def run(
     types = tuple(network_types) if network_types else NETWORK_TYPES
     profiler = _ProfileAggregator() if profile else None
 
-    # Same known-missing exclusions as rasterize_network / Flair3DDataset hardcoded set.
+    # Same known-missing exclusions as rasterize_network / Malibu3DDataset hardcoded set.
     if missing_tiles_file is None:
         missing_tiles_file = nps.default_missing_coord_details_csv()
     else:
@@ -677,7 +677,7 @@ def build_argparser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description=(
             "Evaluate predicted network graphs (built from stitched per-ROI "
-            "probability rasters) against Flair3D-build-exported GT graphs via APLS."
+            "probability rasters) against Malibu3D-build-exported GT graphs via APLS."
         )
     )
     p.add_argument("--data_root", type=str, required=True)
@@ -845,8 +845,8 @@ def build_argparser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Exclusion list of known-missing (split, patch_id), same role as "
-            "Flair3DDataset / rasterize_network. Default: "
-            "data/flair3d_plus/missing_coord_tiles.details.csv"
+            "Malibu3DDataset / rasterize_network. Default: "
+            "data/malibu3d_plus/missing_coord_tiles.details.csv"
         ),
     )
     p.add_argument(

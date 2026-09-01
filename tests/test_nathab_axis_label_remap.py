@@ -1,5 +1,5 @@
 """
-Tests for the nathab ecological-axis LabelDefinitions and the Flair3DLabelRemap
+Tests for the nathab ecological-axis LabelDefinitions and the Malibu3DLabelRemap
 fan-out extension (one on-disk source field -> several differently-named
 per-axis output fields in a single transform call).
 
@@ -10,8 +10,8 @@ import unittest
 
 import numpy as np
 
-from pointcept.datasets.preprocessing.flair3d_plus import flair3d_label_remap as fr
-from pointcept.datasets.transform import Flair3DLabelRemap
+from pointcept.datasets.preprocessing.malibu3d_plus import malibu3d_label_remap as fr
+from pointcept.datasets.transform import Malibu3DLabelRemap
 
 
 class TestNathabAxisLabelDefinitions(unittest.TestCase):
@@ -59,9 +59,9 @@ class TestNathabAxisLabelDefinitions(unittest.TestCase):
         self.assertEqual(d.names, ("Temperate", "Mediterranean", "Alpine", "Void"))
 
 
-class TestFlair3DLabelRemapFanOut(unittest.TestCase):
+class TestMalibu3DLabelRemapFanOut(unittest.TestCase):
     def _make_fanout_remap(self):
-        return Flair3DLabelRemap(
+        return Malibu3DLabelRemap(
             remaps=dict(
                 natural_habitat="default",
                 nathab_habitat_type=("natural_habitat", "by_habitat_type_ecological"),
@@ -101,7 +101,7 @@ class TestFlair3DLabelRemapFanOut(unittest.TestCase):
         # if the same source key is ALSO remapped in place in the same
         # transform instance, fan-out outputs must still be derived from the
         # untouched on-disk (storage-space) value, not the in-place output.
-        remap = Flair3DLabelRemap(
+        remap = Malibu3DLabelRemap(
             remaps=dict(
                 natural_habitat="by_moisture_v3",  # in-place mutation
                 nathab_habitat_type=("natural_habitat", "by_habitat_type_ecological"),
@@ -120,7 +120,7 @@ class TestFlair3DLabelRemapFanOut(unittest.TestCase):
     def test_bare_string_in_place_form_unchanged(self):
         # Existing single-key in-place usage (e.g. nathab_moisture configs)
         # must keep working exactly as before this extension.
-        remap = Flair3DLabelRemap(
+        remap = Malibu3DLabelRemap(
             remaps={"natural_habitat": "by_moisture_v3"},
             storage_definitions={"natural_habitat": "default"},
         )
@@ -130,7 +130,7 @@ class TestFlair3DLabelRemapFanOut(unittest.TestCase):
 
     def test_invalid_spec_shape_raises(self):
         with self.assertRaises(ValueError):
-            Flair3DLabelRemap(remaps={"bad_key": (1, 2, 3)})
+            Malibu3DLabelRemap(remaps={"bad_key": (1, 2, 3)})
 
 
 if __name__ == "__main__":

@@ -14,7 +14,7 @@ The step is sourced locally (``wandb_last_step.txt`` next to
 ``wandb_run_id.txt`` in ``save_path``, refreshed each epoch by
 ``CheckpointSaver``) rather than via ``wandb.Api()``: that call ignores
 ``WANDB_MODE=offline`` and, on a compute node with no internet egress (e.g.
-Jean Zay), blocks in an unbounded retry loop on ConnectionError instead of
+cluster), blocks in an unbounded retry loop on ConnectionError instead of
 raising — silently burning the whole job's walltime before training even
 starts. The local file works identically online and offline and needs no
 network at all.

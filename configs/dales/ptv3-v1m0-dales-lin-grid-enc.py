@@ -1,7 +1,7 @@
 """
 PT-v3-malibu grid-search linear probing on DALES — encoder multiscale variant
-(same frozen checkpoint as ptv3-v1m0-dales-lin-grid.py, job 1095469, Flair3D+
-multitask supervised pretrain at w109/2/ptv3_wd/multi-ptv3-v1m0-flair3d_5.py).
+(same frozen checkpoint as ptv3-v1m0-dales-lin-grid.py, job ptv3_multitask, Malibu3D+
+multitask supervised pretrain at w109/2/ptv3_wd/multi-ptv3-v1m0-malibu3d_5.py).
 
 `enc_mode=True` drops the decoder entirely; GridProbeSegmentorV2's generic
 encoder-side multiscale concat (walking `pooling_parent` links — see
@@ -29,8 +29,8 @@ num_classes = 8
 ignore_index = 8
 grid_size = 0.1
 point_max = 102400
-coord_feat_scale = 0.01  # must match Flair3D multitask pretrain
-strength_feat_scale = 1 / 60000  # DALES raw intensity → Flair3D [0,1] convention
+coord_feat_scale = 0.01  # must match Malibu3D multitask pretrain
+strength_feat_scale = 1 / 60000  # DALES raw intensity → Malibu3D [0,1] convention
 
 num_gpu = 1
 epoch = 400
@@ -45,8 +45,7 @@ batch_size_per_gpu = 24
 batch_size = batch_size_per_gpu * num_gpu
 batch_size_val = 1
 batch_size_test = 1
-num_worker = 24 * num_gpu  # H100 Jean-Zay
-num_worker_test = 2
+num_worker = 24 * num_gpu  num_worker_test = 2
 mix_prob = 0.8
 empty_cache = False
 enable_amp = True
@@ -55,7 +54,7 @@ enable_amp = True
 dataset_type = "DALESDataset"
 data_root = "data/dales"
 
-weight = "/lustre/fswork/projects/rech/unv/usi32yh/Pointcept/logs/slurm/1095469/model/model_best.pth"
+weight = "ckpt/malibu3d/ptv3_multitask/model_best.pth"
 
 wandb_project = f"pointcept_{dataset_type[:-7].lower()}"
 

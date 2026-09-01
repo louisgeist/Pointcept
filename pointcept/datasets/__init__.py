@@ -26,8 +26,8 @@ from .waymo import WaymoDataset
 from .hk import HKDataset
 
 # aerial lidar
-from .flair3d import Flair3DDataset
-from .flair3d_climatic_domain import Flair3DClimaticDomainDataset
+from .malibu3d import Malibu3DDataset
+from .malibu3d_climatic_domain import Malibu3DClimaticDomainDataset
 from .dales import DALESDataset
 from .eclair import ECLAIRDataset
 from .h3d import H3DDataset

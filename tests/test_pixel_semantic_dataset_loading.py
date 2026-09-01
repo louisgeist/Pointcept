@@ -1,10 +1,10 @@
 """
-Tests for Flair3DDataset's pixel-semantic asset loading, generalized from a
+Tests for Malibu3DDataset's pixel-semantic asset loading, generalized from a
 network-only _load_network_label to a target_key-parametrized
 _load_pixel_semantic_label so both "network" and "forest_2d" (or any other
-FLAIR3D_PIXEL_SEMANTIC_TASKS entry) load through the same code path.
+MALIBU3D_PIXEL_SEMANTIC_TASKS entry) load through the same code path.
 
-Constructs a bare Flair3DDataset instance via object.__new__ (bypassing __init__,
+Constructs a bare Malibu3DDataset instance via object.__new__ (bypassing __init__,
 which needs real on-disk manifests) and sets only the attributes the method under
 test actually reads (self.optional_target_keys), following the same lightweight
 pattern as tests/test_tile_distribution_pooling.py's direct model construction.
@@ -19,11 +19,11 @@ import unittest
 
 import numpy as np
 
-from pointcept.datasets.flair3d import Flair3DDataset
+from pointcept.datasets.malibu3d import Malibu3DDataset
 
 
 def _bare_dataset(optional_target_keys=()):
-    ds = object.__new__(Flair3DDataset)
+    ds = object.__new__(Malibu3DDataset)
     ds.optional_target_keys = tuple(optional_target_keys)
     return ds
 

@@ -1,7 +1,7 @@
 """
 SpUNet-v1m1 grid-search linear probing on DALES — combined encoder+decoder
 hypercolumn variant (same frozen checkpoint as
-spunet-v1m0-dales-lin-grid-{enc,dec}.py, job 1052217, Flair3D+ multitask
+spunet-v1m0-dales-lin-grid-{enc,dec}.py, job spunet_multitask, Malibu3D+ multitask
 supervised pretrain: channels=(32,64,128,256,256,128,96,96),
 layers=(2,3,4,6,2,2,2,2), stride=3).
 
@@ -42,8 +42,8 @@ num_classes = 8
 ignore_index = 8
 grid_size = 0.1
 point_max = 102400
-coord_feat_scale = 0.01  # must match Flair3D multitask pretrain
-strength_feat_scale = 1 / 60000  # DALES raw intensity → Flair3D [0,1] convention
+coord_feat_scale = 0.01  # must match Malibu3D multitask pretrain
+strength_feat_scale = 1 / 60000  # DALES raw intensity → Malibu3D [0,1] convention
 
 num_gpu = 1
 epoch = 400
@@ -57,8 +57,7 @@ batch_size_per_gpu = 24
 batch_size = batch_size_per_gpu * num_gpu
 batch_size_val = 1
 batch_size_test = 1
-num_worker = 24 * num_gpu  # H100 Jean-Zay
-num_worker_test = 2
+num_worker = 24 * num_gpu  num_worker_test = 2
 mix_prob = 0.8
 empty_cache = False
 enable_amp = True
@@ -67,7 +66,7 @@ enable_amp = True
 dataset_type = "DALESDataset"
 data_root = "data/dales"
 
-weight = "/lustre/fswork/projects/rech/unv/usi32yh/Pointcept/logs/slurm/1052217/model/model_best.pth"
+weight = "ckpt/malibu3d/spunet_multitask/model_best.pth"
 
 wandb_project = f"pointcept_{dataset_type[:-7].lower()}"
 

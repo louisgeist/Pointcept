@@ -1,5 +1,5 @@
 """
-Tests for FLAIR3D_PIXEL_SEMANTIC_TASKS registration of forest_2d and the
+Tests for MALIBU3D_PIXEL_SEMANTIC_TASKS registration of forest_2d and the
 per-task-name generalization of init_multitask_collect_keys (previously
 hardcoded to the literal "network_*" key set).
 
@@ -8,8 +8,8 @@ Run with: PYTHONPATH=./ pytest tests/test_pixel_semantic_collect_keys.py
 
 import unittest
 
-from pointcept.datasets.flair3d_config_utils import (
-    FLAIR3D_PIXEL_SEMANTIC_TASKS,
+from pointcept.datasets.malibu3d_config_utils import (
+    MALIBU3D_PIXEL_SEMANTIC_TASKS,
     get_pixel_semantic_config,
     init_multitask_collect_keys,
 )
@@ -34,7 +34,7 @@ class TestForestTwoDRegistration(unittest.TestCase):
         self.assertEqual(b["num_classes"], 2)
 
     def test_network_defaults_unchanged(self):
-        cfg = FLAIR3D_PIXEL_SEMANTIC_TASKS["network"]
+        cfg = MALIBU3D_PIXEL_SEMANTIC_TASKS["network"]
         self.assertNotIn("pooling", cfg)
         self.assertTrue(cfg["enable_dilated_prf"])
 

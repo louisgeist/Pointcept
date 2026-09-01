@@ -4,7 +4,7 @@ configs/experiment/w110/2/grid_seed_{h3d,eclair,dales}/ from the existing
 12-probe lr-grid GridProbeSegmentorV2 reference configs, fixing lr at each
 (model, dataset)'s already-established sweep winner.
 
-Mirrors tools/gen_flair3d_mono_configs.py's batch-regeneration pattern: a
+Mirrors tools/gen_malibu3d_mono_configs.py's batch-regeneration pattern: a
 small per-row table drives a text transform applied to each reference file,
 rather than hand-writing ~27 near-duplicate configs.
 

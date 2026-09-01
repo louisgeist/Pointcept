@@ -1,7 +1,7 @@
 """
 PT-v3-malibu grid-search linear probing on ECLAIR — decoder hypercolumn
-variant (transfer from Flair3D+ multitask supervised pretrain, job 1095469,
-w109/2/ptv3_wd/multi-ptv3-v1m0-flair3d_5.py). `traceable=True` -> 1024ch
+variant (transfer from Malibu3D+ multitask supervised pretrain, job ptv3_multitask,
+w109/2/ptv3_wd/multi-ptv3-v1m0-malibu3d_5.py). `traceable=True` -> 1024ch
 concat of decoder stages (64+64+128+256) + encoder bottleneck (512).
 
 ECLAIR provides real RGB: ChromaticAutoContrast/Translation/Jitter (train) +
@@ -24,8 +24,8 @@ num_classes = 11
 ignore_index = -1
 grid_size = 0.1
 point_max = 102400
-coord_feat_scale = 0.01  # must match Flair3D multitask pretrain
-strength_feat_scale = 1 / 60000  # raw uint16 intensity → Flair3D [0,1] convention
+coord_feat_scale = 0.01  # must match Malibu3D multitask pretrain
+strength_feat_scale = 1 / 60000  # raw uint16 intensity → Malibu3D [0,1] convention
 
 num_gpu = 1
 epoch = 200
@@ -39,8 +39,7 @@ batch_size_per_gpu = 24
 batch_size = batch_size_per_gpu * num_gpu
 batch_size_val = 1
 batch_size_test = 1
-num_worker = 24  # H100 Jean-Zay
-num_worker_test = 2
+num_worker = 24  num_worker_test = 2
 mix_prob = 0.8
 empty_cache = False
 enable_amp = True
@@ -48,7 +47,7 @@ enable_amp = True
 dataset_type = "ECLAIRDataset"
 data_root = "data/eclair"
 
-weight = "/lustre/fswork/projects/rech/unv/usi32yh/Pointcept/logs/slurm/1095469/model/model_best.pth"
+weight = "ckpt/malibu3d/ptv3_multitask/model_best.pth"
 
 wandb_project = f"pointcept_{dataset_type[:-7].lower()}"
 

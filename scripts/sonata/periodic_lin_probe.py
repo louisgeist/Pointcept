@@ -8,11 +8,10 @@ monitoring (``tail -f``), independent of wandb sync.
 Examples:
   # Local (subprocess train.sh)
   python scripts/sonata/periodic_lin_probe.py \\
-    --pretrain_job_dir exp/flair3d_default/sonata_pretrain_flair3dplus \\
+    --pretrain_job_dir exp/malibu3d_default/sonata_pretrain_malibu3dplus \\
     --mode local --gpus 1
 
-  # Jean-Zay (sbatch probe jobs)
-  python scripts/sonata/periodic_lin_probe.py \\
+    python scripts/sonata/periodic_lin_probe.py \\
     --pretrain_job_dir logs/slurm/<PRETRAIN_JOB_ID> \\
     --mode sbatch --lin_sbatch scripts/sonata/sbatch_lin_probe.sh
 """
@@ -103,8 +102,7 @@ def _parse_miou_from_logs(probe_dir: Path) -> Optional[float]:
     candidates: List[Path] = []
     for pattern in ("*.log", "train.log", "log.txt"):
         candidates.extend(probe_dir.glob(pattern))
-    # Jean-Zay: sibling slurm.out under JOB_DIR
-    out = probe_dir / "slurm.out"
+        out = probe_dir / "slurm.out"
     if out.is_file():
         candidates.append(out)
     best: Optional[float] = None
@@ -249,12 +247,12 @@ def main() -> int:
     parser.add_argument("--gpus", type=int, default=1, help="GPUs for mode=local")
     parser.add_argument(
         "--dataset",
-        default="flair3d_default",
+        default="malibu3d_default",
         help="train.sh -d value",
     )
     parser.add_argument(
         "--config",
-        default="probe/sonata-v1m2-flair3d-lin",
+        default="probe/sonata-v1m2-malibu3d-lin",
         help="train.sh -c value",
     )
     parser.add_argument(

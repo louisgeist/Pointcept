@@ -89,29 +89,29 @@ class TestApplySubsetSelection(unittest.TestCase):
 
 class TestSceneMatchesIncludeName(unittest.TestCase):
     def test_exact_patch_id(self):
-        path = "/data/flair3d_plus/test/D075-2021_LIDARHD/AA/D075-2021_AA-S2-2"
+        path = "/data/malibu3d_plus/test/D075-2021_LIDARHD/AA/D075-2021_AA-S2-2"
         self.assertTrue(scene_matches_include_name(path, "D075-2021_AA-S2-2"))
 
     def test_lidarhd_token_stripped(self):
-        path = "/data/flair3d_plus/test/D075-2021_LIDARHD/AA/D075-2021_AA-S2-2"
+        path = "/data/malibu3d_plus/test/D075-2021_LIDARHD/AA/D075-2021_AA-S2-2"
         self.assertTrue(scene_matches_include_name(path, "D075-2021_LIDARHD_AA-S2-2"))
 
     def test_dept_plus_roi_suffix(self):
-        path = "/data/flair3d_plus/train/D075-2021_LIDARHD/UF/D075-2021_UF-S1-2"
+        path = "/data/malibu3d_plus/train/D075-2021_LIDARHD/UF/D075-2021_UF-S1-2"
         self.assertTrue(scene_matches_include_name(path, "D075_UF-S1-2"))
 
     def test_no_match(self):
-        path = "/data/flair3d_plus/test/D075-2021_LIDARHD/AA/D075-2021_AA-S2-2"
+        path = "/data/malibu3d_plus/test/D075-2021_LIDARHD/AA/D075-2021_AA-S2-2"
         self.assertFalse(scene_matches_include_name(path, "D068_UN-S1-28"))
 
 
 class TestIncludeNamesFilter(unittest.TestCase):
     def setUp(self):
         self.data_list = [
-            "/data/flair3d_plus/test/D075-2021_LIDARHD/AA/D075-2021_AA-S2-2",
-            "/data/flair3d_plus/test/D075-2021_LIDARHD/UU/D075-2021_UU-S1-4",
-            "/data/flair3d_plus/train/D068-2021_LIDARHD/FA/D068-2021_FA-S1-26",
-            "/data/flair3d_plus/val/D049-2021_LIDARHD/AA/D049-2021_AA-S1-1",
+            "/data/malibu3d_plus/test/D075-2021_LIDARHD/AA/D075-2021_AA-S2-2",
+            "/data/malibu3d_plus/test/D075-2021_LIDARHD/UU/D075-2021_UU-S1-4",
+            "/data/malibu3d_plus/train/D068-2021_LIDARHD/FA/D068-2021_FA-S1-26",
+            "/data/malibu3d_plus/val/D049-2021_LIDARHD/AA/D049-2021_AA-S1-1",
         ]
 
     def test_include_names_keeps_matches(self):

@@ -788,7 +788,7 @@ class GridProbeSemSegTester(TesterBase):
     fragment-voting loop instead.
 
     Only supports the unpacked (batch_size_test_per_gpu == 1) path -- every
-    grid-probe downstream config already uses that (see CLAUDE.md: DALES/H3D
+    grid-probe downstream config already uses that (see README_MALIBU3D.md: DALES/H3D
     batch_size_test=1) -- and skips the dataset-specific submission-file
     writers (ScanNet/S3DIS/SemanticKITTI/NuScenes), since grid-probe configs
     never target those.
@@ -1014,7 +1014,7 @@ class RegressionTester(TesterBase):
     """Fragment-based test for DefaultRegressorV2 (point-wise MAE/RMSE).
 
     Expects cfg.data.target_key. Ground-truth must be present at full resolution
-    in the sample dict (see Flair3DDataset.prepare_test_data).
+    in the sample dict (see Malibu3DDataset.prepare_test_data).
     """
 
     @staticmethod
@@ -1315,7 +1315,7 @@ class MultiTaskTester(TesterBase):
 
     Expects cfg.data.task_configs and cfg.data.main_task (required when multiple tasks).
     Ground-truth tensors for each task must be present at full resolution in the sample dict
-    (see Flair3DDataset.prepare_test_data).
+    (see Malibu3DDataset.prepare_test_data).
     """
 
     def __init__(self, write_cls_iou=False, **kwargs):
@@ -2111,7 +2111,7 @@ class MultiTaskTester(TesterBase):
 
                 # Test-set precision/recall/F1 for pixel_semantic tasks (foreground
                 # class only). targets_by_task[task_name] is already the dense
-                # (r, H, W) GT raster at full tile resolution (Flair3DDataset.
+                # (r, H, W) GT raster at full tile resolution (Malibu3DDataset.
                 # prepare_test_data snapshots it before any per-fragment transform
                 # runs), so no fragment-merging is needed on the GT side --
                 # pixel_logits_np[task_name] (the merged dense prediction, from

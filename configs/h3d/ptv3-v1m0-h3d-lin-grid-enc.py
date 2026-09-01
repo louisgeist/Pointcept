@@ -1,7 +1,7 @@
 """
 PT-v3-malibu grid-search linear probing on H3D — encoder multiscale variant
-(same frozen checkpoint as ptv3-v1m0-h3d-lin-grid-dec.py, job 1095469,
-Flair3D+ multitask supervised pretrain). `enc_mode=True` -> 992ch concat of
+(same frozen checkpoint as ptv3-v1m0-h3d-lin-grid-dec.py, job ptv3_multitask,
+Malibu3D+ multitask supervised pretrain). `enc_mode=True` -> 992ch concat of
 the 5 raw encoder stages (32+64+128+256+512).
 
 AdamW / wd=0 / OneCycleLR with warmup fixed at pct_start=5%, lr swept over
@@ -26,7 +26,7 @@ num_classes = 11
 ignore_index = 11
 grid_size = 0.1
 point_max = 102400  # keep pretrain SphereCrop budget; do not raise for denser H3D
-coord_feat_scale = 0.01  # must match Flair3D multitask pretrain
+coord_feat_scale = 0.01  # must match Malibu3D multitask pretrain
 
 num_gpu = 1
 epoch = 2000
@@ -51,7 +51,7 @@ enable_amp = True
 dataset_type = "H3DDataset"
 data_root = "data/h3d"
 
-weight = "/lustre/fswork/projects/rech/unv/usi32yh/Pointcept/logs/slurm/1095469/model/model_best.pth"
+weight = "ckpt/malibu3d/ptv3_multitask/model_best.pth"
 
 wandb_project = f"pointcept_{dataset_type[:-7].lower()}"
 

@@ -2,7 +2,7 @@
 Tests for rasterize_forest.process_patch: reads a small synthetic GeoTIFF window,
 resamples it to the target grid, and writes forest_2d.npy + meta.json.
 
-Requires rasterio (already a dependency for Flair3D+ preprocessing). Skips cleanly
+Requires rasterio (already a dependency for Malibu3D+ preprocessing). Skips cleanly
 if rasterio is not importable in the current environment.
 
 Run with: PYTHONPATH=./ pytest tests/test_rasterize_forest.py
@@ -23,7 +23,7 @@ try:
 except ImportError:
     HAS_RASTERIO = False
 
-from pointcept.datasets.preprocessing.flair3d_plus.rasterize_forest import (
+from pointcept.datasets.preprocessing.malibu3d_plus.rasterize_forest import (
     ManifestPatch,
     load_manifest_patches,
     process_patch,
@@ -173,7 +173,7 @@ class TestProcessPatch(unittest.TestCase):
 class TestManifestPatchLidarStem(unittest.TestCase):
     def test_lidar_patch_stem_does_not_duplicate_dept_year_and_roi(self):
         # patch_id is already f"{dept_year}_{roi}_{scene_i_j}" (see
-        # preprocess_flair3d_v2.py's manifest convention) -- lidar_patch_stem
+        # preprocess_malibu3d_v2.py's manifest convention) -- lidar_patch_stem
         # must be built from scene_i_j alone, not from patch_id, or
         # dept_year/roi get duplicated in the resulting FOREST tiff path.
         patch = ManifestPatch(

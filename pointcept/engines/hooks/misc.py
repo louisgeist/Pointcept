@@ -1245,7 +1245,6 @@ class SpconvNativeConvAlgo(HookBase):
     SubMConv3d shape is used in the same process, crashing a few layers in
     with an "illegal memory access" (see scripts/_grid_probe_extract_common.py's
     force_native_conv_algo, which this mirrors for the training path instead
-    of a standalone extraction script). Not needed on Jean-Zay's spconv
     build; harmless there regardless since ConvAlgo.Native is always
     numerically correct, just slower than the fused kernel.
 

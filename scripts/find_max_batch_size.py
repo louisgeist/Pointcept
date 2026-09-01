@@ -34,38 +34,38 @@ Examples (JeanZay / local GPU)::
 
   # Train (supervised, Mix3D worst-case)
   python scripts/find_max_batch_size.py \\
-    --config-file configs/experiment/w105/2/10h/litept-v1m0-flair3d_13.py \\
+    --config-file configs/experiment/w105/2/10h/litept-v1m0-malibu3d_13.py \\
     --mode train --min-bs 2 --max-bs 32 --probe-steps 64 --soak-steps 500 \\
     --num-worker 8
 
   # Sonata SSL pretrain (no Mix3D)
   python scripts/find_max_batch_size.py \\
-    --config-file configs/flair3d_default/pretrain-sonata-v1m2-flair3d.py \\
+    --config-file configs/malibu3d_default/pretrain-sonata-v1m2-malibu3d.py \\
     --mode train --min-bs 1 --max-bs 8 --probe-steps 32 --soak-steps 200 \\
     --mix-prob 0 --num-gpus 1 --num-worker 8
 
   # Sonata linear probe (Mix3D as in config)
   python scripts/find_max_batch_size.py \\
-    --config-file configs/flair3d_default/probe/sonata-v1m2-flair3d-lin.py \\
+    --config-file configs/malibu3d_default/probe/sonata-v1m2-malibu3d-lin.py \\
     --mode train --min-bs 1 --max-bs 8 --probe-steps 32 --soak-steps 200 \\
     --mix-prob 0.8 --num-gpus 1 --num-worker 8
 
   # Sonata linear probe, only reasonable batch sizes (4..32), not a bisection
   python scripts/find_max_batch_size.py \\
-    --config-file configs/flair3d_default/probe/sonata-v1m2-flair3d-lin.py \\
+    --config-file configs/malibu3d_default/probe/sonata-v1m2-malibu3d-lin.py \\
     --mode train --candidates 4 8 12 16 20 24 32 \\
     --probe-steps 32 --soak-steps 200 --mix-prob 0.8 --num-gpus 1 \\
     --num-worker 8
 
   # Val (capped samples, no Mix3D)
   python scripts/find_max_batch_size.py \\
-    --config-file configs/experiment/w105/2/10h/litept-v1m0-flair3d_13.py \\
+    --config-file configs/experiment/w105/2/10h/litept-v1m0-malibu3d_13.py \\
     --mode val --min-bs 1 --max-bs 16 --max-sample 128 --soak-steps 0 \\
     --num-worker 8
 
   # Test (builds a 1-step seed checkpoint, then probes tools/test.py)
   python scripts/find_max_batch_size.py \\
-    --config-file configs/experiment/w105/2/10h/litept-v1m0-flair3d_13.py \\
+    --config-file configs/experiment/w105/2/10h/litept-v1m0-malibu3d_13.py \\
     --mode test --min-bs 1 --max-bs 16 --max-sample 128 --soak-steps 0 \\
     --num-worker 8
 

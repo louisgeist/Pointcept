@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Rank D068/D075 ROIs by elevation MAE from already-dumped predictions.
 
-Reads ``*_reg_elevation.npy`` under the job-873542 dump (already de-normalized
+Reads ``*_reg_elevation.npy`` under the job-litept_b_multitask dump (already de-normalized
 to metres) and the matching preprocessed ``elevation.npy`` GT. One-pass
 accumulators, no concatenation of the full point cloud -- just MAE / RMSE /
 R^2 / bias per ROI and per sub-tile, then rank hardest first.
@@ -34,9 +34,9 @@ PRED_SUFFIX = "_reg_elevation.npy"
 PRED_RE = re.compile(r"^(.*)_(\d+)-(\d+)_reg_elevation\.npy$")
 SCENE_RE = re.compile(r"^(D\d{3}-\d{4})_(.+)$")
 
-DEFAULT_PRED_ROOT = Path("/data/geist/superpixel_transformer_dev/local/temp/873542")
-DEFAULT_DATA_ROOT = REPO_ROOT / "data" / "flair3d_plus"
-DEFAULT_OUT_DIR = REPO_ROOT / "stats" / "flair3d" / "elevation_parity"
+DEFAULT_PRED_ROOT = Path("exp/malibu3d/litept_b_multitask/result")
+DEFAULT_DATA_ROOT = REPO_ROOT / "data" / "malibu3d_plus"
+DEFAULT_OUT_DIR = REPO_ROOT / "stats" / "malibu3d" / "elevation_parity"
 SPLITS = ("test", "val", "train")
 
 ROI_FIELDS = [
@@ -219,7 +219,7 @@ def main() -> None:
     ap.add_argument("--pred-root", type=Path, default=DEFAULT_PRED_ROOT)
     ap.add_argument(
         "--data-root", type=Path, default=DEFAULT_DATA_ROOT,
-        help="Flair3D+ preprocessed root (train/val/test/<dept>_LIDARHD/...)",
+        help="Malibu3D+ preprocessed root (train/val/test/<dept>_LIDARHD/...)",
     )
     ap.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
     ap.add_argument(

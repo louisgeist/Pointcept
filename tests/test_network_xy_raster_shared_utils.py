@@ -17,7 +17,7 @@ from pathlib import Path
 
 import numpy as np
 
-from pointcept.datasets.preprocessing.flair3d_plus.network_xy_raster_utils import (
+from pointcept.datasets.preprocessing.malibu3d_plus.network_xy_raster_utils import (
     abs_xy_bounds_from_coord,
     default_missing_coord_details_csv,
     load_known_missing_tiles,
@@ -77,11 +77,11 @@ class TestLoadKnownMissingTiles(unittest.TestCase):
 
 
 class TestDefaultMissingCoordDetailsCsv(unittest.TestCase):
-    def test_points_under_data_flair3d_plus(self):
+    def test_points_under_data_malibu3d_plus(self):
         path = default_missing_coord_details_csv()
         parts = path.parts
         self.assertIn("data", parts)
-        self.assertIn("flair3d_plus", parts)
+        self.assertIn("malibu3d_plus", parts)
         self.assertEqual(path.name, "missing_coord_tiles.details.csv")
 
 

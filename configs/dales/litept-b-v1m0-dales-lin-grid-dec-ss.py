@@ -1,6 +1,6 @@
 """
 LitePT-Base grid-search linear probing on DALES — decoder Single Scale
-ablation (transfer from Flair3D+ multitask supervised pretrain, job 873542).
+ablation (transfer from Malibu3D+ multitask supervised pretrain).
 
 Ablation vs litept-b-v1m0-dales-lin-grid-dec.py: `dec_traceable=False` probes
 only the native final decoder stage output (dec_channels[0]=72ch), not the
@@ -24,8 +24,8 @@ num_classes = 8
 ignore_index = 8
 grid_size = 0.1
 point_max = 102400
-coord_feat_scale = 0.01  # must match Flair3D multitask pretrain
-strength_feat_scale = 1 / 60000  # DALES raw intensity → Flair3D [0,1] convention
+coord_feat_scale = 0.01  # must match Malibu3D multitask pretrain
+strength_feat_scale = 1 / 60000  # DALES raw intensity → Malibu3D [0,1] convention
 
 num_gpu = 1
 epoch = 400
@@ -40,8 +40,7 @@ batch_size_per_gpu = 24
 batch_size = batch_size_per_gpu * num_gpu
 batch_size_val = 1
 batch_size_test = 1
-num_worker = 24 * num_gpu # H100 Jean-Zay
-num_worker_test = 2
+num_worker = 24 * num_gpu num_worker_test = 2
 mix_prob = 0.8
 empty_cache = False
 enable_amp = True
@@ -50,7 +49,7 @@ enable_amp = True
 dataset_type = "DALESDataset"
 data_root = "data/dales"
 
-weight = "/lustre/fswork/projects/rech/unv/usi32yh/Pointcept/logs/slurm/873542/model/model_best.pth"
+weight = "ckpt/malibu3d/litept_b_multitask/model_best.pth"
 
 wandb_project = f"pointcept_{dataset_type[:-7].lower()}"
 

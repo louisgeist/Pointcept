@@ -3,38 +3,37 @@
 Build a fixed stratified val/test subset sidecar CSV for fast dev evaluation.
 
 Example (val ~34k -> 2k):
-Hecate :
+local machine :
 python scripts/build_stratified_subset.py \
-  --data_root data/flair3d_plus \
-  --csv_manifest data/flair3d_plus/raw/scene_split_manifest_D067.csv \
+  --data_root data/malibu3d_plus \
+  --csv_manifest data/malibu3d_plus/raw/scene_split_manifest_D067.csv \
   --split val \
   --max_sample 300 \
   --warm-random 150 \
   --seed 0 \
   --keys segment natural_habitat_multilabel \
-  --output data/flair3d_plus/manifests/val_dev_subset_D067_300.csv
+  --output data/malibu3d_plus/manifests/val_dev_subset_D067_300.csv
 
-Jean-Zay : 
 VAL:
 python scripts/build_stratified_subset.py \
-  --data_root data/flair3d_plus \
-  --csv_manifest data/flair3d_plus/raw/scene_split_manifest.csv \
+  --data_root data/malibu3d_plus \
+  --csv_manifest data/malibu3d_plus/raw/scene_split_manifest.csv \
   --split val \
   --max_sample 2000 \
   --warm-random 1000 \
   --seed 0 \
   --keys segment natural_habitat_multilabel \
-  --output data/flair3d_plus/manifests/val_dev_subset_2000.csv
+  --output data/malibu3d_plus/manifests/val_dev_subset_2000.csv
   
 TEST:
 python scripts/build_stratified_subset.py \
-  --data_root data/flair3d_plus \
-  --csv_manifest data/flair3d_plus/raw/scene_split_manifest.csv \
+  --data_root data/malibu3d_plus \
+  --csv_manifest data/malibu3d_plus/raw/scene_split_manifest.csv \
   --split test \
   --max_sample 10000 \
   --seed 0 \
   --keys segment natural_habitat_multilabel \
-  --output data/flair3d_plus/manifests/test_dev_subset_10k.csv
+  --output data/malibu3d_plus/manifests/test_dev_subset_10k.csv
 """
 
 from __future__ import annotations
@@ -93,7 +92,7 @@ def build_scene_path(data_root: str, split: str, patch_id: str, dept_year: str, 
 def load_hardcoded_excluded_tiles() -> Set[Tuple[str, str]]:
     excluded: Set[Tuple[str, str]] = set()
     details_csv = os.path.join(
-        REPO_ROOT, "data", "flair3d_plus", "missing_coord_tiles.details.csv"
+        REPO_ROOT, "data", "malibu3d_plus", "missing_coord_tiles.details.csv"
     )
     if not os.path.isfile(details_csv):
         return excluded
@@ -222,7 +221,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Build a fixed stratified val/test subset sidecar CSV."
     )
-    parser.add_argument("--data_root", required=True, help="Flair3D+ preprocessed root")
+    parser.add_argument("--data_root", required=True, help="Malibu3D+ preprocessed root")
     parser.add_argument("--csv_manifest", required=True, help="Scene split manifest CSV")
     parser.add_argument("--split", required=True, choices=["train", "val", "test"])
     parser.add_argument("--max_sample", type=int, required=True)
@@ -242,11 +241,11 @@ def main() -> None:
     parser.add_argument("--output", required=True, help="Output sidecar CSV path")
     parser.add_argument(
         "--missing_tiles_manifest",
-        default="data/flair3d_plus/missing_ply_preflight.txt",
+        default="data/malibu3d_plus/missing_ply_preflight.txt",
     )
     parser.add_argument(
         "--too_small_tiles_manifest",
-        default="data/flair3d_plus/too_small_tiles.csv",
+        default="data/malibu3d_plus/too_small_tiles.csv",
     )
     parser.add_argument("--ignore_index", type=int, default=-1)
     parser.add_argument(

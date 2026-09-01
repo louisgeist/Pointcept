@@ -37,7 +37,7 @@ mkdir -p data/pureforest
 ln -sfn /path/to/PureForest data/pureforest/PureForest
 
 # Example:
-# ln -sfn /data/geist/datasets/PureForest data/pureforest/PureForest
+# ln -sfn data/datasets/PureForest data/pureforest/PureForest
 
 ls data/pureforest/PureForest/metadata/PureForest-patches.csv
 ```
@@ -66,8 +66,7 @@ With GNU `parallel` (if installed):
 REPO=data/pureforest
 mkdir -p "${REPO}/extracted"
 
-module load parallel/20210922 # on Jean-Zay
-
+module load parallel/20210922 
 parallel -j 8 'unzip -n {} -d '"${REPO}/extracted"'' ::: "${REPO}/PureForest/data"/lidar-*.zip
 ln -sfn ../PureForest/metadata "${REPO}/extracted/metadata"
 ```

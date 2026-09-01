@@ -1,7 +1,7 @@
 """
 Sonata-v1m2 grid-search linear probing on H3D — Sonata counterpart of the
 LitePT AdamW configs in this directory (same frozen checkpoint as
-w109/5/11h_grid_h3d/sonata-v1m2-h3d-lin-grid_3.py, job 862680, epoch_120).
+w109/5/11h_grid_h3d/sonata-v1m2-h3d-lin-grid_3.py, job sonata_outdoor, epoch_120).
 Frozen PT-v3m2 encoder (enc_mode=True -> multi-scale concat 1232ch =
 48+96+192+384+512). No coord_feat_scale; zero strength fill via
 FillMissingFeat (see 11h_grid_h3d Sonata docstring).
@@ -55,7 +55,7 @@ enable_amp = True
 dataset_type = "H3DDataset"
 data_root = "data/h3d"
 
-weight = "/lustre/fsn1/projects/rech/unv/usi32yh/logs/pointcept_logs/slurm/862680/model/epoch_120.pth"
+weight = "ckpt/malibu3d/sonata_outdoor/epoch_120.pth"
 
 wandb_project = f"pointcept_{dataset_type[:-7].lower()}"
 

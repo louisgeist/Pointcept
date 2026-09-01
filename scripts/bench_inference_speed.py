@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Inference-speed benchmark: LitePT-B / PTv3 / KPConvX / SpUNet / Sonata on Flair3D+.
+"""Inference-speed benchmark: LitePT-B / PTv3 / KPConvX / SpUNet / Sonata on Malibu3D+.
 
 Measures batch_size=1 test-time throughput (points/sec) for the 5 models
-currently used on Flair3D, on an identical seeded tile sample. Two passes per
+currently used on Malibu3D, on an identical seeded tile sample. Two passes per
 backbone:
 
 - sequential: exclusive CPU (dataset load + transform) / H2D / GPU via
@@ -19,14 +19,14 @@ backbone so LitePT is not the only one paying cold Lustre I/O. GPU warmup
 (``--num-warmup`` leading tiles, cudnn/kernel selection) is independent and
 applies to both passes.
 
-Reference configs (already harmonized on data_root="data/flair3d_plus",
+Reference configs (already harmonized on data_root="data/malibu3d_plus",
 segment="v20", feat_keys=["coord","color","strength"], grid_size=0.1,
 test_single_fragment=True, crop=None) -- see
-configs/flair3d_default/multi-{litept-b,ptv3,kpconvx,spunet}-v1m0-flair3d.py
-(MultiTaskSegmentorV2) and configs/flair3d_default/probe/sonata-v1m2-flair3d-lin.py
+configs/malibu3d_default/multi-{litept-b,ptv3,kpconvx,spunet}-v1m0-malibu3d.py
+(MultiTaskSegmentorV2) and configs/malibu3d_default/probe/sonata-v1m2-malibu3d-lin.py
 (DefaultSegmentorV2, PT-v3m2 encoder + linear head). The single-probe Sonata
 config has no data.test (val-only periodic probes); its test pipeline is
-borrowed from sonata-v1m2-flair3d-lin-grid.py (same tiles / voxelize, no
+borrowed from sonata-v1m2-malibu3d-lin-grid.py (same tiles / voxelize, no
 config file is edited). No config is copied or modified; they are loaded via
 Config.fromfile exactly like tools/train.py / tools/test.py.
 
@@ -49,15 +49,13 @@ config's ``data.test`` (``--tile-sample random`` shuffles with ``--seed``,
 
 Examples::
 
-  # Local dry run on Hecate (D067 has no local test split -- use val).
-  export PYTHONPATH=$PWD
+    export PYTHONPATH=$PWD
   python scripts/bench_inference_speed.py \\
-    --csv-manifest data/flair3d_plus/raw/scene_split_manifest_D067.csv --split val \\
+    --csv-manifest data/malibu3d_plus/raw/scene_split_manifest_D067.csv --split val \\
     --num-tiles 15 --num-warmup 5 --device cuda:0
 
-  # Real run on A100 (Jean Zay, full national manifest, test split).
-  python scripts/bench_inference_speed.py \\
-    --csv-manifest data/flair3d_plus/raw/scene_split_manifest.csv --split test \\
+    python scripts/bench_inference_speed.py \\
+    --csv-manifest data/malibu3d_plus/raw/scene_split_manifest.csv --split test \\
     --num-tiles 200 --num-warmup 10 --device cuda:0
 """
 
@@ -80,19 +78,19 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 DEFAULT_CONFIGS = {
-    "litept_b": "configs/flair3d_default/multi-litept-b-v1m0-flair3d.py",
-    "ptv3": "configs/flair3d_default/multi-ptv3-v1m0-flair3d.py",
-    "kpconvx": "configs/flair3d_default/multi-kpconvx-v1m0-flair3d.py",
-    "spunet": "configs/flair3d_default/multi-spunet-v1m0-flair3d.py",
+    "litept_b": "configs/malibu3d_default/multi-litept-b-v1m0-malibu3d.py",
+    "ptv3": "configs/malibu3d_default/multi-ptv3-v1m0-malibu3d.py",
+    "kpconvx": "configs/malibu3d_default/multi-kpconvx-v1m0-malibu3d.py",
+    "spunet": "configs/malibu3d_default/multi-spunet-v1m0-malibu3d.py",
     # PT-v3m2 encoder (enc_mode=True, 1232-ch concat) + linear head. Not the
     # SSL MultiView graph, and not PT-v3-malibu (`ptv3` above, decoder + multitask).
-    "sonata": "configs/flair3d_default/probe/sonata-v1m2-flair3d-lin.py",
+    "sonata": "configs/malibu3d_default/probe/sonata-v1m2-malibu3d-lin.py",
 }
 
-# sonata-v1m2-flair3d-lin.py has train/val only; reuse the grid-probe test split
-# (same Flair3D+ tiles, test_single_fragment=True, no max_sample).
+# sonata-v1m2-malibu3d-lin.py has train/val only; reuse the grid-probe test split
+# (same Malibu3D+ tiles, test_single_fragment=True, no max_sample).
 TEST_PIPELINE_FALLBACK = {
-    "sonata": "configs/flair3d_default/probe/sonata-v1m2-flair3d-lin-grid.py",
+    "sonata": "configs/malibu3d_default/probe/sonata-v1m2-malibu3d-lin-grid.py",
 }
 
 PER_TILE_FIELDS = [
@@ -128,13 +126,13 @@ def parse_args():
         default=None,
         metavar="NAME=PATH",
         help="Override one or more config paths, e.g. ptv3=configs/foo.py (default: "
-        "the 4 flair3d_default multi-task configs + Sonata lin-probe, unmodified).",
+        "the 4 malibu3d_default multi-task configs + Sonata lin-probe, unmodified).",
     )
     parser.add_argument(
         "--csv-manifest",
         default=None,
         help="Override data.test.csv_manifest for all backbones (default: keep each "
-        "config's own, the national manifest -- only fully mirrored on Jean Zay).",
+        "config's own, the national manifest -- only fully mirrored on cluster).",
     )
     parser.add_argument(
         "--split", default="test", help="Override data.test.split for all backbones."
@@ -199,7 +197,7 @@ def parse_args():
     parser.add_argument(
         "--out-dir",
         default=None,
-        help="Default: stats/flair3d/inference_speed_bench/<timestamp>/",
+        help="Default: stats/malibu3d/inference_speed_bench/<timestamp>/",
     )
     return parser.parse_args()
 
@@ -622,7 +620,7 @@ def main():
         if args.out_dir
         else REPO_ROOT
         / "stats"
-        / "flair3d"
+        / "malibu3d"
         / "inference_speed_bench"
         / datetime.now().strftime("%Y%m%d_%H%M%S")
     )

@@ -1,7 +1,7 @@
 """
 LitePT-Base grid-search linear probing on H3D — encoder multiscale variant
 (same frozen checkpoint as w109/5/11h_grid_h3d/litept-b-v1m0-h3d-lin_2.py /
-job 873542). `enc_mode=True` -> 1386ch concat of the 5 raw encoder stages
+). `enc_mode=True` -> 1386ch concat of the 5 raw encoder stages
 (54+108+216+432+576).
 
 AdamW / wd=0 / OneCycleLR with warmup fixed at pct_start=5%, lr swept over
@@ -28,7 +28,7 @@ num_classes = 11
 ignore_index = 11
 grid_size = 0.1
 point_max = 102400  # keep pretrain SphereCrop budget; do not raise for denser H3D
-coord_feat_scale = 0.01  # must match Flair3D multitask pretrain
+coord_feat_scale = 0.01  # must match Malibu3D multitask pretrain
 
 num_gpu = 1
 epoch = 2000
@@ -53,7 +53,7 @@ enable_amp = True
 dataset_type = "H3DDataset"
 data_root = "data/h3d"
 
-weight = "/lustre/fswork/projects/rech/unv/usi32yh/Pointcept/logs/slurm/873542/model/model_best.pth"
+weight = "ckpt/malibu3d/litept_b_multitask/model_best.pth"
 
 wandb_project = f"pointcept_{dataset_type[:-7].lower()}"
 

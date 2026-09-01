@@ -14,7 +14,7 @@ batch_size_test = None  # auto adapt to bs 1 for each gpu
 # When set, loaders use VoxelBudgetBatchSampler; batch_size_val / batch_size_test
 # are the max number of scenes per batch. Scene sizes come from
 # data.*.csv_manifest column n_voxels (required when budget is set;
-# enrich after preprocess with analyze_flair3d_test_point_voxel_counts.py
+# enrich after preprocess with analyze_malibu3d_test_point_voxel_counts.py
 # --write_manifest). Missing column raises a clear error at loader build.
 # Budgets are independent of train point_max; calibrate ~8× median n_voxels.
 test_voxel_budget = None  # e.g. 1_200_000
@@ -28,7 +28,7 @@ val_voxel_budget = None  # e.g. 1_200_000
 num_worker_test = None
 
 # -----------------------------------------------------------------------------
-# Training schedule — two mutually exclusive modes (see README_geist.md)
+# Training schedule — two mutually exclusive modes (see README_MALIBU3D.md)
 # -----------------------------------------------------------------------------
 
 # Classic mode (leave total_iters = None): each trainer epoch loops over the dataset.

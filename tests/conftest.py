@@ -102,11 +102,11 @@ def _install_fallback_stubs():
         "pointcept.datasets.transform", str(_REPO_ROOT / "pointcept" / "datasets" / "transform.py")
     )
     _load_real(
-        "pointcept.datasets.flair3d_config_utils",
-        str(_REPO_ROOT / "pointcept" / "datasets" / "flair3d_config_utils.py"),
+        "pointcept.datasets.malibu3d_config_utils",
+        str(_REPO_ROOT / "pointcept" / "datasets" / "malibu3d_config_utils.py"),
     )
-    datasets_flair3d = _load_real(
-        "pointcept.datasets.flair3d", str(_REPO_ROOT / "pointcept" / "datasets" / "flair3d.py")
+    datasets_malibu3d = _load_real(
+        "pointcept.datasets.malibu3d", str(_REPO_ROOT / "pointcept" / "datasets" / "malibu3d.py")
     )
     datasets_utils = _load_real(
         "pointcept.datasets.utils", str(_REPO_ROOT / "pointcept" / "datasets" / "utils.py")
@@ -114,7 +114,7 @@ def _install_fallback_stubs():
     datasets_pkg.build_dataset = datasets_builder.build_dataset
     datasets_pkg.collate_fn = datasets_utils.collate_fn
     datasets_pkg.point_collate_fn = datasets_utils.point_collate_fn
-    datasets_pkg.Flair3DDataset = datasets_flair3d.Flair3DDataset
+    datasets_pkg.Malibu3DDataset = datasets_malibu3d.Malibu3DDataset
     datasets_pkg.DefaultDataset = datasets_defaults.DefaultDataset
 
 

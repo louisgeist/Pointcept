@@ -6,7 +6,7 @@ when PRETRAIN_JOB_DIR is set. Concurrent array tasks flock the CSV.
 
 Example:
   python scripts/sonata/append_grid_probe_result.py \\
-    --pretrain_job_dir logs/slurm/862680 \\
+    --pretrain_job_dir logs/slurm/sonata_outdoor \\
     --probe_job_dir logs/slurm/456 \\
     --ckpt /path/to/epoch_10.pth \\
     --pretrain_epoch 10

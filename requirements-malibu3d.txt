@@ -1,0 +1,6 @@
+# Minimal pip extras for Malibu3D+ benchmark (see environment.yml for full conda env).
+laspy
+lazrs
+transformers
+sharedarray
+geopandas

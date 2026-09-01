@@ -14,12 +14,12 @@ Oracle never predicts Void. Forest GT Void (ignore_index) is excluded from metri
 
 Example:
 python scripts/oracle_landcover_to_forest.py \\
-  --data_root data/flair3d_plus \\
-  --csv_manifest data/flair3d_plus/raw/scene_split_manifest.csv \\
+  --data_root data/malibu3d_plus \\
+  --csv_manifest data/malibu3d_plus/raw/scene_split_manifest.csv \\
   --splits test \\
   --settings deciduous_coniferous,trees_brushwood,all_vegetation \\
   --num_workers 16 \\
-  --output_dir stats/flair3d/oracle_landcover_to_forest
+  --output_dir stats/malibu3d/oracle_landcover_to_forest
 """
 
 from __future__ import annotations
@@ -64,18 +64,18 @@ _WORKER_STATE: Dict[str, object] = {}
 
 
 def _load_label_remap_module():
-    module_name = "flair3d_label_remap_oracle_script"
+    module_name = "malibu3d_label_remap_oracle_script"
     path = os.path.join(
         REPO_ROOT,
         "pointcept",
         "datasets",
         "preprocessing",
-        "flair3d_plus",
-        "flair3d_label_remap.py",
+        "malibu3d_plus",
+        "malibu3d_label_remap.py",
     )
     spec = importlib.util.spec_from_file_location(module_name, path)
     if spec is None or spec.loader is None:
-        raise ImportError(f"Cannot load flair3d_label_remap from {path}")
+        raise ImportError(f"Cannot load malibu3d_label_remap from {path}")
     module = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = module
     spec.loader.exec_module(module)
@@ -184,7 +184,7 @@ class SceneOracleResult:
 def load_hardcoded_excluded_tiles() -> set[tuple[str, str]]:
     excluded: set[tuple[str, str]] = set()
     details_csv = os.path.join(
-        REPO_ROOT, "data", "flair3d_plus", "missing_coord_tiles.details.csv"
+        REPO_ROOT, "data", "malibu3d_plus", "missing_coord_tiles.details.csv"
     )
     if not os.path.isfile(details_csv):
         return excluded
@@ -500,10 +500,10 @@ def main() -> None:
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--data_root", default="data/flair3d_plus")
+    parser.add_argument("--data_root", default="data/malibu3d_plus")
     parser.add_argument(
         "--csv_manifest",
-        default="data/flair3d_plus/raw/scene_split_manifest.csv",
+        default="data/malibu3d_plus/raw/scene_split_manifest.csv",
     )
     parser.add_argument(
         "--splits",
@@ -531,11 +531,11 @@ def main() -> None:
     )
     parser.add_argument(
         "--missing_tiles_manifest",
-        default="data/flair3d_plus/missing_ply_preflight.txt",
+        default="data/malibu3d_plus/missing_ply_preflight.txt",
     )
     parser.add_argument(
         "--too_small_tiles_manifest",
-        default="data/flair3d_plus/too_small_tiles.csv",
+        default="data/malibu3d_plus/too_small_tiles.csv",
     )
     parser.add_argument("--no_exclude_hardcoded", action="store_true")
     parser.add_argument("--no_exclude_missing_manifest", action="store_true")
@@ -552,7 +552,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--output_dir",
-        default="stats/flair3d/oracle_landcover_to_forest",
+        default="stats/malibu3d/oracle_landcover_to_forest",
     )
     args = parser.parse_args()
 

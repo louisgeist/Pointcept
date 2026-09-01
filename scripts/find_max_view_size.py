@@ -35,7 +35,7 @@ trial so each probe deterministically hits the worst case (exactly max_size
 points per global view) instead of possibly getting lucky on a short probe.
 Disable with --no-force-worst-case-scale to measure the average case instead.
 
-enc2d_max_size is out of scope: the Flair3D+ MultiViewGenerator config never
+enc2d_max_size is out of scope: the Malibu3D+ MultiViewGenerator config never
 sets view_keys to include "correspondence", so the if_enc2d branch in
 get_view() (transform.py) is unreachable for this dataset.
 
@@ -43,30 +43,30 @@ Examples::
 
   # Resolve the transform index + preview the first trial, no GPU needed
   python scripts/find_max_view_size.py \\
-    --config-file configs/flair3d_default/pretrain-sonata-v1m2-flair3d.py \\
+    --config-file configs/malibu3d_default/pretrain-sonata-v1m2-malibu3d.py \\
     --dry-run
 
   # Fast smoke test on the debug config (small dataset, few steps)
   python scripts/find_max_view_size.py \\
-    --config-file configs/flair3d_default/pretrain-sonata-v1m2-flair3d-debug.py \\
+    --config-file configs/malibu3d_default/pretrain-sonata-v1m2-malibu3d-debug.py \\
     --min-max-size 4096 --max-max-size 16384 --probe-steps 8 --soak-steps 0
 
   # Bracket around the known OOM (job 546886 crashed at max_size=65536,
   # batch_size_per_gpu=2); batch_size_per_gpu=3 here is strictly worse
   python scripts/find_max_view_size.py \\
-    --config-file configs/flair3d_default/pretrain-sonata-v1m2-flair3d.py \\
+    --config-file configs/malibu3d_default/pretrain-sonata-v1m2-malibu3d.py \\
     --min-max-size 32768 --max-max-size 65536 --probe-steps 16 --soak-steps 0 \\
     --batch-size-per-gpu 3
 
   # Full search with binary soak, matching the target batch_size=96 (32 GPU x 3)
   python scripts/find_max_view_size.py \\
-    --config-file configs/flair3d_default/pretrain-sonata-v1m2-flair3d.py \\
+    --config-file configs/malibu3d_default/pretrain-sonata-v1m2-malibu3d.py \\
     --min-max-size 8192 --max-max-size 49152 \\
     --batch-size-per-gpu 3 --probe-steps 16 --soak-steps 300
 
   # Single-point soak verification at max_size=40000
   python scripts/find_max_view_size.py \\
-    --config-file configs/flair3d_default/pretrain-sonata-v1m2-flair3d.py \\
+    --config-file configs/malibu3d_default/pretrain-sonata-v1m2-malibu3d.py \\
     --min-max-size 40000 --max-max-size 40000 \\
     --batch-size-per-gpu 3 --probe-steps 16 --soak-steps 300
 """

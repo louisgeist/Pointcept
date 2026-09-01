@@ -7,7 +7,7 @@ Raw layout (official release):
     pointclouds/pointcloud_*.laz
 
 Usage:
-ln -sfn /data/geist/datasets/ECLAIR data/eclair/raw OU ln -sfn $SCRATCH/data/eclair-dataset data/eclair/raw
+ln -sfn data/datasets/ECLAIR data/eclair/raw OU ln -sfn $SCRATCH/data/eclair-dataset data/eclair/raw
 python pointcept/datasets/preprocessing/eclair/preprocess_eclair.py \
     --dataset_root data/eclair/raw \
     --output_root data/eclair \
@@ -75,7 +75,7 @@ def build_scene(laz_path: str) -> Dict[str, np.ndarray]:
         raise KeyError(f"Missing 'intensity' field in {laz_path}")
     strength = np.asarray(las.intensity).astype(np.float32)
 
-    # Store RGB in Flair3D-compatible [0, 255] float range (16-bit LAZ → 8-bit scale).
+    # Store RGB in Malibu3D-compatible [0, 255] float range (16-bit LAZ → 8-bit scale).
     # Config pipelines then apply NormalizeColor (/255 → [0, 1]).
     if not {"red", "green", "blue"}.issubset(dim_names):
         raise KeyError(f"Missing RGB fields in {laz_path}")

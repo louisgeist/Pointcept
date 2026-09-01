@@ -18,19 +18,19 @@ only the triangle inequality m_TV(pi_hat) <= H_a^TV + TV(q_bar, pi_hat) holds.
 Aggregate TV(q_bar, *) is still reported separately (same layout as KL(q_bar, *)).
 
 Per-tile, per-axis class counts (points with non-void natural_habitat annotation,
-fanned out to each axis exactly like Flair3DLabelRemap / count_flair3d_train_label_distribution.py)
+fanned out to each axis exactly like Malibu3DLabelRemap / count_malibu3d_train_label_distribution.py)
 are the required input; Void points are excluded before building the count vectors,
 which happens automatically here since Void sits at ignore_index == num_classes and only
 in-range ids are binned.
 
 A tile with zero valid points for an axis is dropped for that axis (N_t^a = 0 case).
 
-Reuses scene listing / exclusion logic from count_flair3d_train_label_distribution.py
+Reuses scene listing / exclusion logic from count_malibu3d_train_label_distribution.py
 (same manifest, same excluded-tile rules) so the tile population matches the existing
-dataset-wide stats in stats/flair3d/label_distribution*/. Locally (Hecate), only a subset
+dataset-wide stats in stats/malibu3d/label_distribution*/. Locally (local machine), only a subset
 of the manifest's tiles are actually mirrored on disk; by default this script skips
 manifest rows with no local scene directory (reported explicitly in the output) rather
-than treating them as errors -- run on Jean Zay with the full manifest for the true
+than treating them as errors -- run on cluster with the full manifest for the true
 national test-set numbers.
 
 Example (two steps -- step 1 provides the "train" pi_hat for the KL/TV(qbar_test, pi_hat_train)
@@ -38,24 +38,24 @@ columns in step 2's output; skip it and drop --extra_pi_hat_csv_dir/--extra_pi_h
 step 2 if you only want H_a / H_a^TV and D(qbar_test, U)):
 
 # 1) train's global per-axis marginal (pi_hat_train) -- cheap, only aggregate counts needed.
-python scripts/count_flair3d_train_label_distribution.py \
-    --data_root data/flair3d_plus \
-    --csv_manifest data/flair3d_plus/raw/scene_split_manifest.csv \
+python scripts/count_malibu3d_train_label_distribution.py \
+    --data_root data/malibu3d_plus \
+    --csv_manifest data/malibu3d_plus/raw/scene_split_manifest.csv \
     --split train \
     --num_workers 24 \
-    --output_dir stats/flair3d/label_distribution_national/train
+    --output_dir stats/malibu3d/label_distribution_national/train
 
 # 2) main computation on the test split (KL + TV tables).
 python scripts/compute_nathab_baseline_metrics.py \
-    --data_root data/flair3d_plus \
-    --csv_manifest data/flair3d_plus/raw/scene_split_manifest.csv \
+    --data_root data/malibu3d_plus \
+    --csv_manifest data/malibu3d_plus/raw/scene_split_manifest.csv \
     --split test \
     --num_workers 24 \
-    --extra_pi_hat_csv_dir stats/flair3d/label_distribution_national/train \
+    --extra_pi_hat_csv_dir stats/malibu3d/label_distribution_national/train \
     --extra_pi_hat_name train \
-    --output_dir stats/flair3d/nathab_baseline_metrics
+    --output_dir stats/malibu3d/nathab_baseline_metrics
 # (--output_dir gets the split name appended automatically -> results land in
-#  stats/flair3d/nathab_baseline_metrics/test/, no need to add "/test" yourself)
+#  stats/malibu3d/nathab_baseline_metrics/test/, no need to add "/test" yourself)
 """
 
 from __future__ import annotations
@@ -88,12 +88,12 @@ def _load_module(module_name: str, rel_path: str):
 
 
 _count_script = _load_module(
-    "flair3d_count_label_distribution",
-    "scripts/count_flair3d_train_label_distribution.py",
+    "malibu3d_count_label_distribution",
+    "scripts/count_malibu3d_train_label_distribution.py",
 )
 _label_remap = _load_module(
-    "flair3d_label_remap_baseline_script",
-    "pointcept/datasets/preprocessing/flair3d_plus/flair3d_label_remap.py",
+    "malibu3d_label_remap_baseline_script",
+    "pointcept/datasets/preprocessing/malibu3d_plus/malibu3d_label_remap.py",
 )
 
 NATHAB_AXIS_TASKS: Tuple[str, ...] = _count_script.NATHAB_AXIS_TASKS
@@ -108,7 +108,7 @@ AXIS_DISPLAY_NAMES: Dict[str, str] = {
 }
 
 # Set once in main() before worker processes are forked; child processes inherit it
-# via COW fork (mirrors the pattern in count_flair3d_train_label_distribution.py).
+# via COW fork (mirrors the pattern in count_malibu3d_train_label_distribution.py).
 _AXIS_STATE: Dict[str, "AxisState"] = {}
 
 
@@ -126,7 +126,7 @@ def build_axis_states(storage_definition: str) -> Dict[str, AxisState]:
 
     storage_def = get_definition(NATHAB_AXIS_SOURCE_TASK, storage_definition)
     states: Dict[str, AxisState] = {}
-    for axis, target_name in _count_script.FLAIR3D_TILE_DISTRIBUTION_TASKS.items():
+    for axis, target_name in _count_script.MALIBU3D_TILE_DISTRIBUTION_TASKS.items():
         target_def = get_definition(NATHAB_AXIS_SOURCE_TASK, target_name)
         cfg = definition_to_task_config(target_def)
         lut = build_stored_to_train_lut(storage_def, target_def)
@@ -194,7 +194,7 @@ def tv(q: np.ndarray, p: np.ndarray) -> float:
 
 def load_axis_marginal_from_csv(csv_path: str, num_classes: int) -> np.ndarray:
     """Read the per-class 'count' column (bucket=='class', in class_id order) from a
-    {axis}_label_distribution.csv produced by count_flair3d_train_label_distribution.py.
+    {axis}_label_distribution.csv produced by count_malibu3d_train_label_distribution.py.
     Returns raw (un-normalized) counts, length num_classes."""
     counts = [None] * num_classes
     with open(csv_path, "r", encoding="utf-8", newline="") as f:
@@ -307,11 +307,11 @@ def compute_axis_metrics(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--data_root", default="data/flair3d_plus")
-    parser.add_argument("--csv_manifest", default="data/flair3d_plus/raw/scene_split_manifest.csv")
+    parser.add_argument("--data_root", default="data/malibu3d_plus")
+    parser.add_argument("--csv_manifest", default="data/malibu3d_plus/raw/scene_split_manifest.csv")
     parser.add_argument("--split", default="test", help="Comma-separated splits (default: test)")
-    parser.add_argument("--missing_tiles_manifest", default="data/flair3d_plus/missing_ply_preflight.txt")
-    parser.add_argument("--too_small_tiles_manifest", default="data/flair3d_plus/too_small_tiles.csv")
+    parser.add_argument("--missing_tiles_manifest", default="data/malibu3d_plus/missing_ply_preflight.txt")
+    parser.add_argument("--too_small_tiles_manifest", default="data/malibu3d_plus/too_small_tiles.csv")
     parser.add_argument("--no_exclude_hardcoded", action="store_true")
     parser.add_argument("--no_exclude_missing_manifest", action="store_true")
     parser.add_argument("--no_exclude_too_small", action="store_true")
@@ -325,18 +325,18 @@ def main() -> None:
         action="store_true",
         default=True,
         help="Skip manifest rows with no local scene directory instead of erroring "
-        "(default: on; needed on Hecate where only a subset of the national manifest "
+        "(default: on; needed on local machine where only a subset of the national manifest "
         "is mirrored on disk).",
     )
     parser.add_argument("--no_require_local_dir", dest="require_local_dir", action="store_false")
     parser.add_argument("--num_workers", type=int, default=8)
     parser.add_argument("--max_scenes", type=int, default=0, help="Debug: limit number of scenes (0=all)")
-    parser.add_argument("--output_dir", default="stats/flair3d/nathab_baseline_metrics")
+    parser.add_argument("--output_dir", default="stats/malibu3d/nathab_baseline_metrics")
     parser.add_argument(
         "--extra_pi_hat_csv_dir",
         default="",
         help="Directory with {axis}_label_distribution.csv files (e.g. from "
-        "count_flair3d_train_label_distribution.py run on --split train) providing an "
+        "count_malibu3d_train_label_distribution.py run on --split train) providing an "
         "additional, fixed pi_hat to evaluate against the SAME per-tile q_t/N_t as "
         "--split (e.g. tiles are test, but pi_hat is train's global marginal -- measures "
         "train/test distribution shift on top of intra-split heterogeneity). Optional; "
@@ -445,7 +445,7 @@ def main() -> None:
         # data), so department-level exclusion is NOT applied here -- file presence is the
         # sole source of truth for whether a tile contributes to the metric (matches the
         # spec's N_t^a=0 exclusion rule automatically). This breakdown just helps distinguish
-        # "whole department has no natural_habitat.npy" (expected per README_flair3dplus.md's
+        # "whole department has no natural_habitat.npy" (expected per README_malibu3dplus.md's
         # documented 55/74 dept-year NATURAL_HABITAT coverage) from isolated missing files
         # within an otherwise-covered department (worth investigating).
         print("\nMissing natural_habitat.npy by department (diagnostic, not filtered on):")
@@ -703,7 +703,7 @@ def main() -> None:
             f"\nNOTE: {n_no_local_dir}/{n_manifest} manifest tiles for split(s) "
             f"{sorted(target_splits)} have no local directory on this machine -- "
             "these numbers are computed on a PARTIAL test set, not the full national one. "
-            "Re-run on Jean Zay with the full manifest for the paper-reportable numbers."
+            "Re-run on cluster with the full manifest for the paper-reportable numbers."
         )
 
 

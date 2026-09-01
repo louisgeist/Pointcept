@@ -5,7 +5,7 @@ Companion to ``scripts/find_max_view_size.py``: that script binary-searches
 ``max_size`` (per-view point budget) at a fixed ``stride``. This script does
 the opposite — it keeps ``max_size`` and ``batch_size_per_gpu`` FIXED and
 instead sweeps ``model.backbone.stride`` (the PT-v3 encoder pooling stride,
-see ``configs/flair3d_default/pretrain-sonata-v1m2-flair3d.py``), which
+see ``configs/malibu3d_default/pretrain-sonata-v1m2-malibu3d.py``), which
 controls how many points survive each encoder stage and is a much more
 direct VRAM lever than ``max_size`` once the base stride (2,2,2,2) already
 OOMs outright.
@@ -33,22 +33,22 @@ Examples::
 
   # Resolve the transform index + preview the first trial, no GPU needed
   python scripts/find_max_pooling_stride.py \\
-    --config-file configs/flair3d_default/pretrain-sonata-v1m2-flair3d.py \\
+    --config-file configs/malibu3d_default/pretrain-sonata-v1m2-malibu3d.py \\
     --dry-run
 
   # Default sweep: (2,2,2,3) -> (2,2,3,3) -> (2,3,3,3) -> (3,3,3,3),
   # max_size=65536, batch_size_per_gpu=3
   python scripts/find_max_pooling_stride.py \\
-    --config-file configs/flair3d_default/pretrain-sonata-v1m2-flair3d.py
+    --config-file configs/malibu3d_default/pretrain-sonata-v1m2-malibu3d.py
 
   # Fast smoke test on the debug config, probe only (no soak)
   python scripts/find_max_pooling_stride.py \\
-    --config-file configs/flair3d_default/pretrain-sonata-v1m2-flair3d-debug.py \\
+    --config-file configs/malibu3d_default/pretrain-sonata-v1m2-malibu3d-debug.py \\
     --probe-steps 4 --soak-steps 0
 
   # Custom candidate list / fixed values
   python scripts/find_max_pooling_stride.py \\
-    --config-file configs/flair3d_default/pretrain-sonata-v1m2-flair3d.py \\
+    --config-file configs/malibu3d_default/pretrain-sonata-v1m2-malibu3d.py \\
     --strides 2,2,2,3 2,3,3,3 3,3,3,3 \\
     --max-size 49152 --batch-size-per-gpu 3
 """

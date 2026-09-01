@@ -1,6 +1,6 @@
 """
 KPConvX grid-search linear probing on ECLAIR — encoder multiscale variant
-(Flair3D+ multitask supervised pretrain, configs/flair3d_default/multi-kpconvx-v1m0-flair3d.py
+(Malibu3D+ multitask supervised pretrain, configs/malibu3d_default/multi-kpconvx-v1m0-malibu3d.py
 recipe: input_channels=7, kp_radius=3.2, radius_scaling=3.0,
 neighbor_limits=(12,16,20,20,20), layer_blocks=(3,3,9,12,3), init_channels=64,
 channel_scaling=1.414, grid_size=0.1, point_max=40000, drop_path_rate=0.3 at
@@ -39,10 +39,7 @@ part of the backbone architecture/checkpoint, so this doesn't break
 checkpoint loading — but the frozen backbone was never trained on scenes
 this large, so its features at this crop scale are unverified.
 
-weight = Jean Zay job 1159986 (KPConvX multitask Flair3D+, same recipe as
-configs/flair3d_default/multi-kpconvx-v1m0-flair3d.py) — not reachable from
-Hecate (Jean-Zay-only lustre path, see CLAUDE.md local-vs-JZ data note), so
-CheckpointLoader can only be exercised on Jean Zay.
+Frozen backbone: Malibu3D+ KPConvX multitask checkpoint (see ckpt/malibu3d/kpconvx_multitask/).
 
 batch_size=24 on a single GPU (vs. the pretrain's global 24 spread over 6-8
 GPUs) — set by hand per user instruction; the frozen-backbone, no-backward
@@ -67,8 +64,8 @@ num_classes = 11
 ignore_index = -1
 grid_size = 0.1
 point_max = 100_000  # deliberately > pretrain's 40000 SphereCrop budget — see docstring
-coord_feat_scale = 0.01  # must match Flair3D multitask pretrain
-strength_feat_scale = 1 / 60000  # raw uint16 intensity → Flair3D [0,1] convention
+coord_feat_scale = 0.01  # must match Malibu3D multitask pretrain
+strength_feat_scale = 1 / 60000  # raw uint16 intensity → Malibu3D [0,1] convention
 kp_radius = 3.2
 kp_sigma = kp_radius
 radius_scaling = 3.0
@@ -94,7 +91,7 @@ enable_amp = True
 dataset_type = "ECLAIRDataset"
 data_root = "data/eclair"
 
-weight = "/lustre/fswork/projects/rech/unv/usi32yh/Pointcept/logs/slurm/1159986/model/model_best.pth"
+weight = "ckpt/malibu3d/kpconvx_multitask/model_best.pth"
 
 wandb_project = f"pointcept_{dataset_type[:-7].lower()}"
 

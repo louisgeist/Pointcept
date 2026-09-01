@@ -6,7 +6,7 @@ Same spirit as scripts/find_max_batch_size.py, but searches
 cap (``batch_size_val`` / ``batch_size_test``) so packing is budget-limited.
 
 Requires ``n_voxels`` in ``data.*.csv_manifest`` (enrich with
-``analyze_flair3d_test_point_voxel_counts.py --write_manifest``).
+``analyze_malibu3d_test_point_voxel_counts.py --write_manifest``).
 
 Typical safe order of magnitude is around 2M voxels; default search range is
 ``[500_000, 4_000_000]`` with step ``100_000``.
@@ -15,12 +15,12 @@ Examples::
 
   # Val
   python scripts/find_max_voxel_budget.py \\
-    --config-file configs/experiment/w105/2/10h/litept-v1m0-flair3d_12.py \\
+    --config-file configs/experiment/w105/2/10h/litept-v1m0-malibu3d_12.py \\
     --mode val --min-budget 500000 --max-budget 4000000 --max-sample 128
 
   # Test
   python scripts/find_max_voxel_budget.py \\
-    --config-file configs/experiment/w105/2/10h/litept-v1m0-flair3d_12.py \\
+    --config-file configs/experiment/w105/2/10h/litept-v1m0-malibu3d_12.py \\
     --mode test --min-budget 500000 --max-budget 4000000 --max-sample 128
 """
 
@@ -542,7 +542,7 @@ def main() -> int:
     log(f"GPU: {_gpu_name()}")
     log(
         "Note: requires n_voxels in csv_manifest "
-        "(analyze_flair3d_test_point_voxel_counts.py --write_manifest)."
+        "(analyze_malibu3d_test_point_voxel_counts.py --write_manifest)."
     )
 
     try:

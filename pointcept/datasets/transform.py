@@ -206,21 +206,21 @@ class Update(object):
 
 
 @TRANSFORMS.register_module()
-class Flair3DLabelRemap(object):
-    """Remap Flair3D+ semantic targets from on-disk storage defs to training defs."""
+class Malibu3DLabelRemap(object):
+    """Remap Malibu3D+ semantic targets from on-disk storage defs to training defs."""
 
     @staticmethod
     def _load_label_remap_module():
         import importlib.util
 
-        module_name = "flair3d_label_remap"
+        module_name = "malibu3d_label_remap"
         if module_name in sys.modules:
             return sys.modules[module_name]
         path = os.path.join(
             os.path.dirname(os.path.abspath(__file__)),
             "preprocessing",
-            "flair3d_plus",
-            "flair3d_label_remap.py",
+            "malibu3d_plus",
+            "malibu3d_label_remap.py",
         )
         spec = importlib.util.spec_from_file_location(module_name, path)
         mod = importlib.util.module_from_spec(spec)
@@ -390,7 +390,7 @@ class CenterShift(object):
 class ExtractAbsZ(object):
     """Save absolute altitude before geometric shifts normalize it away.
 
-    If ``coord_translation`` is present (Flair3D+ preprocessing offset), reconstruct
+    If ``coord_translation`` is present (Malibu3D+ preprocessing offset), reconstruct
     absolute Z as ``coord_z + translation_z``. Otherwise fall back to ``coord[:, 2]``.
     """
 
@@ -408,7 +408,7 @@ class ExtractAbsXY(object):
     """Save absolute Lambert XY before geometric shifts normalize them away.
 
     Reconstructs absolute XY in **float64** as ``coord.astype(f64) + coord_translation``
-    (Flair3D+ stores ``coord_translation`` as float64 and local ``coord`` as float32).
+    (Malibu3D+ stores ``coord_translation`` as float64 and local ``coord`` as float32).
     Do **not** cast the translation to float32 — that loses ~0.5–1 m at Lambert Y
     and breaks 1 m network cell binning.
 

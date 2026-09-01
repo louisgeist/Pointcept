@@ -38,7 +38,9 @@ dependencies:
   - matplotlib
   - black
   - open3d
-  - geopandas  # Flair3D+ network masks (rasterize_network.py)
+  - geopandas  # Malibu3D+ network masks (rasterize_network.py)
+  - laspy
+  - lazrs  # optional, for LAZ point clouds (H3D)
   - peft
   - pip:
     - torch-cluster -f https://data.pyg.org/whl/torch-2.5.0+cu124.html
@@ -46,9 +48,14 @@ dependencies:
     - torch-sparse -f https://data.pyg.org/whl/torch-2.5.0+cu124.html
     - torch_geometric
     - spconv-cu124
-    - peft #for lora finetune
+    - peft
+    - transformers
+    - sharedarray
     - git+https://github.com/octree-nn/ocnn-pytorch.git
     - git+https://github.com/openai/CLIP.git
     - git+https://github.com/Dao-AILab/flash-attention.git
     - ./libs/pointops
+    - ./libs/pointops2
     - ./libs/pointgroup_ops
+    - ./libs/pointrope
+    - ./libs/pointseg
