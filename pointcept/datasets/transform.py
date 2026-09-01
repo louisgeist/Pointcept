@@ -698,6 +698,19 @@ class RandomRotateTargetAngle(object):
 
 
 @TRANSFORMS.register_module()
+class FixedScaleCoord(object):
+    """Deterministic uniform scale on ``coord`` (e.g. aerial /25 before GridSample)."""
+
+    def __init__(self, scale=1.0):
+        self.scale = float(scale)
+
+    def __call__(self, data_dict):
+        if "coord" in data_dict.keys():
+            data_dict["coord"] = data_dict["coord"] * self.scale
+        return data_dict
+
+
+@TRANSFORMS.register_module()
 class RandomScale(object):
     def __init__(self, scale=None, anisotropic=False):
         self.scale = scale if scale is not None else [0.95, 1.05]
