@@ -155,9 +155,6 @@ hooks = [
     dict(type="InformationWriter", log_interval=100),
     dict(type="MultiTaskEvaluator", write_cls_iou=True),
     dict(type="CheckpointSaver", save_freq=None),
-    dict(type="PreciseEvaluator", test_last=False),
-    # After PreciseEvaluator only (end of training / tools/test.py) -- not on val.
-    dict(type="NetworkAPLSEvaluator"),
 ]
 
 test_single_fragment = True
