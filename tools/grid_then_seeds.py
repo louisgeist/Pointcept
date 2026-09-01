@@ -115,6 +115,23 @@ def needs_resume(save_path: Path) -> bool:
     return (save_path / "model" / "model_last.pth").is_file()
 
 
+def resolve_seed_weight(weight: str | None, grid_dir: Path) -> str | None:
+    """Phase-2 weight for the seed ensemble.
+
+  Pretrained runs pass the same external checkpoint to both phases. Random-init
+  runs have no external weight — phase 1 saves the scratch backbone in
+  ``grid_dir/model/model_last.pth`` and phase 2 must reload it (otherwise the
+  backbone would be re-randomized).
+    """
+    if weight:
+        return weight
+    grid_ckpt = grid_dir / "model" / "model_last.pth"
+    if grid_ckpt.is_file():
+        log(f"no external weight: seed phase will load backbone from {grid_ckpt}")
+        return str(grid_ckpt)
+    return None
+
+
 def _split_of(entry) -> str | None:
     try:
         return entry.get("split")
@@ -502,10 +519,11 @@ def main() -> int:
         seed_dir.mkdir(parents=True, exist_ok=True)
         resume = needs_resume(seed_dir)
         log(f"phase 2 (seeds): {'RESUMING' if resume else 'starting'}")
+        seed_weight = resolve_seed_weight(weight, grid_dir)
         run_train(
             seed_dir / "config.py" if resume else gen_cfg,
             seed_dir,
-            weight=weight,
+            weight=seed_weight,
             extra_options=args.extra_options,
             num_gpus=args.num_gpus,
             wandb_group=wandb_group,

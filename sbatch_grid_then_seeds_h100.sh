@@ -7,9 +7,10 @@
 # See sbatch_grid_then_seeds.sh (A100 variant) for the full description.
 #
 # Usage:
-#   ./submit_grid_then_seeds_h100.sh <grid_config> <weight.pth> [exp_name]
+#   ./submit_grid_then_seeds_h100.sh <grid_config> [weight.pth] [exp_name]
 #   (sets Slurm --time from config path: H3D 4h / DALES 8h / ECLAIR 12h)
-#   GRID_CONFIG=... WEIGHT=... [N_SEEDS=10] sbatch sbatch_grid_then_seeds_h100.sh
+#   GRID_CONFIG=... [WEIGHT=...] [N_SEEDS=10] sbatch sbatch_grid_then_seeds_h100.sh
+#   Random-init grid configs: omit weight (or WEIGHT=) — phase 2 reloads grid ckpt.
 #
 # Jean-Zay compute-accounting tags (IMAGINE wrapper):
 #   https://github.com/Archiel19/compute-accounting
@@ -31,7 +32,8 @@
 #SBATCH --job-name=grid_then_seeds_h100
 
 GRID_CONFIG="${GRID_CONFIG:-${1:?grid config required (arg1 or GRID_CONFIG=)}}"
-WEIGHT="${WEIGHT:-${2:?WEIGHT path required (arg2 or WEIGHT=)}}"
+# Optional: random-init grid configs have no external backbone checkpoint.
+WEIGHT="${WEIGHT:-${2:-}}"
 EXP_NAME="${EXP_NAME:-${3:-grid_then_seeds}}"
 N_SEEDS="${N_SEEDS:-10}"
 EXTRA_ARGS="${EXTRA_ARGS:-}"
@@ -77,9 +79,13 @@ START_TIME=$(date +%s)
 
 export JOB_DIR
 RC=0
+WEIGHT_ARGS=()
+if [[ -n "${WEIGHT}" ]]; then
+  WEIGHT_ARGS=(--weight "$WEIGHT")
+fi
 python tools/grid_then_seeds.py \
   --grid-config "$GRID_CONFIG" \
-  --weight "$WEIGHT" \
+  "${WEIGHT_ARGS[@]}" \
   --save-root "$JOB_DIR" \
   --n-seeds "$N_SEEDS" \
   --num-gpus 1 \
