@@ -47,11 +47,15 @@ conda deactivate && while [ -n "${CONDA_DEFAULT_ENV:-}" ]; do conda deactivate; 
 
 module purge
 module load arch/h100
+module load cuda/12.4.1
 module load miniforge/24.9.0
 conda activate pointcept_124
 
 cd ${REPO_ROOT}
-export PYTHONPATH="${REPO_ROOT}"
+# Pointops built for H100 (same as other unv@h100 jobs; harmless once count script no longer
+# imports the full training stack, but kept for consistency with sbatch_pretrain_h100.sh).
+POINTOPS_PATH=/lustre/fswork/projects/rech/unv/usi32yh/Pointcept/pointops_build_h100/lib/python3.10/site-packages/pointops-1.0-py3.10-linux-x86_64.egg
+export PYTHONPATH="${REPO_ROOT}:${POINTOPS_PATH}${PYTHONPATH:+:${PYTHONPATH}}"
 
 # 1) train's global per-axis marginal (pi_hat_train), needed for the KL/TV(qbar_test, pi_hat_train)
 #    column -- cheap relative to step 2, only aggregate counts are used, not per-tile.

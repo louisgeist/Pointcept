@@ -52,36 +52,46 @@ from tqdm import tqdm
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
-def _load_flair3d_config_utils():
-    path = os.path.join(REPO_ROOT, "pointcept", "datasets", "flair3d_config_utils.py")
-    spec = importlib.util.spec_from_file_location("flair3d_config_utils", path)
+def _load_module_from_path(module_name: str, rel_path: str):
+    path = os.path.join(REPO_ROOT, *rel_path.split("/"))
+    spec = importlib.util.spec_from_file_location(module_name, path)
     if spec is None or spec.loader is None:
-        raise ImportError(f"Cannot load flair3d_config_utils from {path}")
+        raise ImportError(f"Cannot load {module_name} from {path}")
     module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
     spec.loader.exec_module(module)
     return module
 
 
-_flair3d_cfg = _load_flair3d_config_utils()
-FLAIR3D_SEMANTIC_TARGET_KEYS = _flair3d_cfg.FLAIR3D_SEMANTIC_TARGET_KEYS
-FLAIR3D_TILE_DISTRIBUTION_TASKS = _flair3d_cfg.FLAIR3D_TILE_DISTRIBUTION_TASKS
-get_missing_target_fill_value = _flair3d_cfg.get_missing_target_fill_value
-get_semantic_config = _flair3d_cfg.get_semantic_config
-get_multilabel_classification_config = _flair3d_cfg.get_multilabel_classification_config
-
-SEMANTIC_TASKS = tuple(FLAIR3D_SEMANTIC_TARGET_KEYS)
+# Keep in sync with flair3d_config_utils (avoid importing that module here: it pulls in
+# pointcept.datasets.__init__ -> pointops, which this numpy-only counter does not need).
+SEMANTIC_TASKS: Tuple[str, ...] = ("segment", "forest", "land_use", "natural_habitat")
+FLAIR3D_TILE_DISTRIBUTION_TASKS: Dict[str, str] = {
+    "nathab_habitat_type": "by_habitat_type_ecological",
+    "nathab_moisture_regime": "by_moisture_regime",
+    "nathab_soil_chemistry": "by_soil_chemistry",
+    "nathab_bioclimatic_zone": "by_climatic_domain",
+}
 NATHAB_AXIS_TASKS = tuple(FLAIR3D_TILE_DISTRIBUTION_TASKS.keys())
 NATHAB_AXIS_SOURCE_TASK = "natural_habitat"
-
 MULTILABEL_TASK = "natural_habitat_multilabel"
-_MULTILABEL_CFG = get_multilabel_classification_config(MULTILABEL_TASK)
-MULTILABEL_CLASS_NAMES: Tuple[str, ...] = tuple(_MULTILABEL_CFG["names"])
-NUM_MULTILABEL_CLASSES = int(_MULTILABEL_CFG["num_classes"])
+
+# climatic_domain_tile_labels must be registered before natural_habitat_multilabel_tile_labels
+# (the latter does `from climatic_domain_tile_labels import ...` in a try block).
+_climatic_domain_mod = _load_module_from_path(
+    "climatic_domain_tile_labels_count_script",
+    "pointcept/datasets/preprocessing/flair3d_plus/climatic_domain_tile_labels.py",
+)
+sys.modules["climatic_domain_tile_labels"] = _climatic_domain_mod
+_multilabel_mod = _load_module_from_path(
+    "natural_habitat_multilabel_tile_labels_count_script",
+    "pointcept/datasets/preprocessing/flair3d_plus/natural_habitat_multilabel_tile_labels.py",
+)
+MULTILABEL_CLASS_NAMES: Tuple[str, ...] = tuple(_multilabel_mod.MULTILABEL_CLASS_NAMES)
+NUM_MULTILABEL_CLASSES = int(_multilabel_mod.NUM_MULTILABEL_CLASSES)
 MULTILABEL_FILENAME = f"{MULTILABEL_TASK}.npy"
 
-# Set in main() before workers start; read by _process_scene in child processes.
-_TASK_REMAP_STATE: Dict[str, "TaskRemapState"] = {}
-_NATHAB_AXIS_REMAP_STATE: Dict[str, "TaskRemapState"] = {}
+_label_remap_mod = None
 
 
 def _load_label_remap_module():
@@ -101,6 +111,61 @@ def _load_label_remap_module():
     sys.modules[module_name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def _get_label_remap_module():
+    global _label_remap_mod
+    if _label_remap_mod is None:
+        _label_remap_mod = _load_label_remap_module()
+    return _label_remap_mod
+
+
+def get_semantic_config(target_key: str, definition: str | None = None) -> Dict[str, Any]:
+    label_remap = _get_label_remap_module()
+    defn_name = (
+        definition
+        if definition is not None
+        else label_remap.get_default_definition_name(target_key)
+    )
+    return label_remap.definition_to_task_config(
+        label_remap.get_definition(target_key, defn_name)
+    )
+
+
+def get_multilabel_classification_config(target_key: str) -> Dict[str, Any]:
+    if target_key != MULTILABEL_TASK:
+        raise KeyError(
+            f"Unknown multilabel classification target_key '{target_key}'. "
+            f"Expected: {MULTILABEL_TASK}"
+        )
+    return {
+        "task_type": "multilabel_classification",
+        "num_classes": NUM_MULTILABEL_CLASSES,
+        "ignore_index": -1,
+        "names": list(MULTILABEL_CLASS_NAMES),
+        "pooling": "mean",
+        "threshold": 0.5,
+    }
+
+
+def get_missing_target_fill_value(target_key: str, pixel_semantic_config=None) -> Any:
+    if target_key in SEMANTIC_TASKS:
+        label_remap = _get_label_remap_module()
+        storage_def = label_remap.get_definition(target_key, "default")
+        return int(storage_def.ignore_index)
+    if target_key == MULTILABEL_TASK:
+        cfg = get_multilabel_classification_config(target_key)
+        ignore_index = int(cfg.get("ignore_index", -1))
+        return np.full((1, int(cfg["num_classes"])), ignore_index, dtype=np.float32)
+    keys = ", ".join(sorted((*SEMANTIC_TASKS, MULTILABEL_TASK)))
+    raise KeyError(f"Unknown target_key '{target_key}'. Expected one of: {keys}")
+
+
+_MULTILABEL_CFG = get_multilabel_classification_config(MULTILABEL_TASK)
+
+# Set in main() before workers start; read by _process_scene in child processes.
+_TASK_REMAP_STATE: Dict[str, "TaskRemapState"] = {}
+_NATHAB_AXIS_REMAP_STATE: Dict[str, "TaskRemapState"] = {}
 
 
 @dataclass(frozen=True)
