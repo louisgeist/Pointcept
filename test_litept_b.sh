@@ -32,8 +32,8 @@
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=24
 #SBATCH --hint=nomultithread
-#SBATCH --job-name=lptb-test
-#SBATCH --time=12:00:00
+#SBATCH --job-name=3h_lptb-test
+#SBATCH --time=03:00:00
 
 # Do not use `set -u` here: conda activate.d scripts (e.g. gdal) reference
 # unset variables like GDAL_DATA and fail under nounset.
