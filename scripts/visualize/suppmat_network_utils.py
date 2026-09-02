@@ -1,7 +1,4 @@
-"""Vendored copy of network_vis_utils.py for standalone suppmat zone viewers.
-
-No imports from Flair3D-build ``src/`` or Hydra configs. Keep in sync with
-``scripts/network_vis_utils.py`` when corridor behaviour changes.
+"""Network-corridor helpers for the standalone Malibu3D sample-tile viewer.
 """
 
 from __future__ import annotations

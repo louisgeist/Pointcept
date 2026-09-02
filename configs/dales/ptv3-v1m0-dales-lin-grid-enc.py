@@ -1,6 +1,6 @@
 """
 PT-v3-malibu grid-search linear probing on DALES — encoder multiscale variant
-(same frozen checkpoint as ptv3-v1m0-dales-lin-grid.py, job ptv3_multitask, Malibu3D+
+(same frozen checkpoint as ptv3-v1m0-dales-lin-grid.py, job ptv3_multitask, Malibu3D
 multitask supervised pretrain at w109/2/ptv3_wd/multi-ptv3-v1m0-malibu3d_5.py).
 
 `enc_mode=True` drops the decoder entirely; GridProbeSegmentorV2's generic

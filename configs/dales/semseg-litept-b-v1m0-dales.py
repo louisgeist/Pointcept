@@ -2,7 +2,7 @@
 LitePT-Base semantic segmentation on DALES (coord + strength LiDAR features).
 
 Backbone dims and augmentation pipeline mirror the LitePT-Base backbone used
-in configs/malibu3d_default/multi-litept-b-v1m0-malibu3d.py, adapted to DALES
+in configs/malibu3d/multi-litept-b-v1m0-malibu3d.py, adapted to DALES
 single-task semseg (DefaultSegmentorV2, no multitask wiring) and trained from
 scratch (no pretrained weight). See configs/dales/semseg-litept-v1m0-dales.py
 for the LitePT-Small counterpart this config is derived from.

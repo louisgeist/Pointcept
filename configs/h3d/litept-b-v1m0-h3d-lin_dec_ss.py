@@ -1,6 +1,6 @@
 """
 LitePT-Base grid-search linear probing on H3D — decoder Single Scale ablation
-(same frozen checkpoint as litept-b-v1m0-h3d-lin_dec.py, Malibu3D+
+(same frozen checkpoint as litept-b-v1m0-h3d-lin_dec.py, Malibu3D
 multitask supervised pretrain).
 
 Ablation vs litept-b-v1m0-h3d-lin_dec.py: `dec_traceable=False` probes only

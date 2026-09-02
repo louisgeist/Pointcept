@@ -7,7 +7,7 @@ frozen-backbone forward across all probes) purely to avoid paying the
 backbone cost 10x, not for hyperparameter search.
 
 Frozen PT-v3m2 encoder (enc_mode=True → multi-scale concat 1232ch) from the
-Malibu3D+ Sonata pretrain job sonata_outdoor, epoch_120. DALES has no RGB — Sonata was
+Malibu3D Sonata pretrain job sonata_outdoor, epoch_120. DALES has no RGB — Sonata was
 pretrained with scene-level RandomDropColor/RandomDropStrength (drop_value=0.0)
 so `FillMissingFeat` synthesizes a zero "color" channel (in_channels=7). No
 learned masked-feat at pretrain time, so literal zero fill is faithful.

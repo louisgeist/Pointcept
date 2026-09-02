@@ -2,7 +2,7 @@
 LitePT-Base semantic segmentation on H3D (coord + RGB point features).
 
 Backbone dims and optimization recipe mirror the LitePT-Base used in
-configs/malibu3d_default/multi-litept-b-v1m0-malibu3d.py / configs/dales/semseg-litept-b-v1m0-dales.py,
+configs/malibu3d/multi-litept-b-v1m0-malibu3d.py / configs/dales/semseg-litept-b-v1m0-dales.py,
 adapted to H3D single-task semseg (DefaultSegmentorV2, no multitask wiring)
 and trained from scratch (no pretrained weight). See
 configs/h3d/semseg-litept-v1m0-h3d.py for the LitePT-Small counterpart.

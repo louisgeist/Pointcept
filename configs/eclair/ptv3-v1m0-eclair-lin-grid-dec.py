@@ -1,6 +1,6 @@
 """
 PT-v3-malibu grid-search linear probing on ECLAIR — decoder hypercolumn
-variant (transfer from Malibu3D+ multitask supervised pretrain, job ptv3_multitask,
+variant (transfer from Malibu3D multitask supervised pretrain, job ptv3_multitask,
 w109/2/ptv3_wd/multi-ptv3-v1m0-malibu3d_5.py). `traceable=True` -> 1024ch
 concat of decoder stages (64+64+128+256) + encoder bottleneck (512).
 

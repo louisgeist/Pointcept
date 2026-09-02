@@ -1,5 +1,5 @@
 """
-Malibu3D+ tile climatic-domain classification dataset (preprocessed Pointcept scenes).
+Malibu3D tile climatic-domain classification dataset (preprocessed Pointcept scenes).
 
 Each sample is a LidarHD subtile with a scene-level label in climatic_domain.npy
 (0=Temperate, 1=Mediterranean, 2=Alpine, -1=invalid/mixed).
@@ -25,7 +25,7 @@ class Malibu3DClimaticDomainDataset(Dataset):
     def __init__(
         self,
         split="train",
-        data_root="data/malibu3d_plus",
+        data_root="data/malibu3d",
         csv_manifest=None,
         missing_tiles_manifest=None,
         too_small_tiles_manifest=None,

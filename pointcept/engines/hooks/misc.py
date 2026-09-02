@@ -1344,14 +1344,16 @@ class LinProbeSbatchHook(HookBase):
 
     Non-blocking: failures to submit are logged and training continues.
     Place this hook **after** ``CheckpointSaver`` so the epoch checkpoint exists.
-    Outside Slurm (no ``sbatch``), the hook is a no-op after a one-time warning.
+    Pass ``sbatch_script`` to the probe job script; if the path is empty or
+    missing, the hook is a no-op after a warning. Outside Slurm (no
+    ``sbatch``), the hook is a no-op after a one-time warning.
     """
 
     def __init__(
         self,
         enable=True,
         save_freq=5,
-        sbatch_script="scripts/sonata/sbatch_lin_probe.sh",
+        sbatch_script="",
         iter_per_epoch=1000,
         state_filename="lin_probe_state.json",
     ):
@@ -1391,6 +1393,8 @@ class LinProbeSbatchHook(HookBase):
         os.replace(tmp, path)
 
     def _resolve_sbatch_script(self):
+        if not self.sbatch_script:
+            return None
         script = Path(self.sbatch_script)
         if script.is_file():
             return script.resolve()
@@ -1429,8 +1433,7 @@ class LinProbeSbatchHook(HookBase):
         if shutil.which("sbatch") is None:
             if not self._warned_no_sbatch:
                 self.trainer.logger.warning(
-                    "LinProbeSbatchHook: sbatch not found; linear-probe submit disabled "
-                    "(use scripts/sonata/periodic_lin_probe.py --mode local for offline probing)."
+                    "LinProbeSbatchHook: sbatch not found; linear-probe submit disabled."
                 )
                 self._warned_no_sbatch = True
             return

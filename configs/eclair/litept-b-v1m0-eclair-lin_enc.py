@@ -1,6 +1,6 @@
 """
 LitePT-Base grid-search linear probing on ECLAIR — encoder multiscale variant
-(transfer from Malibu3D+ multitask supervised pretrain).
+(transfer from Malibu3D multitask supervised pretrain).
 
 `enc_mode=True` → 1386ch concat of the 5 raw encoder stages
 (54+108+216+432+576).

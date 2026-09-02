@@ -1,5 +1,5 @@
 """
-Malibu3D+ multi-target label configs (semantic class names / counts and elevation regression).
+Malibu3D multi-target label configs (semantic class names / counts and elevation regression).
 
 Edit MALIBU3D_SEMANTIC_TASKS if your on-disk label ids differ from these defaults.
 For each semantic task, names[i] is the display name for processed label id i.
@@ -22,7 +22,7 @@ from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 
-from pointcept.datasets.preprocessing.malibu3d_plus.natural_habitat_multilabel_tile_labels import (
+from pointcept.datasets.preprocessing.malibu3d.natural_habitat_multilabel_tile_labels import (
     MULTILABEL_CLASS_NAMES,
     NUM_MULTILABEL_CLASSES,
 )
@@ -219,7 +219,7 @@ MALIBU3D_TILE_DISTRIBUTION_TARGET_KEYS: Tuple[str, ...] = tuple(
     MALIBU3D_TILE_DISTRIBUTION_TASKS.keys()
 )
 
-# Keys passed to GridSample / index_valid_keys (superset of all Malibu3D+ targets).
+# Keys passed to GridSample / index_valid_keys (superset of all Malibu3D targets).
 # Only **per-point** arrays belong here. Scene-level tensors (e.g. ``coord_translation``
 # shape (3,), or ``network`` raster (C,H,W) before NetworkRasterToPointLabels) must
 # NOT be listed — GridSample would index them with point ids → IndexError.
@@ -294,7 +294,7 @@ def get_semantic_config(
         keys = ", ".join(sorted(MALIBU3D_SEMANTIC_TASKS.keys()))
         raise KeyError(f"Unknown semantic target_key '{target_key}'. Expected one of: {keys}")
 
-    from pointcept.datasets.preprocessing.malibu3d_plus.malibu3d_label_remap import (
+    from pointcept.datasets.preprocessing.malibu3d.malibu3d_label_remap import (
         definition_to_task_config,
         get_default_definition_name,
         get_definition,
@@ -340,7 +340,7 @@ def get_regression_target_scales(target_keys: Tuple[str, ...]) -> Dict[str, floa
 def get_multitask_regression_task_config_elevation() -> Dict[str, Any]:
     """Task config dict for point-wise elevation regression in MultiTaskSegmentorV2.
 
-    Expects an "elevation" tensor in input_dict when Malibu3D+ loads elevation (elevation
+    Expects an "elevation" tensor in input_dict when Malibu3D loads elevation (elevation
     listed in target_keys), i.e. task targets are keyed by task_name.
     """
     out = deepcopy(MALIBU3D_ELEVATION)
@@ -380,7 +380,7 @@ def get_tile_distribution_config(
             f"Unknown tile_distribution target_key '{target_key}'. Expected one of: {keys}"
         )
 
-    from pointcept.datasets.preprocessing.malibu3d_plus.malibu3d_label_remap import (
+    from pointcept.datasets.preprocessing.malibu3d.malibu3d_label_remap import (
         definition_to_task_config,
         get_definition,
     )
@@ -433,7 +433,7 @@ def init_multitask_collect_keys(
     *,
     collect_prefix_keys: Tuple[str, ...] = (),
 ) -> Tuple[Tuple[str, ...], Tuple[str, ...], Tuple[str, ...]]:
-    """Build train/val Collect keys and index_valid_keys for Malibu3D+ configs.
+    """Build train/val Collect keys and index_valid_keys for Malibu3D configs.
 
     train: coord + collect_prefix_keys + target_keys (+ per pixel_semantic task's cell
     ints / grid meta)
@@ -537,7 +537,7 @@ def get_missing_target_fill_value(
     override so the missing-tile fallback shape stays consistent with it.
     """
     if target_key in MALIBU3D_SEMANTIC_TASKS:
-        from pointcept.datasets.preprocessing.malibu3d_plus.malibu3d_label_remap import (
+        from pointcept.datasets.preprocessing.malibu3d.malibu3d_label_remap import (
             get_definition,
         )
 

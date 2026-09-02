@@ -1,7 +1,7 @@
 """
 PT-v3-malibu grid-search linear probing on H3D — encoder multiscale variant
 (same frozen checkpoint as ptv3-v1m0-h3d-lin-grid-dec.py, job ptv3_multitask,
-Malibu3D+ multitask supervised pretrain). `enc_mode=True` -> 992ch concat of
+Malibu3D multitask supervised pretrain). `enc_mode=True` -> 992ch concat of
 the 5 raw encoder stages (32+64+128+256+512).
 
 AdamW / wd=0 / OneCycleLR with warmup fixed at pct_start=5%, lr swept over

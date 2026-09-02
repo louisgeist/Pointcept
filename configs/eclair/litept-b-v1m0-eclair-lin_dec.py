@@ -1,6 +1,6 @@
 """
 LitePT-Base grid-search linear probing on ECLAIR — decoder hypercolumn /
-multi-scale variant (transfer from Malibu3D+ multitask supervised
+multi-scale variant (transfer from Malibu3D multitask supervised
 pretrain).
 
 `dec_traceable=True` → 1404ch concat of decoder stages + bottleneck.

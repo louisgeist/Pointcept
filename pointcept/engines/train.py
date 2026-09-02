@@ -866,8 +866,8 @@ class GridProbeTrainer(Trainer):
     than one backward() per probe, but keeps every active probe's forward+loss
     graph alive simultaneously until that point: ~440MB/probe measured on the
     wide-grid config (batch_size=12, point_max=102400) — cap probe count to
-    what fits (~100 is a safe margin on an 80GB GPU; verify per-config with
-    scripts/sonata/diagnose_grid_probe_vram.py rather than assuming).
+    what fits (~100 is a safe margin on an 80GB GPU; verify per-config rather
+    than assuming).
 
     self.optimizer / self.scheduler become dict[str, ...] here (one entry per
     probe) instead of the base Trainer's single instance — hooks that assume
@@ -961,7 +961,7 @@ class GridProbeTrainer(Trainer):
         # cost of keeping every active probe's forward+loss graph alive at
         # once until this point -- ~440MB/probe measured (batch_size=12,
         # point_max=102400, wide-grid config), so cap probe count accordingly
-        # (see GridProbeSegmentorV2 docstring / scripts/sonata/diagnose_grid_probe_vram.py).
+        # (see GridProbeSegmentorV2 docstring).
         raw_model = self._raw_model()
         with auto_cast(
             enabled=self.cfg.enable_amp, dtype=AMP_DTYPE[self.cfg.amp_dtype]

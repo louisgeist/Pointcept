@@ -1,6 +1,6 @@
 """
 KPConvX grid-search linear probing on H3D — encoder multiscale variant
-(Malibu3D+ multitask supervised pretrain, configs/malibu3d_default/multi-kpconvx-v1m0-malibu3d.py
+(Malibu3D multitask supervised pretrain, configs/malibu3d/multi-kpconvx-v1m0-malibu3d.py
 recipe: input_channels=7, kp_radius=3.2, radius_scaling=3.0,
 neighbor_limits=(12,16,20,20,20), layer_blocks=(3,3,9,12,3), init_channels=64,
 channel_scaling=1.414, grid_size=0.1, point_max=40000, drop_path_rate=0.3 at
@@ -39,13 +39,12 @@ part of the backbone architecture/checkpoint, so this doesn't break
 checkpoint loading — but the frozen backbone was never trained on scenes
 this large, so its features at this crop scale are unverified.
 
-Frozen backbone: Malibu3D+ KPConvX multitask checkpoint (see ckpt/malibu3d/kpconvx_multitask/).
+Frozen backbone: Malibu3D KPConvX multitask checkpoint (see ckpt/malibu3d/kpconvx_multitask/).
 
 batch_size=24 on a single GPU (vs. the pretrain's global 24 spread over 6-8
 GPUs) — set by hand per user instruction; the frozen-backbone, no-backward
-probe forward is far cheaper than full multitask training, so this has not
-been formally verified against a find_max_batch_size.py run at this batch
-size, only inferred from that gap.
+probe forward is far cheaper than full multitask training, so this batch
+size has not been formally VRAM-verified, only inferred from that gap.
 
 Same probe grid as litept-b-v1m0-h3d-lin_enc.py / spunet-v1m0-h3d-lin-grid-enc.py
 (ce_lovasz, AdamW/wd0/OneCycleLR warmup5%, lr sweep {1e-4 … 5e-1}) for

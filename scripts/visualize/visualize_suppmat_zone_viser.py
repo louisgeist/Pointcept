@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Standalone viser viewer for a packaged Flair3D suppmat zone folder.
+"""Standalone viser viewer for a Malibu3D supplementary sample tile.
 
-Does not require the Flair3D-build repo (only numpy, plyfile, viser, and for
-road-network corridor display: geopandas, scipy, shapely).
+Requires numpy, plyfile, and viser. Road-network corridor display also needs
+geopandas, scipy, and shapely.
 
 Example:
   python scripts/visualize/visualize_suppmat_zone_viser.py --zone-dir .

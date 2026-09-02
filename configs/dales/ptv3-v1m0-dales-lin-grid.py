@@ -1,6 +1,6 @@
 """
 PT-v3-malibu grid-search linear probing on DALES — decoder hypercolumn /
-multi-scale variant (transfer from Malibu3D+ multitask supervised pretrain at
+multi-scale variant (transfer from Malibu3D multitask supervised pretrain at
 w109/2/ptv3_wd/multi-ptv3-v1m0-malibu3d_5.py, job 1052200).
 
 Unlike w109/4/ptv3_lin/ptv3-v1m0-dales-lin_1.py (finest decoder stage only,

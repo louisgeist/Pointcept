@@ -1,6 +1,6 @@
 """
 SpUNet-v1m1 grid-search linear probing on H3D — decoder (standard U-Net
-forward) variant, transfer from Malibu3D+ multitask supervised pretrain (job
+forward) variant, transfer from Malibu3D multitask supervised pretrain (job
 spunet_multitask, w109/1/sp_final/multi-spunet-v1m0-malibu3d_1.py: channels=(32,64,128,
 256,256,128,96,96), layers=(2,3,4,6,2,2,2,2), stride=3).
 

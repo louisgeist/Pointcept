@@ -64,10 +64,9 @@ class Malibu3DDataset(DefaultDataset):
         
     :param min_points: Optional dict mapping split name ("train"/"val") to a minimum
         point-count threshold. Tiles below the threshold are excluded, using the
-        "n_points" column of csv_manifest (populate it via
-        scripts/analyze_malibu3d_test_point_voxel_counts.py --write_manifest). Raises if
-        the "n_points" column is missing/empty for a row in a thresholded split, or if
-        "test" is given a threshold.
+        "n_points" column of csv_manifest (the column must be populated before
+        enabling a threshold). Raises if the "n_points" column is missing/empty for
+        a row in a thresholded split, or if "test" is given a threshold.
 
     :param target_keys: Target keys. Supports semantic multitask for "segment", "forest",
         "land_use", and "natural_habitat". "elevation" can be combined with semantic keys.
@@ -200,9 +199,8 @@ class Malibu3DDataset(DefaultDataset):
                             raise ValueError(
                                 f"min_points is configured for split {row['split']!r} but the "
                                 f"'n_points' column is missing/empty for tile {row['patch_id']!r}. "
-                                "Run scripts/analyze_malibu3d_test_point_voxel_counts.py "
-                                f"--write_manifest for split {row['split']!r} before enabling "
-                                "min_points on it."
+                                f"Populate 'n_points' in csv_manifest for split {row['split']!r} "
+                                "before enabling min_points on it."
                             )
                         if int(n_points_raw) < self.min_points[row['split']]:
                             min_points_excluded += 1

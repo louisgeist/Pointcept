@@ -38,7 +38,7 @@ dependencies:
   - matplotlib
   - black
   - open3d
-  - geopandas  # Malibu3D+ network masks (rasterize_network.py)
+  - geopandas  # Malibu3D network masks (rasterize_network.py)
   - laspy
   - lazrs  # optional, for LAZ point clouds (H3D)
   - peft

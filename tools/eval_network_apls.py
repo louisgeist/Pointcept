@@ -15,10 +15,10 @@ Pass ``--no_save_pred_gpkg`` / ``network_apls_eval.save_pred_gpkg=False`` to ski
 Example::
 
     python tools/eval_network_apls.py \\
-        --data_root data/malibu3d_plus \\
+        --data_root data/malibu3d \\
         --save_path exp/malibu3d/network_run/result \\
         --network_graphs_root data/malibu3d_build/data/network_graphs \\
-        --split_manifest_csv data/malibu3d_plus/raw/scene_split_manifest_D067.csv \\
+        --split_manifest_csv data/malibu3d/raw/scene_split_manifest_D067.csv \\
         --split val --threshold 0.5 \\
         --out_dir exp/malibu3d/network_run/result
 """
@@ -45,7 +45,7 @@ _PREPROC_DIR = (
     / "pointcept"
     / "datasets"
     / "preprocessing"
-    / "malibu3d_plus"
+    / "malibu3d"
 )
 if str(_PREPROC_DIR) not in sys.path:
     sys.path.insert(0, str(_PREPROC_DIR))
@@ -846,7 +846,7 @@ def build_argparser() -> argparse.ArgumentParser:
         help=(
             "Exclusion list of known-missing (split, patch_id), same role as "
             "Malibu3DDataset / rasterize_network. Default: "
-            "data/malibu3d_plus/missing_coord_tiles.details.csv"
+            "data/malibu3d/missing_coord_tiles.details.csv"
         ),
     )
     p.add_argument(

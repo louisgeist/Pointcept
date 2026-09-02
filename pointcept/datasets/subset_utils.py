@@ -1,7 +1,7 @@
 """
 Stratified fixed subset selection for val/test (segment + natural_habitat_multilabel).
 
-Selection runs offline via scripts/build_stratified_subset.py; training loads a CSV sidecar.
+Selection is prepared offline; training loads a CSV sidecar.
 """
 
 from __future__ import annotations

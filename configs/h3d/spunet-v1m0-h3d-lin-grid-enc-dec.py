@@ -1,7 +1,7 @@
 """
 SpUNet-v1m1 grid-search linear probing on H3D — combined encoder+decoder
 hypercolumn variant (same frozen checkpoint as
-spunet-v1m0-h3d-lin-grid-{enc,dec}.py, job spunet_multitask, Malibu3D+ multitask
+spunet-v1m0-h3d-lin-grid-{enc,dec}.py, job spunet_multitask, Malibu3D multitask
 supervised pretrain: channels=(32,64,128,256,256,128,96,96),
 layers=(2,3,4,6,2,2,2,2), stride=3).
 

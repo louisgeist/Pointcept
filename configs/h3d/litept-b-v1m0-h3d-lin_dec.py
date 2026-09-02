@@ -1,7 +1,7 @@
 """
 LitePT-Base grid-search linear probing on H3D — decoder hypercolumn variant
 (same frozen checkpoint as w109/5/11h_grid_h3d/litept-b-v1m0-h3d-lin_1.py,
-Malibu3D+ multitask supervised pretrain). `dec_traceable=True` ->
+Malibu3D multitask supervised pretrain). `dec_traceable=True` ->
 1404ch concat of decoder stages + bottleneck.
 
 AdamW / wd=0 / OneCycleLR with warmup fixed at pct_start=5%, lr swept over

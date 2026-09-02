@@ -1,7 +1,7 @@
 """
 LitePT-Base grid-search linear probing on DALES — encoder multiscale variant
 (same frozen backbone checkpoint as litept-b-v1m0-dales-lin-grid.py, job
-litept_b_multitask, Malibu3D+ multitask supervised pretrain).
+litept_b_multitask, Malibu3D multitask supervised pretrain).
 
 Ablation vs the sibling decoder-hypercolumn config: `enc_mode=True` drops the
 decoder entirely and GridProbeSegmentorV2's generic encoder-side multiscale

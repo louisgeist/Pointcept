@@ -12,7 +12,7 @@
 
 [![Formatter](https://github.com/pointcept/pointcept/actions/workflows/formatter.yml/badge.svg)](https://github.com/pointcept/pointcept/actions/workflows/formatter.yml)
 
-> **Malibu3D benchmark extension:** see [README_MALIBU3D.md](README_MALIBU3D.md) for multimodal pretraining on FLAIR-HUB, linear-probe transfer to DALES/H3D/ECLAIR, and reproduction commands.
+> **Malibu3D benchmark extension:** see [README_MALIBU3D.md](README_MALIBU3D.md) for multitask pretraining on Malibu3D, linear-probe transfer to DALES/H3D/ECLAIR, and reproduction commands.
 
 **Pointcept** is a powerful and flexible codebase for point cloud perception research. It is also an official implementation of the following paper:
 - 🚀 **Utonia: Toward One Encoder for All Point Clouds**  

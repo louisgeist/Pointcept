@@ -1,6 +1,6 @@
 """
 LitePT-Base grid-search linear probing on DALES — decoder hypercolumn /
-multi-scale variant (transfer from Malibu3D+ multitask supervised
+multi-scale variant (transfer from Malibu3D multitask supervised
 pretrain).
 
 Same multi-scale mechanism as w109/3/dales_lin/litept-b-v1m0-dales-lin_5.py

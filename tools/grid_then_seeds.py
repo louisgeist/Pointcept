@@ -24,7 +24,7 @@ idempotent: a phase whose result JSON already exists is skipped, and an
 interrupted phase resumes from ``model/model_last.pth`` -- so a Slurm requeue
 just re-runs this script.
 
-Typical use (see ``README_grid_then_seed.md``)::
+Typical use (see ``README_MALIBU3D.md``)::
 
     python tools/grid_then_seeds.py \\
       --grid-config configs/h3d/sonata-v1m2-h3d-lin-grid.py \\

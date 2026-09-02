@@ -34,7 +34,7 @@ def dilated_precision_recall_counts(
     # Deferred import: pointcept.datasets.__init__ pulls in models/engines, which
     # import this module, so importing morph_dilate_mask at module load time would
     # create a circular import.
-    from pointcept.datasets.preprocessing.malibu3d_plus.network_xy_raster_utils import (
+    from pointcept.datasets.preprocessing.malibu3d.network_xy_raster_utils import (
         morph_dilate_mask,
     )
 
