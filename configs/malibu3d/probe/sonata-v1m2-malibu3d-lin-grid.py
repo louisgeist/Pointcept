@@ -1,19 +1,5 @@
 """
-Sonata-v1m2 grid-search linear probing on Malibu3D semantic segmentation (v20).
-
-Trains N independently-configured linear probe heads (see `probes` below) on
-top of ONE shared frozen-PT-v3m2-encoder forward pass per batch, instead of
-launching N separate jobs each redoing that forward pass — see
-pointcept/models/grid_probe.py and pointcept/engines/train.py::GridProbeTrainer
-for the mechanism. At the end of training, the probe with the best val mIoU is
-selected automatically, reloaded from its own best checkpoint, tested via
-SemSegTester, and the winning config + metrics are written to
-save_path/grid_search_results.json (GridProbeWinnerSelector hook).
-
-Adapted from sonata-v1m2-malibu3d-lin.py (single-probe version): same frozen
-backbone / label definitions / train+val pipeline, plus a `data.test` split
-(needed for the automatic final test pass, which the single-probe config
-doesn't have) and `probes` in place of the single top-level `criteria`.
+Sonata-v1m2 grid-search linear probe on Malibu3D segment (v20); shared frozen encoder.
 """
 
 _base_ = ["../../_base_/default_runtime.py"]

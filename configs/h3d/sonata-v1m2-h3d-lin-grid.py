@@ -1,24 +1,6 @@
 """
-Sonata-v1m2 grid-search linear probing on H3D — Sonata counterpart of the
-LitePT AdamW configs in this directory (same frozen checkpoint as
-w109/5/11h_grid_h3d/sonata-v1m2-h3d-lin-grid_3.py, job sonata_outdoor, epoch_120).
-Frozen PT-v3m2 encoder (enc_mode=True -> multi-scale concat 1232ch =
-48+96+192+384+512). No coord_feat_scale; zero strength fill via
-FillMissingFeat (see 11h_grid_h3d Sonata docstring).
-
-AdamW / wd=0 / OneCycleLR with warmup fixed at pct_start=0%, lr swept over
-{1e-4 .. 5e-1} (12 values), input_norm=none. Counterpart to the SGD/cosine
-DINOv2 sweep in 11h_grid_h3d; scheduler/optimizer family matches the DALES
-AdamW GridProbe configs (e.g. w109/4/grid_20h). Cosine anneal + warmup are
-owned by OneCycleLR (pct_start); GridProbeTrainer.build_scheduler injects
-total_steps per eval_epoch window.
-
-Dataset-driven axes (num_worker/AMP/batch) match 11h_grid_h3d. epoch=2000
-/ eval_epoch=10.
-
-Grid (12 probes): ce_lovasz x lr{1e-4,2e-4,5e-4,1e-3,2e-3,5e-3,1e-2,2e-2,5e-2,
-1e-1,2e-1,5e-1} x wd=0 x dropout=0 x input_norm=none x feat_norm=none x
-optimizer=AdamW x warmup=0%. skip_test=False, log_test_f1=True.
+Sonata-v1m2 H3D linear probe (frozen encoder, multi-scale concat).
+AdamW/OneCycleLR lr sweep; counterpart to LitePT H3D lin-grid configs.
 """
 
 

@@ -1,22 +1,6 @@
 """
-LitePT-Base grid-search linear probing on DALES — encoder multiscale variant
-(same frozen backbone checkpoint as litept-b-v1m0-dales-lin-grid.py, job
-litept_b_multitask, Malibu3D multitask supervised pretrain).
-
-Ablation vs the sibling decoder-hypercolumn config: `enc_mode=True` drops the
-decoder entirely and GridProbeSegmentorV2's generic encoder-side multiscale
-concat (walking `pooling_parent` links — see grid_probe.py) hands the probes
-a 1386ch concat of the 5 raw encoder stages (54+108+216+432+576), the same
-mechanism sonata-v1m2-dales-lin-grid.py uses for its 1232ch Sonata encoder
-feat. Point: isolate whether Sonata's much higher GridProbe DALES starting
-mIoU (see val/mIoU_best/winner comparison) is mainly an SSL-vs-supervised
-effect or an encoder-vs-decoder-feature effect — same supervised checkpoint,
-same probe grid, only the tapped feature changes.
-
-Grid (12 probes): ce_lovasz, AdamW/wd0/OneCycleLR warmup5%, lr sweep {1e-4 … 5e-1}.
-epoch=400 / eval_epoch=10. AMP enabled
-(fp16). Same DALES-has-no-RGB handling as the other LitePT-B DALES lin
-configs.
+LitePT-Base DALES linear probe, encoder-multiscale (`enc_mode=True`).
+Frozen Malibu3D multitask backbone; AdamW/OneCycleLR lr sweep.
 """
 
 _base_ = ["../_base_/default_runtime.py"]

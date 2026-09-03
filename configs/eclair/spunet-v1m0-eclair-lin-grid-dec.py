@@ -1,27 +1,6 @@
 """
-SpUNet-v1m1 grid-search linear probing on ECLAIR — decoder (standard U-Net
-forward) variant, transfer from Malibu3D multitask supervised pretrain (job
-spunet_multitask, w109/1/sp_final/multi-spunet-v1m0-malibu3d_1.py: channels=(32,64,128,
-256,256,128,96,96), layers=(2,3,4,6,2,2,2,2), stride=3).
-
-Unlike LitePT/PT-v3-malibu, SpUNetBase's forward never returns a `Point`
-object (no `pooling_parent`/`unpooling_parent`), so GridProbeSegmentorV2's
-automatic multiscale hypercolumn concat does not apply here: with
-`num_classes=0` (final 1x1 conv disabled), the backbone just returns the
-standard full-resolution decoder output — 96ch (`channels[-1]`). See
-spunet-v1m0-eclair-lin-grid-enc.py for the encoder-multiscale counterpart
-(needs the new `point_mode` backbone flag to get a comparable per-point
-feature).
-
-ECLAIR provides real RGB: ChromaticAutoContrast/Translation/Jitter (train) +
-NormalizeColor (like H3D / semseg-litept ECLAIR); strength uses 1/60000 like
-DALES. Same probe grid as litept-b-v1m0-eclair-lin_dec.py (ce_lovasz x 12 LRs
-x wd=0 x dropout=0 x input_norm=None x AdamW x warmup=5%) for cross-backbone
-comparability. epoch=200 / eval_epoch=10.
-
-`bn_eval_mode=True` freezes SpUNet's BatchNorm running stats (real
-BatchNorm1d, unlike PT-v3-malibu/LitePT's LayerNorm-dominated stages);
-`drop_path_eval_mode=True` is a no-op (SpUNet has no DropPath modules).
+SpUNet ECLAIR linear probe, standard decoder output (96ch).
+Frozen Malibu3D multitask backbone; same probe grid as LitePT-B ECLAIR lin-grid.
 """
 
 _base_ = ["../_base_/default_runtime.py"]

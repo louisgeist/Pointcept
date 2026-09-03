@@ -1,18 +1,6 @@
 """
-LitePT-Base grid-search linear probing on DALES — decoder Single Scale
-ablation (transfer from Malibu3D multitask supervised pretrain).
-
-Ablation vs litept-b-v1m0-dales-lin-grid-dec.py: `dec_traceable=False` probes
-only the native final decoder stage output (dec_channels[0]=72ch), not the
-1404ch hypercolumn concat of all decoder stages + bottleneck. Same signal as
-the multitask pretrain seg_head input.
-
-`bn_eval_mode=True` freezes BatchNorm running stats; `drop_path_eval_mode=True`
-keeps DropPath inactive.
-
-Grid (12 probes): ce_lovasz x lr{1e-4..5e-1} x wd=0 x dropout=0 x
-input_norm=none x AdamW/OneCycleLR warmup5%. epoch=400 / eval_epoch=10.
-Same DALES-has-no-RGB handling as the other LitePT-B DALES lin configs.
+LitePT-Base DALES linear probe, decoder single-scale (`dec_traceable=False`).
+Frozen Malibu3D multitask backbone; AdamW/OneCycleLR lr sweep.
 """
 
 _base_ = ["../_base_/default_runtime.py"]

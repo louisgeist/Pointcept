@@ -115,13 +115,7 @@ python pointcept/datasets/preprocessing/pureforest/preprocess_pureforest.py \
   --num_workers 4
 ```
 
-`missing_laz_preflight.txt` under `--output_root` lists which selected tiles are still missing on disk.
-
-Smoke-test training:
-
-```bash
-python tools/train.py --config-file configs/pureforest/cls-spunet-v1m0-pureforest-toy.py
-```
+`missing_laz_preflight.txt` under `--output_root` lists which selected tiles are still missing on disk. Point `data_root` in a PureForest train config to that output root for a smoke test.
 
 ## Train
 

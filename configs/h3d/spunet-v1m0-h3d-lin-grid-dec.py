@@ -1,25 +1,6 @@
 """
-SpUNet-v1m1 grid-search linear probing on H3D — decoder (standard U-Net
-forward) variant, transfer from Malibu3D multitask supervised pretrain (job
-spunet_multitask, w109/1/sp_final/multi-spunet-v1m0-malibu3d_1.py: channels=(32,64,128,
-256,256,128,96,96), layers=(2,3,4,6,2,2,2,2), stride=3).
-
-Unlike LitePT/PT-v3-malibu, SpUNetBase's forward never returns a `Point`
-object (no `pooling_parent`/`unpooling_parent`), so GridProbeSegmentorV2's
-automatic multiscale hypercolumn concat does not apply here: with
-`num_classes=0` (final 1x1 conv disabled), the backbone just returns the
-standard full-resolution decoder output — 96ch (`channels[-1]`). See
-spunet-v1m0-h3d-lin-grid-enc.py for the encoder-multiscale counterpart (needs
-the new `point_mode` backbone flag to get a comparable per-point feature).
-
-Same probe grid as litept-b-v1m0-h3d-lin_dec.py (AdamW/wd0/OneCycleLR
-warmup5%, lr sweep over 12 values, epoch=2000/eval_epoch=10) for
-cross-backbone comparability. `bn_eval_mode=True` freezes SpUNet's BatchNorm
-running stats (real BatchNorm1d, unlike PT-v3-malibu/LitePT's LayerNorm-
-dominated stages); `drop_path_eval_mode=True` is a no-op (SpUNet has no
-DropPath modules). H3D fill/aug/feature_mask_values unchanged from the
-LitePT-B H3D ref (no real intensity -> FillMissingFeat "strength").
-skip_test=False, log_test_f1=True (required for H3D lin-grid configs).
+SpUNet H3D linear probe, standard decoder output (96ch).
+Frozen Malibu3D multitask backbone; same probe grid as LitePT-B H3D lin-grid.
 """
 
 _base_ = ["../_base_/default_runtime.py"]

@@ -1,9 +1,5 @@
 """
-Sonata-v1m2 pretraining on Malibu3D (train split only).
-
-Features: coord + color + strength (in_channels=7).
-Schedule: iter-limited (total_iters / iter_per_epoch=1000).
-No online evaluation; use periodic linear-probe jobs on epoch_*.pth.
+Sonata-v1m2 pretrain on Malibu3D (lr=1e-3; coord+color+strength, iter-limited).
 """
 
 _base_ = ["../_base_/default_runtime.py"]

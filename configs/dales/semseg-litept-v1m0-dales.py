@@ -1,9 +1,5 @@
 """
-LitePT semantic segmentation on DALES (coord + strength LiDAR features).
-
-This config is intentionally self-contained: it inherits only from
-default_runtime and can be read top-to-bottom without cross-referencing
-other DALES configs.
+LitePT-Small DALES semantic segmentation from scratch (coord+strength). Self-contained.
 """
 
 # -----------------------------------------------------------------------------

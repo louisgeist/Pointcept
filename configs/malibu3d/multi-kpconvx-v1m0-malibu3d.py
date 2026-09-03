@@ -1,16 +1,6 @@
 """
-KPConvX on Malibu3D multitask: segment (v20) + forest_2d + elevation + 4 nathab
-tile_distribution axes (WeightedKL; Habitat Type / Moisture Regime / Soil
-Chemistry / Bioclimatic Zone, remapped on the fly from natural_habitat) +
-network (roads only, CE + foreground weight=5; railroads/transmission lines
-dropped; scored via APLS at test time). Aligned with w107/w108 toward_bm +
-network roads-only recipe.
-
-Follows the KPConvX data path (GridSample return_min_coord, point_max) and
-kpconvx_base backbone. Uses num_classes=0 on the backbone so
-MultiTaskSegmentorV2 attaches all task heads (requires kpconvx_base feature mode).
-
-This config is intentionally self-contained: it inherits only from default_runtime.
+KPConvX Malibu3D multitask (segment v20, forest_2d, elevation, 4 nathab axes,
+roads-only network + APLS). Self-contained; inherits only default_runtime.
 """
 
 # -----------------------------------------------------------------------------

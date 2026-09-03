@@ -1,27 +1,6 @@
 """
-SpUNet-v1m1 grid-search linear probing on DALES — decoder (standard U-Net
-forward) variant, transfer from Malibu3D multitask supervised pretrain (job
-spunet_multitask, w109/1/sp_final/multi-spunet-v1m0-malibu3d_1.py: channels=(32,64,128,
-256,256,128,96,96), layers=(2,3,4,6,2,2,2,2), stride=3).
-
-Unlike LitePT/PT-v3-malibu, SpUNetBase's forward never returns a `Point`
-object (no `pooling_parent`/`unpooling_parent`), so GridProbeSegmentorV2's
-automatic multiscale hypercolumn concat does not apply here: with
-`num_classes=0` (final 1x1 conv disabled), the backbone just returns the
-standard full-resolution decoder output — 96ch (`channels[-1]`), the same
-per-point feature `multi-spunet-v1m0-malibu3d.py` feeds its own task heads
-from. See spunet-v1m0-dales-lin-grid-enc.py for the encoder-multiscale
-counterpart (needs a new `point_mode` backbone flag to get a comparable
-per-point feature at all).
-
-Same probe grid as litept-b-v1m0-dales-lin-grid-dec.py (ce_lovasz x 12 LRs,
-AdamW/wd0/OneCycleLR warmup5%, epoch=400/eval_epoch=10) for cross-backbone
-comparability. `bn_eval_mode=True` freezes SpUNet's BatchNorm running stats
-(real BatchNorm1d, unlike PT-v3-malibu/LitePT's LayerNorm-dominated stages);
-`drop_path_eval_mode=True` is a no-op (SpUNet has no DropPath modules).
-Z_MinShift/Z_RandomOffset included in train/val/test per the H3D/ECLAIR
-lin-grid convention. Same DALES-has-no-RGB handling as the other DALES lin
-configs.
+SpUNet DALES linear probe, standard decoder output (96ch).
+Frozen Malibu3D multitask backbone; same probe grid as LitePT-B DALES lin-grid.
 """
 
 _base_ = ["../_base_/default_runtime.py"]

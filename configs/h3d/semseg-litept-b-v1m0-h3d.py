@@ -1,21 +1,5 @@
 """
-LitePT-Base semantic segmentation on H3D (coord + RGB point features).
-
-Backbone dims and optimization recipe mirror the LitePT-Base used in
-configs/malibu3d/multi-litept-b-v1m0-malibu3d.py / configs/dales/semseg-litept-b-v1m0-dales.py,
-adapted to H3D single-task semseg (DefaultSegmentorV2, no multitask wiring)
-and trained from scratch (no pretrained weight). See
-configs/h3d/semseg-litept-v1m0-h3d.py for the LitePT-Small counterpart.
-
-H3D has real RGB but no native intensity (LAS intensity is all-zero), so
-features stay native: coord + color only. No FillMissingFeat / strength
-channel (those are reserved for GridProbes that must match a Malibu3D
-pretrained 7-ch input). RandomDropColor + learned color masking follow the
-ECLAIR / Malibu3D Lite-B RGB recipe.
-
-This config is intentionally self-contained: it inherits only from
-default_runtime and can be read top-to-bottom without cross-referencing
-other H3D configs.
+LitePT-Base H3D semantic segmentation from scratch (coord+RGB). Self-contained.
 """
 
 # -----------------------------------------------------------------------------

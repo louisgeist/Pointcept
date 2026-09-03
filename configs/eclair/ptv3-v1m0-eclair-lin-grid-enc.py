@@ -1,18 +1,6 @@
 """
-PT-v3-malibu grid-search linear probing on ECLAIR — encoder multiscale
-variant (same frozen checkpoint as ptv3-v1m0-eclair-lin-grid-dec.py, job
-ptv3_multitask, Malibu3D multitask supervised pretrain). `enc_mode=True` -> 992ch
-concat of the 5 raw encoder stages (32+64+128+256+512).
-
-ECLAIR provides real RGB: ChromaticAutoContrast/Translation/Jitter (train) +
-NormalizeColor (like H3D / semseg-litept ECLAIR); strength uses 1/60000 like
-DALES. Same probe grid as litept-b-v1m0-eclair-lin_enc.py (ce_lovasz x 12 LRs
-x wd=0 x dropout=0 x input_norm=None x AdamW x warmup=5%) for cross-backbone
-comparability. epoch=200 / eval_epoch=10.
-
-`bn_eval_mode=True` is a no-op for PT-v3-malibu (LayerNorm only, no
-BatchNorm); `drop_path_eval_mode=True` keeps DropPath(0.3) inactive during
-probe training.
+PT-v3-malibu ECLAIR linear probe, encoder-multiscale (`enc_mode=True`).
+Frozen Malibu3D multitask backbone; same probe grid as LitePT-B ECLAIR lin-grid.
 """
 
 _base_ = ["../_base_/default_runtime.py"]

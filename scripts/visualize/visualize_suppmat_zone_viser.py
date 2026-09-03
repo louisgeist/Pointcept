@@ -1,12 +1,7 @@
 #!/usr/bin/env python3
 """Standalone viser viewer for a Malibu3D supplementary sample tile.
 
-Requires numpy, plyfile, and viser. Road-network corridor display also needs
-geopandas, scipy, and shapely.
-
-Example:
-  python scripts/visualize/visualize_suppmat_zone_viser.py --zone-dir .
-  python scripts/visualize/visualize_suppmat_zone_viser.py --zone-dir suppmat_zones/D075_UU-S1-4_3-3
+Example: python scripts/visualize/visualize_suppmat_zone_viser.py --zone-dir .
 """
 
 from __future__ import annotations

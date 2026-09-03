@@ -1,27 +1,6 @@
 """
-SpUNet-v1m1 grid-search linear probing on DALES — decoder hypercolumn /
-multi-scale variant (same frozen checkpoint as
-spunet-v1m0-dales-lin-grid-{enc,dec,enc-dec}.py, job spunet_multitask, Malibu3D multitask
-supervised pretrain: channels=(32,64,128,256,256,128,96,96),
-layers=(2,3,4,6,2,2,2,2), stride=3).
-
-Sets `dec_point_mode=True` alone (spconv_unet_v1m1_base.py): the decoder
-hypercolumn chain (dec0(96)+dec1(96)+dec2(128)+dec3(256)+bottleneck(256) =
-832ch), mirroring LitePT/PT-v3's dec_traceable/traceable convention of
-"decoder stages + encoder bottleneck". Counterpart to the plain single-scale
-decoder (spunet-v1m0-dales-lin-grid-dec.py, 96ch), encoder-only
-(spunet-v1m0-dales-lin-grid-enc.py, 512ch), and combined enc+dec
-(spunet-v1m0-dales-lin-grid-enc-dec.py, 1088ch). See
-tests/test_spunet_point_mode.py (`test_dec_point_mode_forward_shape`) for the
-shape/row-alignment correctness check.
-
-Same probe grid as litept-b-v1m0-dales-lin-grid-enc.py (ce_lovasz x 12 LRs,
-AdamW/wd0/OneCycleLR warmup5%, epoch=400/eval_epoch=10) for cross-backbone
-comparability. `bn_eval_mode=True` freezes SpUNet's BatchNorm running stats
-(real BatchNorm1d); `drop_path_eval_mode=True` is a no-op (SpUNet has no
-DropPath modules). Z_MinShift/Z_RandomOffset included in train/val/test per
-the H3D/ECLAIR lin-grid convention. Same DALES-has-no-RGB handling as the
-other DALES lin configs.
+SpUNet DALES linear probe, decoder hypercolumn (`dec_point_mode=True`).
+Frozen Malibu3D multitask backbone; same probe grid as LitePT-B DALES lin-grid.
 """
 
 _base_ = ["../_base_/default_runtime.py"]

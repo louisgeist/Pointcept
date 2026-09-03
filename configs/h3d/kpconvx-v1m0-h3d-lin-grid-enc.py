@@ -1,57 +1,6 @@
 """
-KPConvX grid-search linear probing on H3D — encoder multiscale variant
-(Malibu3D multitask supervised pretrain, configs/malibu3d/multi-kpconvx-v1m0-malibu3d.py
-recipe: input_channels=7, kp_radius=3.2, radius_scaling=3.0,
-neighbor_limits=(12,16,20,20,20), layer_blocks=(3,3,9,12,3), init_channels=64,
-channel_scaling=1.414, grid_size=0.1, point_max=40000, drop_path_rate=0.3 at
-pretrain time).
-
-`enc_mode=True` (new `kpconvx_base.py` flag) skips the decoder entirely and
-returns the 5 raw encoder-stage features, each gathered back onto the
-original points via KPConvX's pyramid `upsamples` cluster indices (chained
-through intermediate levels — KPConvX only stores adjacent-level indices,
-unlike PT-v3/LitePT's `pooling_parent`) and concatenated finest-first.
-
-IMPORTANT — channel widths are NOT the nominal per-stage `layer_C`
-([64,96,128,192,256]). With grid_pool=True, KPConvX bumps the LAST block of
-each stage to the NEXT stage's channel width before pooling (so pooling never
-changes channel count), so the captured stage features are already at
-[96,128,192,256,256] (stage 5, the last, has no further transition so it
-stays at layer_C[4]=256). Verified empirically via a synthetic forward pass +
-manual replay (max abs diff 0.0 against both a 0-hop and 1-hop manual
-gather) — see plan file / scratchpad/check_kpconvx_enc_mode.py.
-backbone_out_channels = 96+128+192+256+256 = 928.
-
-`drop_path_rate=0` on the backbone here is required, not optional: KPConvX's
-stochastic depth uses its own `DropPathPack` class
-(pointcept/models/kpconvx/utils/generic_blocks.py), not `timm.layers.DropPath`
-— so `GridProbeSegmentorV2`'s `drop_path_eval_mode` (which only checks
-`isinstance(m, timm.layers.DropPath)`) does NOT pin it to eval. Building with
-drop_path_rate=0 makes every block use `nn.Identity()` instead (no
-learnable params either way, so this is checkpoint-compatible with the
-drop_path_rate=0.3 pretrain).
-
-point_max=100_000 — deliberately larger than the KPConvX pretrain's own
-SphereCrop budget (40000); roughly matches the ~102400 convention used by
-the other backbones' GridProbe configs (LitePT/PT-v3/SpUNet/Sonata). Set by
-user instruction. SphereCrop point_max is a data-pipeline parameter, not
-part of the backbone architecture/checkpoint, so this doesn't break
-checkpoint loading — but the frozen backbone was never trained on scenes
-this large, so its features at this crop scale are unverified.
-
-Frozen backbone: Malibu3D KPConvX multitask checkpoint (see ckpt/malibu3d/kpconvx_multitask/).
-
-batch_size=24 on a single GPU (vs. the pretrain's global 24 spread over 6-8
-GPUs) — set by hand per user instruction; the frozen-backbone, no-backward
-probe forward is far cheaper than full multitask training, so this batch
-size has not been formally VRAM-verified, only inferred from that gap.
-
-Same probe grid as litept-b-v1m0-h3d-lin_enc.py / spunet-v1m0-h3d-lin-grid-enc.py
-(ce_lovasz, AdamW/wd0/OneCycleLR warmup5%, lr sweep {1e-4 … 5e-1}) for
-cross-backbone comparability. epoch=2000 / eval_epoch=10. H3D has no real
-intensity (FillMissingFeat strength=0.0), no strength_feat_scale, and
-requires log_test_f1=True / skip_test=False on GridProbeEvaluator/
-GridProbeWinnerSelector (required for H3D lin-grid configs).
+KPConvX H3D linear probe, encoder-multiscale (`enc_mode=True`).
+Frozen Malibu3D multitask backbone; drop_path_rate=0; same probe grid as other H3D lin-grid configs.
 """
 
 _base_ = ["../_base_/default_runtime.py"]

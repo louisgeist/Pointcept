@@ -1,16 +1,6 @@
 """
-Sonata-v1m2 grid-search linear probing on ECLAIR — Sonata counterpart of
-litept-b-v1m0-eclair-lin_enc.py in this directory (same probe grid).
-
-Frozen PT-v3m2 encoder (enc_mode=True → multi-scale concat 1232ch) from the
-Malibu3D Sonata pretrain job sonata_outdoor, epoch_120. ECLAIR provides real RGB
-(normalized via NormalizeColor); strength uses the same 1/60000 scale as DALES.
-No coord_feat_scale (Sonata pretrain does not use it). Reference copy of
-w109/6/3_grid_eclair/sonata-v1m2-eclair-lin-grid_200ep.py.
-
-Grid (12 probes): ce_lovasz x 12 LRs x wd=0 x dropout=0 x
-input_norm=None x AdamW x warmup=5%. epoch=200 / eval_epoch=10.
-skip_test=False (matches LitePT sibling).
+Sonata-v1m2 ECLAIR linear probe (frozen encoder, multi-scale concat).
+Same probe grid as LitePT-B ECLAIR lin-grid configs.
 """
 
 _base_ = ["../_base_/default_runtime.py"]

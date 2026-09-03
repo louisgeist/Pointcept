@@ -1,23 +1,6 @@
 """
-PT-v3-malibu grid-search linear probing on DALES — encoder multiscale variant
-(same frozen checkpoint as ptv3-v1m0-dales-lin-grid.py, job ptv3_multitask, Malibu3D
-multitask supervised pretrain at w109/2/ptv3_wd/multi-ptv3-v1m0-malibu3d_5.py).
-
-`enc_mode=True` drops the decoder entirely; GridProbeSegmentorV2's generic
-encoder-side multiscale concat (walking `pooling_parent` links — see
-grid_probe.py) hands the probes a 992ch concat of the 5 raw encoder stages
-(32+64+128+256+512). Counterpart to the sibling decoder-hypercolumn config
-(1024ch, `traceable=True`) — same probe grid, same checkpoint, only the
-tapped feature changes, so the two are directly comparable.
-
-Same probe grid as litept-b-v1m0-dales-lin-grid-enc.py (ce_lovasz x 12 LRs,
-AdamW/wd0/OneCycleLR warmup5%, epoch=400/eval_epoch=10) for cross-backbone
-comparability. `bn_eval_mode=True` is a no-op for PT-v3-malibu (LayerNorm
-only, no BatchNorm); `drop_path_eval_mode=True` keeps DropPath(0.3) inactive
-during probe training. Z_MinShift/Z_RandomOffset added to the train/val/test
-pipeline (missing from the older DALES PTv3/LitePT lin-grid configs) per the
-Z-normalization convention used by the H3D/ECLAIR lin-grid configs.
-Same DALES-has-no-RGB handling as the other PTv3/LitePT DALES lin configs.
+PT-v3-malibu DALES linear probe, encoder-multiscale (`enc_mode=True`).
+Frozen Malibu3D multitask backbone; same probe grid as LitePT-B DALES lin-grid.
 """
 
 _base_ = ["../_base_/default_runtime.py"]

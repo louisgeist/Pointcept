@@ -1,18 +1,6 @@
 """
-LitePT-Base grid-search linear probing on ECLAIR — encoder multiscale variant
-(transfer from Malibu3D multitask supervised pretrain).
-
-`enc_mode=True` → 1386ch concat of the 5 raw encoder stages
-(54+108+216+432+576).
-`bn_eval_mode=True` freezes BatchNorm running stats;
-`drop_path_eval_mode=True` keeps DropPath inactive.
-
-ECLAIR provides real RGB: ChromaticAutoContrast/Translation/Jitter (train)
-+ NormalizeColor (like H3D / semseg-litept ECLAIR); strength uses 1/60000
-like DALES. Reference copy of w109/6/3_grid_eclair/litept-b-v1m0-eclair-lin_enc_200ep.py.
-
-Grid (12 probes): ce_lovasz x 12 LRs x wd=0 x dropout=0 x
-input_norm=None x AdamW x warmup=5%. epoch=200 / eval_epoch=10.
+LitePT-Base ECLAIR linear probe, encoder-multiscale (`enc_mode=True`).
+Frozen Malibu3D multitask backbone; AdamW/OneCycleLR lr sweep.
 """
 
 _base_ = ["../_base_/default_runtime.py"]

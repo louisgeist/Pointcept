@@ -1,8 +1,5 @@
 """
 DEBUG smoke: Sonata-v1m2 linear probe on Malibu3D segment (v20).
-
-Same model as sonata-v1m2-malibu3d-lin.py, but short schedule and max_sample
-(no stratified val subset, no PreciseEvaluator / test).
 """
 
 _base_ = ["../../_base_/default_runtime.py"]

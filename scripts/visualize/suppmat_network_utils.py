@@ -62,7 +62,7 @@ def high_points_mean_z(
     points_xyz: np.ndarray,
     percentile: float = PREC_ALTI_HIGH_Z_PERCENTILE,
 ) -> float:
-    """Mean Z of the upper part of a point cloud (points >= ``percentile``)."""
+    """Mean Z of points at or above ``percentile`` of the cloud Z."""
     if points_xyz.size == 0:
         return 0.0
     z = np.asarray(points_xyz[:, 2], dtype=np.float64)
@@ -78,12 +78,12 @@ def high_points_mean_z(
 
 
 def attr_flag_has_prec_alti_unknown(flag: int) -> bool:
-    """True for layers that carry PREC_ALTI=9999 (red or pink)."""
+    """True if layer carries PREC_ALTI=9999 (red or pink)."""
     return flag in (ATTR_PREC_UNKNOWN, ATTR_BOTH)
 
 
 def is_path_nature(nature: object) -> bool:
-    """True if BDTOPO ``NATURE`` is a path/trail (Chemin / Sentier)."""
+    """True if BDTOPO ``NATURE`` is Chemin or Sentier."""
     if nature is None:
         return False
     text = str(nature).strip()
@@ -91,35 +91,35 @@ def is_path_nature(nature: object) -> bool:
 
 
 def is_unpaved_road_nature(nature: object) -> bool:
-    """True if BDTOPO ``NATURE`` is an unpaved road (Route empierrée)."""
+    """True if BDTOPO ``NATURE`` is Route empierrée."""
     if nature is None:
         return False
     return str(nature).strip() == UNPAVED_ROAD_NATURE
 
 
 def is_ferry_nature(nature: object) -> bool:
-    """True if BDTOPO ``NATURE`` is a ferry/maritime link (Bac ou liaison maritime)."""
+    """True if BDTOPO ``NATURE`` is Bac ou liaison maritime."""
     if nature is None:
         return False
     return str(nature).strip() == FERRY_NATURE
 
 
 def is_acces_vl_impossible(acces_vl: object) -> bool:
-    """True if BDTOPO ``ACCES_VL`` is physically impossible for light vehicles."""
+    """True if BDTOPO ``ACCES_VL`` is physically impossible."""
     if acces_vl is None:
         return False
     return str(acces_vl).strip() == ACCES_VL_IMPOSSIBLE
 
 
 def is_fictif_oui(fictif: object) -> bool:
-    """True if BDTOPO ``FICTIF`` is Oui (purely topological, no physical trace)."""
+    """True if BDTOPO ``FICTIF`` is Oui."""
     if fictif is None:
         return False
     return str(fictif).strip() == FICTIF_OUI
 
 
 def is_etat_not_en_service(etat: object) -> bool:
-    """True if BDTOPO ``ETAT`` is set and not "En service" (planned/closed/unknown)."""
+    """True if BDTOPO ``ETAT`` is set and not En service."""
     if etat is None:
         return False
     text = str(etat).strip()
@@ -131,7 +131,7 @@ def attr_flag_filtered(
     hide_prec_alti_9999: bool,
     hide_pos_sol_lt0: bool,
 ) -> bool:
-    """Return True if an ``ATTR_*`` layer should be hidden by GUI filters."""
+    """True if an ``ATTR_*`` layer should be hidden by GUI filters."""
     if flag == ATTR_PREC_UNKNOWN:
         return bool(hide_prec_alti_9999)
     if flag == ATTR_BELOW_GROUND:
@@ -158,7 +158,7 @@ def layer_filtered(
     is_not_en_service: bool = False,
     hide_not_en_service: bool = False,
 ) -> bool:
-    """Compose attribute + NATURE/FICTIF/ETAT + ACCES_VL filters for a network layer."""
+    """Apply attribute + NATURE/FICTIF/ETAT + ACCES_VL filters for a layer."""
     if hide_paths and is_path:
         return True
     if hide_unpaved_roads and is_unpaved:
@@ -202,12 +202,7 @@ _POLYLINE_HUE_STEP = 0.618033988749895
 
 
 def dept_stem_from_lidarhd_dirname(dirname: str) -> str | None:
-    """Extract department stem from a LIDARHD folder name.
-
-    Examples:
-        D075-2021_LIDARHD -> D075-2021
-        D059062-2021_LIDARHD -> D059062-2021
-    """
+    """Department stem from a LIDARHD folder name (e.g. D075-2021_LIDARHD → D075-2021)."""
     suffix = "_LIDARHD"
     if not dirname.endswith(suffix):
         return None
@@ -220,11 +215,7 @@ def resolve_network_gpkg(
     roi_dir: Path | str,
     network_type: str,
 ) -> Path | None:
-    """Resolve ``{root}/{TYPE}/{dept}_{TYPE}/{zone}.gpkg`` from a ROI PLY directory.
-
-    Expects ``roi_dir`` like ``.../D075-2021_LIDARHD/UU-S1-4``.
-    Returns None if the path cannot be derived or the file is missing.
-    """
+    """Resolve ``{root}/{TYPE}/{dept}_{TYPE}/{zone}.gpkg`` from a ROI PLY directory."""
     if network_type not in NETWORK_TYPES:
         raise ValueError(
             f"Unknown network type {network_type!r}; expected one of {NETWORK_TYPES}"
@@ -244,7 +235,7 @@ def resolve_network_gpkg(
 
 
 def _coords_xyz(geom: LineString) -> np.ndarray:
-    """Return (M, 3) XYZ coordinates for a LineString (Z=0 if 2D)."""
+    """Return (M, 3) XYZ for a LineString (Z=0 if 2D)."""
     coords = np.asarray(geom.coords, dtype=np.float64)
     if coords.ndim != 2 or coords.shape[0] == 0:
         return np.empty((0, 3), dtype=np.float64)
@@ -259,15 +250,7 @@ def sanitize_polyline_z(
     fallback_z: float,
     invalid_z_threshold_m: float = INVALID_Z_THRESHOLD_M,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Replace sentinel / missing Z along a polyline.
-
-    Returns
-    -------
-    coords_out :
-        Copy of ``coords`` with valid Z.
-    imputed :
-        Bool mask (M,) — True for vertices whose Z was filled (interp or fallback).
-    """
+    """Replace sentinel / missing Z along a polyline; return coords and imputed mask."""
     if coords.shape[0] == 0:
         return coords, np.empty((0,), dtype=bool)
     out = coords.copy()
@@ -306,10 +289,7 @@ def _densify_polyline(
     max_segment_length_m: float,
     imputed: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Insert vertices so consecutive points are at most ``max_segment_length_m`` apart.
-
-    Intermediate vertices inherit imputed=True if either endpoint of the edge was imputed.
-    """
+    """Insert vertices so consecutive points are at most ``max_segment_length_m`` apart."""
     if coords.shape[0] == 0:
         return coords, np.empty((0,), dtype=bool)
     if imputed is None:
@@ -346,10 +326,7 @@ def polyline_to_segments(
     max_segment_length_m: float = DEFAULT_MAX_SEGMENT_LENGTH_M,
     imputed: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Convert a polyline (M, 3) into consecutive segments (N, 2, 3).
-
-    Returns segments and a bool mask (N,) True if either endpoint had imputed Z.
-    """
+    """Convert a polyline (M, 3) into consecutive segments (N, 2, 3)."""
     if coords.shape[0] < 2:
         return (
             np.empty((0, 2, 3), dtype=np.float64),
@@ -369,7 +346,7 @@ def polyline_to_segments(
 
 
 def parse_pos_sol(value: object) -> float | None:
-    """Parse BDTOPO ``POS_SOL`` (often a string) to a float, or None if unknown."""
+    """Parse BDTOPO ``POS_SOL`` to float, or None if unknown."""
     if value is None:
         return None
     if isinstance(value, (float, int, np.floating, np.integer)):
@@ -410,7 +387,7 @@ def parse_largeur_m(
     network_type: str,
     nb_voies: object = None,
 ) -> float | None:
-    """Parse BDTOPO ``LARGEUR`` into a metric ribbon width, or None if unknown."""
+    """Parse BDTOPO ``LARGEUR`` into a metric ribbon width, or None."""
     if largeur is None:
         return None
     if isinstance(largeur, (float, int, np.floating, np.integer)):
@@ -447,14 +424,7 @@ def polyline_to_ribbon_mesh(
     imputed: np.ndarray | None = None,
     max_segment_length_m: float = DEFAULT_MAX_SEGMENT_LENGTH_M,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Build a horizontal ribbon mesh of metric width along a polyline.
-
-    Returns
-    -------
-    vertices : (V, 3) float64
-    faces : (F, 3) int32
-    face_imputed : (F,) bool — True if the face comes from an imputed-Z edge
-    """
+    """Build a horizontal ribbon mesh of metric width along a polyline."""
     empty_v = np.empty((0, 3), dtype=np.float64)
     empty_f = np.empty((0, 3), dtype=np.int32)
     empty_i = np.empty((0,), dtype=bool)
@@ -534,33 +504,7 @@ def load_network_line_segments(
     np.ndarray,
     np.ndarray,
 ]:
-    """Load a zone GeoPackage into line segments (+ optional width ribbons).
-
-    Returns
-    -------
-    segments : (N, 2, 3) float64
-    length_m : float
-    imputed_z : (N,) bool for line segments
-    ribbon_vertices : (V, 3) float64
-    ribbon_faces : (F, 3) int32
-    ribbon_face_imputed : (F,) bool
-    seg_attr_flags : (N,) uint8 ``ATTR_*`` codes
-    ribbon_face_attr_flags : (F,) uint8 ``ATTR_*`` codes
-    seg_is_path : (N,) bool — ``NATURE`` in Chemin / Sentier
-    ribbon_face_is_path : (F,) bool
-    seg_acces_impossible : (N,) bool — ``ACCES_VL`` physically impossible
-    ribbon_face_acces_impossible : (F,) bool
-    seg_polyline_ids : (N,) int32 — id of the source LineString
-    ribbon_face_polyline_ids : (F,) int32
-    seg_is_unpaved : (N,) bool — ``NATURE`` == Route empierrée
-    ribbon_face_is_unpaved : (F,) bool
-    seg_is_ferry : (N,) bool — ``NATURE`` == Bac ou liaison maritime
-    ribbon_face_is_ferry : (F,) bool
-    seg_is_fictif : (N,) bool — ``FICTIF`` == Oui
-    ribbon_face_is_fictif : (F,) bool
-    seg_is_not_en_service : (N,) bool — ``ETAT`` != En service
-    ribbon_face_is_not_en_service : (F,) bool
-    """
+    """Load a GeoPackage into densified line segments and optional width ribbons."""
     path = Path(gpkg_path)
     empty_seg = np.empty((0, 2, 3), dtype=np.float64)
     empty_imp = np.empty((0,), dtype=bool)
@@ -844,10 +788,7 @@ def sample_segments_xy(
     segments: np.ndarray,
     sample_step_m: float = DEFAULT_CORRIDOR_SAMPLE_STEP_M,
 ) -> np.ndarray:
-    """Densely sample XY points along line segments for corridor queries.
-
-    ``segments`` shape is ``(N, 2, 3)`` (or ``(N, 2, 2)``). Returns ``(K, 2)``.
-    """
+    """Densely sample XY points along line segments for corridor queries."""
     samples_xy, _seg_ids = sample_segments_xy_with_ids(
         segments, sample_step_m=sample_step_m
     )
@@ -858,10 +799,7 @@ def sample_segments_xy_with_ids(
     segments: np.ndarray,
     sample_step_m: float = DEFAULT_CORRIDOR_SAMPLE_STEP_M,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Sample XY along segments; also return the source segment index per sample.
-
-    Returns ``(samples_xy (K, 2), segment_ids (K,))``.
-    """
+    """Sample XY along segments; also return the source segment index per sample."""
     if segments.size == 0 or segments.shape[0] == 0:
         return (
             np.empty((0, 2), dtype=np.float64),
@@ -903,10 +841,7 @@ def nearest_segment_indices(
     radius_m: float,
     sample_step_m: float = DEFAULT_CORRIDOR_SAMPLE_STEP_M,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Nearest segment index and XY distance per point (``-1`` / ``inf`` if none).
-
-    Z is ignored. Indices refer to rows of ``segments``.
-    """
+    """Nearest segment index and XY distance per point (``-1`` / ``inf`` if none)."""
     n = int(np.asarray(points_xyz).shape[0]) if points_xyz.size else 0
     seg_idx = np.full(n, -1, dtype=np.int32)
     dist_out = np.full(n, np.inf, dtype=np.float64)
@@ -948,10 +883,7 @@ def points_near_network_segments(
     radius_m: float,
     sample_step_m: float = DEFAULT_CORRIDOR_SAMPLE_STEP_M,
 ) -> np.ndarray:
-    """Bool mask for points whose XY lies within ``radius_m`` of any segment.
-
-    Z is ignored (vertical corridor / column through buildings and terrain).
-    """
+    """Bool mask for points whose XY lies within ``radius_m`` of any segment."""
     seg_idx, _dist = nearest_segment_indices(
         points_xyz,
         segments,
@@ -1015,13 +947,7 @@ def corridor_overlay_from_assignments(
     hide_fictif: bool = False,
     hide_not_en_service: bool = False,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Compose active corridor mask + RGB from per-type nearest-segment maps.
-
-    ``assignments[network_type]`` keys: ``seg_idx``, ``dist``, ``attr_flags``,
-    ``is_path``, ``acces_impossible``, ``polyline_ids``, optional ``is_unpaved``,
-    ``is_ferry``, ``is_fictif``, ``is_not_en_service``.
-    Among overlapping types, the nearest segment wins.
-    """
+    """Compose active corridor mask + RGB from per-type nearest-segment maps."""
     mask = np.zeros(n_points, dtype=bool)
     colors = np.zeros((n_points, 3), dtype=np.uint8)
     if n_points <= 0 or not assignments:
@@ -1142,13 +1068,7 @@ def segment_colors(
     polyline_ids: np.ndarray | None = None,
     color_mode: str = "type",
 ) -> np.ndarray:
-    """Per-endpoint colors (N, 2, 3) uint8 for viser ``add_line_segments``.
-
-    ``color_mode``:
-      - ``type``: one color per infrastructure type (default).
-      - ``polyline``: distinct color per polyline id (requires ``polyline_ids``).
-    ``attr_flags`` / ``imputed_z`` are kept for call-site compatibility but ignored.
-    """
+    """Per-endpoint colors (N, 2, 3) uint8 for viser ``add_line_segments``."""
     _ = (attr_flags, imputed_z)
     if n_segments <= 0:
         return np.empty((0, 2, 3), dtype=np.uint8)
@@ -1179,10 +1099,7 @@ def load_roi_networks(
     fallback_z: float = 0.0,
     build_width_ribbons: bool = True,
 ) -> dict[str, tuple]:
-    """Load all requested network types for a ROI.
-
-    Returns a dict mapping network type -> load_network_line_segments result tuple.
-    """
+    """Load all requested network types for a ROI."""
     out: dict[str, tuple] = {}
     root = Path(networks_root)
     for network_type in network_types:

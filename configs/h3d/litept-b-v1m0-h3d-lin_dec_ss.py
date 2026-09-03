@@ -1,19 +1,6 @@
 """
-LitePT-Base grid-search linear probing on H3D — decoder Single Scale ablation
-(same frozen checkpoint as litept-b-v1m0-h3d-lin_dec.py, Malibu3D
-multitask supervised pretrain).
-
-Ablation vs litept-b-v1m0-h3d-lin_dec.py: `dec_traceable=False` probes only
-the native final decoder stage output (dec_channels[0]=72ch), not the 1404ch
-hypercolumn concat of all decoder stages + bottleneck.
-
-AdamW / wd=0 / OneCycleLR with warmup fixed at pct_start=5%, lr swept over
-{1e-4 .. 5e-1} (12 values), input_norm=none. Dataset-driven axes
-(num_worker/AMP/batch) match the hypercolumn ref. epoch=2000 / eval_epoch=10.
-
-Grid (12 probes): ce_lovasz x lr{1e-4..5e-1} x wd=0 x dropout=0 x
-input_norm=none x feat_norm=none x optimizer=AdamW x warmup=5%.
-skip_test=False, log_test_f1=True.
+LitePT-Base H3D linear probe, decoder single-scale (`dec_traceable=False`).
+Frozen Malibu3D multitask backbone; AdamW/OneCycleLR lr sweep.
 """
 
 _base_ = ["../_base_/default_runtime.py"]

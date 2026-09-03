@@ -1,8 +1,5 @@
 """
-DEBUG smoke: Sonata-v1m2 pretrain on Malibu3D (2× A100, few iters).
-
-Same model/data as pretrain-sonata-v1m2-malibu3d.py, but short schedule +
-max_sample.
+DEBUG smoke: Sonata-v1m2 pretrain on Malibu3D (short schedule + max_sample).
 """
 
 _base_ = ["../_base_/default_runtime.py"]

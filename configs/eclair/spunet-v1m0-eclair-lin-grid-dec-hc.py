@@ -1,29 +1,6 @@
 """
-SpUNet-v1m1 grid-search linear probing on ECLAIR — decoder hypercolumn /
-multi-scale variant (same frozen checkpoint as
-spunet-v1m0-eclair-lin-grid-{enc,dec,enc-dec}.py, job spunet_multitask, Malibu3D multitask
-supervised pretrain: channels=(32,64,128,256,256,128,96,96),
-layers=(2,3,4,6,2,2,2,2), stride=3).
-
-Sets `dec_point_mode=True` alone (spconv_unet_v1m1_base.py): the decoder
-hypercolumn chain (dec0(96)+dec1(96)+dec2(128)+dec3(256)+bottleneck(256) =
-832ch), mirroring LitePT/PT-v3's dec_traceable/traceable convention of
-"decoder stages + encoder bottleneck". Counterpart to the plain single-scale
-decoder (spunet-v1m0-eclair-lin-grid-dec.py, 96ch), encoder-only
-(spunet-v1m0-eclair-lin-grid-enc.py, 512ch), and combined enc+dec
-(spunet-v1m0-eclair-lin-grid-enc-dec.py, 1088ch). See
-tests/test_spunet_point_mode.py (`test_dec_point_mode_forward_shape`) for the
-shape/row-alignment correctness check.
-
-ECLAIR provides real RGB: ChromaticAutoContrast/Translation/Jitter (train) +
-NormalizeColor (like H3D / semseg-litept ECLAIR); strength uses 1/60000 like
-DALES. Same probe grid as litept-b-v1m0-eclair-lin_enc.py (ce_lovasz x 12 LRs
-x wd=0 x dropout=0 x input_norm=None x AdamW x warmup=5%) for cross-backbone
-comparability. epoch=200 / eval_epoch=10.
-
-`bn_eval_mode=True` freezes SpUNet's BatchNorm running stats (real
-BatchNorm1d); `drop_path_eval_mode=True` is a no-op (SpUNet has no DropPath
-modules).
+SpUNet ECLAIR linear probe, decoder hypercolumn (`dec_point_mode=True`).
+Frozen Malibu3D multitask backbone; same probe grid as LitePT-B ECLAIR lin-grid.
 """
 
 _base_ = ["../_base_/default_runtime.py"]

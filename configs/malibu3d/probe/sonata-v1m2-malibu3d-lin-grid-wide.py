@@ -1,22 +1,5 @@
 """
-Sonata-v1m2 wide grid-search linear probe on Malibu3D segment (v20) — cluster.
-
-Explicit nested-loop cartesian (no cartesian_probes helper): loss × lr × wd ×
-input_norm (unitsphere), all AdamW + CosineAnnealing. Shared frozen PT-v3m2
-forward once per batch — see pointcept/models/grid_probe.py and GridProbeTrainer.
-
-Intended checkpoint (pretrain job sonata_outdoor, epoch 9):
-Launch via ``sh scripts/train.sh`` or ``python tools/grid_then_seeds.py``.
-
-Grid (336 probes):
-  4 losses (ce_lovasz, ce, focal_g2, focal_g1)
-  × 7 LRs (1e-5 … 5e-2)
-  × 3 weight decays (0, 1e-4, 1e-6)
-  × 4 input_norm (l2, linf, l1, none)
-  Fixed: feat_norm=None, dropout=0, AdamW, CosineAnnealingLR, grad_clip=3.0.
-
-Val uses stratified 2k subset capped at max_sample=100. Final winner gets a
-full test pass.
+Sonata-v1m2 wide grid-search linear probe on Malibu3D segment (v20); shared frozen encoder.
 """
 
 _base_ = ["../../_base_/default_runtime.py"]

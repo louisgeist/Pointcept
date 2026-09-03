@@ -1,24 +1,6 @@
 """
-Sonata-v1m2 seed-ensemble linear probing on DALES — 10 probes with IDENTICAL
-hyperparameters (the best lr from the earlier lr-grid sweep), differing only
-by random init, to report test mIoU/mAcc/allAcc as mean±std across seeds
-instead of a single point estimate. Reuses the GridProbe machinery (shared
-frozen-backbone forward across all probes) purely to avoid paying the
-backbone cost 10x, not for hyperparameter search.
-
-Frozen PT-v3m2 encoder (enc_mode=True → multi-scale concat 1232ch) from the
-Malibu3D Sonata pretrain job sonata_outdoor, epoch_120. DALES has no RGB — Sonata was
-pretrained with scene-level RandomDropColor/RandomDropStrength (drop_value=0.0)
-so `FillMissingFeat` synthesizes a zero "color" channel (in_channels=7). No
-learned masked-feat at pretrain time, so literal zero fill is faithful.
-
-10 probes, identical config, each getting its own random Linear init from
-sequential construction in GridProbeSegmentorV2.__init__ (no seed field
-needed). Test-set aggregation: GridProbeSeedEnsembleTester (in place of
-GridProbeWinnerSelector) + GridProbeSemSegTester (test = dict(...) below)
-reload every probe's best-val checkpoint, run one shared-backbone test pass
-across all 10, and write save_path/seed_ensemble_results.json with
-mean/std of test_mIoU/test_mAcc/test_allAcc.
+Sonata-v1m2 DALES seed-ensemble linear probe (identical hyperparams, 10 random inits).
+Frozen Malibu3D Sonata encoder; reports mean±std test metrics.
 """
 
 _base_ = ["../_base_/default_runtime.py"]

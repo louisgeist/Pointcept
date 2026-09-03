@@ -1,21 +1,6 @@
 """
-LitePT-Base grid-search linear probing on DALES — decoder hypercolumn /
-multi-scale variant (transfer from Malibu3D multitask supervised
-pretrain).
-
-Same multi-scale mechanism as w109/3/dales_lin/litept-b-v1m0-dales-lin_5.py
-(`dec_traceable=True` → 1404ch concat of decoder stages + bottleneck).
-`bn_eval_mode=True` freezes BatchNorm running stats; for the BN-adapt
-variant see w109/4/grid_12h/litept-b-v1m0-dales-lin_1.py.
-`drop_path_eval_mode=True` keeps DropPath inactive.
-
-Grid (16 probes): ce_lovasz x {5e-2, 1e-1, 2e-1, 5e-1} x {5e-3, 5e-2} wd x
-dropout {0, 0.3} x input_norm=None. epoch=50 / eval_epoch=10. AMP enabled
-(fp16) and dropout=0.5 dropped — job 1200400 OOM'd in fp32 on the 1404ch
-hypercolumn feat shared across probes (see GridProbeTrainer docstring in
-pointcept/engines/train.py for why the single shared backward keeps every
-active probe's Dropout+Linear activations alive at once).
-Same DALES-has-no-RGB handling as the other LitePT-B DALES lin configs.
+LitePT-Base DALES linear probe, decoder hypercolumn (`dec_traceable=True`).
+Frozen Malibu3D multitask backbone; AdamW/OneCycleLR probe grid.
 """
 
 _base_ = ["../_base_/default_runtime.py"]

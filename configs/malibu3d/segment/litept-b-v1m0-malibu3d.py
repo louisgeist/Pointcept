@@ -1,9 +1,5 @@
 """
-LitePT-Base on Malibu3D (coord + RGB + strength in feat_keys).
-
-Mono-task Malibu3D config for target ``segment`` (v20). Derived from
-multi-litept-b-v1m0-malibu3d.py (Base backbone + schedule) with mono-task wiring
-aligned to segment/litept-v1m0-malibu3d.py. Inherits only from default_runtime.
+LitePT-Base mono-task Malibu3D segment (v20). Self-contained; inherits only default_runtime.
 """
 
 # -----------------------------------------------------------------------------

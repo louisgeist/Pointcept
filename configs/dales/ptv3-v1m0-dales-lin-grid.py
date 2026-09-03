@@ -1,18 +1,6 @@
 """
-PT-v3-malibu grid-search linear probing on DALES — decoder hypercolumn /
-multi-scale variant (transfer from Malibu3D multitask supervised pretrain at
-w109/2/ptv3_wd/multi-ptv3-v1m0-malibu3d_5.py, job 1052200).
-
-Unlike w109/4/ptv3_lin/ptv3-v1m0-dales-lin_1.py (finest decoder stage only,
-64ch), this config sets `traceable=True` so GridProbeSegmentorV2 concatenates
-every decoder-stage feature + the encoder bottleneck into one 1024-dim vector
-per point (64+64+128+256 + 512). Same DALES-has-no-RGB handling as the other
-PTv3/LitePT DALES lin configs.
-
-Grid (12 probes): ce_lovasz, AdamW/wd0/OneCycleLR warmup5%, lr sweep {1e-4 … 5e-1}.
-epoch=400 / eval_epoch=10. AMP enabled (fp16).
-`bn_eval_mode=True` is a no-op for PT-v3-malibu (LayerNorm only);
-`drop_path_eval_mode=True` keeps DropPath(0.3) inactive during probe training.
+PT-v3-malibu DALES linear probe, decoder hypercolumn (`traceable=True`).
+Frozen Malibu3D multitask backbone; AdamW/OneCycleLR lr sweep.
 """
 
 _base_ = ["../_base_/default_runtime.py"]

@@ -1,36 +1,6 @@
 """
-SpUNet-v1m1 grid-search linear probing on DALES — encoder multiscale variant
-(same frozen checkpoint as spunet-v1m0-dales-lin-grid-dec.py, job spunet_multitask,
-Malibu3D multitask supervised pretrain: channels=(32,64,128,256,256,128,96,96),
-layers=(2,3,4,6,2,2,2,2), stride=3).
-
-SpUNetBase never returned a `Point` with `pooling_parent`/`unpooling_parent`
-links, and its pre-existing `enc_mode=True` is a *classification* mode
-(scatter-mean-pools every voxel to one feature per whole scene, dropping all
-per-point resolution — see modelnet40/cls-spunet-v1m1-0-base.py) — unusable
-for a per-point segmentation probe (shape mismatch against `segment`).
-
-Added a new `point_mode=True` backbone flag (spconv_unet_v1m1_base.py) that
-instead builds a `Point` chain (stem -> stage0 -> ... -> bottleneck) with
-`pooling_parent`/`pooling_inverse` populated the same way PT-v3's GridPooling
-does, so GridProbeSegmentorV2's existing generic encoder-multiscale walk
-(grid_probe.py) concatenates every stage's per-point feature broadcast up to
-the finest (stem) resolution — no scatter, no new trainable parameters, pure
-post-hoc reshaping of the frozen forward pass (see
-tests/test_spunet_point_mode.py for correctness checks against an
-independent coordinate-based reference and an end-to-end GridProbeSegmentorV2
-smoke test). Levels concatenated (finest first): stem(32) + stage0(32) +
-stage1(64) + stage2(128) + stage3/bottleneck(256) = 512ch. Counterpart to the
-sibling decoder config (96ch, standard full-resolution U-Net output) — same
-probe grid, same checkpoint, only the tapped feature changes.
-
-Same probe grid as litept-b-v1m0-dales-lin-grid-enc.py (ce_lovasz x 12 LRs,
-AdamW/wd0/OneCycleLR warmup5%, epoch=400/eval_epoch=10) for cross-backbone
-comparability. `bn_eval_mode=True` freezes SpUNet's BatchNorm running stats
-(real BatchNorm1d); `drop_path_eval_mode=True` is a no-op (SpUNet has no
-DropPath modules). Z_MinShift/Z_RandomOffset included in train/val/test per
-the H3D/ECLAIR lin-grid convention. Same DALES-has-no-RGB handling as the
-other DALES lin configs.
+SpUNet DALES linear probe, encoder-multiscale (`point_mode=True`).
+Frozen Malibu3D multitask backbone; same probe grid as LitePT-B DALES lin-grid.
 """
 
 _base_ = ["../_base_/default_runtime.py"]

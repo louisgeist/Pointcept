@@ -1,14 +1,6 @@
 """
-SpUNet on Malibu3D multitask: segment (v20) + forest_2d + elevation + 4 nathab
-tile_distribution axes (WeightedKL; Habitat Type / Moisture Regime / Soil
-Chemistry / Bioclimatic Zone, remapped on the fly from natural_habitat) +
-network (roads only, CE + foreground weight=5; railroads/transmission lines
-dropped; scored via APLS at test time). Aligned with w107/w108 toward_bm +
-network roads-only recipe.
-
-This config is intentionally self-contained: it inherits only from
-default_runtime and duplicates everything it needs so it can be read
-top-to-bottom without cross-referencing other Malibu3D configs.
+SpUNet Malibu3D multitask (segment v20, forest_2d, elevation, 4 nathab axes,
+roads-only network + APLS). Self-contained; inherits only default_runtime.
 """
 
 # -----------------------------------------------------------------------------

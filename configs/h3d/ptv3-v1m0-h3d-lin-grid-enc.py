@@ -1,20 +1,6 @@
 """
-PT-v3-malibu grid-search linear probing on H3D — encoder multiscale variant
-(same frozen checkpoint as ptv3-v1m0-h3d-lin-grid-dec.py, job ptv3_multitask,
-Malibu3D multitask supervised pretrain). `enc_mode=True` -> 992ch concat of
-the 5 raw encoder stages (32+64+128+256+512).
-
-AdamW / wd=0 / OneCycleLR with warmup fixed at pct_start=5%, lr swept over
-{1e-4 .. 5e-1} (12 values), input_norm=none — same probe grid as
-litept-b-v1m0-h3d-lin_enc.py for cross-backbone comparability.
-Dataset-driven axes (num_worker/AMP/batch) match the LitePT-B H3D lin-grid
-configs. epoch=2000 / eval_epoch=10. H3D fill/aug/feature_mask_values
-unchanged from that ref (no real intensity -> FillMissingFeat "strength").
-
-`bn_eval_mode=True` is a no-op for PT-v3-malibu (LayerNorm only, no
-BatchNorm); `drop_path_eval_mode=True` keeps DropPath(0.3) inactive during
-probe training. skip_test=False, log_test_f1=True (required for H3D
-lin-grid configs — see project convention).
+PT-v3-malibu H3D linear probe, encoder-multiscale (`enc_mode=True`).
+Frozen Malibu3D multitask backbone; same probe grid as LitePT-B H3D lin-grid.
 """
 
 _base_ = ["../_base_/default_runtime.py"]

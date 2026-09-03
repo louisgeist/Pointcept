@@ -1,9 +1,5 @@
 """
-Sonata-v1m2 linear probing on Malibu3D semantic segmentation (v20).
-
-Frozen PT-v3m2 encoder (enc_mode); short iter-limited schedule for periodic probes.
-Val uses stratified subset (val_dev_subset_2000.csv) capped to max_sample=20;
-eval_every=2. No test split.
+Sonata-v1m2 linear probe on Malibu3D segment (v20); frozen encoder, short schedule.
 """
 
 _base_ = ["../../_base_/default_runtime.py"]

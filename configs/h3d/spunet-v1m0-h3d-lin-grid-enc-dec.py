@@ -1,36 +1,6 @@
 """
-SpUNet-v1m1 grid-search linear probing on H3D — combined encoder+decoder
-hypercolumn variant (same frozen checkpoint as
-spunet-v1m0-h3d-lin-grid-{enc,dec}.py, job spunet_multitask, Malibu3D multitask
-supervised pretrain: channels=(32,64,128,256,256,128,96,96),
-layers=(2,3,4,6,2,2,2,2), stride=3).
-
-Sets `point_mode=True` AND `dec_point_mode=True` together
-(spconv_unet_v1m1_base.py): the decoder hypercolumn chain
-(dec0(96)+dec1(96)+dec2(128)+dec3(256)+bottleneck(256) = 832ch, built by
-`dec_point_mode` alone, mirroring LitePT/PT-v3's dec_traceable/traceable
-convention of "decoder stages + encoder bottleneck") is concatenated with the
-raw encoder multiscale (stem(32)+stage0(32)+stage1(64)+stage2(128) = 256ch,
-bottleneck dropped here since dec_point_mode already carries it, to avoid
-duplicating an identical 256ch block) — 832 + 256 = 1088ch total. Decoder-
-hypercolumn only (832ch) is spunet-v1m0-h3d-lin-grid-dec-hc.py; plain
-single-scale decoder is spunet-v1m0-h3d-lin-grid-dec.py (96ch); encoder-only
-is spunet-v1m0-h3d-lin-grid-enc.py (512ch). This closes
-most of the channel-budget gap against LitePT-B's enc/dec hypercolumns
-(1386/1404ch) and PT-v3-malibu's/Sonata's (992/1024/1232ch): SpUNet's
-per-stage widths are simply narrower in this checkpoint, so tapping every
-level of both the encoder and decoder (instead of the encoder XOR decoder) is
-the way to reach a comparable feature budget without retraining. See
-tests/test_spunet_point_mode.py (`test_combined_point_mode_and_dec_point_mode_shape_and_alignment`)
-for the shape/row-alignment correctness check.
-
-Same probe grid as litept-b-v1m0-h3d-lin_enc.py (AdamW/wd0/OneCycleLR
-warmup5%, lr sweep over 12 values, epoch=2000/eval_epoch=10) for
-cross-backbone comparability. `bn_eval_mode=True` freezes SpUNet's BatchNorm
-running stats (real BatchNorm1d); `drop_path_eval_mode=True` is a no-op
-(SpUNet has no DropPath modules). H3D fill/aug/feature_mask_values unchanged
-from the LitePT-B H3D ref (no real intensity -> FillMissingFeat "strength").
-skip_test=False, log_test_f1=True (required for H3D lin-grid configs).
+SpUNet H3D linear probe, combined encoder+decoder hypercolumn.
+Frozen Malibu3D multitask backbone; same probe grid as LitePT-B H3D lin-grid.
 """
 
 _base_ = ["../_base_/default_runtime.py"]

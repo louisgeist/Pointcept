@@ -1,35 +1,6 @@
 """
-SpUNet-v1m1 grid-search linear probing on ECLAIR — encoder multiscale
-variant (same frozen checkpoint as spunet-v1m0-eclair-lin-grid-dec.py, job
-spunet_multitask, Malibu3D multitask supervised pretrain: channels=(32,64,128,256,256,
-128,96,96), layers=(2,3,4,6,2,2,2,2), stride=3).
-
-SpUNetBase never returned a `Point` with `pooling_parent`/`unpooling_parent`
-links, and its pre-existing `enc_mode=True` is a *classification* mode
-(scatter-mean-pools every voxel to one feature per whole scene — see
-modelnet40/cls-spunet-v1m1-0-base.py) — unusable for a per-point segmentation
-probe (shape mismatch against `segment`).
-
-Uses the new `point_mode=True` backbone flag (spconv_unet_v1m1_base.py) that
-instead builds a `Point` chain (stem -> stage0 -> ... -> bottleneck) with
-`pooling_parent`/`pooling_inverse` populated the same way PT-v3's GridPooling
-does, so GridProbeSegmentorV2's existing generic encoder-multiscale walk
-concatenates every stage's per-point feature broadcast up to the finest
-(stem) resolution — no scatter, no new trainable parameters (see
-tests/test_spunet_point_mode.py). Levels concatenated (finest first):
-stem(32) + stage0(32) + stage1(64) + stage2(128) + stage3/bottleneck(256) =
-512ch. Counterpart to the sibling decoder config (96ch, standard
-full-resolution U-Net output).
-
-ECLAIR provides real RGB: ChromaticAutoContrast/Translation/Jitter (train) +
-NormalizeColor (like H3D / semseg-litept ECLAIR); strength uses 1/60000 like
-DALES. Same probe grid as litept-b-v1m0-eclair-lin_enc.py (ce_lovasz x 12 LRs
-x wd=0 x dropout=0 x input_norm=None x AdamW x warmup=5%) for cross-backbone
-comparability. epoch=200 / eval_epoch=10.
-
-`bn_eval_mode=True` freezes SpUNet's BatchNorm running stats (real
-BatchNorm1d); `drop_path_eval_mode=True` is a no-op (SpUNet has no DropPath
-modules).
+SpUNet ECLAIR linear probe, encoder-multiscale (`point_mode=True`).
+Frozen Malibu3D multitask backbone; same probe grid as LitePT-B ECLAIR lin-grid.
 """
 
 _base_ = ["../_base_/default_runtime.py"]

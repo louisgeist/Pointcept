@@ -1,22 +1,6 @@
 """
-LitePT-Base grid-search linear probing on ECLAIR — decoder Single Scale
-ablation (transfer from Malibu3D multitask supervised pretrain).
-
-Ablation vs litept-b-v1m0-eclair-lin_dec.py: `dec_traceable=False` probes
-only the native final decoder stage output (dec_channels[0]=72ch), not the
-1404ch hypercolumn concat of all decoder stages + bottleneck. Same signal as
-the multitask pretrain seg_head input. Missing sibling of
-litept-b-v1m0-h3d-lin_dec_ss.py / litept-b-v1m0-dales-lin-grid-dec-ss.py —
-ported by analogy from those (same checkpoint, same SS backbone
-dict), onto this directory's own dataset settings (ECLAIR real RGB via
-ChromaticAutoContrast/Translation/Jitter + NormalizeColor, strength 1/60000,
-ignore_index=-1, no `_warmups` axis).
-
-`bn_eval_mode=True` freezes BatchNorm running stats; `drop_path_eval_mode=True`
-keeps DropPath inactive.
-
-Grid (12 probes): ce_lovasz x 12 LRs x wd=0 x dropout=0 x
-input_norm=None x AdamW x warmup=5%. epoch=200 / eval_epoch=10.
+LitePT-Base ECLAIR linear probe, decoder single-scale (`dec_traceable=False`).
+Frozen Malibu3D multitask backbone; AdamW/OneCycleLR lr sweep.
 """
 
 _base_ = ["../_base_/default_runtime.py"]

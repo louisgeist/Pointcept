@@ -1,9 +1,5 @@
 """
-LitePT semantic segmentation on H3D (RGB point features).
-
-This config is intentionally self-contained: it inherits only from
-default_runtime and can be read top-to-bottom without cross-referencing
-other H3D configs.
+LitePT-Small H3D semantic segmentation from scratch (RGB). Self-contained.
 """
 
 # -----------------------------------------------------------------------------
