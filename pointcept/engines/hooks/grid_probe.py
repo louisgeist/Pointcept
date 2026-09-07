@@ -318,7 +318,13 @@ class GridProbeEvaluator(HookBase):
             with torch.no_grad():
                 output_dict = self.trainer.model(input_dict)
             logits_by_task = output_dict["seg_logits_by_task"]
-            segment = input_dict["segment"]
+            target_key = getattr(raw_model, "target_key", "segment")
+            if target_key not in input_dict:
+                raise KeyError(
+                    f"GridProbeEvaluator: target_key={target_key!r} missing from "
+                    f"val batch (keys={sorted(input_dict.keys())})."
+                )
+            segment = input_dict[target_key]
             has_inverse = "inverse" in input_dict.keys()
             if has_inverse:
                 assert "origin_segment" in input_dict.keys()

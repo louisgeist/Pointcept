@@ -6,22 +6,29 @@ shared frozen-backbone forward pass, so a hyperparameter grid search over
 loss/optimizer/scheduler/dropout/normalization only pays the backbone cost
 once per batch instead of once per grid point.
 
-Scope: semantic segmentation probes only, all probes read the same target
-key (e.g. "segment"). Optimizer/scheduler heterogeneity across probes is
-handled by GridProbeTrainer (pointcept/engines/train.py), not here — this
-module only owns probe architecture + per-probe loss.
+Scope:
+  - GridProbeSegmentorV2: semantic segmentation probes (per-point logits,
+    target e.g. "segment").
+  - GridProbeClassifier: tile/scene classification probes (encoder multiscale
+    concat -> scene pool -> linear heads, target e.g. "category").
+
+Optimizer/scheduler heterogeneity across probes is handled by
+GridProbeTrainer (pointcept/engines/train.py), not here — this module only
+owns probe architecture + per-probe loss.
 """
 
 from collections.abc import Mapping
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+import torch_scatter
 from timm.layers import DropPath
 
 from pointcept.models.losses import build_criteria
 from pointcept.models.utils.structure import Point
 from .builder import MODELS, build_model
-from .default import LearnedMaskedFeatMixin
+from .default import LearnedMaskedFeatMixin, _safe_segment_csr_mean
 
 _INPUT_NORM_P = {
     "l1": 1,
@@ -426,4 +433,111 @@ class GridProbeSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
             elif not self.training:
                 return_dict["pred"] = return_dict["seg_logits"].argmax(dim=1)
 
+        return return_dict
+
+
+@MODELS.register_module()
+class GridProbeClassifier(GridProbeSegmentorV2):
+    """N linear probe heads for tile/scene classification.
+
+    Same probe grid + frozen-backbone sharing as GridProbeSegmentorV2, but
+    after the encoder multiscale (or decoder hypercolumn) concat the per-point
+    features are scene-pooled (mean/max) to shape [B, C] before the heads.
+    Target key defaults to ``category`` (PureForest / ModelNet-style).
+
+    Use with GridProbeTrainer + GridProbeEvaluator (reads ``target_key``) and
+    ``test=dict(type="ClsTester")`` via GridProbeWinnerSelector (exposes
+    ``cls_logits`` when ``active_probe`` is set).
+
+    Encoder multiscale recipes match the H3D/DALES seg probes:
+      - LitePT / PT-v3 / KPConvX: ``enc_mode=True``
+      - SpUNet: ``point_mode=True`` (not ``enc_mode``, which scene-pools inside
+        the backbone and cannot build a multiscale hypercolumn)
+    """
+
+    def __init__(
+        self,
+        probes,
+        backbone_out_channels,
+        num_classes,
+        ignore_index=-1,
+        backbone=None,
+        target_key="category",
+        freeze_backbone=True,
+        bn_eval_mode=True,
+        drop_path_eval_mode=True,
+        feature_mask_values=None,
+        drop_leading_channels=0,
+        channel_blocks=None,
+        pooling="mean",
+    ):
+        super().__init__(
+            probes=probes,
+            backbone_out_channels=backbone_out_channels,
+            num_classes=num_classes,
+            ignore_index=ignore_index,
+            backbone=backbone,
+            target_key=target_key,
+            freeze_backbone=freeze_backbone,
+            bn_eval_mode=bn_eval_mode,
+            drop_path_eval_mode=drop_path_eval_mode,
+            feature_mask_values=feature_mask_values,
+            drop_leading_channels=drop_leading_channels,
+            channel_blocks=channel_blocks,
+        )
+        pooling = str(pooling)
+        if pooling not in ("mean", "max"):
+            raise ValueError(
+                f"GridProbeClassifier.pooling must be 'mean' or 'max', got {pooling!r}."
+            )
+        self.pooling = pooling
+
+    def _pool_scene_feat(self, feat, offset):
+        indptr = F.pad(offset, (1, 0))
+        if self.pooling == "mean":
+            return _safe_segment_csr_mean(feat, indptr)
+        return torch_scatter.segment_csr(feat, indptr, reduce="max")
+
+    def prepare_batch(self, input_dict):
+        """Backbone multiscale feat -> scene pool -> unitsphere cache."""
+        self._fill_masked_feat_with_learned_value(input_dict)
+        if self.freeze_backbone:
+            with torch.no_grad():
+                feat, point = self._forward_backbone(input_dict)
+        else:
+            feat, point = self._forward_backbone(input_dict)
+        if self.drop_leading_channels:
+            feat = feat[..., self.drop_leading_channels :]
+
+        offset = input_dict["offset"]
+        if isinstance(point, Point) and "offset" in point.keys():
+            offset = point.offset
+        n_scenes = int(offset.numel())
+        n_points = int(offset[-1].item()) if n_scenes > 0 else 0
+        if feat.shape[0] == n_scenes:
+            # Already scene-pooled (e.g. SpUNet enc_mode=True).
+            pass
+        elif feat.shape[0] == n_points:
+            feat = self._pool_scene_feat(feat, offset)
+        else:
+            raise ValueError(
+                "Unexpected backbone feature shape "
+                f"{tuple(feat.shape)} for offset with {n_scenes} scenes and "
+                f"{n_points} points (pooling={self.pooling!r})."
+            )
+
+        active = self._active_probe_names()
+        feat = _prepare_shared_feat(feat)
+        feat_by_norm = _input_norm_cache(feat, self.heads, active, self.channel_blocks)
+        return feat_by_norm, point, active
+
+    def forward(self, input_dict, return_point=False):
+        return_dict = super().forward(input_dict, return_point=return_point)
+        # Alias classification keys for ClsTester / train logging that expect
+        # cls_logits(_by_task) rather than the seg_* names shared with the
+        # segmentor parent.
+        if "seg_logits_by_task" in return_dict:
+            return_dict["cls_logits_by_task"] = return_dict["seg_logits_by_task"]
+        if "seg_logits" in return_dict:
+            return_dict["cls_logits"] = return_dict["seg_logits"]
         return return_dict
