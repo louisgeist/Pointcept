@@ -242,7 +242,15 @@ class Trainer(TrainerBase):
         self.logger.info("=> Building hooks ...")
         self.register_hooks(self.cfg.hooks)
         self._gradient_accumulation_counter = 0
+        # GradNormLite EMA of last-layer norms. Built eagerly so CheckpointLoader
+        # can restore into it before the first step. Mutually exclusive with
+        # grad_norm (enforced in default_config_parser).
         self._grad_norm_lite_ema = None
+        if getattr(cfg, "grad_norm_lite", False):
+            self._grad_norm_lite_ema = GradNormLiteEMA(
+                alpha=getattr(cfg, "grad_norm_lite_ema_alpha", 0.1),
+                eps=getattr(cfg, "grad_norm_lite_eps", 1e-3),
+            )
         # Real GradNorm (Chen et al. 2018): learnable per-group loss weights +
         # their Adam state + L_g(0) anchors. Built eagerly so CheckpointLoader
         # can restore into it before the first step. Mutually exclusive with

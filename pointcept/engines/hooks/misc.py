@@ -803,6 +803,12 @@ class CheckpointSaver(HookBase):
                         if getattr(self.trainer, "_grad_norm_state", None) is not None
                         else None
                     ),
+                    "grad_norm_lite_state": (
+                        self.trainer._grad_norm_lite_ema.state_dict()
+                        if getattr(self.trainer, "_grad_norm_lite_ema", None)
+                        is not None
+                        else None
+                    ),
                 },
                 filename + ".tmp",
             )
@@ -913,6 +919,17 @@ class CheckpointLoader(HookBase):
             ):
                 self.trainer._grad_norm_state.load_state_dict(grad_norm_state)
                 self.trainer.logger.info("=> Restored GradNorm state from checkpoint")
+            # GradNormLite EMA of last-layer norms (older checkpoints predate
+            # this key, hence .get).
+            grad_norm_lite_state = checkpoint.get("grad_norm_lite_state")
+            if (
+                grad_norm_lite_state
+                and getattr(self.trainer, "_grad_norm_lite_ema", None) is not None
+            ):
+                self.trainer._grad_norm_lite_ema.load_state_dict(grad_norm_lite_state)
+                self.trainer.logger.info(
+                    "=> Restored GradNormLite EMA from checkpoint"
+                )
 
 
 @HOOKS.register_module()

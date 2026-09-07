@@ -15,6 +15,7 @@ import unittest
 import torch
 
 from pointcept.utils.gradient_norm import (
+    GradNormLiteEMA,
     GradNormState,
     build_grad_norm_state,
     group_task_losses,
@@ -125,6 +126,32 @@ class TestGradNormStateCheckpoint(unittest.TestCase):
         src = GradNormState(["a", "b"], weight_lr=0.05)
         with self.assertRaises(ValueError):
             GradNormState(["a", "c"], weight_lr=0.05).load_state_dict(src.state_dict())
+
+
+class TestGradNormLiteEMACheckpoint(unittest.TestCase):
+    def test_state_dict_round_trip(self):
+        src = GradNormLiteEMA(alpha=0.1, eps=1e-3)
+        src.update({"segment": 2.0, "nathab": 0.5, "elevation": 4.0})
+        src.update({"segment": 1.8, "nathab": 0.6})
+        state = src.state_dict()
+
+        dst = GradNormLiteEMA(alpha=0.9, eps=1e-1)  # different defaults
+        dst.load_state_dict(state)
+
+        self.assertEqual(src.ema, dst.ema)
+        self.assertAlmostEqual(dst.alpha, 0.1)
+        self.assertAlmostEqual(dst.eps, 1e-3)
+        for name in ["segment", "nathab", "elevation"]:
+            self.assertAlmostEqual(src.scale(name), dst.scale(name), places=6)
+
+    def test_load_state_dict_missing_ema_key_is_empty(self):
+        dst = GradNormLiteEMA(alpha=0.2, eps=1e-2)
+        dst.update({"segment": 3.0})
+        dst.load_state_dict({"alpha": 0.05})  # no "ema" key
+        self.assertEqual(dst.ema, {})
+        self.assertAlmostEqual(dst.alpha, 0.05)
+        self.assertAlmostEqual(dst.eps, 1e-2)  # kept
+        self.assertAlmostEqual(dst.scale("segment"), 1.0)
 
 
 class _FakeModel:

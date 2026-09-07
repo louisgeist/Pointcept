@@ -345,7 +345,11 @@ def combine_weighted_task_losses(loss_by_task, task_weights, scales=None):
 
 
 class GradNormLiteEMA:
-    """Per-task EMA of last-layer gradient norms for loss reweighting."""
+    """Per-task EMA of last-layer gradient norms for loss reweighting.
+
+    Checkpointed via ``CheckpointSaver`` / ``CheckpointLoader``
+    (``grad_norm_lite_state``) so a Slurm requeue does not reset the scales.
+    """
 
     def __init__(self, alpha=0.1, eps=1e-3):
         self.alpha = float(alpha)
@@ -374,6 +378,14 @@ class GradNormLiteEMA:
     def scales(self, task_names=None):
         names = task_names if task_names is not None else list(self.ema.keys())
         return {name: self.scale(name) for name in names}
+
+    def state_dict(self):
+        return {"ema": dict(self.ema), "alpha": self.alpha, "eps": self.eps}
+
+    def load_state_dict(self, state):
+        self.ema = {k: float(v) for k, v in dict(state.get("ema", {})).items()}
+        self.alpha = float(state.get("alpha", self.alpha))
+        self.eps = float(state.get("eps", self.eps))
 
 
 def group_task_losses(loss_by_task, task_groups=None):
