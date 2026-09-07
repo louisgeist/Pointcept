@@ -4,7 +4,7 @@ KPConvX GridProbeClassifier on PureForest — encoder multiscale
 heads. Frozen Malibu3D multitask ckpt. Strength zero-fill.
 
 AdamW / wd=0 / OneCycleLR warmup 5%, lr sweep {1e-4 .. 5e-1} (12 probes),
-CE only. select_metric=macro_f1.
+CE only. select_metric=mIoU.
 """
 
 _base_ = ["../_base_/default_runtime.py"]
@@ -119,7 +119,7 @@ hooks = [
     ),
     dict(type="IterationTimer", warmup_iter=2),
     dict(type="InformationWriter", log_interval=100),
-    dict(type="GridProbeEvaluator", write_cls_iou=True, select_metric="macro_f1"),
+    dict(type="GridProbeEvaluator", write_cls_iou=True, select_metric="mIoU"),
     dict(type="GridProbeCheckpointSaver"),
     dict(type="CheckpointSaver", save_freq=None),
     dict(type="GridProbeWinnerSelector", skip_test=False),
