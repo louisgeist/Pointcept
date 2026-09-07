@@ -373,6 +373,9 @@ def get_tile_distribution_config(
     IS the ``flair3d_label_remap`` task_key.
 
     Adds task_type set to "tile_distribution" for use with MultiTaskSegmentorV2.
+    Default training uses tile-pooled WeightedKL; set ``pointwise_supervision=True``
+    (via ``enable_nathab_pointwise_supervision``) for CE + Lovasz on point labels
+    while keeping tile-distribution inference / KL–TV metrics.
     """
     if target_key not in FLAIR3D_TILE_DISTRIBUTION_TASKS:
         keys = ", ".join(sorted(FLAIR3D_TILE_DISTRIBUTION_TASKS.keys()))
@@ -390,7 +393,23 @@ def get_tile_distribution_config(
     )
     cfg = deepcopy(definition_to_task_config(get_definition("natural_habitat", defn_name)))
     cfg["task_type"] = "tile_distribution"
+    cfg["pointwise_supervision"] = False
     return cfg
+
+
+def enable_nathab_pointwise_supervision(
+    task_configs: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Opt in to CE + Lovasz point-wise training for nathab tile_distribution axes.
+
+    Mutates and returns ``task_configs``. Call after ``init_task_configs`` and before
+    ``init_task_criteria``. Inference / KL–TV eval stay on the tile_distribution path;
+    MultiTaskEvaluator / MultiTaskTester also report mIoU when this flag is set.
+    """
+    for name in FLAIR3D_TILE_DISTRIBUTION_TASKS:
+        if name in task_configs:
+            task_configs[name]["pointwise_supervision"] = True
+    return task_configs
 
 
 def _validate_target_keys(target_keys: Tuple[str, ...]) -> None:
@@ -616,12 +635,27 @@ def init_task_criteria(task_configs: Dict[str, Any]) -> Dict[str, Any]:
                 ),
             ]
         elif task_type == "tile_distribution":
-            task_criteria[task_name] = [
-                dict(
-                    type="WeightedKLDivLoss",
-                    loss_weight=1.0,
-                ),
-            ]
+            if task_config.get("pointwise_supervision"):
+                task_criteria[task_name] = [
+                    dict(
+                        type="CrossEntropyLoss",
+                        loss_weight=1.0,
+                        ignore_index=task_config["ignore_index"],
+                    ),
+                    dict(
+                        type="LovaszLoss",
+                        mode="multiclass",
+                        loss_weight=1.0,
+                        ignore_index=task_config["ignore_index"],
+                    ),
+                ]
+            else:
+                task_criteria[task_name] = [
+                    dict(
+                        type="WeightedKLDivLoss",
+                        loss_weight=1.0,
+                    ),
+                ]
         else:
             raise KeyError(f"Unsupported task_type {task_type!r} for task '{task_name}'.")
     

@@ -797,6 +797,16 @@ class MultiTaskEvaluator(HookBase):
         ]
 
     @staticmethod
+    def _tile_distribution_pointwise_miou_task_names(task_configs):
+        """tile_distribution axes trained with CE that also report point-wise mIoU."""
+        return [
+            k
+            for k, task_config in task_configs.items()
+            if task_config.get("task_type") == "tile_distribution"
+            and task_config.get("pointwise_supervision")
+        ]
+
+    @staticmethod
     def _sync_multilabel_stats(stats: MultilabelStats):
         if comm.get_world_size() <= 1:
             return stats
@@ -901,6 +911,9 @@ class MultiTaskEvaluator(HookBase):
         classification_tasks = self._classification_task_names(task_configs)
         multilabel_tasks = self._multilabel_classification_task_names(task_configs)
         tile_distribution_tasks = self._tile_distribution_task_names(task_configs)
+        tile_pw_miou_tasks = self._tile_distribution_pointwise_miou_task_names(
+            task_configs
+        )
 
         reg_sums = {
             t: {"mae": 0.0, "mse": 0.0, "count": 0.0} for t in regression_tasks
@@ -1205,6 +1218,41 @@ class MultiTaskEvaluator(HookBase):
                             .astype(np.float64)
                         )
 
+                    # Optional point-wise mIoU (CE / Lovasz supervision mode).
+                    if task_name in tile_pw_miou_tasks:
+                        pred = logits_by_task[task_name].max(1)[1]
+                        miou_target = input_dict[task_name]
+                        if "inverse" in input_dict.keys():
+                            origin_target_key = self._task_origin_target_key(task_name)
+                            if origin_target_key in input_dict:
+                                pred = remap_pred_with_inverse(
+                                    pred,
+                                    input_dict["inverse"],
+                                    input_dict.get("offset"),
+                                    input_dict.get("origin_offset"),
+                                )
+                                miou_target = input_dict[origin_target_key]
+                        intersection, union, target = intersection_and_union_gpu(
+                            pred,
+                            miou_target,
+                            num_classes,
+                            ignore_index,
+                        )
+                        intersection, union, target = (
+                            intersection.cpu().numpy(),
+                            union.cpu().numpy(),
+                            target.cpu().numpy(),
+                        )
+                        self.trainer.storage.put_scalar(
+                            f"val_intersection/{task_name}", intersection
+                        )
+                        self.trainer.storage.put_scalar(
+                            f"val_union/{task_name}", union
+                        )
+                        self.trainer.storage.put_scalar(
+                            f"val_target/{task_name}", target
+                        )
+
                 self.trainer.storage.put_scalar("val_loss", loss.item())
                 # Skip when only one task: scalar "loss" already logged
                 if isinstance(loss_by_task, dict) and len(loss_by_task) > 1:
@@ -1304,7 +1352,12 @@ class MultiTaskEvaluator(HookBase):
                 final_tv_by_task[task_name] = float(mae.sum())
 
         per_task_metrics = {}
-        metric_task_names = semantic_tasks + classification_tasks + pixel_semantic_tasks
+        metric_task_names = (
+            semantic_tasks
+            + classification_tasks
+            + pixel_semantic_tasks
+            + tile_pw_miou_tasks
+        )
         for task_name in metric_task_names:
             task_config = task_configs[task_name]
             num_classes = int(task_config["num_classes"])

@@ -1415,6 +1415,16 @@ class MultiTaskTester(TesterBase):
         ]
 
     @staticmethod
+    def _tile_distribution_pointwise_miou_task_names(task_configs):
+        """tile_distribution axes trained with CE that also report point-wise mIoU."""
+        return [
+            k
+            for k, task_config in task_configs.items()
+            if task_config.get("task_type") == "tile_distribution"
+            and task_config.get("pointwise_supervision")
+        ]
+
+    @staticmethod
     def _tile_distribution_cache_paths(save_path, data_name, task_name):
         return dict(
             pred=os.path.join(save_path, f"{data_name}_pred_{task_name}.npy"),
@@ -1593,6 +1603,9 @@ class MultiTaskTester(TesterBase):
         classification_tasks = self._classification_task_names(task_configs)
         multilabel_tasks = self._multilabel_classification_task_names(task_configs)
         tile_distribution_tasks = self._tile_distribution_task_names(task_configs)
+        tile_pw_miou_tasks = self._tile_distribution_pointwise_miou_task_names(
+            task_configs
+        )
         scene_level_cls_tasks = classification_tasks + multilabel_tasks
 
         self.model.eval()
@@ -1765,6 +1778,7 @@ class MultiTaskTester(TesterBase):
             # Skip model forward when sem/reg/multilabel/pixel/nathab caches are present.
             # Mono-label classification is not cached and still forces a forward.
             batch_td_dist_np = []
+            batch_td_pred_np = []
             batch_td_metrics = []
             if all(batch_all_cached) and not classification_tasks:
                 batch_pred_cls_np = []
@@ -1787,13 +1801,18 @@ class MultiTaskTester(TesterBase):
                             batch_pixel_logits_cache_paths[b_idx][t]
                         )
                     td_dist = {}
+                    td_pred = {}
                     for t in tile_distribution_tasks:
-                        td_dist[t] = np.load(batch_td_cache_paths[b_idx][t]["dist"])
+                        paths = batch_td_cache_paths[b_idx][t]
+                        td_dist[t] = np.load(paths["dist"])
+                        if t in tile_pw_miou_tasks:
+                            td_pred[t] = np.load(paths["pred"])
                     batch_pred_cls_np.append(pred_cls_np)
                     batch_pred_reg_np.append(pred_reg_np)
                     batch_pred_scene_cls_np.append(pred_scene_cls_np)
                     batch_pixel_logits_np.append(pixel_logits_np)
                     batch_td_dist_np.append(td_dist)
+                    batch_td_pred_np.append(td_pred)
                     batch_td_metrics.append(None)
             else:
                 # Extract the single fragment from each scene
@@ -1987,6 +2006,7 @@ class MultiTaskTester(TesterBase):
                         )
 
                     td_dist = {}
+                    td_pred = {}
                     td_metrics = {}
                     for task_name in tile_distribution_tasks:
                         if task_name not in batch_axis_pred_sum[b_idx]:
@@ -2019,7 +2039,7 @@ class MultiTaskTester(TesterBase):
                                 )
                                 tgt_np = None
                         tc = task_configs[task_name]
-                        _, _, dist_np, td_m = self._finalize_and_save_tile_distribution(
+                        pred_np, _, dist_np, td_m = self._finalize_and_save_tile_distribution(
                             avg_probs,
                             tgt_np,
                             int(tc["ignore_index"]),
@@ -2027,9 +2047,12 @@ class MultiTaskTester(TesterBase):
                             batch_td_cache_paths[b_idx][task_name],
                         )
                         td_dist[task_name] = dist_np
+                        if task_name in tile_pw_miou_tasks:
+                            td_pred[task_name] = pred_np
                         if tgt_aligned:
                             td_metrics[task_name] = td_m
                     batch_td_dist_np.append(td_dist)
+                    batch_td_pred_np.append(td_pred)
                     batch_td_metrics.append(td_metrics)
                         
                     batch_pred_cls_np.append(pred_cls_np)
@@ -2301,6 +2324,43 @@ class MultiTaskTester(TesterBase):
                     if td_m is not None:
                         td_metrics_scene[task_name] = td_m
 
+                # Point-wise mIoU for nathab axes under CE / Lovasz supervision.
+                for task_name in tile_pw_miou_tasks:
+                    if task_name not in targets_by_task:
+                        continue
+                    pred_np = batch_td_pred_np[b_idx].get(task_name)
+                    if pred_np is None:
+                        continue
+                    pred_np = np.asarray(pred_np).reshape(-1)
+                    tgt_np = np.asarray(
+                        self._target_for_metrics(
+                            task_name, targets_by_task, scene_extra
+                        ),
+                        dtype=np.int64,
+                    ).reshape(-1)
+                    if pred_np.shape[0] != tgt_np.shape[0]:
+                        logger.warning(
+                            "Scene %s: tile_distribution mIoU task %s pred/target length "
+                            "mismatch (%d vs %d); skipping mIoU.",
+                            data_name,
+                            task_name,
+                            pred_np.shape[0],
+                            tgt_np.shape[0],
+                        )
+                        continue
+                    tc = task_configs[task_name]
+                    intersection, union, target_hist = intersection_and_union(
+                        pred_np,
+                        tgt_np,
+                        int(tc["num_classes"]),
+                        int(tc["ignore_index"]),
+                    )
+                    sem_metrics_scene[task_name] = dict(
+                        intersection=intersection,
+                        union=union,
+                        target=target_hist,
+                    )
+
                 record[data_name] = dict(
                     semantic=sem_metrics_scene,
                     tile_distribution=td_metrics_scene,
@@ -2348,7 +2408,9 @@ class MultiTaskTester(TesterBase):
                 merged.update(r)
                 del r
 
-            per_task_sem = {t: None for t in semantic_tasks + pixel_semantic_tasks}
+            per_task_sem = {
+                t: None for t in semantic_tasks + pixel_semantic_tasks + tile_pw_miou_tasks
+            }
             per_task_pixel_prf = {t: {} for t in pixel_semantic_tasks}
             for _, payload in merged.items():
                 for task_name, meters in payload["semantic"].items():
@@ -2389,7 +2451,7 @@ class MultiTaskTester(TesterBase):
                             acc["r_denom"] = acc.get("r_denom", 0.0) + counts["r_denom"]
 
             per_task_metrics = {}
-            for task_name in semantic_tasks + pixel_semantic_tasks:
+            for task_name in semantic_tasks + pixel_semantic_tasks + tile_pw_miou_tasks:
                 hist = per_task_sem[task_name]
                 if hist is None:
                     logger.warning(

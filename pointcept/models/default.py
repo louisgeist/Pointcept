@@ -783,25 +783,30 @@ class MultiTaskSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
                 if task_name not in input_dict:
                     continue
                 logits = logits_by_task[task_name]
-                target = input_dict[task_name].reshape(-1).long()
-                num_classes = int(task_config["num_classes"])
-                ignore_index = int(task_config["ignore_index"])
-                offset = input_dict["offset"]
-                indptr = nn.functional.pad(offset, (1, 0))
-                probs = torch.softmax(logits.float(), dim=-1)
-                pi_hat, q_t, n_t = pool_axis_distribution_from_probs(
-                    probs, target, indptr, ignore_index, num_classes
-                )
-                keep = n_t > 0
-                if not keep.any():
-                    # Keep logits in the graph so DDP always sees this head's grads
-                    # (zero) even when no tile in the batch has a valid point for
-                    # this axis — same idiom as the classification/multilabel branches.
-                    task_loss = logits.sum() * 0.0
-                else:
+                if task_config.get("pointwise_supervision"):
                     task_loss = self.criteria_by_task[task_name](
-                        pi_hat[keep], q_t[keep], weight=n_t[keep]
+                        logits, input_dict[task_name]
                     )
+                else:
+                    target = input_dict[task_name].reshape(-1).long()
+                    num_classes = int(task_config["num_classes"])
+                    ignore_index = int(task_config["ignore_index"])
+                    offset = input_dict["offset"]
+                    indptr = nn.functional.pad(offset, (1, 0))
+                    probs = torch.softmax(logits.float(), dim=-1)
+                    pi_hat, q_t, n_t = pool_axis_distribution_from_probs(
+                        probs, target, indptr, ignore_index, num_classes
+                    )
+                    keep = n_t > 0
+                    if not keep.any():
+                        # Keep logits in the graph so DDP always sees this head's grads
+                        # (zero) even when no tile in the batch has a valid point for
+                        # this axis — same idiom as the classification/multilabel branches.
+                        task_loss = logits.sum() * 0.0
+                    else:
+                        task_loss = self.criteria_by_task[task_name](
+                            pi_hat[keep], q_t[keep], weight=n_t[keep]
+                        )
             elif tt == "pixel_semantic":
                 if task_name not in pixel_logits_by_task:
                     continue
