@@ -28,7 +28,7 @@ lr = 5e-2
 
 log_test_f1 = True
 
-batch_size = 32 * num_gpu
+batch_size = 24 * num_gpu
 batch_size_val = batch_size // 2
 batch_size_test = batch_size // 2
 num_worker = 24 * num_gpu

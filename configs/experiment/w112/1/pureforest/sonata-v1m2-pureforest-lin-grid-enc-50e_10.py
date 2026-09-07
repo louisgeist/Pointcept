@@ -1,27 +1,27 @@
 """
-PT-v3-malibu GridProbeClassifier on PureForest — encoder multiscale
-(enc_mode=True -> 32+64+128+256+512 = 992ch), scene mean-pool, N linear
-heads. Frozen Malibu3D multitask ckpt. Strength zero-fill.
+Sonata-v1m2 (PT-v3m2) GridProbeClassifier on PureForest — encoder multiscale
+(enc_mode=True -> 48+96+192+384+512 = 1232ch), scene mean-pool, N linear
+heads. Frozen Malibu3D Sonata outdoor SSL ckpt. Strength zero-fill.
+No coord_feat_scale (matches Sonata H3D/DALES probes).
 
 AdamW / wd=0 / OneCycleLR warmup 5%, lr sweep {1e-4 .. 5e-1} (12 probes),
-CE only. select_metric=mIoU.
+CE only. select_metric=mIoU. 50-epoch schedule (eval every 5 trainer epochs).
 """
 
 _base_ = ["../../../../_base_/default_runtime.py"]
 
 grp_exp = 1
-num_exp = 2
+num_exp = 10
 
 num_classes = 13
 ignore_index = -1
 grid_size = 0.1
 point_max = 5000
 patch_size = 1024
-coord_feat_scale = 0.01
 
 num_gpu = 1
-epoch = 100
-eval_epoch = 10
+epoch = 50
+eval_epoch = 5
 lr = 5e-2
 
 log_test_f1 = True
@@ -35,11 +35,10 @@ enable_amp = False
 dataset_type = "PureForestDataset"
 data_root = "data/pureforest"
 
-weight = "ckpt/malibu3d/ptv3_multitask/model_best.pth"
+weight = "ckpt/malibu3d/sonata_outdoor/epoch_120.pth"
 
 wandb_project = "pointcept_pureforest"
 
-learned_masked_feat = True
 feat_keys = ["coord", "color", "strength"]
 
 class_names = [
@@ -58,7 +57,7 @@ class_names = [
     "douglas",
 ]
 
-enc_channels = (32, 64, 128, 256, 512)
+enc_channels = (48, 96, 192, 384, 512)
 backbone_out_channels = sum(enc_channels)
 
 _criteria = [
@@ -100,20 +99,15 @@ for _lr_name, _lr in _lrs.items():
 del _criteria, _lrs, _lr_name, _lr
 
 wandb_run_name = (
-    f"PTv3-malibu GridProbeClassifier PureForest ({grp_exp}.{num_exp}) "
+    f"Sonata GridProbeClassifier PureForest ({grp_exp}.{num_exp}) "
     f"enc multiscale {backbone_out_channels}ch, {len(probes)} probes, epoch={epoch}"
 )
 
 hooks = [
     dict(
         type="CheckpointLoader",
-        exclude_keys=(
-            "seg_heads",
-            "reg_heads",
-            "cls_heads",
-            "pixel_seg_heads",
-            "cls_attn_pools",
-        ),
+        keywords="module.student.backbone",
+        replacement="module.backbone",
     ),
     dict(type="IterationTimer", warmup_iter=2),
     dict(type="InformationWriter", log_interval=100),
@@ -135,13 +129,13 @@ model = dict(
     backbone_out_channels=backbone_out_channels,
     channel_blocks=enc_channels,
     backbone=dict(
-        type="PT-v3-malibu",
+        type="PT-v3m2",
         in_channels=7,
-        order=["z", "z-trans", "hilbert", "hilbert-trans"],
+        order=("z", "z-trans", "hilbert", "hilbert-trans"),
         stride=(3, 3, 3, 3),
-        enc_depths=(2, 2, 2, 6, 2),
+        enc_depths=(3, 3, 3, 12, 3),
         enc_channels=enc_channels,
-        enc_num_head=(2, 4, 8, 16, 32),
+        enc_num_head=(3, 6, 12, 24, 32),
         enc_patch_size=(patch_size, patch_size, patch_size, patch_size, patch_size),
         mlp_ratio=4,
         qkv_bias=True,
@@ -155,15 +149,14 @@ model = dict(
         enable_flash=True,
         upcast_attention=False,
         upcast_softmax=False,
+        traceable=False,
+        mask_token=False,
         enc_mode=True,
+        freeze_encoder=False,
     ),
     freeze_backbone=True,
     bn_eval_mode=True,
     drop_path_eval_mode=True,
-    feature_mask_values=dict(
-        enable=learned_masked_feat,
-        masked_feat_keys=["color", "strength"],
-    ),
 )
 
 train = dict(type="GridProbeTrainer")
@@ -191,7 +184,6 @@ _val_test_transform = [
         type="Collect",
         keys=("coord", "grid_coord", "grid_size", "category"),
         feat_keys=feat_keys,
-        feat_scales=dict(coord=coord_feat_scale),
         optional_keys=("name",),
     ),
 ]
@@ -243,7 +235,6 @@ data = dict(
                 type="Collect",
                 keys=("coord", "grid_coord", "grid_size", "category"),
                 feat_keys=feat_keys,
-                feat_scales=dict(coord=coord_feat_scale),
                 optional_keys=("name",),
             ),
         ],

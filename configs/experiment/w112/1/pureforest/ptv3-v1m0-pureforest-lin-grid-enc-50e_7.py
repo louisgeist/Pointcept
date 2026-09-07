@@ -4,13 +4,13 @@ PT-v3-malibu GridProbeClassifier on PureForest — encoder multiscale
 heads. Frozen Malibu3D multitask ckpt. Strength zero-fill.
 
 AdamW / wd=0 / OneCycleLR warmup 5%, lr sweep {1e-4 .. 5e-1} (12 probes),
-CE only. select_metric=mIoU.
+CE only. select_metric=mIoU. 50-epoch schedule (eval every 5 trainer epochs).
 """
 
 _base_ = ["../../../../_base_/default_runtime.py"]
 
 grp_exp = 1
-num_exp = 2
+num_exp = 7
 
 num_classes = 13
 ignore_index = -1
@@ -20,8 +20,8 @@ patch_size = 1024
 coord_feat_scale = 0.01
 
 num_gpu = 1
-epoch = 100
-eval_epoch = 10
+epoch = 50
+eval_epoch = 5
 lr = 5e-2
 
 log_test_f1 = True

@@ -1,16 +1,16 @@
 """
-PT-v3-malibu GridProbeClassifier on PureForest — encoder multiscale
-(enc_mode=True -> 32+64+128+256+512 = 992ch), scene mean-pool, N linear
+LitePT-B GridProbeClassifier on PureForest — encoder multiscale
+(enc_mode=True -> 54+108+216+432+576 = 1386ch), scene mean-pool, N linear
 heads. Frozen Malibu3D multitask ckpt. Strength zero-fill.
 
 AdamW / wd=0 / OneCycleLR warmup 5%, lr sweep {1e-4 .. 5e-1} (12 probes),
-CE only. select_metric=mIoU.
+CE only. select_metric=mIoU. 50-epoch schedule (eval every 5 trainer epochs).
 """
 
 _base_ = ["../../../../_base_/default_runtime.py"]
 
 grp_exp = 1
-num_exp = 2
+num_exp = 6
 
 num_classes = 13
 ignore_index = -1
@@ -20,8 +20,8 @@ patch_size = 1024
 coord_feat_scale = 0.01
 
 num_gpu = 1
-epoch = 100
-eval_epoch = 10
+epoch = 50
+eval_epoch = 5
 lr = 5e-2
 
 log_test_f1 = True
@@ -35,7 +35,7 @@ enable_amp = False
 dataset_type = "PureForestDataset"
 data_root = "data/pureforest"
 
-weight = "ckpt/malibu3d/ptv3_multitask/model_best.pth"
+weight = "ckpt/malibu3d/litept_b_multitask/model_best.pth"
 
 wandb_project = "pointcept_pureforest"
 
@@ -58,7 +58,7 @@ class_names = [
     "douglas",
 ]
 
-enc_channels = (32, 64, 128, 256, 512)
+enc_channels = (54, 108, 216, 432, 576)
 backbone_out_channels = sum(enc_channels)
 
 _criteria = [
@@ -100,7 +100,7 @@ for _lr_name, _lr in _lrs.items():
 del _criteria, _lrs, _lr_name, _lr
 
 wandb_run_name = (
-    f"PTv3-malibu GridProbeClassifier PureForest ({grp_exp}.{num_exp}) "
+    f"LitePT-B GridProbeClassifier PureForest ({grp_exp}.{num_exp}) "
     f"enc multiscale {backbone_out_channels}ch, {len(probes)} probes, epoch={epoch}"
 )
 
@@ -115,6 +115,7 @@ hooks = [
             "cls_attn_pools",
         ),
     ),
+    dict(type="ModelHook"),
     dict(type="IterationTimer", warmup_iter=2),
     dict(type="InformationWriter", log_interval=100),
     dict(type="GridProbeEvaluator", write_cls_iou=True, select_metric="mIoU"),
@@ -135,14 +136,17 @@ model = dict(
     backbone_out_channels=backbone_out_channels,
     channel_blocks=enc_channels,
     backbone=dict(
-        type="PT-v3-malibu",
+        type="LitePT-v1",
         in_channels=7,
-        order=["z", "z-trans", "hilbert", "hilbert-trans"],
+        order=("z", "z-trans", "hilbert", "hilbert-trans"),
         stride=(3, 3, 3, 3),
-        enc_depths=(2, 2, 2, 6, 2),
+        enc_depths=(3, 3, 3, 12, 3),
         enc_channels=enc_channels,
-        enc_num_head=(2, 4, 8, 16, 32),
+        enc_num_head=(3, 6, 12, 24, 32),
         enc_patch_size=(patch_size, patch_size, patch_size, patch_size, patch_size),
+        enc_conv=(True, True, True, False, False),
+        enc_attn=(False, False, False, True, True),
+        enc_rope_freq=(100.0, 100.0, 100.0, 100.0, 100.0),
         mlp_ratio=4,
         qkv_bias=True,
         qk_scale=None,
@@ -151,10 +155,6 @@ model = dict(
         drop_path=0.3,
         shuffle_orders=True,
         pre_norm=True,
-        enable_rpe=False,
-        enable_flash=True,
-        upcast_attention=False,
-        upcast_softmax=False,
         enc_mode=True,
     ),
     freeze_backbone=True,

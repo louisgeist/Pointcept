@@ -1,27 +1,29 @@
 """
-PT-v3-malibu GridProbeClassifier on PureForest — encoder multiscale
-(enc_mode=True -> 32+64+128+256+512 = 992ch), scene mean-pool, N linear
+KPConvX GridProbeClassifier on PureForest — encoder multiscale
+(enc_mode=True -> 96+128+192+256+256 = 928ch), scene mean-pool, N linear
 heads. Frozen Malibu3D multitask ckpt. Strength zero-fill.
 
 AdamW / wd=0 / OneCycleLR warmup 5%, lr sweep {1e-4 .. 5e-1} (12 probes),
-CE only. select_metric=mIoU.
+CE only. select_metric=mIoU. 50-epoch schedule (eval every 5 trainer epochs).
 """
 
 _base_ = ["../../../../_base_/default_runtime.py"]
 
 grp_exp = 1
-num_exp = 2
+num_exp = 9
 
 num_classes = 13
 ignore_index = -1
 grid_size = 0.1
 point_max = 5000
-patch_size = 1024
+kp_radius = 3.2
+kp_sigma = kp_radius
+radius_scaling = 3.0
 coord_feat_scale = 0.01
 
 num_gpu = 1
-epoch = 100
-eval_epoch = 10
+epoch = 50
+eval_epoch = 5
 lr = 5e-2
 
 log_test_f1 = True
@@ -35,7 +37,7 @@ enable_amp = False
 dataset_type = "PureForestDataset"
 data_root = "data/pureforest"
 
-weight = "ckpt/malibu3d/ptv3_multitask/model_best.pth"
+weight = "ckpt/malibu3d/kpconvx_multitask/model_best.pth"
 
 wandb_project = "pointcept_pureforest"
 
@@ -58,7 +60,7 @@ class_names = [
     "douglas",
 ]
 
-enc_channels = (32, 64, 128, 256, 512)
+enc_channels = (96, 128, 192, 256, 256)
 backbone_out_channels = sum(enc_channels)
 
 _criteria = [
@@ -100,7 +102,7 @@ for _lr_name, _lr in _lrs.items():
 del _criteria, _lrs, _lr_name, _lr
 
 wandb_run_name = (
-    f"PTv3-malibu GridProbeClassifier PureForest ({grp_exp}.{num_exp}) "
+    f"KPConvX GridProbeClassifier PureForest ({grp_exp}.{num_exp}) "
     f"enc multiscale {backbone_out_channels}ch, {len(probes)} probes, epoch={epoch}"
 )
 
@@ -135,26 +137,38 @@ model = dict(
     backbone_out_channels=backbone_out_channels,
     channel_blocks=enc_channels,
     backbone=dict(
-        type="PT-v3-malibu",
-        in_channels=7,
-        order=["z", "z-trans", "hilbert", "hilbert-trans"],
-        stride=(3, 3, 3, 3),
-        enc_depths=(2, 2, 2, 6, 2),
-        enc_channels=enc_channels,
-        enc_num_head=(2, 4, 8, 16, 32),
-        enc_patch_size=(patch_size, patch_size, patch_size, patch_size, patch_size),
-        mlp_ratio=4,
-        qkv_bias=True,
-        qk_scale=None,
-        attn_drop=0.0,
-        proj_drop=0.0,
-        drop_path=0.3,
-        shuffle_orders=True,
-        pre_norm=True,
-        enable_rpe=False,
-        enable_flash=True,
-        upcast_attention=False,
-        upcast_softmax=False,
+        type="kpconvx_base",
+        input_channels=7,
+        num_classes=0,
+        dim=3,
+        task="cloud_segmentation",
+        kp_mode="kpconvx",
+        shell_sizes=(1, 14, 28),
+        kp_radius=kp_radius,
+        kp_aggregation="nearest",
+        kp_influence="constant",
+        kp_sigma=kp_sigma,
+        share_kp=False,
+        conv_groups=-1,
+        inv_groups=8,
+        inv_act="sigmoid",
+        inv_grp_norm=True,
+        kpx_upcut=False,
+        subsample_size=grid_size,
+        neighbor_limits=(12, 16, 20, 20, 20),
+        layer_blocks=(3, 3, 9, 12, 3),
+        init_channels=64,
+        channel_scaling=1.414,
+        radius_scaling=radius_scaling,
+        decoder_layer=True,
+        grid_pool=True,
+        upsample_n=3,
+        first_inv_layer=1,
+        drop_path_rate=0,
+        norm="batch",
+        bn_momentum=0.1,
+        smooth_labels=False,
+        class_w=(),
         enc_mode=True,
     ),
     freeze_backbone=True,
@@ -180,16 +194,15 @@ _val_test_transform = [
         grid_size=grid_size,
         hash_type="fnv",
         mode="train",
-        return_grid_coord=True,
+        return_min_coord=True,
     ),
     dict(type="CenterShift", apply_z=False),
     dict(type="NormalizeColor"),
     _fill_strength,
     dict(type="ToTensor"),
-    dict(type="Update", keys_dict={"grid_size": grid_size}),
     dict(
         type="Collect",
-        keys=("coord", "grid_coord", "grid_size", "category"),
+        keys=("coord", "category"),
         feat_keys=feat_keys,
         feat_scales=dict(coord=coord_feat_scale),
         optional_keys=("name",),
@@ -231,17 +244,17 @@ data = dict(
                 grid_size=grid_size,
                 hash_type="fnv",
                 mode="train",
-                return_grid_coord=True,
+                return_min_coord=True,
             ),
             dict(type="SphereCrop", point_max=point_max, mode="random"),
             dict(type="CenterShift", apply_z=False),
             dict(type="NormalizeColor"),
+            dict(type="ShufflePoint"),
             _fill_strength,
             dict(type="ToTensor"),
-            dict(type="Update", keys_dict={"grid_size": grid_size}),
             dict(
                 type="Collect",
-                keys=("coord", "grid_coord", "grid_size", "category"),
+                keys=("coord", "category"),
                 feat_keys=feat_keys,
                 feat_scales=dict(coord=coord_feat_scale),
                 optional_keys=("name",),

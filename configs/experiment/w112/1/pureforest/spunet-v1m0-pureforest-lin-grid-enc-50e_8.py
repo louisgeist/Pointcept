@@ -1,27 +1,25 @@
 """
-PT-v3-malibu GridProbeClassifier on PureForest — encoder multiscale
-(enc_mode=True -> 32+64+128+256+512 = 992ch), scene mean-pool, N linear
-heads. Frozen Malibu3D multitask ckpt. Strength zero-fill.
+SpUNet-v1m1 GridProbeClassifier on PureForest — encoder multiscale
+(point_mode=True -> stem+stage0..3 concat = 512ch), scene mean-pool, N
+linear heads. Frozen Malibu3D multitask ckpt (stride=3). Strength zero-fill.
 
 AdamW / wd=0 / OneCycleLR warmup 5%, lr sweep {1e-4 .. 5e-1} (12 probes),
-CE only. select_metric=mIoU.
+CE only (tile classification). select_metric=mIoU. 50-epoch schedule (eval every 5 trainer epochs).
 """
 
 _base_ = ["../../../../_base_/default_runtime.py"]
 
 grp_exp = 1
-num_exp = 2
+num_exp = 8
 
 num_classes = 13
 ignore_index = -1
 grid_size = 0.1
 point_max = 5000
-patch_size = 1024
-coord_feat_scale = 0.01
 
 num_gpu = 1
-epoch = 100
-eval_epoch = 10
+epoch = 50
+eval_epoch = 5
 lr = 5e-2
 
 log_test_f1 = True
@@ -35,12 +33,13 @@ enable_amp = False
 dataset_type = "PureForestDataset"
 data_root = "data/pureforest"
 
-weight = "ckpt/malibu3d/ptv3_multitask/model_best.pth"
+weight = "ckpt/malibu3d/spunet_multitask/model_best.pth"
 
 wandb_project = "pointcept_pureforest"
 
 learned_masked_feat = True
 feat_keys = ["coord", "color", "strength"]
+coord_feat_scale = 0.01
 
 class_names = [
     "deciduous_oak",
@@ -58,7 +57,9 @@ class_names = [
     "douglas",
 ]
 
-enc_channels = (32, 64, 128, 256, 512)
+# point_mode multiscale: stem(32)+stage0(32)+stage1(64)+stage2(128)+bottleneck(256)
+enc_channels = (32, 32, 64, 128, 256)
+backbone_channels = (32, 64, 128, 256, 256, 128, 96, 96)
 backbone_out_channels = sum(enc_channels)
 
 _criteria = [
@@ -100,7 +101,7 @@ for _lr_name, _lr in _lrs.items():
 del _criteria, _lrs, _lr_name, _lr
 
 wandb_run_name = (
-    f"PTv3-malibu GridProbeClassifier PureForest ({grp_exp}.{num_exp}) "
+    f"SpUNet GridProbeClassifier PureForest ({grp_exp}.{num_exp}) "
     f"enc multiscale {backbone_out_channels}ch, {len(probes)} probes, epoch={epoch}"
 )
 
@@ -135,27 +136,13 @@ model = dict(
     backbone_out_channels=backbone_out_channels,
     channel_blocks=enc_channels,
     backbone=dict(
-        type="PT-v3-malibu",
+        type="SpUNet-v1m1",
         in_channels=7,
-        order=["z", "z-trans", "hilbert", "hilbert-trans"],
-        stride=(3, 3, 3, 3),
-        enc_depths=(2, 2, 2, 6, 2),
-        enc_channels=enc_channels,
-        enc_num_head=(2, 4, 8, 16, 32),
-        enc_patch_size=(patch_size, patch_size, patch_size, patch_size, patch_size),
-        mlp_ratio=4,
-        qkv_bias=True,
-        qk_scale=None,
-        attn_drop=0.0,
-        proj_drop=0.0,
-        drop_path=0.3,
-        shuffle_orders=True,
-        pre_norm=True,
-        enable_rpe=False,
-        enable_flash=True,
-        upcast_attention=False,
-        upcast_softmax=False,
-        enc_mode=True,
+        num_classes=0,
+        channels=backbone_channels,
+        layers=(2, 3, 4, 6, 2, 2, 2, 2),
+        stride=3,
+        point_mode=True,
     ),
     freeze_backbone=True,
     bn_eval_mode=True,
