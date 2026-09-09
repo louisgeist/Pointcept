@@ -39,6 +39,8 @@ dependencies:
   - black
   - open3d
   - geopandas  # Flair3D+ network masks (rasterize_network.py)
+  - scikit-image  # Flair3D+ network mask skeletonization (network_graph_pipeline.py)
+  - scikit-learn  # PureForest offline linear probe (scripts/probe_pureforest_sklearn.py)
   - peft
   - pip:
     - torch-cluster -f https://data.pyg.org/whl/torch-2.5.0+cu124.html

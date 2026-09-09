@@ -129,3 +129,53 @@ python tools/train.py --config-file configs/pureforest/cls-spunet-v1m0-purefores
 ```bash
 python tools/train.py --config-file configs/pureforest/cls-spunet-v1m0-pureforest.py
 ```
+
+## Offline pooled embeddings + sklearn linear probe
+
+Faster alternative to `GridProbeClassifier` lr sweeps for frozen-backbone probes:
+one GPU pass dumps per-tile **mean** and **max** pools; then a CPU sklearn
+`LogisticRegression` grid over `C` (L2 ≈ weight decay) tries mean / max /
+concat / sum.
+
+Requires `scikit-learn` (`conda install scikit-learn` or recreate the env from
+`environment.yml`).
+
+**Extract** (deterministic `GridSample` test fragment; no train augs):
+
+```bash
+export PYTHONPATH="$PWD"
+python scripts/extract_pureforest_pooled_embeddings.py \
+  --config configs/pureforest/cls-sonata-v1m2-pureforest-lin-grid-enc.py \
+  --weight ckpt/malibu3d/sonata_outdoor/epoch_120.pth \
+  --output-dir stats/pureforest/embeddings/sonata_outdoor \
+  --splits train val test \
+  --batch-size 4
+```
+
+Toy smoke (override data root):
+
+```bash
+python scripts/extract_pureforest_pooled_embeddings.py \
+  --config configs/pureforest/cls-sonata-v1m2-pureforest-lin-grid-enc.py \
+  --weight ckpt/malibu3d/sonata_outdoor/epoch_120.pth \
+  --data-root data/pureforest_toy \
+  --output-dir stats/pureforest/embeddings/sonata_outdoor_toy \
+  --splits train val test \
+  --batch-size 2
+```
+
+Optional `--point-max N` adds a center `SphereCrop` after voxelization if VRAM
+is tight. Writes `{split}.npz` (`names`, `category`, `mean_feat`, `max_feat`)
+plus `meta.json`.
+
+**Probe**:
+
+```bash
+python scripts/probe_pureforest_sklearn.py \
+  --embeddings-dir stats/pureforest/embeddings/sonata_outdoor \
+  --output-dir stats/pureforest/sklearn_probe/sonata_outdoor
+```
+
+Selects best `(agg, C)` on val (`--select-metric mIoU` by default), reports test
+once, writes `metrics.json` and `best_test_predictions.npz`. Use
+`--class-weight balanced` or a custom `--Cs` grid as needed.
