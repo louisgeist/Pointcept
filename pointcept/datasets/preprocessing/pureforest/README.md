@@ -140,17 +140,70 @@ concat / sum.
 Requires `scikit-learn` (`conda install scikit-learn` or recreate the env from
 `environment.yml`).
 
-**Extract** (deterministic `GridSample` test fragment; no train augs):
+Common setup (repo root):
 
 ```bash
 export PYTHONPATH="$PWD"
+BS=24
+SPLITS="train val test"
+OUT=stats/pureforest/embeddings
+```
+
+Optional `--point-max 5000` if VRAM OOMs on full tiles (val has no SphereCrop).
+Writes `{split}.npz` (`names`, `category`, `mean_feat`, `max_feat`) + `meta.json`.
+
+### Extract — encoder multiscale (local)
+
+Malibu3D / Sonata weights under `ckpt/malibu3d/` (see `ckpt/README.md`).
+
+```bash
+# Sonata outdoor SSL (1232ch)
 python scripts/extract_pureforest_pooled_embeddings.py \
   --config configs/pureforest/cls-sonata-v1m2-pureforest-lin-grid-enc.py \
   --weight ckpt/malibu3d/sonata_outdoor/epoch_120.pth \
-  --output-dir stats/pureforest/embeddings/sonata_outdoor \
-  --splits train val test \
-  --batch-size 4
+  --output-dir ${OUT}/sonata_outdoor_ms \
+  --splits ${SPLITS} --batch-size ${BS}
+
+# LitePT-B Malibu3D multitask (1386ch)
+python scripts/extract_pureforest_pooled_embeddings.py \
+  --config configs/pureforest/cls-litept-b-v1m0-pureforest-lin-grid-enc.py \
+  --weight ckpt/malibu3d/litept_b_multitask/model_best.pth \
+  --output-dir ${OUT}/litept_b_malibu3d_ms \
+  --splits ${SPLITS} --batch-size ${BS}
+
+# PTv3 Malibu3D multitask (992ch)
+python scripts/extract_pureforest_pooled_embeddings.py \
+  --config configs/pureforest/cls-ptv3-v1m0-pureforest-lin-grid-enc.py \
+  --weight ckpt/malibu3d/ptv3_multitask/model_best.pth \
+  --output-dir ${OUT}/ptv3_malibu3d_ms \
+  --splits ${SPLITS} --batch-size ${BS}
+
+# SpUNet Malibu3D multitask (512ch)
+python scripts/extract_pureforest_pooled_embeddings.py \
+  --config configs/pureforest/cls-spunet-v1m0-pureforest-lin-grid-enc.py \
+  --weight ckpt/malibu3d/spunet_multitask/model_best.pth \
+  --output-dir ${OUT}/spunet_malibu3d_ms \
+  --splits ${SPLITS} --batch-size ${BS}
+
+# KPConvX Malibu3D multitask (928ch)
+python scripts/extract_pureforest_pooled_embeddings.py \
+  --config configs/pureforest/cls-kpconvx-v1m0-pureforest-lin-grid-enc.py \
+  --weight ckpt/malibu3d/kpconvx_multitask/model_best.pth \
+  --output-dir ${OUT}/kpconvx_malibu3d_ms \
+  --splits ${SPLITS} --batch-size ${BS}
 ```
+
+### LitePT-B préentraîné ECLAIR (job 1330042)
+
+```bash
+python scripts/extract_pureforest_pooled_embeddings.py \
+  --config configs/pureforest/cls-litept-b-v1m0-pureforest-lin-grid-enc.py \
+  --weight ckpt/1330042/model_best.pth \
+  --output-dir ${OUT}/litept_b_preECLAIR_ms \
+  --splits ${SPLITS} --batch-size ${BS}
+```
+
+On Jean-Zay you can point `--weight` directly at the lustre path without copying.
 
 Toy smoke (override data root):
 
@@ -159,23 +212,35 @@ python scripts/extract_pureforest_pooled_embeddings.py \
   --config configs/pureforest/cls-sonata-v1m2-pureforest-lin-grid-enc.py \
   --weight ckpt/malibu3d/sonata_outdoor/epoch_120.pth \
   --data-root data/pureforest_toy \
-  --output-dir stats/pureforest/embeddings/sonata_outdoor_toy \
-  --splits train val test \
-  --batch-size 2
+  --output-dir ${OUT}/sonata_outdoor_toy \
+  --splits ${SPLITS} --batch-size 2
 ```
 
-Optional `--point-max N` adds a center `SphereCrop` after voxelization if VRAM
-is tight. Writes `{split}.npz` (`names`, `category`, `mean_feat`, `max_feat`)
-plus `meta.json`.
-
-**Probe**:
+### Probe (sklearn)
 
 ```bash
 python scripts/probe_pureforest_sklearn.py \
-  --embeddings-dir stats/pureforest/embeddings/sonata_outdoor \
-  --output-dir stats/pureforest/sklearn_probe/sonata_outdoor
+  --embeddings-dir ${OUT}/sonata_outdoor_ms \
+  --output-dir stats/pureforest/sklearn_probe/sonata_outdoor_ms
 ```
 
-Selects best `(agg, C)` on val (`--select-metric mIoU` by default), reports test
-once, writes `metrics.json` and `best_test_predictions.npz`. Use
-`--class-weight balanced` or a custom `--Cs` grid as needed.
+Repeat with each `${OUT}/<tag>`. Selects best `(agg, C)` on val
+(`--select-metric mIoU` by default), reports test once, writes `metrics.json`
+and `best_test_predictions.npz`. Options: `--class-weight balanced`,
+`--Cs 0.01 0.1 1 10 100`, `--aggs mean concat`.
+
+### Slurm (Jean-Zay H100)
+
+Extract all MS-encoder backbones (Malibu3D + LitePT preECLAIR) with
+`batch_size=24` by default:
+
+```bash
+sbatch scripts/pureforest/sbatch_extract_pooled_embeddings_h100.sh
+
+# Optional overrides:
+BATCH_SIZE=32 POINT_MAX=5000 SKIP_EXISTING=1 \
+  sbatch scripts/pureforest/sbatch_extract_pooled_embeddings_h100.sh
+```
+
+Outputs: `stats/pureforest/embeddings/<tag>/{train,val,test}.npz`.
+Logs: `logs/slurm/$SLURM_JOB_ID/`.
