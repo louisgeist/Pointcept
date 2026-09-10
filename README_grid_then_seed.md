@@ -66,7 +66,9 @@ There is **no official outdoor Sonata release**; the Flair3D fork above (`W_SONA
 separate line. Indoor configs use `in_channels=9` (`coord+color+normal`), zero-fill
 missing normals (and color on DALES), `stride=(2,2,2,2)`, **`grid_size=0.02`**
 (native indoor pretrain), and `FixedScaleCoord(1/N)` before `GridSample` with
-`N ∈ {10, 25, 50}` for the scale ablation. **Do not** reuse the lr winner from
+`N ∈ {1, 5, 10, 25, 50}` for the scale ablation (`N=1` = no `FixedScaleCoord`;
+`N=5` and extra scales live under `configs/experiment/w111/3/sonata_indoor/`).
+**Do not** reuse the lr winner from
 `W_SONATA` (Flair3D fork) or from another coord scale.
 
 Download once (Jean-Zay or local):
@@ -93,6 +95,15 @@ $SB configs/eclair/sonata-v1m1-eclair-lin-grid-scale10.py $W_SONATA_INDOOR  ecla
 $SB configs/dales/sonata-v1m1-dales-lin-grid-scale50.py  $W_SONATA_INDOOR  dales_sonata_indoor_s50
 $SB configs/h3d/sonata-v1m1-h3d-lin-grid-scale50.py      $W_SONATA_INDOOR  h3d_sonata_indoor_s50
 $SB configs/eclair/sonata-v1m1-eclair-lin-grid-scale50.py $W_SONATA_INDOOR  eclair_sonata_indoor_s50
+
+# w111/3 — coord /5 and /1 (no rescale)
+EXP=configs/experiment/w111/3/sonata_indoor
+$SB $EXP/sonata-v1m1-dales-lin-grid-scale5_1.py   $W_SONATA_INDOOR  dales_sonata_indoor_s5
+$SB $EXP/sonata-v1m1-h3d-lin-grid-scale5_3.py     $W_SONATA_INDOOR  h3d_sonata_indoor_s5
+$SB $EXP/sonata-v1m1-eclair-lin-grid-scale5_5.py   $W_SONATA_INDOOR  eclair_sonata_indoor_s5
+$SB $EXP/sonata-v1m1-dales-lin-grid-scale1_2.py   $W_SONATA_INDOOR  dales_sonata_indoor_s1
+$SB $EXP/sonata-v1m1-h3d-lin-grid-scale1_4.py     $W_SONATA_INDOOR  h3d_sonata_indoor_s1
+$SB $EXP/sonata-v1m1-eclair-lin-grid-scale1_6.py   $W_SONATA_INDOOR  eclair_sonata_indoor_s1
 ```
 
 ### LitePT-B pretraining ablations (backbone changes, probe recipe identical)
@@ -194,6 +205,25 @@ $SB configs/experiment/w110/4/grid_eclair_norgb/litept-b-v1m0-eclair-lin_enc-nor
 | `grid_then_seeds_summary.csv` | one row: `winner_select_metric`, `winner_val_mIoU`, `winner_val_f1_macro`, `test_*_mean/std`, … |
 
 W&B: two runs (grid + seeds) sharing group `gts-<jobid>`.
+
+## Archive best seeds to hecate (release / durable copy)
+
+For the **15** main-table runs (MS Enc × H3D/DALES/ECLAIR, plus Sonata outdoor),
+job IDs live in [`scripts/lin_probe_external_jobs.csv`](scripts/lin_probe_external_jobs.csv).
+[`scripts/archive_external_lin_probe_ckpts.py`](scripts/archive_external_lin_probe_ckpts.py)
+picks the best seed from `seeds/seed_ensemble_results.json` and packs
+`probe_best.pth` + provenance under `ckpt/lin_probe/` (see [`ckpt/README.md`](ckpt/README.md)).
+
+```bash
+# on Jean-Zay
+python scripts/archive_external_lin_probe_ckpts.py --dry-run --verify-exp-name
+python scripts/archive_external_lin_probe_ckpts.py --copy \
+  --dest $WORK/Pointcept/ckpt/lin_probe_pack
+# on hecate
+scp -J passerelle -r \
+  usi32yh@jean-zay.idris.fr:$WORK/Pointcept/ckpt/lin_probe_pack/. \
+  /data/geist/Pointcept/ckpt/lin_probe/
+```
 
 ## Notes
 
