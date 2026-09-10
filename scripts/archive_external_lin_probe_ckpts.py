@@ -2,9 +2,16 @@
 """Archive best multi-seed linear-probe checkpoints for external benchmarks.
 
 For each row in the jobs CSV (H3D / DALES / ECLAIR × Sonata + MS-Enc
-backbones), locate the Jean-Zay ``grid_then_seeds`` job directory, pick the
-seed with the highest test metric, and copy (or emit scp commands for) that
-checkpoint plus lightweight provenance JSON.
+backbones), locate the Jean-Zay job directory, pick the seed with the highest
+test metric, and copy (or emit scp commands for) that checkpoint plus
+lightweight provenance JSON.
+
+Supports two on-disk layouts:
+
+- **nested** (``grid_then_seeds``): ``seeds/seed_ensemble_results.json`` +
+  ``seeds/model/probe_best_seedK.pth`` (typical H3D).
+- **flat** (legacy seed-ensemble): ``seed_ensemble_results.json`` +
+  ``model/probe_best_seedK.pth`` at the job root (typical DALES / ECLAIR).
 
 Example (on Jean-Zay):
 
@@ -65,6 +72,22 @@ class JobRow:
 
 
 @dataclass
+class JobLayout:
+    """On-disk layout of a grid→seed (or legacy seed-ensemble) job.
+
+    ``nested``: ``grid_then_seeds`` (``seeds/``, ``grid/`` subdirs) — H3D.
+    ``flat``: single job dir with ``seed_ensemble_results.json`` + ``model/``
+    at the root — older DALES / ECLAIR seed-ensemble runs.
+    """
+
+    kind: str
+    seed_json: Path
+    model_dir: Path
+    grid_json: Optional[Path]
+    summary_csv: Optional[Path]
+
+
+@dataclass
 class Selection:
     row: JobRow
     job_dir: Path
@@ -79,6 +102,7 @@ class Selection:
     test_f1_macro_std: Optional[float]
     status: str
     detail: str = ""
+    layout: Optional[JobLayout] = None
 
 
 def _utc_now() -> str:
@@ -165,6 +189,64 @@ def pick_best_seed(
     return best_name, metric_key, best_val, select_metric
 
 
+def discover_job_layout(job_dir: Path) -> Optional[JobLayout]:
+    """Resolve nested (``seeds/``) vs flat (job-root) seed-ensemble layouts."""
+    nested_json = job_dir / "seeds" / SEED_RESULT
+    flat_json = job_dir / SEED_RESULT
+
+    if nested_json.is_file():
+        model_dir = job_dir / "seeds" / "model"
+        grid = job_dir / "grid" / GRID_RESULT
+        summary = job_dir / SUMMARY_CSV
+        return JobLayout(
+            kind="nested",
+            seed_json=nested_json,
+            model_dir=model_dir,
+            grid_json=grid if grid.is_file() else None,
+            summary_csv=summary if summary.is_file() else None,
+        )
+
+    if flat_json.is_file():
+        model_dir = job_dir / "model"
+        grid = job_dir / GRID_RESULT
+        if not grid.is_file():
+            alt = job_dir / "grid" / GRID_RESULT
+            grid = alt if alt.is_file() else grid
+        summary = job_dir / SUMMARY_CSV
+        return JobLayout(
+            kind="flat",
+            seed_json=flat_json,
+            model_dir=model_dir,
+            grid_json=grid if grid.is_file() else None,
+            summary_csv=summary if summary.is_file() else None,
+        )
+
+    return None
+
+
+def _fail_selection(
+    row: JobRow,
+    job_dir: Path,
+    status: str,
+    detail: str,
+) -> Selection:
+    return Selection(
+        row=row,
+        job_dir=job_dir,
+        seed_name="",
+        metric_key="",
+        metric_value=float("nan"),
+        ckpt_path=Path(),
+        select_metric=None,
+        test_mIoU_mean=None,
+        test_mIoU_std=None,
+        test_f1_macro_mean=None,
+        test_f1_macro_std=None,
+        status=status,
+        detail=detail,
+    )
+
+
 def resolve_selection(
     row: JobRow,
     src_root: Path,
@@ -173,82 +255,42 @@ def resolve_selection(
 ) -> Selection:
     job_dir = src_root / row.job_id
     if not job_dir.is_dir():
-        return Selection(
-            row=row,
-            job_dir=job_dir,
-            seed_name="",
-            metric_key="",
-            metric_value=float("nan"),
-            ckpt_path=Path(),
-            select_metric=None,
-            test_mIoU_mean=None,
-            test_mIoU_std=None,
-            test_f1_macro_mean=None,
-            test_f1_macro_std=None,
-            status="missing_job_dir",
-            detail=str(job_dir),
-        )
+        return _fail_selection(row, job_dir, "missing_job_dir", str(job_dir))
 
     if verify_exp_name:
         logged = parse_job_info_exp_name(job_dir)
         if logged is not None and logged != row.exp_name:
-            return Selection(
-                row=row,
-                job_dir=job_dir,
-                seed_name="",
-                metric_key="",
-                metric_value=float("nan"),
-                ckpt_path=Path(),
-                select_metric=None,
-                test_mIoU_mean=None,
-                test_mIoU_std=None,
-                test_f1_macro_mean=None,
-                test_f1_macro_std=None,
-                status="exp_name_mismatch",
-                detail=f"job_info={logged!r} csv={row.exp_name!r}",
+            return _fail_selection(
+                row,
+                job_dir,
+                "exp_name_mismatch",
+                f"job_info={logged!r} csv={row.exp_name!r}",
             )
 
-    seed_json = job_dir / "seeds" / SEED_RESULT
-    if not seed_json.is_file():
-        return Selection(
-            row=row,
-            job_dir=job_dir,
-            seed_name="",
-            metric_key="",
-            metric_value=float("nan"),
-            ckpt_path=Path(),
-            select_metric=None,
-            test_mIoU_mean=None,
-            test_mIoU_std=None,
-            test_f1_macro_mean=None,
-            test_f1_macro_std=None,
-            status="missing_seed_results",
-            detail=str(seed_json),
+    layout = discover_job_layout(job_dir)
+    if layout is None:
+        return _fail_selection(
+            row,
+            job_dir,
+            "missing_seed_results",
+            f"neither seeds/{SEED_RESULT} nor {SEED_RESULT} under {job_dir}",
         )
 
     try:
-        data = json.loads(seed_json.read_text(encoding="utf-8"))
+        data = json.loads(layout.seed_json.read_text(encoding="utf-8"))
         seed_name, metric_key, metric_value, select_metric = pick_best_seed(
             data, row.dataset
         )
     except (json.JSONDecodeError, ValueError, OSError) as exc:
-        return Selection(
-            row=row,
-            job_dir=job_dir,
-            seed_name="",
-            metric_key="",
-            metric_value=float("nan"),
-            ckpt_path=Path(),
-            select_metric=None,
-            test_mIoU_mean=None,
-            test_mIoU_std=None,
-            test_f1_macro_mean=None,
-            test_f1_macro_std=None,
-            status="bad_seed_results",
-            detail=str(exc),
-        )
+        return _fail_selection(row, job_dir, "bad_seed_results", str(exc))
 
-    ckpt_path = job_dir / "seeds" / "model" / f"probe_best_{seed_name}.pth"
+    ckpt_path = layout.model_dir / f"probe_best_{seed_name}.pth"
+    means = dict(
+        test_mIoU_mean=_as_float(data.get("test_mIoU_mean")),
+        test_mIoU_std=_as_float(data.get("test_mIoU_std")),
+        test_f1_macro_mean=_as_float(data.get("test_f1_macro_mean")),
+        test_f1_macro_std=_as_float(data.get("test_f1_macro_std")),
+    )
     if not ckpt_path.is_file():
         return Selection(
             row=row,
@@ -258,12 +300,10 @@ def resolve_selection(
             metric_value=metric_value,
             ckpt_path=ckpt_path,
             select_metric=select_metric,
-            test_mIoU_mean=_as_float(data.get("test_mIoU_mean")),
-            test_mIoU_std=_as_float(data.get("test_mIoU_std")),
-            test_f1_macro_mean=_as_float(data.get("test_f1_macro_mean")),
-            test_f1_macro_std=_as_float(data.get("test_f1_macro_std")),
             status="missing_ckpt",
             detail=str(ckpt_path),
+            layout=layout,
+            **means,
         )
 
     return Selection(
@@ -274,11 +314,10 @@ def resolve_selection(
         metric_value=metric_value,
         ckpt_path=ckpt_path,
         select_metric=select_metric,
-        test_mIoU_mean=_as_float(data.get("test_mIoU_mean")),
-        test_mIoU_std=_as_float(data.get("test_mIoU_std")),
-        test_f1_macro_mean=_as_float(data.get("test_f1_macro_mean")),
-        test_f1_macro_std=_as_float(data.get("test_f1_macro_std")),
         status="ok",
+        detail=layout.kind,
+        layout=layout,
+        **means,
     )
 
 
@@ -298,6 +337,7 @@ def build_meta(sel: Selection) -> dict[str, Any]:
         "test_miou_reported": row.test_miou_reported,
         "lr": row.lr,
         "job_dir": str(sel.job_dir),
+        "layout": sel.layout.kind if sel.layout else None,
         "seed_name": sel.seed_name,
         "metric_key": sel.metric_key,
         "metric_value": sel.metric_value,
@@ -318,14 +358,13 @@ def copy_slot(sel: Selection, dest: Path) -> Path:
     (out / "meta.json").write_text(
         json.dumps(build_meta(sel), indent=2) + "\n", encoding="utf-8"
     )
-    for rel in (
-        Path("seeds") / SEED_RESULT,
-        Path("grid") / GRID_RESULT,
-        Path(SUMMARY_CSV),
-    ):
-        src = sel.job_dir / rel
-        if src.is_file():
-            shutil.copy2(src, out / src.name)
+    layout = sel.layout
+    if layout is not None:
+        shutil.copy2(layout.seed_json, out / SEED_RESULT)
+        if layout.grid_json is not None:
+            shutil.copy2(layout.grid_json, out / GRID_RESULT)
+        if layout.summary_csv is not None:
+            shutil.copy2(layout.summary_csv, out / SUMMARY_CSV)
     return out
 
 
@@ -418,13 +457,27 @@ def emit_scp_commands(
         lines.append(
             f"scp -J passerelle {jz_host}:{sel.ckpt_path} {slot}/probe_best.pth"
         )
-        for name, rel in (
-            (SEED_RESULT, Path("seeds") / SEED_RESULT),
-            (GRID_RESULT, Path("grid") / GRID_RESULT),
-            (SUMMARY_CSV, Path(SUMMARY_CSV)),
-        ):
-            src = sel.job_dir / rel
-            lines.append(f"scp -J passerelle {jz_host}:{src} {slot}/{name}")
+        layout = sel.layout
+        if layout is not None:
+            lines.append(
+                f"scp -J passerelle {jz_host}:{layout.seed_json} {slot}/{SEED_RESULT}"
+            )
+            if layout.grid_json is not None:
+                lines.append(
+                    f"scp -J passerelle {jz_host}:{layout.grid_json} {slot}/{GRID_RESULT}"
+                )
+            if layout.summary_csv is not None:
+                lines.append(
+                    f"scp -J passerelle {jz_host}:{layout.summary_csv} {slot}/{SUMMARY_CSV}"
+                )
+        else:
+            for name, rel in (
+                (SEED_RESULT, Path("seeds") / SEED_RESULT),
+                (GRID_RESULT, Path("grid") / GRID_RESULT),
+                (SUMMARY_CSV, Path(SUMMARY_CSV)),
+            ):
+                src = sel.job_dir / rel
+                lines.append(f"scp -J passerelle {jz_host}:{src} {slot}/{name}")
     return lines
 
 
@@ -451,8 +504,9 @@ def emit_scp_pack_workflow(
 def print_selection(sel: Selection) -> None:
     row = sel.row
     if sel.status == "ok":
+        layout = sel.layout.kind if sel.layout else "?"
         print(
-            f"[ok] {row.exp_name:22s} job={row.job_id} "
+            f"[ok] {row.exp_name:22s} job={row.job_id} layout={layout} "
             f"{sel.seed_name} {sel.metric_key}={sel.metric_value:.4f} "
             f"<- {sel.ckpt_path}",
             flush=True,
