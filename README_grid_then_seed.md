@@ -211,8 +211,9 @@ W&B: two runs (grid + seeds) sharing group `gts-<jobid>`.
 For the **15** main-table runs (MS Enc × H3D/DALES/ECLAIR, plus Sonata outdoor),
 job IDs live in [`scripts/lin_probe_external_jobs.csv`](scripts/lin_probe_external_jobs.csv).
 [`scripts/archive_external_lin_probe_ckpts.py`](scripts/archive_external_lin_probe_ckpts.py)
-picks the best seed from `seeds/seed_ensemble_results.json` and packs
-`probe_best.pth` + provenance under `ckpt/lin_probe/` (see [`ckpt/README.md`](ckpt/README.md)).
+picks the best seed from `seed_ensemble_results.json` (nested under `seeds/` for
+`grid_then_seeds`, or at the job root for older DALES/ECLAIR seed-ensemble jobs)
+and packs `probe_best.pth` + provenance under `ckpt/lin_probe/` (see [`ckpt/README.md`](ckpt/README.md)).
 
 ```bash
 # on Jean-Zay
