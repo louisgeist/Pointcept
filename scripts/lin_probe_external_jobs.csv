@@ -1,0 +1,16 @@
+dataset,backbone,exp_name,job_id,wandb_id,test_miou_reported,lr
+h3d,litept,h3d_lpt_enc,1475081,owmtsj43,61.9,5e-3
+h3d,ptv3,h3d_ptv3_enc,1475084,ew5jqbda,58.0,5e-3
+h3d,spunet,h3d_spunet_enc,1475087,zyvlho4r,48.4,1e-2
+h3d,kpconvx,h3d_kpconvx_enc,1475092,8b4xiynb,62.6,5e-2
+h3d,sonata,h3d_sonata,1475095,782jvkvn,59.9,2e-2
+dales,litept,dales_lpt_enc,1381590,65ttlnxl,74.6,0.02
+dales,ptv3,dales_ptv3_enc,1381595,r3207mv9,70.2,0.002
+dales,spunet,dales_spunet_enc,1381597,pb5cl9hi,66.0,0.005
+dales,kpconvx,dales_kpconvx_enc,1381589,20q0ikzz,74.7,0.05
+dales,sonata,dales_sonata,1381596,hiytn4um,76.0,0.02
+eclair,litept,eclair_lpt_enc,1381723,2aca9c11,73.0,0.01
+eclair,ptv3,eclair_ptv3_enc,1381732,77dkvt5h,69.4,0.002
+eclair,spunet,eclair_spunet_enc,1381734,eqitesm1,67.8,0.01
+eclair,kpconvx,eclair_kpconvx_enc,1381722,tyhvx6ix,75.7,0.01
+eclair,sonata,eclair_sonata,1381733,gfdtyfdx,75.8,0.02
