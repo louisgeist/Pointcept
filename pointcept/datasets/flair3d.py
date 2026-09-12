@@ -23,6 +23,12 @@ from .flair3d_config_utils import (
     FLAIR3D_TILE_DISTRIBUTION_TARGET_KEYS,
     get_missing_target_fill_value,
 )
+from pointcept.datasets.preprocessing.flair3d_plus.nathab_axes import (
+    NATHAB_AXIS_KEYS,
+    is_nathab_axes_array,
+    is_nathab_carhab_array,
+    unpack_nathab_axes,
+)
 from pointcept.utils.logger import get_root_logger
 
 FLAIR3D_SPECIFIC_ASSETS = (
@@ -87,6 +93,7 @@ class Flair3DDataset(DefaultDataset):
     FLAIR3D_OPTIONAL_TARGETS = (
         "land_use",
         "natural_habitat",
+        *NATHAB_AXIS_KEYS,
         "elevation",
         "climatic_domain",
         "natural_habitat_multilabel",
@@ -239,9 +246,45 @@ class Flair3DDataset(DefaultDataset):
             return np.asarray(fill_value, dtype=np.uint8)
         if target_key in FLAIR3D_SEMANTIC_TARGETS:
             return np.full(n, int(fill_value), dtype=np.int32)
+        if target_key in FLAIR3D_TILE_DISTRIBUTION_TARGETS:
+            return np.full(n, int(fill_value), dtype=np.int32)
         if target_key in FLAIR3D_REGRESSION_TARGETS:
             return np.full(n, float(fill_value), dtype=np.float32)
         raise KeyError(f"Unsupported target key: {target_key}")
+
+    def _unpack_natural_habitat_axes(self, data_dict, n, scene):
+        """Dual-read ``natural_habitat.npy``: bake ``(N, 4)`` or legacy CarHab ``(N,)``.
+
+        Baked axes are unpacked into ``nathab_*`` int32 vectors and the packed
+        array is removed so pointwise semantic reshape cannot flatten ``(N, 4)``.
+        Legacy CarHab ``(N,)`` is left for ``Flair3DLabelRemap`` fan-out.
+        """
+        if "natural_habitat" not in data_dict:
+            return data_dict
+        nh = np.asarray(data_dict["natural_habitat"])
+        if is_nathab_axes_array(nh):
+            if nh.shape[0] != n:
+                raise ValueError(
+                    f"natural_habitat axes rows {nh.shape[0]} != coord rows {n} "
+                    f"under scene: {scene}"
+                )
+            if "natural_habitat" in self.target_keys:
+                raise ValueError(
+                    "On-disk natural_habitat.npy is ecological axes (N, 4); "
+                    "target_keys cannot include semantic 'natural_habitat' "
+                    "(CarHab-only). Use nathab_* axis keys instead. "
+                    f"scene={scene}"
+                )
+            for key, labels in unpack_nathab_axes(nh).items():
+                data_dict[key] = labels
+            data_dict.pop("natural_habitat")
+            return data_dict
+        if is_nathab_carhab_array(nh):
+            return data_dict
+        raise ValueError(
+            f"natural_habitat.npy expected shape (N,) CarHab or (N, 4) axes, "
+            f"got {nh.shape} under scene: {scene}"
+        )
 
     def _load_pixel_semantic_label(self, data_dict, scene, target_key="network"):
         """Load ``{target_key}.npy`` and grid meta for a pixel semantic task.
@@ -411,6 +454,8 @@ class Flair3DDataset(DefaultDataset):
             data_dict["segment"] = np.full(n, -1, dtype=np.int32)
             return data_dict
 
+        data_dict = self._unpack_natural_habitat_axes(data_dict, n, scene)
+
         pointwise_keys = [
             tk
             for tk in self.target_keys
@@ -430,6 +475,9 @@ class Flair3DDataset(DefaultDataset):
         ]
         pixel_semantic_keys = [
             tk for tk in self.target_keys if tk in FLAIR3D_PIXEL_SEMANTIC_TARGETS
+        ]
+        tile_distribution_keys = [
+            tk for tk in self.target_keys if tk in FLAIR3D_TILE_DISTRIBUTION_TARGETS
         ]
         semantic_labels = {}
         for tk in pointwise_keys:
@@ -453,6 +501,23 @@ class Flair3DDataset(DefaultDataset):
 
         for tk, labels in semantic_labels.items():
             data_dict[tk] = labels
+
+        for tk in tile_distribution_keys:
+            if tk not in data_dict:
+                if self._is_optional_target(tk):
+                    data_dict[tk] = self._missing_target_array(tk, n)
+                else:
+                    raise FileNotFoundError(
+                        f"target key '{tk}' but natural_habitat.npy missing or "
+                        f"incomplete under scene: {scene}"
+                    )
+            else:
+                labels = np.asarray(data_dict[tk]).reshape(-1)
+                if labels.shape[0] != n:
+                    raise ValueError(
+                        f"{tk} length {labels.shape[0]} does not match coord rows {n}"
+                    )
+                data_dict[tk] = labels.astype(np.int32)
 
         for tk in classification_keys:
             data_dict[tk] = self._load_classification_label(data_dict, tk, scene)

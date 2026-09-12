@@ -1,10 +1,15 @@
 """
 Per-subtile multi-label natural habitat vectors for Flair3D+.
 
-Reads on-disk natural_habitat.npy (preprocess default, stored ids 0-43) and writes
+Reads on-disk natural_habitat.npy as **CarHab** stored ids 0-43 ``(N,)`` and writes
 natural_habitat_multilabel.npy: a length-15 int8 multi-hot vector per subtile.
 A label is set when its point fraction >= threshold (default 1%) over all subtile points
 (coord.npy count).
+
+Baked ecological-axes ``natural_habitat.npy`` with shape ``(N, 4)`` cannot rebuild
+cultivated/built/road bits; the offline pass fails fast on that layout. Prefer writing
+multilabel during preprocess (CarHab in memory → multilabel → axes bake) or via the
+migration script before overwriting CarHab.
 """
 
 from __future__ import annotations
@@ -180,7 +185,14 @@ def _assign_multilabel_one_scene(
         stats.n_missing_nh = 1
         return stats
 
-    stored = np.load(nh_path).reshape(-1)
+    stored = np.load(nh_path)
+    if stored.ndim == 2 and stored.shape[1] == 4:
+        raise ValueError(
+            f"{nh_path}: ecological axes (N, 4) cannot rebuild multilabel "
+            "(cultivated/built/road lost). Write multilabel from CarHab before "
+            "axes bake (preprocess or migration script)."
+        )
+    stored = np.asarray(stored).reshape(-1)
     if n_total <= 0:
         n_total = int(stored.size)
 

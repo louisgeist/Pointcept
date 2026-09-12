@@ -81,9 +81,20 @@ class PureForestDataset(Dataset):
         data_idx = idx % len(self.data_list)
         patch_stem = self.data_list[data_idx]
         scene_dir = os.path.join(self.data_root, self.split, patch_stem)
-        coord = np.load(os.path.join(scene_dir, "coord.npy")).astype(np.float32)
-        color = np.load(os.path.join(scene_dir, "color.npy")).astype(np.float32)
-        category_val = int(np.load(os.path.join(scene_dir, "category.npy")))
+        try:
+            coord = np.load(os.path.join(scene_dir, "coord.npy")).astype(np.float32)
+            color = np.load(os.path.join(scene_dir, "color.npy")).astype(np.float32)
+            category_val = int(np.load(os.path.join(scene_dir, "category.npy")))
+        except Exception as exc:
+            raise RuntimeError(
+                f"Failed to load PureForest scene '{patch_stem}' "
+                f"(split={self.split}, dir={scene_dir}): {exc}"
+            ) from exc
+        if coord.shape[0] != color.shape[0]:
+            raise RuntimeError(
+                f"PureForest scene '{patch_stem}' has mismatched lengths: "
+                f"coord={coord.shape} color={color.shape} (dir={scene_dir})"
+            )
         category = np.array([category_val], dtype=np.int64)
         return dict(
             coord=coord,

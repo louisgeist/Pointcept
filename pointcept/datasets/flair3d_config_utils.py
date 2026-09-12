@@ -196,10 +196,10 @@ FLAIR3D_PIXEL_SEMANTIC_TASKS: Dict[str, Dict[str, Any]] = {
     },
 }
 
-# Nathab ecological-axis distribution tasks: point-wise per-axis categorical labels
-# derived on the fly (via Flair3DLabelRemap fan-out) from the raw ``natural_habitat``
-# CarHab asset. Values are the default ``flair3d_label_remap`` definition name (under
-# task_key="natural_habitat") each axis resolves to.
+# Nathab ecological-axis distribution tasks: point-wise per-axis categorical labels.
+# On-disk ``natural_habitat.npy`` is ``uint8 (N, 4)`` (baked at preprocess); the loader
+# unpacks columns into these ``nathab_*`` keys. Values are the
+# ``flair3d_label_remap`` definition name each axis column corresponds to.
 FLAIR3D_TILE_DISTRIBUTION_TASKS: Dict[str, str] = {
     "nathab_habitat_type": "by_habitat_type_ecological",
     "nathab_moisture_regime": "by_moisture_regime",
@@ -239,6 +239,8 @@ FLAIR3D_MULTITASK_INDEX_VALID_KEYS: Tuple[str, ...] = (
     "instance",
     "forest",
     "land_use",
+    # Legacy CarHab ``(N,)`` only — baked ``(N, 4)`` is unpacked in
+    # ``Flair3DDataset.get_data`` and popped before GridSample.
     "natural_habitat",
     "elevation",
     "abs_xy",
@@ -562,6 +564,19 @@ def get_missing_target_fill_value(
 
         storage_def = get_definition(target_key, "default")
         return int(storage_def.ignore_index)
+    if target_key in FLAIR3D_TILE_DISTRIBUTION_TASKS:
+        from pointcept.datasets.preprocessing.flair3d_plus.nathab_axes import (
+            NATHAB_AXIS_IGNORE_INDEX,
+            NATHAB_AXIS_KEYS,
+        )
+
+        try:
+            column = NATHAB_AXIS_KEYS.index(target_key)
+        except ValueError as exc:
+            raise KeyError(
+                f"Unknown tile_distribution target_key '{target_key}'"
+            ) from exc
+        return int(NATHAB_AXIS_IGNORE_INDEX[column])
     if target_key in FLAIR3D_CLASSIFICATION_TASKS:
         return int(get_classification_config(target_key)["ignore_index"])
     if target_key in FLAIR3D_MULTILABEL_CLASSIFICATION_TASKS:
@@ -585,6 +600,7 @@ def get_missing_target_fill_value(
                 *FLAIR3D_CLASSIFICATION_TASKS.keys(),
                 *FLAIR3D_MULTILABEL_CLASSIFICATION_TASKS.keys(),
                 *FLAIR3D_PIXEL_SEMANTIC_TASKS.keys(),
+                *FLAIR3D_TILE_DISTRIBUTION_TASKS.keys(),
                 "elevation",
             )
         )

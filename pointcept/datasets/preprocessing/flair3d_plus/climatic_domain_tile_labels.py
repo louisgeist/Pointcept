@@ -1,8 +1,10 @@
 """
 Tile-level climatic-domain labels for Flair3D+ (Temperate / Mediterranean / Alpine).
 
-Aggregates point counts from on-disk natural_habitat.npy (preprocess default, ids 0-43),
-remapped via by_climatic_domain, at 1 km² tile granularity (dept_year_roi).
+Aggregates point counts from on-disk natural_habitat.npy at 1 km² tile granularity
+(dept_year_roi). Supports:
+- legacy CarHab ``(N,)`` ids 0-43 remapped via by_climatic_domain
+- baked ecological axes ``(N, 4)`` using column 3 (nathab_bioclimatic_zone)
 """
 
 from __future__ import annotations
@@ -134,10 +136,16 @@ def _count_subtile(scene_path: str, lut: np.ndarray) -> Tuple[DomainCounts, str]
     nh_path = os.path.join(scene_path, "natural_habitat.npy")
     if not os.path.isfile(nh_path):
         return DomainCounts(), "missing_nh"
-    stored = np.load(nh_path).reshape(-1)
+    stored = np.load(nh_path)
     if stored.size == 0:
         return DomainCounts(), ""
-    return count_climatic_domains(stored, lut), ""
+    # Baked ecological axes: bioclimatic zone is column 3 (== by_climatic_domain).
+    if stored.ndim == 2 and stored.shape[1] == 4:
+        mapped = stored[:, 3].astype(np.int32, copy=False).reshape(-1)
+        counts = DomainCounts()
+        counts.add_mapped(mapped)
+        return counts, ""
+    return count_climatic_domains(np.asarray(stored).reshape(-1), lut), ""
 
 
 def assign_climatic_domain_labels(

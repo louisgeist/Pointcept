@@ -79,6 +79,21 @@ indicates that every other array and `meta.json` were fully persisted. This
 makes re-runs incremental: only patches still missing or interrupted mid-write
 are processed.
 
+## On-disk label dtypes (v2)
+
+| File | Dtype / shape | Notes |
+|------|---------------|--------|
+| `segment.npy` | `uint8 (N,)` | Train taxonomy (e.g. v20); upcast to int32 at load |
+| `natural_habitat.npy` | `uint8 (N, 4)` | Ecological axes (HF-compatible); CarHab only in-memory before bake |
+| `natural_habitat_multilabel.npy` | `int8 (15,)` | Written from CarHab before bake |
+| `color.npy` | `uint8 (N, 3)` | |
+| `coord.npy` | `float32 (N, 3)` | Relative to `coord_translation.npy` |
+
+Migrate legacy CarHab `(N,)` tiles with
+`scripts/flair3d/migrate_natural_habitat_to_axes.py` (regenerate multilabel before overwrite).
+Mono-task CarHab remaps (`by_moisture*`, `by_habitat_x_domain`, …) are incompatible with
+axes-only storage.
+
 Use `--force` to reprocess every patch unconditionally. This is required when:
 
 - `--label_definition` is changed between runs.

@@ -17,12 +17,16 @@ is the single source of truth: one row per patch, and only rows with
 - segment.npy    (from PLY ``semantic``; remapped via ``--segment_definition``)
 - strength.npy   (LiDAR intensity)
 - forest.npy     (FOREST GeoTIFF — always sampled; remapped via ``--forest_definition``)
-- natural_habitat.npy   (only when NATURAL_HABITAT=True; default definition = full CarHab ids 0-43)
+- natural_habitat.npy   (only when NATURAL_HABITAT=True; ``uint8 (N, 4)`` ecological axes
+                        baked from CarHab via ``nathab_axes.carhab_to_nathab_axes``;
+                        ``--natural_habitat_definition default`` still selects the CarHab
+                        storage LUT used before bake)
 - land_use.npy          (only when LAND_USE=True; ``--land_use_definition``)
 - elevation.npy         (only when DEM_ELEV=True in the manifest)
 - climatic_domain.npy   (opt-in via ``--write-climatic-domain-category``)
-- natural_habitat_multilabel.npy  (opt-in via ``--write-natural-habitat-multilabel``, default True)
-- meta.json      (date_gap_days, label_definitions)
+- natural_habitat_multilabel.npy  (opt-in via ``--write-natural-habitat-multilabel``;
+                        written from CarHab in memory before axes bake)
+- meta.json      (date_gap_days, label_definitions, natural_habitat_layout)
 
 Required manifest columns (extra columns are ignored):
     split, dept_year, roi, scene_i_j, patch_id,
@@ -111,6 +115,8 @@ from climatic_domain_tile_labels import (  # noqa: E402
     run_climatic_domain_label_pass,
 )
 from natural_habitat_multilabel_tile_labels import (  # noqa: E402
+    MULTILABEL_FILENAME,
+    compute_multilabel_vector,
     run_natural_habitat_multilabel_label_pass,
 )
 from flair3d_label_remap import (  # noqa: E402
@@ -120,9 +126,15 @@ from flair3d_label_remap import (  # noqa: E402
     build_preprocess_label_definitions,
     supported_definitions,
 )
+from nathab_axes import (  # noqa: E402
+    NATHAB_LAYOUT_META,
+    NATHAB_ONDISK_DEFINITION,
+    carhab_to_nathab_axes,
+    is_nathab_carhab_array,
+)
 
-# Preprocess stores natural_habitat.npy with the full CarHab id space (0-43), not a
-# collapsed taxonomy. Training may still use another definition via config / meta.json.
+# Raster sampling still uses CarHab storage definition ``default`` (ids 0-43);
+# ``_save_scene`` then bakes ``natural_habitat.npy`` to ecological axes ``(N, 4)``.
 PREPROCESS_LABEL_DEFINITION_DEFAULTS = {
     **DEFAULT_LABEL_DEFINITION_NAMES,
     "natural_habitat": "default",
@@ -737,6 +749,8 @@ def _save_scene(
     output_scene_dir: str,
     scene: Dict[str, np.ndarray],
     task: PatchTask,
+    *,
+    write_natural_habitat_multilabel: bool = False,
 ) -> None:
     """Persist scene arrays under the patch output directory.
 
@@ -744,13 +758,17 @@ def _save_scene(
     stale file from a previous run is removed when the modality is disabled or
     its raster was missing.
 
+    ``natural_habitat`` is expected as CarHab ``(N,)`` in ``scene``; this function
+    optionally writes ``natural_habitat_multilabel.npy`` from those ids, then bakes
+    axes to ``uint8 (N, 4)`` before saving ``natural_habitat.npy``.
+
     ``coord.npy`` is intentionally written LAST so its presence on disk acts as
     a reliable completion marker for the resume / skip-existing logic in
     ``main_process``.
     """
     os.makedirs(output_scene_dir, exist_ok=True)
     np.save(os.path.join(output_scene_dir, "color.npy"), scene["color"].astype(np.uint8))
-    np.save(os.path.join(output_scene_dir, "segment.npy"), scene["segment"].astype(np.int32))
+    np.save(os.path.join(output_scene_dir, "segment.npy"), scene["segment"].astype(np.uint8))
     if "strength" in scene:
         np.save(
             os.path.join(output_scene_dir, "strength.npy"),
@@ -760,15 +778,44 @@ def _save_scene(
     def _save_or_clean(filename: str, key: str, dtype, enabled: bool) -> None:
         path = os.path.join(output_scene_dir, filename)
         if enabled and key in scene:
-            np.save(path, scene[key].astype(dtype))
+            np.save(path, scene[key].astype(dtype, copy=False))
         elif os.path.isfile(path):
             os.remove(path)
 
     # FOREST is conceptually always enabled; any stale file is overwritten or kept.
     _save_or_clean("forest.npy", "forest", np.int16, enabled=True)
-    _save_or_clean(
-        "natural_habitat.npy", "natural_habitat", np.int16, enabled=task.has_natural_habitat
-    )
+
+    multilabel_path = os.path.join(output_scene_dir, MULTILABEL_FILENAME)
+    if task.has_natural_habitat and "natural_habitat" in scene:
+        carhab = np.asarray(scene["natural_habitat"])
+        if not is_nathab_carhab_array(carhab):
+            raise ValueError(
+                "preprocess expected in-memory natural_habitat as CarHab (N,) "
+                f"before bake, got shape {carhab.shape}"
+            )
+        if write_natural_habitat_multilabel:
+            vector = compute_multilabel_vector(carhab, int(carhab.shape[0]))
+            np.save(multilabel_path, vector)
+        elif os.path.isfile(multilabel_path):
+            os.remove(multilabel_path)
+        scene = dict(scene)
+        scene["natural_habitat"] = carhab_to_nathab_axes(carhab)
+        _save_or_clean(
+            "natural_habitat.npy",
+            "natural_habitat",
+            np.uint8,
+            enabled=True,
+        )
+    else:
+        if os.path.isfile(multilabel_path):
+            os.remove(multilabel_path)
+        _save_or_clean(
+            "natural_habitat.npy",
+            "natural_habitat",
+            np.uint8,
+            enabled=False,
+        )
+
     _save_or_clean("land_use.npy", "land_use", np.int16, enabled=task.has_land_use)
     _save_or_clean("elevation.npy", "elevation", np.float32, enabled=task.has_dem_elev)
 
@@ -789,6 +836,22 @@ def _save_scene(
     np.save(os.path.join(output_scene_dir, "coord.npy"), coord)
 
 
+def _scene_meta_dict(
+    task: PatchTask,
+    label_definitions: PreprocessLabelDefinitions,
+) -> Dict[str, Any]:
+    """Build meta.json payload with on-disk nathab axes contract."""
+    label_meta = label_definitions.to_meta_dict()
+    # Raster sampling still uses CarHab ``default``; on-disk asset is axes.
+    label_meta = dict(label_meta)
+    label_meta["natural_habitat"] = NATHAB_ONDISK_DEFINITION
+    return {
+        "date_gap_days": task.date_gap_days,
+        "label_definitions": label_meta,
+        "natural_habitat_layout": dict(NATHAB_LAYOUT_META),
+    }
+
+
 def _save_scene_meta(output_scene_dir: str, meta: Dict[str, Any]) -> None:
     meta_path = os.path.join(output_scene_dir, "meta.json")
     with open(meta_path, "w", encoding="utf-8") as f:
@@ -801,6 +864,7 @@ def _process_subtile_task(
     dataset_root: str,
     output_root: str,
     label_definitions: PreprocessLabelDefinitions,
+    write_natural_habitat_multilabel: bool = False,
 ) -> Tuple[str, List[Dict[str, str]]]:
     """Worker entry point: build and save one scene from a PatchTask.
 
@@ -818,14 +882,13 @@ def _process_subtile_task(
     # writes ``coord.npy`` last, so its on-disk presence reliably indicates that
     # both the metadata and every other array have been fully persisted.
     os.makedirs(output_scene_dir, exist_ok=True)
-    _save_scene_meta(
+    _save_scene_meta(output_scene_dir, _scene_meta_dict(task, label_definitions))
+    _save_scene(
         output_scene_dir,
-        {
-            "date_gap_days": task.date_gap_days,
-            "label_definitions": label_definitions.to_meta_dict(),
-        },
+        scene,
+        task,
+        write_natural_habitat_multilabel=write_natural_habitat_multilabel,
     )
-    _save_scene(output_scene_dir, scene, task)
     return task.patch_id, missing_modalities
 
 
@@ -1124,6 +1187,7 @@ def main_process():
                     args.dataset_root,
                     args.output_root,
                     label_definitions,
+                    args.write_natural_habitat_multilabel,
                 ): task
                 for task in tasks_to_process
             }
@@ -1192,9 +1256,9 @@ def main_process():
     if args.write_climatic_domain_category:
         if args.natural_habitat_definition != "default":
             logger.warning(
-                "Skipping climatic domain label pass: requires "
-                "--natural_habitat_definition default (stored ids 0-43), got '%s'. "
-                "Use --no-write-climatic-domain-category to silence this warning.",
+                "Skipping climatic domain label pass: raster sampling requires "
+                "--natural_habitat_definition default (CarHab ids 0-43 before axes bake), "
+                "got '%s'. Use --no-write-climatic-domain-category to silence this warning.",
                 args.natural_habitat_definition,
             )
         else:
@@ -1209,29 +1273,12 @@ def main_process():
             run_climatic_domain_label_pass(args.output_root, tasks, logger=logger)
 
     if args.write_natural_habitat_multilabel:
-        if args.natural_habitat_definition != "default":
-            logger.warning(
-                "Skipping natural habitat multilabel pass: requires "
-                "--natural_habitat_definition default (stored ids 0-43), got '%s'. "
-                "Use --no-write-natural-habitat-multilabel to silence this warning.",
-                args.natural_habitat_definition,
-            )
-        else:
-            if not any(t.has_natural_habitat for t in tasks):
-                logger.warning(
-                    "No manifest rows have NATURAL_HABITAT=True; multilabel vectors "
-                    "will not be written for subtiles without natural_habitat.npy."
-                )
-            logger.info(
-                "Running natural habitat multilabel pass on %d manifest task(s)...",
-                len(tasks),
-            )
-            run_natural_habitat_multilabel_label_pass(
-                args.output_root,
-                tasks,
-                num_workers=args.num_workers,
-                logger=logger,
-            )
+        # Multilabel is written from CarHab in-memory inside ``_save_scene`` before
+        # axes bake. Do not re-run the offline pass on baked ``(N, 4)`` tiles.
+        logger.info(
+            "natural_habitat_multilabel.npy written during scene save "
+            "(CarHab → multilabel → axes bake); skipping offline multilabel pass."
+        )
 
     log_run_configuration(logger, args)
     logger.info("Detailed logs saved to: %s", log_file_path)
