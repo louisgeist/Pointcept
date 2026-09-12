@@ -21,6 +21,7 @@
 #SBATCH --comment=flair3d,baseline,pre-train
 #SBATCH --output=/lustre/fswork/projects/rech/unv/usi32yh/Pointcept/logs/slurm/%j/slurm.out
 #SBATCH --error=/lustre/fswork/projects/rech/unv/usi32yh/Pointcept/logs/slurm/%j/slurm.err
+#SBATCH --open-mode=append
 
 #SBATCH --time=19:50:00
 #SBATCH --signal=B:USR1@120
