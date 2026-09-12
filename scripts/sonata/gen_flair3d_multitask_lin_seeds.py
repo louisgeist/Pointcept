@@ -13,6 +13,10 @@ Examples:
     --grid-dir logs/slurm/<GRID_JOB>
 
   python scripts/sonata/gen_flair3d_multitask_lin_seeds.py --lr 2e-2
+
+  python scripts/sonata/gen_flair3d_multitask_lin_seeds.py \\
+    --grid-dir logs/slurm/<GRID_JOB> --output-dir logs/slurm/<GRID_JOB>/seed_configs
+
 """
 
 from __future__ import annotations
@@ -119,7 +123,15 @@ def main() -> int:
         "--template-dir",
         type=Path,
         default=DEFAULT_DIR,
-        help="Directory holding the seed_1.py template (and write target)",
+        help="Directory holding the seed_1.py template",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=None,
+        help="Where to write _1.py … _N.py (default: --template-dir). "
+        "When different from the template dir, _base_ is rewritten to an "
+        "absolute path so the generated file can live outside configs/.",
     )
     parser.add_argument(
         "--n-seeds",
@@ -150,12 +162,23 @@ def main() -> int:
             grid_dir = (REPO_ROOT / grid_dir).resolve()
         lr, winner_name = lr_from_grid_dir(grid_dir)
 
+    output_dir = args.output_dir or args.template_dir
+    output_dir.mkdir(parents=True, exist_ok=True)
     source = template_path.read_text(encoding="utf-8")
+    if output_dir.resolve() != args.template_dir.resolve():
+        runtime = REPO_ROOT / "configs/_base_/default_runtime.py"
+        source = re.sub(
+            r"^_base_ = \[.*?\]",
+            f"_base_ = [{str(runtime.resolve())!r}]",
+            source,
+            count=1,
+            flags=re.MULTILINE,
+        )
     stem = "multi-sonata-v1m2-flair3d-lin-seed"
     written = []
     for num_exp in range(1, args.n_seeds + 1):
         seed = num_exp - 1
-        out_path = args.template_dir / f"{stem}_{num_exp}.py"
+        out_path = output_dir / f"{stem}_{num_exp}.py"
         out_path.write_text(
             patch_template(source, lr=lr, seed=seed, num_exp=num_exp),
             encoding="utf-8",
