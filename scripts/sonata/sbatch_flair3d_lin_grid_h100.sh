@@ -8,9 +8,11 @@
 #   sbatch scripts/sonata/sbatch_flair3d_lin_grid_h100.sh /path/to/epoch_N.pth [exp_name]
 #   WEIGHT=... EXP_NAME=... sbatch scripts/sonata/sbatch_flair3d_lin_grid_h100.sh
 #
-# After grid_search_results.json:
+# After grid_search_results.json (or use the chained launcher):
 #   python scripts/sonata/gen_flair3d_multitask_lin_seeds.py --grid-dir logs/slurm/<JOB>
 #   sbatch scripts/sonata/sbatch_flair3d_multitask_lin_seeds_h100.sh
+# One-shot grid then 10 seeds:
+#   sbatch scripts/sonata/sbatch_flair3d_lin_grid_then_seeds_h100.sh
 #
 # Jean-Zay compute-accounting tags (IMAGINE wrapper):
 #   https://github.com/Archiel19/compute-accounting

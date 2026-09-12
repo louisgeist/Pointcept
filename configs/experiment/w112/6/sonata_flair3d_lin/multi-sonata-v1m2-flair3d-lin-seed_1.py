@@ -17,7 +17,10 @@ scripts/sonata/gen_flair3d_multitask_lin_seeds.py from the GridProbe winner
 (val mIoU). Placeholder lr below is 2e-3 until that sweep finishes.
 
 Frozen checkpoint: pretrain job 862680 / epoch_120 (W_SONATA).
-Launch after generation: scripts/sonata/sbatch_flair3d_multitask_lin_seeds_h100.sh
+One-shot: sbatch scripts/sonata/sbatch_flair3d_lin_grid_then_seeds_h100.sh
+Or after a standalone grid:
+  python scripts/sonata/gen_flair3d_multitask_lin_seeds.py --grid-dir logs/slurm/<JOB>
+  sbatch scripts/sonata/sbatch_flair3d_multitask_lin_seeds_h100.sh
 """
 
 _base_ = ["../../../../_base_/default_runtime.py"]

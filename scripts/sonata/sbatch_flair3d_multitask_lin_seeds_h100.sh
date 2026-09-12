@@ -1,14 +1,19 @@
 #!/bin/bash
 
 # 10-seed Sonata-v1m2 multi-task lin-probe on Flair3D+ (1x H100 per seed).
-# Requires configs generated first:
+#
+# Standalone (configs already generated into the experiment dir):
 #   python scripts/sonata/gen_flair3d_multitask_lin_seeds.py --grid-dir logs/slurm/<GRID_JOB>
+#   sbatch scripts/sonata/sbatch_flair3d_multitask_lin_seeds_h100.sh
+#
+# Chained from sbatch_flair3d_lin_grid_then_seeds_h100.sh (SEED_CONFIG_DIR + WEIGHT
+# are exported; configs live in the grid job's seed_configs/ dir).
 #
 # Usage:
 #   sbatch scripts/sonata/sbatch_flair3d_multitask_lin_seeds_h100.sh
 #   WEIGHT=... sbatch scripts/sonata/sbatch_flair3d_multitask_lin_seeds_h100.sh
-#   sbatch --array=1,3,7 scripts/sonata/sbatch_flair3d_multitask_lin_seeds_h100.sh
-#
+#   SEED_CONFIG_DIR=/path/to/seed_configs sbatch --array=1,3,7 ...
+
 # Jean-Zay compute-accounting tags (IMAGINE wrapper):
 #   https://github.com/Archiel19/compute-accounting
 
@@ -41,6 +46,13 @@ REPO_ROOT=/lustre/fswork/projects/rech/unv/usi32yh/Pointcept
 JOB_DIR=${REPO_ROOT}/logs/slurm/${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}
 mkdir -p ${JOB_DIR}
 
+STEM=multi-sonata-v1m2-flair3d-lin-seed_${SEED_IDX}.py
+if [ -n "${SEED_CONFIG_DIR:-}" ]; then
+  CONFIG_FILE="${SEED_CONFIG_DIR}/${STEM}"
+else
+  CONFIG_FILE="${REPO_ROOT}/configs/${CONFIG}.py"
+fi
+
 cp $0 ${JOB_DIR}/script.slurm
 
 {
@@ -48,15 +60,18 @@ cp $0 ${JOB_DIR}/script.slurm
     echo "Array job/task: ${SLURM_ARRAY_JOB_ID:-n/a} / ${SLURM_ARRAY_TASK_ID:-n/a}"
     echo "Exp name: $EXP_NAME"
     echo "Weight: $WEIGHT"
-    echo "Config: ${CONFIG}"
+    echo "Config: ${CONFIG_FILE}"
+    echo "SEED_CONFIG_DIR: ${SEED_CONFIG_DIR:-<repo>}"
     echo "Starting job at: $(date)"
     echo "Running on host: $(hostname)"
     nvidia-smi
 } > ${JOB_DIR}/job_info.log
 
-if [ ! -f "${REPO_ROOT}/configs/${CONFIG}.py" ]; then
-    echo "ERROR: config not found: configs/${CONFIG}.py" | tee -a "${JOB_DIR}/job_info.log" >&2
+if [ ! -f "${CONFIG_FILE}" ]; then
+    echo "ERROR: config not found: ${CONFIG_FILE}" | tee -a "${JOB_DIR}/job_info.log" >&2
     echo "Run: python scripts/sonata/gen_flair3d_multitask_lin_seeds.py --grid-dir <grid_job>" \
+        | tee -a "${JOB_DIR}/job_info.log" >&2
+    echo "Or chain: sbatch scripts/sonata/sbatch_flair3d_lin_grid_then_seeds_h100.sh" \
         | tee -a "${JOB_DIR}/job_info.log" >&2
     exit 1
 fi
@@ -78,21 +93,38 @@ conda list > ${JOB_DIR}/conda_env.txt
 
 export WANDB_MODE=offline
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export POINTCEPT_SLURM_REQUEUE=1
 cd ${REPO_ROOT}
 
 POINTOPS_PATH=/lustre/fswork/projects/rech/unv/usi32yh/Pointcept/pointops_build_h100/lib/python3.10/site-packages/pointops-1.0-py3.10-linux-x86_64.egg
-export PYTHONPATH="${POINTOPS_PATH}${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONPATH="${REPO_ROOT}:${POINTOPS_PATH}${PYTHONPATH:+:$PYTHONPATH}"
 
 START_TIME=$(date +%s)
 
 export JOB_DIR
 TRAIN_RC=0
-sh scripts/train.sh \
-  -g 1 \
-  -d flair3d_default \
-  -c "$CONFIG" \
-  -n "$EXP_NAME" \
-  -w "$WEIGHT" || TRAIN_RC=$?
+if [ -n "${SEED_CONFIG_DIR:-}" ]; then
+  OPTS="save_path=${JOB_DIR}"
+  if [ -f "${JOB_DIR}/model/model_last.pth" ]; then
+    OPTS="${OPTS} resume=True weight=${JOB_DIR}/model/model_last.pth"
+  else
+    OPTS="${OPTS} weight=${WEIGHT}"
+  fi
+  if [ -n "${WANDB_GROUP:-}" ]; then
+    OPTS="${OPTS} wandb_group=${WANDB_GROUP}"
+  fi
+  python tools/train.py \
+    --config-file "${CONFIG_FILE}" \
+    --num-gpus 1 \
+    --options ${OPTS} || TRAIN_RC=$?
+else
+  sh scripts/train.sh \
+    -g 1 \
+    -d flair3d_default \
+    -c "$CONFIG" \
+    -n "$EXP_NAME" \
+    -w "$WEIGHT" || TRAIN_RC=$?
+fi
 
 echo "Exp dir: ${JOB_DIR}" >> "${JOB_DIR}/job_info.log"
 echo "WEIGHT=${WEIGHT}" >> "${JOB_DIR}/job_info.log"
