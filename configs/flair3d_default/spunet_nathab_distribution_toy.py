@@ -3,11 +3,10 @@ Toy SpUNet config for debugging nathab axis-distribution training on hecate (D06
 
 Mono-task verification run: the 4 ecological axes (Habitat Type, Moisture Regime,
 Soil Chemistry, Bioclimatic Zone) are each an independent `tile_distribution` task,
-derived on the fly (via Flair3DLabelRemap fan-out) from the raw `natural_habitat`
-CarHab asset (`--natural_habitat_definition default` at preprocess time). Checkpoint
-selection uses `main_task`'s (negated) weighted-KL metric, since this run's purpose
-is confirming the new task type trains and reports correctly, not a full multi-task
-segmentation experiment.
+unpacked from on-disk ``natural_habitat.npy`` ``uint8 (N, 4)`` in
+``Flair3DDataset.get_data``. Checkpoint selection uses `main_task`'s (negated)
+weighted-KL metric, since this run's purpose is confirming the new task type trains
+and reports correctly, not a full multi-task segmentation experiment.
 """
 
 # -----------------------------------------------------------------------------
@@ -69,23 +68,8 @@ from pointcept.datasets.flair3d_config_utils import (
 task_target_keys = tuple(FLAIR3D_TILE_DISTRIBUTION_TASKS.keys())
 main_task = "nathab_habitat_type"
 
-# `natural_habitat` is loaded raw (loader-only, not itself a supervised task) so
-# Flair3DLabelRemap's fan-out below has a source field to read from; it is
-# deliberately excluded from task_target_keys.
-dataset_target_keys = ("natural_habitat",) + task_target_keys
-
-nathab_axis_remaps = dict(
-    nathab_habitat_type=("natural_habitat", "by_habitat_type_ecological"),
-    nathab_moisture_regime=("natural_habitat", "by_moisture_regime"),
-    nathab_soil_chemistry=("natural_habitat", "by_soil_chemistry"),
-    nathab_bioclimatic_zone=("natural_habitat", "by_climatic_domain"),
-)
-nathab_axis_storage_definitions = dict(natural_habitat="default")
-nathab_axis_remap = dict(
-    type="Flair3DLabelRemap",
-    remaps=nathab_axis_remaps,
-    storage_definitions=nathab_axis_storage_definitions,
-)
+# nathab_* axes are unpacked from on-disk natural_habitat.npy (N, 4) in get_data.
+target_keys = task_target_keys
 
 task_configs = init_task_configs(task_target_keys)
 task_criteria = init_task_criteria(task_configs)
@@ -183,7 +167,7 @@ data = dict(
         data_root=data_root,
         csv_manifest=csv_manifest,
         min_points=min_points,
-        target_keys=list(dataset_target_keys),
+        target_keys=list(task_target_keys),
         primary_target_key=main_task,
         max_sample=train_max_sample,
         transform=[
@@ -191,7 +175,6 @@ data = dict(
                 type="Update",
                 keys_dict={"index_valid_keys": list(multitask_index_valid_keys)},
             ),
-            nathab_axis_remap,
             dict(type="CenterShift", apply_z=True),
             dict(type="Z_MinShift"),
             dict(type="Z_RandomOffset"),
@@ -234,7 +217,7 @@ data = dict(
         data_root=data_root,
         csv_manifest=csv_manifest,
         min_points=min_points,
-        target_keys=list(dataset_target_keys),
+        target_keys=list(task_target_keys),
         primary_target_key=main_task,
         max_sample=val_max_sample,
         transform=[
@@ -242,7 +225,6 @@ data = dict(
                 type="Update",
                 keys_dict={"index_valid_keys": list(multitask_index_valid_keys)},
             ),
-            nathab_axis_remap,
             dict(type="CenterShift", apply_z=True),
             dict(type="Z_MinShift"),
             dict(
@@ -275,11 +257,10 @@ data = dict(
         data_root=data_root,
         csv_manifest=csv_manifest,
         min_points=min_points,
-        target_keys=list(dataset_target_keys),
+        target_keys=list(task_target_keys),
         primary_target_key=main_task,
         max_sample=test_max_sample,
         transform=[
-            nathab_axis_remap,
             dict(type="CenterShift", apply_z=True),
             dict(type="Z_MinShift"),
             dict(type="NormalizeColor"),

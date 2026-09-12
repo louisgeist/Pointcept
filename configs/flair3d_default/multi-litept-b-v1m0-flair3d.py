@@ -83,24 +83,10 @@ from pointcept.datasets.flair3d_config_utils import (
 main_task = "segment"
 nathab_keys = tuple(FLAIR3D_TILE_DISTRIBUTION_TASKS.keys())
 target_keys = (main_task, "forest_2d", "elevation") + nathab_keys + ("network",)
-# natural_habitat is loader-only (remap source), not a supervised task.
-dataset_target_keys = ("natural_habitat",) + target_keys
-
+# nathab_* axes are unpacked from on-disk natural_habitat.npy (N, 4) in get_data.
 # GradNormLite: pool the 4 nathab axes into one "nathab" group.
 grad_norm_lite_task_groups = {task_name: "nathab" for task_name in nathab_keys}
 
-nathab_axis_remaps = dict(
-    nathab_habitat_type=("natural_habitat", "by_habitat_type_ecological"),
-    nathab_moisture_regime=("natural_habitat", "by_moisture_regime"),
-    nathab_soil_chemistry=("natural_habitat", "by_soil_chemistry"),
-    nathab_bioclimatic_zone=("natural_habitat", "by_climatic_domain"),
-)
-nathab_axis_storage_definitions = dict(natural_habitat="default")
-nathab_axis_remap = dict(
-    type="Flair3DLabelRemap",
-    remaps=nathab_axis_remaps,
-    storage_definitions=nathab_axis_storage_definitions,
-)
 
 # Elevation in meters: no Collect key_scales, no denorm via target_scales
 # (matches configs/experiment/w107/7/toward_bm/multi-litept-v1m0-flair3d_1.py).
@@ -296,7 +282,7 @@ data = dict(
         data_root=data_root,
         csv_manifest=csv_manifest,
         min_points=min_points,
-        target_keys=list(dataset_target_keys),
+        target_keys=list(target_keys),
         primary_target_key=main_task,
         task_configs=task_configs,
         transform=[
@@ -306,7 +292,6 @@ data = dict(
             ),
             # Freeze Lambert XY before geometric augs / recentering.
             dict(type="ExtractAbsXY"),
-            nathab_axis_remap,
             dict(type="CenterShift", apply_z=True),
             dict(type="Z_MinShift"),
             dict(type="Z_RandomOffset"),
@@ -353,7 +338,7 @@ data = dict(
         csv_manifest=csv_manifest,
         min_points=min_points,
         stratified_subset_manifest=val_stratified_subset_manifest,
-        target_keys=list(dataset_target_keys),
+        target_keys=list(target_keys),
         primary_target_key=main_task,
         task_configs=task_configs,
         transform=[
@@ -362,7 +347,6 @@ data = dict(
                 keys_dict={"index_valid_keys": list(multitask_index_valid_keys)},
             ),
             dict(type="ExtractAbsXY"),
-            nathab_axis_remap,
             dict(type="CenterShift", apply_z=True),
             dict(type="Z_MinShift"),
             dict(
@@ -398,7 +382,7 @@ data = dict(
         data_root=data_root,
         csv_manifest=csv_manifest,
         min_points=min_points,
-        target_keys=list(dataset_target_keys),
+        target_keys=list(target_keys),
         primary_target_key=main_task,
         task_configs=task_configs,
         transform=[
@@ -407,7 +391,6 @@ data = dict(
                 keys_dict={"index_valid_keys": list(multitask_index_valid_keys)},
             ),
             dict(type="ExtractAbsXY"),
-            nathab_axis_remap,
             dict(type="CenterShift", apply_z=True),
             dict(type="Z_MinShift"),
             dict(type="NormalizeColor"),
