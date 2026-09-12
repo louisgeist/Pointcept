@@ -216,18 +216,130 @@ python scripts/extract_pureforest_pooled_embeddings.py \
   --splits ${SPLITS} --batch-size 2
 ```
 
-### Probe (sklearn)
+### Probe (linear or MLP)
+
+Default `--head linear`: multinomial logistic with an L2 `C` grid.
+`--head mlp`: PureForest Fig.7-style head
+`Linear(C→hidden) → LeakyReLU(0.2) → Dropout → Linear(hidden→K)` (default
+`hidden=32`), Adam + CE, grid `agg × lr × weight_decay × dropout`, early-stop
+on val.
 
 ```bash
+# Sonata outdoor SSL (linear)
 python scripts/probe_pureforest_sklearn.py \
   --embeddings-dir ${OUT}/sonata_outdoor_ms \
   --output-dir stats/pureforest/sklearn_probe/sonata_outdoor_ms
+
+# LitePT-B Malibu3D multitask
+python scripts/probe_pureforest_sklearn.py \
+  --embeddings-dir ${OUT}/litept_b_malibu3d_ms \
+  --output-dir stats/pureforest/sklearn_probe/litept_b_malibu3d_ms
+
+# PTv3 Malibu3D multitask
+python scripts/probe_pureforest_sklearn.py \
+  --embeddings-dir ${OUT}/ptv3_malibu3d_ms \
+  --output-dir stats/pureforest/sklearn_probe/ptv3_malibu3d_ms
+
+# SpUNet Malibu3D multitask
+python scripts/probe_pureforest_sklearn.py \
+  --embeddings-dir ${OUT}/spunet_malibu3d_ms \
+  --output-dir stats/pureforest/sklearn_probe/spunet_malibu3d_ms
+
+# KPConvX Malibu3D multitask
+python scripts/probe_pureforest_sklearn.py \
+  --embeddings-dir ${OUT}/kpconvx_malibu3d_ms \
+  --output-dir stats/pureforest/sklearn_probe/kpconvx_malibu3d_ms
+
+# LitePT-B préentraîné ECLAIR (job 1330042)
+python scripts/probe_pureforest_sklearn.py \
+  --embeddings-dir ${OUT}/litept_b_preECLAIR_ms \
+  --output-dir stats/pureforest/sklearn_probe/litept_b_preECLAIR_ms
 ```
 
-Repeat with each `${OUT}/<tag>`. Selects best `(agg, C)` on val
-(`--select-metric mIoU` by default), reports test once, writes `metrics.json`
-and `best_test_predictions.npz`. Options: `--class-weight balanced`,
-`--Cs 0.01 0.1 1 10 100`, `--aggs mean concat`.
+GPU chain (same 6 tags, `--device cuda`, resume-friendly) — prefer tmux:
+
+```bash
+bash scripts/pureforest/run_sklearn_probes_gpu.sh
+# SKIP_EXISTING=1 DEVICE=cuda:1 bash scripts/pureforest/run_sklearn_probes_gpu.sh
+# MLP head: EXTRA_ARGS='--head mlp' PROBE_ROOT=stats/pureforest/sklearn_probe_mlp \
+#   bash scripts/pureforest/run_sklearn_probes_gpu.sh
+```
+
+### Scale-slice linear probes (encoder levels)
+
+Pooled MS embeddings are a finest-first concat of `enc_channels` /
+`channel_blocks` (Sonata: `48+96+192+384+512`). Slice levels **at probe
+time** (no re-extract) with `--scale-slice`:
+
+```bash
+# Finest two levels only (48+96 = 144ch for Sonata)
+python scripts/probe_pureforest_sklearn.py \
+  --embeddings-dir ${OUT}/sonata_outdoor_ms \
+  --output-dir stats/pureforest/sklearn_probe_scales/sonata_outdoor_ms/scale_p0-2 \
+  --scale-slice '[:2]' --device cuda -v
+
+# Coarser levels only
+python scripts/probe_pureforest_sklearn.py \
+  --embeddings-dir ${OUT}/sonata_outdoor_ms \
+  --output-dir stats/pureforest/sklearn_probe_scales/sonata_outdoor_ms/scale_s2-end \
+  --scale-slice '[2:]' --device cuda -v
+```
+
+Blocks default from each tag’s `meta.json` → extract config
+(`model.channel_blocks` / `enc_channels`); override with
+`--channel-blocks 48 96 192 384 512` if needed. Syntax: `full`, `[:k]`,
+`[k:]`, `[i:j]`, `[i]`. Use a distinct `--output-dir` per slice so resume
+files do not mix.
+
+**Grid B launcher** (full + prefixes `[:1]…[:L-1]` + suffixes `[1:]…[L-1:]`,
+9 runs × 6 tags) — prefer tmux:
+
+```bash
+bash scripts/pureforest/run_sklearn_scale_slice_probes_gpu.sh
+# SKIP_EXISTING=1 DEVICE=cuda:1 \
+#   bash scripts/pureforest/run_sklearn_scale_slice_probes_gpu.sh
+# TAGS='sonata_outdoor_ms litept_b_malibu3d_ms' \
+#   bash scripts/pureforest/run_sklearn_scale_slice_probes_gpu.sh
+```
+
+Outputs: `stats/pureforest/sklearn_probe_scales/<tag>/scale_<slug>/metrics.json`
+(slugs: `full`, `p0-2`, `s2-end`, …).
+
+Selects best config on val (`--select-metric mIoU` by default), then reports
+train + test for that winner only (`best.train.*` / `best.test.*` in
+`metrics.json`, plus `best_test_predictions.npz`). After each
+grid fit it also updates `grid_progress.json` (+ `best_so_far.pkl` on new best)
+so a crash can be resumed by re-running the same command (skips finished
+cells). Use `--fresh` to ignore prior progress. Options: `-v`,
+`--class-weight balanced` / `sqrt`, `--Cs 0.01 0.1 1 10 100`, `--aggs mean concat`,
+`--solver newton-cholesky` (sklearn linear).
+
+- ``none``: uniform weights
+- ``balanced``: ``w_k ∝ 1/n_k``
+- ``sqrt``: ``w_k ∝ 1/√n_k`` (between none and balanced)
+
+**GPU linear (torch LBFGS)** — pass `--device cuda` (train/val stay on device
+for the whole `C` grid of each `agg`). Prefer a separate `--output-dir` vs a
+prior sklearn run:
+
+```bash
+python scripts/probe_pureforest_sklearn.py \
+  --embeddings-dir ${OUT}/litept_b_malibu3d_ms \
+  --output-dir stats/pureforest/sklearn_probe/litept_b_malibu3d_ms_torch \
+  --device cuda -v
+```
+
+**MLP head (torch Adam)** — always torch; omit `--device` to auto-pick cuda/cpu.
+Use a distinct `--output-dir` so progress does not mix with linear runs:
+
+```bash
+python scripts/probe_pureforest_sklearn.py \
+  --embeddings-dir ${OUT}/kpconvx_malibu3d_ms \
+  --output-dir stats/pureforest/sklearn_probe/kpconvx_malibu3d_ms_mlp \
+  --head mlp --device cuda -v
+# optional: --hidden 32 --lrs 1e-3 2e-3 5e-3 1e-2 2e-2 \
+#           --wds 0 1e-4 1e-3 1e-2 --dropouts 0.5 --epochs 100 --patience 20
+```
 
 ### Slurm (Jean-Zay H100)
 

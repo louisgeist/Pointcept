@@ -132,6 +132,52 @@ def normalize_tile_coord(coord: np.ndarray) -> np.ndarray:
     return out
 
 
+def _atomic_np_save(path: str, array: np.ndarray) -> None:
+    """Write ``.npy`` via a temp file + rename so crashes never leave truncated files."""
+    directory = os.path.dirname(path) or "."
+    os.makedirs(directory, exist_ok=True)
+    tmp_path = f"{path}.tmp.{os.getpid()}"
+    try:
+        np.save(tmp_path, array)
+        # np.save appends .npy if the path does not already end with it.
+        written = tmp_path if tmp_path.endswith(".npy") else f"{tmp_path}.npy"
+        os.replace(written, path)
+    finally:
+        for leftover in (tmp_path, f"{tmp_path}.npy"):
+            if leftover != path and os.path.isfile(leftover):
+                try:
+                    os.remove(leftover)
+                except OSError:
+                    pass
+
+
+def npy_file_complete(path: str) -> bool:
+    """True if ``path`` exists and its on-disk payload matches the .npy header shape."""
+    import struct
+
+    if not os.path.isfile(path):
+        return False
+    try:
+        with open(path, "rb") as f:
+            if f.read(6) != b"\x93NUMPY":
+                return False
+            major = struct.unpack("B", f.read(1))[0]
+            f.read(1)  # minor
+            if major == 1:
+                header_len = struct.unpack("<H", f.read(2))[0]
+            elif major == 2:
+                header_len = struct.unpack("<I", f.read(4))[0]
+            else:
+                return False
+            meta = eval(f.read(header_len).decode("latin1"))
+            dtype = np.dtype(meta["descr"])
+            expected = int(np.prod(meta["shape"])) * dtype.itemsize
+            actual = os.path.getsize(path) - f.tell()
+            return actual == expected
+    except Exception:
+        return False
+
+
 def save_tile_scene(
     output_scene_dir: str,
     coord: np.ndarray,
@@ -139,12 +185,19 @@ def save_tile_scene(
     category: int,
 ) -> None:
     os.makedirs(output_scene_dir, exist_ok=True)
-    np.save(os.path.join(output_scene_dir, "color.npy"), color.astype(np.float32))
-    np.save(
-        os.path.join(output_scene_dir, "category.npy"),
-        np.int32(category),
+    # Write coord last historically caused truncated coord.npy on kill; all writes
+    # are atomic now. Keep coord last so resume only treats the scene as done when
+    # the final artifact is present and complete.
+    _atomic_np_save(
+        os.path.join(output_scene_dir, "color.npy"), color.astype(np.float32)
     )
-    np.save(os.path.join(output_scene_dir, "coord.npy"), coord.astype(np.float32))
+    _atomic_np_save(
+        os.path.join(output_scene_dir, "category.npy"),
+        np.asarray(np.int32(category)),
+    )
+    _atomic_np_save(
+        os.path.join(output_scene_dir, "coord.npy"), coord.astype(np.float32)
+    )
 
 
 @dataclass(frozen=True)
@@ -354,7 +407,13 @@ def partition_tasks_for_processing(
             continue
 
         coord_path = os.path.join(output_root, task.split, task.patch_id, "coord.npy")
-        if not overwrite and os.path.isfile(coord_path):
+        color_path = os.path.join(output_root, task.split, task.patch_id, "color.npy")
+        # Require complete coord+color (truncated files from a killed write are reprocessed).
+        if (
+            not overwrite
+            and npy_file_complete(coord_path)
+            and npy_file_complete(color_path)
+        ):
             already_done.append(task)
             continue
 
