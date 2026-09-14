@@ -247,6 +247,7 @@ data = dict(
     test=dict(
         type=dataset_type,
         split="test",
+        exclude_flair3d_leakage_tiles=True,
         data_root=data_root,
         class_names=class_names,
         transform=_val_test_transform,

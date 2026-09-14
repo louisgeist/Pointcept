@@ -8,6 +8,7 @@ Author: Pointcept integration
 
 import os
 from copy import deepcopy
+from functools import lru_cache
 
 import numpy as np
 from torch.utils.data import Dataset
@@ -20,6 +21,28 @@ from pointcept.datasets.preprocessing.pureforest.pureforest_classes import (
     CLASS_NAMES,
     NUM_CLASSES,
 )
+from pointcept.datasets.preprocessing.pureforest.preprocess_pureforest import (
+    COORD_SCALE_M,
+)
+
+# Forest-level (bdforetv2_id) exclusion list: PureForest test patches that geographically
+# overlap the Flair3D+ (MALiBU3D) train/val split. See file header for how this was derived.
+FLAIR3D_LEAKAGE_EXCLUDE_FILE = os.path.join(
+    os.path.dirname(__file__),
+    "preprocessing",
+    "pureforest",
+    "flair3d_leakage_excluded_test_tiles.txt",
+)
+
+
+@lru_cache(maxsize=1)
+def _load_flair3d_leakage_excluded_tiles():
+    with open(FLAIR3D_LEAKAGE_EXCLUDE_FILE) as f:
+        return frozenset(
+            line.strip()
+            for line in f
+            if line.strip() and not line.startswith("#")
+        )
 
 
 # Alignment with ModelNetDataset, as it is also a classification dataset
@@ -34,6 +57,7 @@ class PureForestDataset(Dataset):
         test_cfg=None,
         loop=1,
         class_names=None,
+        exclude_flair3d_leakage_tiles=False,
     ):
         super().__init__()
         self.data_root = data_root
@@ -43,6 +67,7 @@ class PureForestDataset(Dataset):
         self.test_mode = test_mode
         self.test_cfg = test_cfg if test_mode else None
         self.class_names = class_names if class_names is not None else CLASS_NAMES
+        self.exclude_flair3d_leakage_tiles = exclude_flair3d_leakage_tiles
         if len(self.class_names) != NUM_CLASSES:
             raise ValueError(
                 f"Expected {NUM_CLASSES} class names, got {len(self.class_names)}."
@@ -75,6 +100,16 @@ class PureForestDataset(Dataset):
         )
         if not names:
             raise FileNotFoundError(f"No preprocessed scenes under {split_dir}.")
+        if self.exclude_flair3d_leakage_tiles:
+            excluded = _load_flair3d_leakage_excluded_tiles()
+            filtered = [name for name in names if name not in excluded]
+            logger = get_root_logger()
+            logger.info(
+                "PureForest {} set: excluded {} / {} Flair3D+-trainval-leaking tile(s).".format(
+                    self.split, len(names) - len(filtered), len(names)
+                )
+            )
+            names = filtered
         return names
 
     def get_data(self, idx):
@@ -82,7 +117,14 @@ class PureForestDataset(Dataset):
         patch_stem = self.data_list[data_idx]
         scene_dir = os.path.join(self.data_root, self.split, patch_stem)
         try:
-            coord = np.load(os.path.join(scene_dir, "coord.npy")).astype(np.float32)
+            # On-disk coord.npy is stored ~[-1, 1]-normalized (mean-centered XY, min-shifted Z,
+            # divided by COORD_SCALE_M) per the PureForest paper's own baseline preprocessing.
+            # Denormalize back to real meters here so every transform downstream (GridSample,
+            # SphereCrop, feat_scales=coord) behaves like every other metric dataset in this repo.
+            coord = (
+                np.load(os.path.join(scene_dir, "coord.npy")).astype(np.float32)
+                * COORD_SCALE_M
+            )
             color = np.load(os.path.join(scene_dir, "color.npy")).astype(np.float32)
             category_val = int(np.load(os.path.join(scene_dir, "category.npy")))
         except Exception as exc:
