@@ -1,7 +1,9 @@
 # Sonata on Flair3D+ (Geist)
 
-Self-supervised pretraining with **Sonata-v1m2** on Flair3D+, plus **periodic linear
-probing** on semantic segmentation (v20) for representation quality tracking.
+Self-supervised pretraining with **Sonata-v1m2** on Flair3D+ (and a sibling
+recipe on **ECLAIR** — see [Sonata on ECLAIR](#sonata-on-eclair)), plus
+**periodic linear probing** on semantic segmentation for representation quality
+tracking.
 
 Official Sonata docs: [`pointcept/models/sonata/README.md`](pointcept/models/sonata/README.md).
 
@@ -47,6 +49,8 @@ python scripts/build_stratified_subset.py \
 | Pretrain | [`configs/flair3d_default/pretrain-sonata-v1m2-flair3d.py`](configs/flair3d_default/pretrain-sonata-v1m2-flair3d.py) |
 | Linear probe | [`configs/flair3d_default/probe/sonata-v1m2-flair3d-lin.py`](configs/flair3d_default/probe/sonata-v1m2-flair3d-lin.py) |
 | Mini grid-probe (H100 sweep) | [`configs/experiment/w109/1/sonata_grid_mini/sonata-v1m2-flair3d-lin-grid_1.py`](configs/experiment/w109/1/sonata_grid_mini/sonata-v1m2-flair3d-lin-grid_1.py) |
+| ECLAIR pretrain | [`configs/eclair/pretrain-sonata-v1m2-eclair.py`](configs/eclair/pretrain-sonata-v1m2-eclair.py) |
+| ECLAIR linear probe | [`configs/eclair/probe/sonata-v1m2-eclair-lin.py`](configs/eclair/probe/sonata-v1m2-eclair-lin.py) |
 
 ### Pretrain defaults
 
@@ -91,8 +95,10 @@ All launchers live under [`scripts/sonata/`](scripts/sonata/):
 
 - [`scripts/sonata/sbatch_pretrain.sh`](scripts/sonata/sbatch_pretrain.sh) — 3×8 A100 (=24), `WANDB_MODE=offline` (+ hook submits probes)
 - [`scripts/sonata/sbatch_pretrain_h100.sh`](scripts/sonata/sbatch_pretrain_h100.sh) — 6×4 H100 (=24); overrides probe script to H100 via `EXTRA_OPTIONS`
+- [`scripts/sonata/sbatch_pretrain_eclair_h100.sh`](scripts/sonata/sbatch_pretrain_eclair_h100.sh) — ECLAIR, 6×4 H100, `ppm@h100`
 - [`scripts/sonata/sbatch_lin_probe.sh`](scripts/sonata/sbatch_lin_probe.sh) — 1× A100, short walltime
 - [`scripts/sonata/sbatch_lin_probe_h100.sh`](scripts/sonata/sbatch_lin_probe_h100.sh) — 1× H100
+- [`scripts/sonata/sbatch_lin_probe_eclair_h100.sh`](scripts/sonata/sbatch_lin_probe_eclair_h100.sh) — ECLAIR lin probe, 1× H100, `ppm@h100`
 - [`scripts/sonata/sbatch_lin_grid_probe_mini_h100.sh`](scripts/sonata/sbatch_lin_grid_probe_mini_h100.sh) — 1× H100 array, mini grid-probe every 10 epochs (no test)
 - [`scripts/sonata/sbatch_pretrain_resume_h100.sh`](scripts/sonata/sbatch_pretrain_resume_h100.sh) — resume under a new config on 24× H100
 - [`scripts/sonata/periodic_lin_probe.py`](scripts/sonata/periodic_lin_probe.py) — **optional** watcher (local / replay only)
@@ -170,6 +176,65 @@ sh scripts/train.sh -g 8 -d flair3d_default -c pretrain-sonata-v1m2-flair3d \
 python scripts/sonata/periodic_lin_probe.py \
   --pretrain_job_dir exp/flair3d_default/sonata_pretrain_flair3dplus \
   --mode local --gpus 1 --once
+```
+
+## Sonata on ECLAIR
+
+Same pipeline (SSL with `evaluate=False` + `LinProbeSbatchHook`), in-domain on
+ECLAIR rather than Flair3D+. Train split only, **`include_pseudo=True`**
+(1059 tiles: 437 GT + 622 pseudo). SSL does not use labels.
+
+| Role | Path |
+|------|------|
+| Pretrain | [`configs/eclair/pretrain-sonata-v1m2-eclair.py`](configs/eclair/pretrain-sonata-v1m2-eclair.py) |
+| Linear probe | [`configs/eclair/probe/sonata-v1m2-eclair-lin.py`](configs/eclair/probe/sonata-v1m2-eclair-lin.py) |
+
+### Schedule (why iter-limited)
+
+ECLAIR configs elsewhere are classic epoch-mode. Sonata SSL is **iter-limited**
+so the budget is independent of dataset size / batch size:
+
+- `total_iters=150_000`, `iter_per_epoch=1000` → **150 trainer-epochs**
+- `batch_size=96` (6×4 H100) → ~12 classic steps/epoch over 1059 tiles
+- **150k iters ≈ 12 500 dataset passes** (~83 passes per trainer-epoch)
+
+Checkpoints: `CheckpointSaver(save_freq=1)` → `epoch_{1..150}.pth` (every 1000
+iters). Probes: `LinProbeSbatchHook(save_freq=10)` → **15 jobs** at epochs
+10, 20, …, 150 (`scripts/sonata/sbatch_lin_probe_eclair_h100.sh`).
+
+Strength is raw uint16 on disk; both configs apply `feat_scales` `1/60000`.
+No `coord_feat_scale` (Sonata pretrain does not use it). W&B project:
+`eclair_sonata`.
+
+### Linear probe defaults
+
+- `DefaultSegmentorV2` + frozen `PT-v3m2` (`enc_mode=True`, 1232ch) — **not** GridProbe
+- Remap: `module.student.backbone` → `module.backbone`
+- 11 classes, `ignore_index=-1`; train+val `include_pseudo=True`; **no test**
+- Classic `epoch=100`, `eval_epoch=10`, `lr=1e-2`, `batch_size=24`, val=62 tiles
+- Hardware: **1× H100**, `num_worker=16`, walltime 12 h
+
+### Jean-Zay (`ppm@h100`)
+
+```bash
+sbatch scripts/sonata/sbatch_pretrain_eclair_h100.sh sonata_pretrain_eclair_h100
+# PRETRAIN_DIR=logs/slurm/$SLURM_JOB_ID
+# resume: sbatch scripts/sonata/sbatch_pretrain_eclair_h100.sh sonata_pretrain_eclair_h100 logs/slurm/<OLD_JOB_ID>
+
+tail -f logs/slurm/<PRETRAIN_JOB_ID>/lin_probe_results.csv
+```
+
+IMAGINE `--comment` tags: pretrain `eclair,explore,pre-train`; lin-probe
+`eclair,explore,evaluate`. Account is **`ppm@h100`** for both (unlike Flair3D,
+which bills probes on `uhn@a100`).
+
+Manual single probe:
+
+```bash
+WEIGHT=/path/to/epoch_10.pth EXP_NAME=sonata_eclair_lin_ep10 \
+  PRETRAIN_JOB_DIR=logs/slurm/<PRETRAIN_JOB_ID> \
+  PRETRAIN_EPOCH=10 PRETRAIN_ITERS=10000 \
+  sbatch scripts/sonata/sbatch_lin_probe_eclair_h100.sh
 ```
 
 ## Batch size / VRAM on Jean-Zay
