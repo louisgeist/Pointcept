@@ -113,9 +113,6 @@ class Collect(object):
             "normal": "normal_mask",
             "strength": "strength_mask",
         } # Remark: coord can also be used as features, but are never masked.
-        data_dict["offset"] = torch.cumsum(
-            torch.tensor([data.shape[0] for data in data_dict["coord"]]), dim=0
-        )
         if isinstance(self.keys, str):
             self.keys = [self.keys]
         for key in self.keys:
