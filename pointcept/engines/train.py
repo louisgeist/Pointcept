@@ -342,7 +342,11 @@ class Trainer(TrainerBase):
                     )
                 interval = int(getattr(self.cfg, "grad_norm_lite_interval", 100))
                 lite_info = {}
-                iter_idx = int(self.comm_info["iter"])
+                # Global step, not comm_info["iter"] (resets to 0 every epoch) --
+                # otherwise the interval never fires when epoch length <= interval.
+                iter_idx = self.epoch * len(self.train_loader) + int(
+                    self.comm_info["iter"]
+                )
                 # Scene-level losses underflow in fp16 without a probe scale.
                 amp_probe_scale = float(
                     getattr(
@@ -419,7 +423,11 @@ class Trainer(TrainerBase):
                         1024.0 if self.cfg.enable_amp else 1.0,
                     )
                 )
-                iter_idx = int(self.comm_info["iter"])
+                # Global step, not comm_info["iter"] (resets to 0 every epoch) --
+                # otherwise the interval never fires when epoch length <= interval.
+                iter_idx = self.epoch * len(self.train_loader) + int(
+                    self.comm_info["iter"]
+                )
                 gn_info = {}
                 if interval > 0 and iter_idx % interval == 0:
                     grad_norms = compute_task_last_layer_grad_norms(
