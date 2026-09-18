@@ -28,6 +28,9 @@ GRID_CONFIG_CARTESIAN = "configs/flair3d_default/probe/sonata-v1m2-flair3d-lin-g
 # DALES: no held-out val, every config points data.val and data.test at split="test"
 GRID_CONFIG_DALES = "configs/dales/spunet-v1m0-dales-lin-grid-enc.py"
 
+# OpenGF: has its own held-out val split (like H3D), unlike DALES
+GRID_CONFIG_OPENGF = "configs/opengf/litept-b-v1m0-opengf-lin-grid-enc.py"
+
 WINNER_NAME = "ce_lovasz_lr2e-2_wd0_do0_none_fnnone_adamw_w05"
 WINNER_PROBE_CONFIG = {
     "criteria": [
@@ -143,6 +146,17 @@ class TestBuildSeedEnsembleConfig(unittest.TestCase):
         self.assertEqual(info["test_split"], "test")
         self.assertTrue(info["val_eq_test_split"])
         self.assertTrue(self._last_info["val_eq_test_split"])
+
+    def test_opengf_val_and_test_are_distinct_splits(self):
+        # OpenGF ships its own held-out val (9 scenes), unlike DALES -- val and
+        # test must stay distinct so seed-ensemble test_* metrics land on T1/T2/T3,
+        # not on the val tiles used for winner selection.
+        cfg, _ = self._generate(GRID_CONFIG_OPENGF, n_seeds=4)
+        info = split_info_from_cfg(cfg)
+        self.assertEqual(info["val_split"], "val")
+        self.assertEqual(info["test_split"], "test")
+        self.assertFalse(info["val_eq_test_split"])
+        self.assertFalse(self._last_info["val_eq_test_split"])
 
     def test_select_metric_propagates_into_seed_config(self):
         # build_seed_ensemble_config copies every hook dict through verbatim

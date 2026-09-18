@@ -1,6 +1,9 @@
 #!/bin/bash
 # Submit grid-then-seed on H100 with dataset-aware Slurm walltime:
-#   H3D 4 h | DALES 8 h | ECLAIR 12 h (inferred from grid config path).
+#   H3D 4 h | DALES 8 h | OpenGF 8 h | ECLAIR 12 h (inferred from grid config path).
+#   OpenGF's 8h is a starting guess (unlike H3D/DALES/ECLAIR, not yet timed on a real
+#   run) -- Test/T1.laz is a single ~46M-point fragment (test_single_fragment=True),
+#   much larger than a typical DALES/H3D tile, so this may need raising.
 #
 # Usage (same args as sbatch_grid_then_seeds_h100.sh):
 #   ./submit_grid_then_seeds_h100.sh <grid_config> [weight.pth] [exp_name]
@@ -21,6 +24,7 @@ grid_then_seeds_resolve_time() {
     case "$cfg" in
         */h3d/* | *h3d* | */H3D/* | *H3D*) echo "04:00:00" ;;
         */dales/* | *dales* | */DALES/* | *DALES*) echo "08:00:00" ;;
+        */opengf/* | *opengf* | */OpenGF/* | *OpenGF*) echo "08:00:00" ;;
         */eclair/* | *eclair* | */ECLAIR/* | *ECLAIR*) echo "12:00:00" ;;
         *) echo "05:00:00" ;;
     esac

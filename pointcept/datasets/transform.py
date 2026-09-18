@@ -311,6 +311,50 @@ class Flair3DLabelRemap(object):
 
 
 @TRANSFORMS.register_module()
+class RemapSegment(object):
+    """In-place ``segment`` label remap via a small id->id dict (e.g. merge one raw class
+    into another). Unlike ``Flair3DLabelRemap``, this has no notion of on-disk storage
+    definitions -- just a literal mapping applied to whatever ``segment`` already holds.
+    IDs not present in ``mapping`` pass through unchanged.
+    """
+
+    def __init__(self, mapping):
+        if not mapping:
+            raise ValueError("mapping must be a non-empty dict of raw_id -> new_id")
+        self.mapping = {int(k): int(v) for k, v in mapping.items()}
+
+    def __call__(self, data_dict):
+        segment = data_dict["segment"]
+        for raw_id, new_id in self.mapping.items():
+            segment[segment == raw_id] = new_id
+        data_dict["segment"] = segment
+        return data_dict
+
+
+@TRANSFORMS.register_module()
+class DropSegmentClass(object):
+    """Physically remove points whose ``segment`` label is in ``labels`` (all
+    ``index_valid_keys`` arrays are masked consistently via ``index_operator``) --
+    as opposed to ``ignore_index``, which keeps the points in the cloud but excludes
+    them from loss/metrics. Use this when downstream geometry (neighbor context fed to
+    the network) must not include the dropped points, e.g. reproducing a benchmark's
+    "outliers physically removed" test protocol.
+    """
+
+    def __init__(self, labels):
+        if not labels:
+            raise ValueError("labels must be a non-empty sequence of segment ids to drop")
+        self.labels = tuple(int(label) for label in labels)
+
+    def __call__(self, data_dict):
+        segment = data_dict["segment"]
+        keep = ~np.isin(segment, self.labels)
+        if not np.all(keep):
+            data_dict = index_operator(data_dict, np.where(keep)[0])
+        return data_dict
+
+
+@TRANSFORMS.register_module()
 class ToTensor(object):
     def __call__(self, data):
         if isinstance(data, torch.Tensor):

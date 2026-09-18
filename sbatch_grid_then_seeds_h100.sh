@@ -2,13 +2,13 @@
 
 # Grid-probe sweep -> best-config (by val) -> seed-ensemble robustness run,
 # chained in one job (1x H100). Generic: works for any *-lin-grid* config
-# (h3d / dales / eclair / flair3d, any frozen backbone) -- not Sonata-specific.
+# (h3d / dales / opengf / eclair / flair3d, any frozen backbone) -- not Sonata-specific.
 #
 # See sbatch_grid_then_seeds.sh (A100 variant) for the full description.
 #
 # Usage:
 #   ./submit_grid_then_seeds_h100.sh <grid_config> [weight.pth] [exp_name]
-#   (sets Slurm --time from config path: H3D 4h / DALES 8h / ECLAIR 12h)
+#   (sets Slurm --time from config path: H3D 4h / DALES 8h / OpenGF 8h / ECLAIR 12h)
 #   GRID_CONFIG=... [WEIGHT=...] [N_SEEDS=10] sbatch sbatch_grid_then_seeds_h100.sh
 #   Random-init grid configs: omit weight (or WEIGHT=) — phase 2 reloads grid ckpt.
 #
