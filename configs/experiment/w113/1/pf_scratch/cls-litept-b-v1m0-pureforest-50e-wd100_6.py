@@ -16,10 +16,10 @@ num_exp = 6
 # Hardware parameters
 num_gpu = 1
 num_worker = 24 * num_gpu
-enable_amp = False
+enable_amp = True
 
 # Data parameters
-batch_size = 128 * num_gpu  # total batch size across all gpus
+batch_size = 12 * num_gpu  # total batch size across all gpus
 batch_size_val = batch_size // 2
 batch_size_test = batch_size // 2
 
