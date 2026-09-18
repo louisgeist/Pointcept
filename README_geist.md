@@ -774,7 +774,7 @@ python pointcept/datasets/preprocessing/dales/preprocess_dales.py \
   --dataset_root data/dales/raw \
   --output_root data/dales \
   --num_workers 8 \
-  --chunking 4
+  --chunking 3
 ```
 
 #### ECLAIR
