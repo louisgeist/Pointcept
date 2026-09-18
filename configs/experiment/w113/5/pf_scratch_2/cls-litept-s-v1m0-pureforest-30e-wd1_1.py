@@ -10,7 +10,7 @@ _base_ = ["../../../../_base_/default_runtime.py"]
 
 # Logging parameters
 grp_exp = 1
-num_exp = 7
+num_exp = 1
 
 
 # Hardware parameters
