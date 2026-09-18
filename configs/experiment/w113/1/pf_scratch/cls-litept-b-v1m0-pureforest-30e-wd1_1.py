@@ -51,15 +51,8 @@ log_test_f1 = True
 # -----------------------------------------------------------------------------
 hooks = [
     dict(type="CheckpointLoader"),
-    # Debug test (2026-09-18): from-scratch PureForest LitePT stem uses
-    # in_channels=6 (coord+color, no strength) — a SubMConv3d shape never
-    # exercised elsewhere on JZ (every other LitePT config uses in_channels=7).
-    # Suspected spconv implicit-gemm autotuner failure on first-time shape,
-    # surfacing as CUBLAS_STATUS_NOT_INITIALIZED / illegal memory access at
-    # the very first stem forward. Bypass the autotuner to confirm.
-    dict(type="SpconvNativeConvAlgo"),
     dict(type="IterationTimer", warmup_iter=2),
-    dict(type="InformationWriter", log_interval=100),
+    dict(type="InformationWriter", log_interval=1),
     dict(type="ClsEvaluator", metric="mIoU"),
     dict(type="CheckpointSaver", save_freq=None),
     dict(type="PreciseEvaluator", test_last=False),

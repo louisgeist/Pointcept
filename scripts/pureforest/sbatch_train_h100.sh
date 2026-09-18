@@ -47,7 +47,7 @@ cp "$0" "${JOB_DIR}/script.slurm"
 
 module purge
 module load arch/h100
-module load cuda/12.1.0
+module load cuda/12.4.1
 module load miniforge/24.9.0
 
 conda deactivate && while [ ! -z "$CONDA_DEFAULT_ENV" ]; do conda deactivate; done
