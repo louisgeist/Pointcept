@@ -17,7 +17,7 @@
 
 #SBATCH --output=/lustre/fswork/projects/rech/unv/usi32yh/Pointcept/logs/slurm/%j/slurm.out
 #SBATCH --error=/lustre/fswork/projects/rech/unv/usi32yh/Pointcept/logs/slurm/%j/slurm.err
-#SBATCH -A uhn@h100
+#SBATCH -A ppm@h100
 #SBATCH -C h100
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
