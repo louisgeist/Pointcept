@@ -5,6 +5,8 @@ Author: Xiaoyang Wu (xiaoyang.wu.cs@gmail.com)
 Please cite our work if the code is helpful to you.
 """
 
+import wandb
+
 from pointcept.engines.defaults import (
     default_argument_parser,
     default_config_parser,
@@ -13,14 +15,20 @@ from pointcept.engines.defaults import (
 from pointcept.engines.test import TESTERS
 from pointcept.engines.launch import launch
 from pointcept.utils.network_apls import run_network_apls_eval_if_configured
+from pointcept.utils.wandb_resume import init_or_resume_wandb
 
 
 def main_worker(cfg):
     cfg = default_setup(cfg)
     test_cfg = dict(cfg=cfg, **cfg.test)
     tester = TESTERS.build(test_cfg)
-    tester.test()
-    run_network_apls_eval_if_configured(cfg, tester.logger)
+    init_or_resume_wandb(cfg, logger=tester.logger)
+    try:
+        tester.test()
+        run_network_apls_eval_if_configured(cfg, tester.logger)
+    finally:
+        if wandb.run is not None:
+            wandb.finish()
 
 
 def main():

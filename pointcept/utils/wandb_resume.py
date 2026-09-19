@@ -21,6 +21,7 @@ network at all.
 """
 
 import os
+from pathlib import Path
 
 
 def local_last_step_path(save_path):
@@ -129,3 +130,98 @@ def bump_wandb_step_on_resume(
         return int(getattr(wandb_run, "step", 0) or 0)
     last = fetch_last_history_step(project, run_id, entity=entity, api=api)
     return bump_wandb_run_step(wandb_run, last, logger=logger)
+
+
+def wandb_run_id_path(save_path):
+    return os.path.join(save_path, "wandb_run_id.txt")
+
+
+def read_wandb_run_id(save_path):
+    """Read the W&B run id sidecar written next to checkpoints, or None."""
+    path = wandb_run_id_path(save_path)
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path, "r") as f:
+            text = f.read().strip()
+        return text or None
+    except OSError:
+        return None
+
+
+def init_or_resume_wandb(cfg, logger=None):
+    """Init or resume the W&B run bound to ``cfg.save_path``.
+
+    No-op when wandb is disabled, on non-main ranks, or if a run is already
+    active (e.g. PreciseEvaluator inside training). Standalone
+    ``tools/test.py`` uses this to append ``test/*`` onto the original
+    training run via ``save_path/wandb_run_id.txt``.
+    """
+    import wandb
+
+    from pointcept.utils.comm import is_main_process
+    from pointcept.utils.wandb_metrics import define_wandb_metrics
+
+    if not getattr(cfg, "enable_wandb", False):
+        return None
+    if not is_main_process():
+        return None
+    if wandb.run is not None:
+        return wandb.run
+
+    save_path = cfg.save_path
+    tag, name = Path(save_path).parts[-2:]
+    run_name = getattr(cfg, "wandb_run_name", f"{tag}/{name}")
+    target_keys = getattr(cfg, "target_keys", None)
+    if target_keys:
+        if isinstance(target_keys, (list, tuple)):
+            tags = [str(x) for x in target_keys]
+        else:
+            tags = [str(target_keys)]
+    else:
+        tags = None
+
+    run_id = read_wandb_run_id(save_path)
+    init_kw = dict(
+        project=cfg.wandb_project,
+        name=run_name,
+        dir=save_path,
+        settings=wandb.Settings(api_key=cfg.wandb_key),
+        config=cfg,
+    )
+    if tags:
+        init_kw["tags"] = tags
+    wandb_group = getattr(cfg, "wandb_group", None)
+    if wandb_group:
+        init_kw["group"] = str(wandb_group)
+    if run_id:
+        init_kw["id"] = run_id
+        init_kw["resume"] = "allow"
+        if logger is not None:
+            logger.info("Resuming W&B run: %s", run_id)
+    else:
+        if logger is not None:
+            logger.warning(
+                "No wandb_run_id.txt in %s; starting a new W&B run instead of "
+                "resuming the training run",
+                save_path,
+            )
+
+    wandb.init(**init_kw)
+    if run_id:
+        bump_wandb_step_on_resume(
+            wandb.run,
+            project=cfg.wandb_project,
+            run_id=run_id,
+            logger=logger,
+            entity=getattr(wandb.run, "entity", None),
+            local_last_step=read_local_last_step(save_path),
+        )
+    task_configs = getattr(cfg.data, "task_configs", None) or {}
+    task_names = []
+    if isinstance(task_configs, dict):
+        task_names = [str(name) for name in task_configs]
+    define_wandb_metrics(task_names=task_names)
+    with open(wandb_run_id_path(save_path), "w") as f:
+        f.write(wandb.run.id)
+    return wandb.run

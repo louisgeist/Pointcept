@@ -18,7 +18,6 @@ import torch.nn as nn
 import torch.utils.data
 from packaging import version
 from functools import partial
-from pathlib import Path
 import itertools
 
 if sys.version_info >= (3, 10):
@@ -38,8 +37,7 @@ from pointcept.utils.optimizer import build_optimizer
 from pointcept.utils.scheduler import build_scheduler
 from pointcept.utils.config import ConfigDict
 from pointcept.utils.events import EventStorage, ExceptionWriter
-from pointcept.utils.wandb_metrics import define_wandb_metrics
-from pointcept.utils.wandb_resume import bump_wandb_step_on_resume, read_local_last_step
+from pointcept.utils.wandb_resume import init_or_resume_wandb
 from pointcept.utils.gradient_norm import (
     GradNormLiteEMA,
     all_reduce_mean_task_norms,
@@ -600,63 +598,7 @@ class Trainer(TrainerBase):
     def build_writer(self):
         writer = SummaryWriter(self.cfg.save_path) if comm.is_main_process() else None
         self.logger.info(f"Tensorboard writer logging dir: {self.cfg.save_path}")
-        if self.cfg.enable_wandb and comm.is_main_process():
-            tag, name = Path(self.cfg.save_path).parts[-2:]
-            # Allow overriding the W&B run name from config if provided
-            run_name = getattr(self.cfg, "wandb_run_name", f"{tag}/{name}")
-            target_keys = getattr(self.cfg, "target_keys", None)
-            if target_keys:
-                if isinstance(target_keys, (list, tuple)):
-                    tags = [str(x) for x in target_keys]
-                else:
-                    tags = [str(target_keys)]
-            else:
-                tags = None
-            wandb_run_id_path = os.path.join(self.cfg.save_path, "wandb_run_id.txt")
-            run_id = None
-            if os.path.isfile(wandb_run_id_path):
-                with open(wandb_run_id_path, "r") as f:
-                    run_id = f.read().strip() or None
-
-            init_kw = dict(
-                project=self.cfg.wandb_project,
-                name=run_name,
-                dir=self.cfg.save_path,
-                settings=wandb.Settings(api_key=self.cfg.wandb_key),
-                config=self.cfg,
-            )
-            if tags:
-                init_kw["tags"] = tags
-            # Optional run grouping (e.g. tools/grid_then_seeds.py puts the grid
-            # sweep and its seed-ensemble follow-up in one group). No-op for
-            # configs that don't set wandb_group.
-            wandb_group = getattr(self.cfg, "wandb_group", None)
-            if wandb_group:
-                init_kw["group"] = str(wandb_group)
-            if run_id:
-                init_kw["id"] = run_id
-                init_kw["resume"] = "allow"
-                self.logger.info("Resuming W&B run: %s", run_id)
-            wandb.init(**init_kw)
-            # New-process resume (manual relaunch or Slurm requeue) can restart
-            # the local _step near zero and collide with already-uploaded
-            # history. Bump past lastHistoryStep before the first wandb.log.
-            if run_id:
-                bump_wandb_step_on_resume(
-                    wandb.run,
-                    project=self.cfg.wandb_project,
-                    run_id=run_id,
-                    logger=self.logger,
-                    entity=getattr(wandb.run, "entity", None),
-                    local_last_step=read_local_last_step(self.cfg.save_path),
-                )
-            task_configs = getattr(self.cfg.data, "task_configs", None) or {}
-            task_names = []
-            if isinstance(task_configs, dict):
-                task_names = [str(name) for name in task_configs]
-            define_wandb_metrics(task_names=task_names)
-            with open(wandb_run_id_path, "w") as f:
-                f.write(wandb.run.id)
+        if init_or_resume_wandb(self.cfg, logger=self.logger) is not None:
             wandb.log({"model/free_params": self.n_free_parameters})
         return writer
 

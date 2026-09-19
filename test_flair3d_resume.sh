@@ -5,12 +5,19 @@
 #   sbatch test_flair3d_resume.sh 1318327
 #   sbatch test_flair3d_resume.sh /lustre/.../logs/slurm/1318327
 #
+# Use the *current* repo (not the training job code snapshot), e.g. to pick up
+# nathab prediction dumps / include_names, or to resume the original W&B run
+# from tools/test.py (wandb_run_id.txt in SAVE_PATH):
+#   CODE_DIR=/lustre/fswork/projects/rech/unv/usi32yh/Pointcept \
+#   EXTRA_OPTIONS='data.test.split=[train,val,test] data.test.include_names=[D075-2021_AA-S2-2,D075-2021_UU-S1-4]' \
+#   sbatch test_flair3d_resume.sh 873542
+#
 # Verify paths locally (no Slurm):
 #   bash test_flair3d_resume.sh --verify-only 1318327
 
 #SBATCH --output=/lustre/fswork/projects/rech/unv/usi32yh/Pointcept/logs/slurm/%j/slurm.out
 #SBATCH --error=/lustre/fswork/projects/rech/unv/usi32yh/Pointcept/logs/slurm/%j/slurm.err
-#SBATCH -A unv@h100
+#SBATCH -A uhn@h100
 #SBATCH -C h100
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -47,6 +54,7 @@ fi
 CHECKPOINT="${CHECKPOINT:-${SAVE_PATH}/model/model_best.pth}"
 CONFIG="${CONFIG:-${SAVE_PATH}/config.py}"
 CODE_DIR="${CODE_DIR:-${SAVE_PATH}/code}"
+EXTRA_OPTIONS="${EXTRA_OPTIONS:-}"
 
 verify_paths() {
     local ok=true
@@ -56,6 +64,7 @@ verify_paths() {
     echo "CHECKPOINT:    ${CHECKPOINT}"
     echo "CONFIG:        ${CONFIG}"
     echo "CODE_DIR:      ${CODE_DIR}"
+    echo "EXTRA_OPTIONS: ${EXTRA_OPTIONS}"
     echo "======================================================="
 
     if [ -z "${SOURCE_JOB_ID}" ]; then
@@ -109,6 +118,8 @@ cp "$0" "${JOB_DIR}/script.slurm"
     echo "Source train job ID: ${SOURCE_JOB_ID}"
     echo "SAVE_PATH (outputs): ${SAVE_PATH}"
     echo "CHECKPOINT: ${CHECKPOINT}"
+    echo "CODE_DIR: ${CODE_DIR}"
+    echo "EXTRA_OPTIONS: ${EXTRA_OPTIONS}"
     echo "Starting job at: $(date)"
     echo "Running on host: $(hostname)"
     echo "Working directory: $(pwd)"
@@ -158,7 +169,7 @@ python ${CODE_DIR}/tools/test.py \
   --num-machines ${NUM_NODES} \
   --machine-rank 0 \
   --dist-url auto \
-  --options save_path=${SAVE_PATH} weight=${CHECKPOINT}
+  --options save_path=${SAVE_PATH} weight=${CHECKPOINT} ${EXTRA_OPTIONS}
 "
 
 END_TIME=$(date +%s)

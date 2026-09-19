@@ -77,6 +77,7 @@ class TesterBase:
         self.logger.info("=> Loading config ...")
         self.cfg = cfg
         self.verbose = verbose
+        self.checkpoint_epoch = None
         if self.verbose and model is None:
             # if model is not none, trigger tester with trainer, no need to print config
             self.logger.info(f"Save path: {cfg.save_path}")
@@ -114,6 +115,7 @@ class TesterBase:
                         key = "module." + key  # xxx.xxx -> module.xxx.xxx
                 weight[key] = value
             model.load_state_dict(weight, strict=True)
+            self.checkpoint_epoch = checkpoint.get("epoch")
             self.logger.info(
                 "=> Loaded weight '{}' (epoch {})".format(
                     self.cfg.weight, checkpoint["epoch"]
@@ -228,8 +230,17 @@ class TesterBase:
                 "test/h": float(total_s / 3600.0),
             }
             if getattr(self.cfg, "enable_wandb", False) and wandb.run is not None:
+                from pointcept.utils.wandb_resume import write_local_last_step
+
                 payload = {**(extra_log_dict or {}), **timing}
+                if "Epoch" not in payload:
+                    epoch = self.checkpoint_epoch
+                    if epoch is None:
+                        epoch = getattr(self.cfg, "epoch", None)
+                    if epoch is not None:
+                        payload["Epoch"] = int(epoch)
                 wandb.log(payload)
+                write_local_last_step(self.cfg.save_path, wandb.run.step)
         return total_s
 
     def test(self):
