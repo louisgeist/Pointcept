@@ -11,6 +11,9 @@ grid_then_seeds_resolve_time() {
         */dales/* | *dales* | */DALES/* | *DALES*)
             echo "08:00:00"
             ;;
+        */opengf/* | *opengf* | */OpenGF/* | *OpenGF*)
+            echo "06:00:00"
+            ;;
         */eclair/* | *eclair* | */ECLAIR/* | *ECLAIR*)
             echo "12:00:00"
             ;;

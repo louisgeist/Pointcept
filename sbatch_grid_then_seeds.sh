@@ -13,7 +13,7 @@
 #
 # Usage:
 #   ./submit_grid_then_seeds.sh <grid_config> <weight.pth> [exp_name]
-#   (sets Slurm --time from config path: H3D 4h / DALES 8h / ECLAIR 12h)
+#   (sets Slurm --time from config path: H3D 4h / DALES 8h / OpenGF 6h   / ECLAIR 12h)
 #   GRID_CONFIG=... WEIGHT=... [N_SEEDS=10] sbatch sbatch_grid_then_seeds.sh
 #
 # For the 336-probe wide flair3d grid (48h on its own): run that grid with

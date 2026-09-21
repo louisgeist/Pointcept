@@ -24,7 +24,7 @@ grid_then_seeds_resolve_time() {
     case "$cfg" in
         */h3d/* | *h3d* | */H3D/* | *H3D*) echo "04:00:00" ;;
         */dales/* | *dales* | */DALES/* | *DALES*) echo "08:00:00" ;;
-        */opengf/* | *opengf* | */OpenGF/* | *OpenGF*) echo "08:00:00" ;;
+        */opengf/* | *opengf* | */OpenGF/* | *OpenGF*) echo "06:00:00" ;;
         */eclair/* | *eclair* | */ECLAIR/* | *ECLAIR*) echo "12:00:00" ;;
         *) echo "05:00:00" ;;
     esac

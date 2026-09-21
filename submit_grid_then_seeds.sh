@@ -1,6 +1,6 @@
 #!/bin/bash
 # Submit grid-then-seed on A100 with dataset-aware Slurm walltime:
-#   H3D 4 h | DALES 8 h | ECLAIR 12 h (inferred from grid config path).
+#   H3D 4 h | DALES 8 h | OpenGF 6 h | ECLAIR 12 h (inferred from grid config path).
 #
 # Usage (same args as sbatch_grid_then_seeds.sh):
 #   ./submit_grid_then_seeds.sh <grid_config> <weight.pth> [exp_name]
