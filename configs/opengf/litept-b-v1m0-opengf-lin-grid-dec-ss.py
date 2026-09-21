@@ -200,7 +200,7 @@ data = dict(
         split="train",
         data_root=data_root,
         transform=[
-            dict(type="RemapSegment", mapping={2: 1}),  # outliers -> Non-ground
+            dict(type="RemapSegment", mapping={2: 1}),  # Qin et al. CVPRW 2021 §4.4: merge outliers into NG (they participate in training)
             dict(type="CenterShift", apply_z=True),
             dict(type="Z_MinShift"),
             dict(type="Z_RandomOffset"),
@@ -235,7 +235,7 @@ data = dict(
         split="val",
         data_root=data_root,
         transform=[
-            dict(type="RemapSegment", mapping={2: 1}),  # outliers -> Non-ground
+            dict(type="RemapSegment", mapping={2: 1}),  # Qin et al. CVPRW 2021 §4.4: merge outliers into NG (they participate in training)
             dict(type="CenterShift", apply_z=True),
             dict(type="Z_MinShift"),
             dict(type="Copy", keys_dict={"segment": "origin_segment"}),
@@ -265,7 +265,7 @@ data = dict(
         data_root=data_root,
         include_names="T2",  # Test II specifically (T1/T3 have no outlier points)
         transform=[
-            dict(type="DropSegmentClass", labels=[2]),  # Test II w/o outliers
+            dict(type="DropSegmentClass", labels=[2]),  # Qin et al. CVPRW 2021 §4.5: Test II w/o outliers (physically deleted, not merged)
             dict(type="CenterShift", apply_z=True),
             dict(type="Z_MinShift"),
             dict(type="FillMissingFeat", feat_key="color", feat_dim=3),
