@@ -9,12 +9,26 @@ directories; confirmed against a local download 2026-09):
     Validation/<Scene>_v.laz                        (9 files, one per training scene)
     Test/T{1,2,3}.laz                               (3 files, large irregular regions)
 
-Usage:
-ln -sfn /data/geist/datasets/OpenGF data/opengf/raw
-python pointcept/datasets/preprocessing/opengf/preprocess_opengf.py \
-    --dataset_root data/opengf/raw \
-    --output_root data/opengf \
-    --num_workers 8
+Usage — assemble raw from Google Drive zips (names vary; unzip until the
+layout above appears), then symlink + preprocess. CPU only (no GPU).
+
+  # Jean-Zay: keep *.zip on $STORE, extract working tree on $SCRATCH
+  # ($STORE=fsstor, $SCRATCH=fsn1/projects — not the same path)
+  mkdir -p "$STORE/OpenGF/Training" "$SCRATCH/OpenGF"
+  # copy Drive zips to $STORE/OpenGF/ (+ Training/*.zip), then:
+  unzip -q "$STORE/OpenGF"/Validation-*.zip -d "$SCRATCH/OpenGF"
+  unzip -q "$STORE/OpenGF"/Test-*.zip -d "$SCRATCH/OpenGF"
+  mkdir -p "$SCRATCH/OpenGF/Training" && cd "$SCRATCH/OpenGF/Training"
+  for z in "$STORE/OpenGF/Training"/*.zip; do unzip -q "$z"; done
+  # expect 151/9/3 LAZ under Training/ Validation/ Test/
+
+  # local or JZ — point Pointcept at the raw root, then preprocess
+  ln -sfn /data/geist/datasets/OpenGF data/opengf/raw
+  # JZ: ln -sfn "$SCRATCH/OpenGF" data/opengf/raw
+  python pointcept/datasets/preprocessing/opengf/preprocess_opengf.py \
+      --dataset_root data/opengf/raw \
+      --output_root data/opengf \
+      --num_workers 8
 
 Writes per-scene folders under output_root/{train,val,test}/<scene_id>/:
   coord.npy, strength.npy, segment.npy, meta.json
