@@ -6,12 +6,16 @@ lin-grid-enc siblings, for cross-domain comparability.
 
 Binary task: 0=Ground, 1=Non-ground. On-disk `segment.npy` actually carries a
 3rd raw label (2=Outlier, ~0.05-0.5% of points depending on scene, see
-preprocessing/opengf/preprocess_opengf.py) which this config merges into
+preprocessing/opengf/preprocess_opengf.py). Train/val merge it into
 Non-ground via `RemapSegment` -- Qin et al.'s official "outliers treated as
-NG" training/eval convention (CVPRW 2021 Sec 4.4, "Test II (w outliers)").
-To instead reproduce "Test II (w/o outliers)" (outliers physically deleted,
-not just excluded from the loss -- see Sec 4.5), swap `RemapSegment` for
-`DropSegmentClass(labels=[2])` in data.test.transform on a T2-only eval.
+NG" training convention (CVPRW 2021 Sec 4.4). **Test evaluates "Test II
+(w/o outliers)"**: `data.test` is restricted to `T2` (the only test region
+with outlier points; `include_names="T2"`) and uses `DropSegmentClass`
+instead of `RemapSegment` -- outliers are physically deleted before the
+model sees them (Sec 4.5), not just excluded from the loss/metric like
+`ignore_index` would do. To instead reproduce "Test II (w outliers)" or
+"Test I" (T1, no outliers either way), swap `DropSegmentClass` back for
+`RemapSegment` and/or change `include_names`.
 
 OpenGF ships its own held-out `val` split (9 scenes, one per training
 terrain) -- unlike DALES, val != test here (mirrors the H3D config shape).
@@ -269,8 +273,9 @@ data = dict(
         type=dataset_type,
         split="test",
         data_root=data_root,
+        include_names="T2",  # Test II specifically (T1/T3 have no outlier points)
         transform=[
-            dict(type="RemapSegment", mapping={2: 1}),  # outliers -> Non-ground
+            dict(type="DropSegmentClass", labels=[2]),  # Test II w/o outliers
             dict(type="CenterShift", apply_z=True),
             dict(type="Z_MinShift"),
             dict(type="FillMissingFeat", feat_key="color", feat_dim=3),

@@ -197,18 +197,23 @@ training terrain) — `data.val.split="val"` and `data.test.split="test"` are
 genuinely distinct here, same shape as H3D.
 
 On-disk `segment.npy` carries a 3rd raw label (`2` = "Outlier", low/high
-LiDAR noise per the OpenGF paper) that every shipped config merges into
-Non-ground via `RemapSegment(mapping={2: 1})` — Qin et al.'s official
-"Test II (w outliers)" training/eval convention. To instead reproduce
-"Test II (w/o outliers)" (outliers **physically removed** before the model
-sees them, not just excluded from the loss — see the preprocessing script's
-docstring), swap `RemapSegment` for `DropSegmentClass(labels=[2])` in
-`data.test.transform` on a `T2`-only eval (`include_names="T2"` — only
-`Test/T2.laz` carries outlier points; `T1`/`T3` have none). Validated locally
-(exact point-removal count matches the known T2 outlier count, real
-checkpoint forward pass succeeds on the outlier-removed cloud) but not yet
-wired into a ready-made config — build it from the shipped `sonata`/`litept`
-configs by that one-transform swap when a "w/o outliers" number is needed.
+LiDAR noise per the OpenGF paper). Train/val merge it into Non-ground via
+`RemapSegment(mapping={2: 1})` — Qin et al.'s official training convention.
+
+**Every shipped config's `data.test` evaluates "Test II (w/o outliers)"**,
+not the pooled `T1+T2+T3` test set: restricted to `T2` (`include_names="T2"`
+— the only test region with outlier points; 48 tiles at ~167 m chunking, vs
+403 for the full test folder) and using `DropSegmentClass(labels=[2])`
+instead of `RemapSegment`, so outliers are **physically removed** before the
+model sees them (not just excluded from the loss — see the preprocessing
+script's docstring). This only affects a standalone `tools/test.py` run or
+`grid_then_seeds.py`'s seed-ensemble phase (`GridProbeSeedEnsembleTester`) —
+the grid-search phase itself never scores `data.test` (`GridProbeWinnerSelector`
+picks the winner from `data.val`, which is untouched: full 9-scene val,
+`RemapSegment`). To instead reproduce "Test II (w outliers)" or "Test I"
+(`T1`, no outliers either way, so `RemapSegment`/`DropSegmentClass` are
+equivalent there), swap `DropSegmentClass` back for `RemapSegment` and/or
+change `include_names`.
 
 `sonata-v1m2-opengf-lin-grid.py` is a genuine 12-LR grid search, **not** a
 copy of DALES' `sonata-v1m2-dales-lin-grid.py` (which is actually a

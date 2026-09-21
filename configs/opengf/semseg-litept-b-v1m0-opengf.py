@@ -5,9 +5,12 @@ trained from scratch -- from-scratch baseline counterpart to the GridProbe
 configs/dales/semseg-litept-b-v1m0-dales.py.
 
 Binary task: 0=Ground, 1=Non-ground. On-disk `segment.npy` carries a 3rd raw
-label (2=Outlier, see preprocessing/opengf/preprocess_opengf.py) merged into
-Non-ground here via `RemapSegment` -- same "w outliers" convention as the
-GridProbe configs.
+label (2=Outlier, see preprocessing/opengf/preprocess_opengf.py). Train/val
+merge it into Non-ground via `RemapSegment` (Qin et al.'s official training
+convention). `data.test` evaluates **"Test II (w/o outliers)"**: restricted
+to `T2` (`include_names="T2"`, the only test region with outlier points)
+with `DropSegmentClass` physically removing them before the model sees the
+cloud -- same convention as the GridProbe configs.
 
 OpenGF has no usable RGB (see preprocess_opengf.py) -- `feat_keys` is
 coord+strength only (in_channels=4), same as DALES (no fake "color" channel
@@ -240,8 +243,9 @@ data = dict(
         type=dataset_type,
         split="test",
         data_root=data_root,
+        include_names="T2",  # Test II specifically (T1/T3 have no outlier points)
         transform=[
-            dict(type="RemapSegment", mapping={2: 1}),  # outliers -> Non-ground
+            dict(type="DropSegmentClass", labels=[2]),  # Test II w/o outliers
             dict(type="CenterShift", apply_z=True),
             dict(type="Z_MinShift"),
             dict(type="NormalizeColor"),

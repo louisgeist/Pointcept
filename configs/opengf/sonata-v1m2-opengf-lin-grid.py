@@ -262,8 +262,9 @@ data = dict(
         type=dataset_type,
         split="test",
         data_root=data_root,
+        include_names="T2",  # Test II specifically (T1/T3 have no outlier points)
         transform=[
-            dict(type="RemapSegment", mapping={2: 1}),  # outliers -> Non-ground
+            dict(type="DropSegmentClass", labels=[2]),  # Test II w/o outliers
             dict(type="CenterShift", apply_z=True),
             dict(type="Z_MinShift"),
             dict(type="FillMissingFeat", feat_key="color", feat_dim=3),
