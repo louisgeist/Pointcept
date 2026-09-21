@@ -230,12 +230,10 @@ $SB configs/opengf/spunet-v1m0-opengf-lin-grid-dec-hc.py    $W_SPUNET  opengf_sp
 $SB configs/opengf/spunet-v1m0-opengf-lin-grid-enc-dec.py   $W_SPUNET  opengf_spunet_encdec
 $SB configs/opengf/kpconvx-v1m0-opengf-lin-grid-enc.py      $W_KPX     opengf_kpconvx_enc
 $SB configs/opengf/sonata-v1m2-opengf-lin-grid.py           $W_SONATA  opengf_sonata
-
-# Sonata-v1m1 indoor (official HF release, coord-scale ablation — see the H3D section above)
-$SB configs/opengf/sonata-v1m1-opengf-lin-grid.py           $W_SONATA_INDOOR  opengf_sonata_indoor_s25
-$SB configs/opengf/sonata-v1m1-opengf-lin-grid-scale10.py   $W_SONATA_INDOOR  opengf_sonata_indoor_s10
-$SB configs/opengf/sonata-v1m1-opengf-lin-grid-scale50.py   $W_SONATA_INDOOR  opengf_sonata_indoor_s50
 ```
+
+No Sonata-v1m1 (official indoor release) variant on OpenGF — kept only for
+H3D/DALES/ECLAIR (see that section above).
 
 ## noRGB ablation — LitePT-B, grid + seed
 

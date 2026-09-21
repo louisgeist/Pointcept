@@ -1,7 +1,8 @@
 """
 Sonata-v1m2 grid-search linear probing on OpenGF — our own Flair3D+ outdoor
 Sonata SSL pretrain (job 862680, epoch_120), not the official indoor release
-used by the sonata-v1m1-opengf-* siblings.
+(see the sonata-v1m1-dales/h3d/eclair-* configs for that baseline — no
+v1m1 OpenGF variant was kept).
 
 Frozen PT-v3m2 encoder (enc_mode=True -> multi-scale concat 1232ch), trained
 natively on Flair3D+ outdoor aerial LiDAR (see README_sonata_geist.md) rather
