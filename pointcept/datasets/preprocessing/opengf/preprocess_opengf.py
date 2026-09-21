@@ -51,7 +51,16 @@ value (checked: `red == 65280` everywhere) -- treated as absent, like DALES.
 Test tiles vary wildly in raw footprint (T1 ~2635x2504 m vs T2 ~939x1226 m),
 unlike Training/Validation's uniform 500x500 m tiles, so this script uses
 `split_scene_xy_by_chunk_size` (a physical target tile size, not a fixed N x N
-factor) -- a no-op on Training/Validation, adaptive on Test.
+factor like DALES' `split_scene_xy_regular(chunking=3)`) -- default 166.67 m
+(= 500/3) reproduces an exact 3x3 split on Training/Validation's uniform 500 m
+tiles (matching DALES' own chunking=3 convention, ~500k pts/subtile at OpenGF's
+density -- comfortably under DALES' own ~1.58M pts/subtile at 57 pts/m2), while
+also scaling Test's much larger, unevenly-sized regions (T1 ~2635 m, T3 ~1679 m)
+down to the *same* ~167 m footprint instead of just dividing them by a fixed
+factor, which would leave T1/T3 subtiles still ~5x denser than Training's
+(GridProbe val eval OOM'd on the unsplit ~500 m val tiles at grid_size=0.1 on
+a 47 GB local GPU before this fix -- a fixed chunking=3 factor alone would not
+have fixed Test/T1, only Training/Validation).
 """
 
 from __future__ import annotations
@@ -184,12 +193,15 @@ def main_process():
     parser.add_argument("--num_workers", default=1, type=int)
     parser.add_argument(
         "--chunk_size",
-        default=500.0,
+        default=500.0 / 3,
         type=float,
         help=(
             "Physical target tile size in meters (adaptive nx x ny split, see "
-            "split_scene_xy_by_chunk_size). No-op on Training/Validation's uniform "
-            "500x500 m tiles; splits Test's large irregular regions."
+            "split_scene_xy_by_chunk_size). Default 166.67 m = an exact 3x3 split on "
+            "Training/Validation's uniform 500x500 m tiles (DALES' own chunking=3 "
+            "convention), and the same absolute footprint on Test's larger, unevenly "
+            "sized regions -- keeps every split's per-tile point count in the same "
+            "ballpark instead of a fixed N x N factor over-sizing Test's subtiles."
         ),
     )
     parser.add_argument(
