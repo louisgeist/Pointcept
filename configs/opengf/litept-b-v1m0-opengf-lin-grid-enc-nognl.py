@@ -1,28 +1,39 @@
 """
-Sonata-v1m2 grid-search linear probing on OpenGF — our own Flair3D+ outdoor
-Sonata SSL pretrain (job 862680, epoch_120). Official indoor Sonata-v1m1 is
-`sonata-v1m1-opengf-lin-grid-scale10.py` (coord /10).
+LitePT-Base grid-search linear probing on OpenGF (ground filtering) --
+encoder multiscale variant.
 
-Frozen PT-v3m2 encoder (enc_mode=True -> multi-scale concat 1232ch), trained
-natively on Flair3D+ outdoor aerial LiDAR (see README_sonata_geist.md) rather
-than an indoor domain, so no FixedScaleCoord rescale is needed here (unlike
-v1m1's coord_scale ablations) -- native grid_size=0.1 at real coordinates,
-same convention as the LitePT/PT-v3-malibu/SpUNet/KPConvX OpenGF configs.
-OpenGF has no usable RGB (see preprocess_opengf.py) -- Sonata was pretrained
-with scene-level RandomDropColor/RandomDropStrength (drop_value=0.0), so
-`FillMissingFeat` synthesizes a zero "color" channel (in_channels=7), same as
-the DALES/H3D/ECLAIR sonata-v1m2 siblings.
+Frozen backbone: Flair3D+ multitask supervised pretrain WITHOUT GradNormLite
+(job 1288597). Standalone copy of litept-b-v1m0-opengf-lin-grid-enc.py with
+only the checkpoint swapped (same recipe as the H3D noGNL ablation).
 
-Unlike configs/dales/sonata-v1m2-dales-lin-grid.py (a *seed-ensemble* config
-hardcoding lr=0.02, the best value from DALES' own prior grid search), this
-is a genuine 12-LR grid search -- OpenGF has no completed grid search yet to
-pick a "best lr" from, so copying DALES' tuned value would not be a faithful
-adaptation. Run this first via tools/grid_then_seeds.py (or standalone) to
-get an OpenGF-specific winner, then build a seed-ensemble config the same
-way DALES did once a winner is known.
+Binary task: 0=Ground, 1=Non-ground. On-disk `segment.npy` actually carries a
+3rd raw label (2=Outlier, ~0.05-0.5% of points depending on scene, see
+preprocessing/opengf/preprocess_opengf.py). Train/val merge it into
+Non-ground via `RemapSegment` -- Qin et al.'s official "outliers treated as
+NG" training convention (CVPRW 2021 Sec 4.4). **Test evaluates "Test II
+(w/o outliers)"**: `data.test` is restricted to `T2` (the only test region
+with outlier points; `include_names="T2"`) and uses `DropSegmentClass`
+instead of `RemapSegment` -- outliers are physically deleted before the
+model sees them (Sec 4.5), not just excluded from the loss/metric like
+`ignore_index` would do. To instead reproduce "Test II (w outliers)" or
+"Test I" (T1, no outliers either way), swap `DropSegmentClass` back for
+`RemapSegment` and/or change `include_names`.
 
-Grid (12 probes): ce_lovasz, AdamW/wd0/OneCycleLR warmup5%, lr sweep
-{1e-4 ... 5e-1}. epoch=50 / eval_epoch=10.
+OpenGF ships its own held-out `val` split (9 scenes, one per training
+terrain) -- unlike DALES, val != test here (mirrors the H3D config shape).
+
+strength_feat_scale reuses DALES's `1/60000` convention (raw LAS intensity ->
+Flair3D [0,1]): OpenGF's observed intensity range (checked on a local
+download) tops out around 60000-65000, same order of magnitude as DALES'.
+
+Encoder levels (enc_mode), grid, probe grid, and hook wiring are copied
+verbatim from litept-b-v1m0-dales-lin-grid-enc.py, except `epoch`: OpenGF has
+~5.2x more train tiles than DALES (1359 vs 261), so DALES' `epoch=400` would
+give ~5.2x more total iterations too -- lowered to `epoch=50` here so total
+iterations (epoch * train_tiles // batch_size, ~3900) land in DALES' own
+ballpark (~3900) instead. Same rationale applies to every other OpenGF
+lin-grid config (all at `epoch=50`) and the from-scratch
+semseg-litept-b-v1m0-opengf.py (`epoch=200`, DALES' from-scratch ballpark).
 """
 
 _base_ = ["../_base_/default_runtime.py"]
@@ -34,7 +45,8 @@ num_classes = 2
 ignore_index = 2  # unreachable after RemapSegment merges raw label 2 into 1
 grid_size = 0.1
 point_max = 102400
-strength_feat_scale = 1 / 60000  # OpenGF raw intensity → Flair3D [0,1] convention (DALES-like range)
+coord_feat_scale = 0.01  # must match Flair3D multitask pretrain
+strength_feat_scale = 1 / 60000  # OpenGF raw intensity -> Flair3D [0,1] convention (DALES-like range)
 
 num_gpu = 1
 epoch = 50  # ~3900 iters (1359 train tiles // 24) -- roughly DALES's ballpark, see decision context
@@ -59,7 +71,7 @@ enable_amp = True
 dataset_type = "OpenGFDataset"
 data_root = "data/opengf"
 
-weight = "/lustre/fsn1/projects/rech/unv/usi32yh/logs/pointcept_logs/slurm/862680/model/epoch_120.pth"
+weight = "/lustre/fswork/projects/rech/unv/usi32yh/Pointcept/logs/slurm/1288597/model/model_best.pth"
 
 wandb_project = f"pointcept_{dataset_type[:-7].lower()}"
 
@@ -71,8 +83,7 @@ wandb_project = f"pointcept_{dataset_type[:-7].lower()}"
 hooks = [
     dict(
         type="CheckpointLoader",
-        keywords="module.student.backbone",
-        replacement="module.backbone",
+        exclude_keys=("seg_heads", "reg_heads", "cls_heads", "pixel_seg_heads", "cls_attn_pools"),
     ),
     dict(type="ModelHook"),
     dict(type="IterationTimer", warmup_iter=2),
@@ -90,8 +101,9 @@ names = [
     "Non-ground",
 ]
 
-# Encoder levels (enc_mode): 48+96+192+384+512 = 1232
-backbone_out_channels = 1232
+# Encoder levels (enc_mode): 54+108+216+432+576 = 1386
+enc_channels = (54, 108, 216, 432, 576)
+backbone_out_channels = sum(enc_channels)
 
 # Grid-search probes — ce_lovasz, AdamW/wd0/OneCycleLR warmup5%, lr sweep only (12 probes).
 _criteria = [
@@ -135,8 +147,8 @@ probes = {
 del _criteria, _lrs
 
 wandb_run_name = (
-    f"Sonata-v1m2 GridProbe OpenGF {grp_exp}.{num_exp}) epoch_120, enc multiscale "
-    f"{backbone_out_channels}ch, {len(probes)} probes, epoch={epoch}"
+    f"LitePT-B GridProbe OpenGF {grp_exp}.{num_exp}) enc noGNL job1288597, "
+    f"{len(probes)} probes, epoch={epoch}"
 )
 
 # model settings
@@ -148,14 +160,17 @@ model = dict(
     target_key="segment",
     backbone_out_channels=backbone_out_channels,
     backbone=dict(
-        type="PT-v3m2",
-        in_channels=7,  # coord(3) + color(3, fake/zero) + strength(1)
+        type="LitePT-v1",
+        in_channels=7,  # coord(3) + color(3, fake) + strength(1)
         order=("z", "z-trans", "hilbert", "hilbert-trans"),
         stride=(3, 3, 3, 3),
         enc_depths=(3, 3, 3, 12, 3),
-        enc_channels=(48, 96, 192, 384, 512),
+        enc_channels=enc_channels,
         enc_num_head=(3, 6, 12, 24, 32),
         enc_patch_size=(patch_size, patch_size, patch_size, patch_size, patch_size),
+        enc_conv=(True, True, True, False, False),
+        enc_attn=(False, False, False, True, True),
+        enc_rope_freq=(100.0, 100.0, 100.0, 100.0, 100.0),
         mlp_ratio=4,
         qkv_bias=True,
         qk_scale=None,
@@ -164,16 +179,15 @@ model = dict(
         drop_path=0.3,
         shuffle_orders=True,
         pre_norm=True,
-        enable_rpe=False,
-        enable_flash=True,
-        upcast_attention=False,
-        upcast_softmax=False,
-        traceable=False,
-        mask_token=False,
         enc_mode=True,
-        freeze_encoder=False,
     ),
     freeze_backbone=True,
+    bn_eval_mode=True,  # freeze BatchNorm running stats during probe training
+    drop_path_eval_mode=True,  # keep DropPath inactive during probe training
+    feature_mask_values=dict(
+        enable=True,
+        masked_feat_keys=["color", "strength"],
+    ),
 )
 
 # trainer settings — GridProbeTrainer builds one optimizer/scheduler per probe
@@ -223,7 +237,7 @@ data = dict(
                 type="Collect",
                 keys=("coord", "grid_coord", "segment", "grid_size"),
                 feat_keys=feat_keys,
-                feat_scales=dict(strength=strength_feat_scale),
+                feat_scales=dict(coord=coord_feat_scale, strength=strength_feat_scale),
             ),
         ],
         test_mode=False,
@@ -252,7 +266,7 @@ data = dict(
                 type="Collect",
                 keys=("coord", "grid_coord", "segment", "origin_segment", "inverse"),
                 feat_keys=feat_keys,
-                feat_scales=dict(strength=strength_feat_scale),
+                feat_scales=dict(coord=coord_feat_scale, strength=strength_feat_scale),
             ),
         ],
         test_mode=False,
@@ -287,7 +301,7 @@ data = dict(
                     keys=("coord", "grid_coord", "index"),
                     optional_keys=("inverse",),  # for test_single_fragment broadcast
                     feat_keys=feat_keys,
-                    feat_scales=dict(strength=strength_feat_scale),
+                    feat_scales=dict(coord=coord_feat_scale, strength=strength_feat_scale),
                 ),
             ],
             aug_transform=[[dict(type="RandomRotateTargetAngle", angle=[0], axis="z", center=[0, 0, 0], p=1)]],
