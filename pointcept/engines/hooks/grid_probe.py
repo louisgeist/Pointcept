@@ -84,6 +84,68 @@ def _atomic_write_history_csv(path, rows):
     os.replace(tmp_path, path)
 
 
+def _metric_stats(metrics_by_probe, metric_key):
+    """Mean/std/min/max of ``metric_key`` across probes (np.std ddof=0)."""
+    values = [
+        m[metric_key]
+        for m in metrics_by_probe.values()
+        if metric_key in m and m[metric_key] is not None
+    ]
+    if not values:
+        return dict(mean=None, std=None, max=None, min=None)
+    arr = np.array(values, dtype=float)
+    return dict(
+        mean=float(arr.mean()),
+        std=float(arr.std()),
+        max=float(arr.max()),
+        min=float(arr.min()),
+    )
+
+
+def _discover_class_metric_keys(
+    metrics_by_probe, prefix, names=None, exclude=()
+):
+    """Per-class keys like ``test/iou_Ground``.
+
+    Prefer ``names`` order (``cfg.data.names``); fall back to first-seen
+    insertion order across probes so this stays dataset-agnostic.
+    """
+    metrics = list(metrics_by_probe.values())
+    exclude = frozenset(exclude)
+    keys = []
+    for cls_name in names or []:
+        key = f"{prefix}{cls_name}"
+        if key not in exclude and any(key in m for m in metrics):
+            keys.append(key)
+    if keys:
+        return keys
+    seen = set()
+    for m in metrics:
+        for key in m:
+            if key.startswith(prefix) and key not in exclude and key not in seen:
+                seen.add(key)
+                keys.append(key)
+    return keys
+
+
+def _flatten_class_stats(keys, stats_by_key, prefix, *, with_spread=False):
+    """Flatten per-class stats into JSON keys ``test_iou_Ground_mean``, …
+
+    ``prefix`` is the per-probe key prefix (``test/iou_`` / ``test/f1_``).
+    """
+    json_stem = prefix.replace("/", "_")
+    out = {}
+    for key in keys:
+        cls_name = key[len(prefix) :]
+        stats = stats_by_key[key]
+        out[f"{json_stem}{cls_name}_mean"] = stats["mean"]
+        if with_spread:
+            out[f"{json_stem}{cls_name}_std"] = stats["std"]
+            out[f"{json_stem}{cls_name}_min"] = stats["min"]
+            out[f"{json_stem}{cls_name}_max"] = stats["max"]
+    return out
+
+
 def _flatten_for_wandb(d, prefix):
     """Recursively flatten a (possibly nested) config dict into dotted-path
     wandb summary keys; lists (e.g. `criteria`) are JSON-stringified since
@@ -760,7 +822,8 @@ class GridProbeSeedEnsembleTester(HookBase):
     shared-backbone test pass across all of them
     (GridProbeSemSegTester -- one backbone forward per fragment, N heads),
     and writes mean/std of the per-probe test metrics (mIoU/mAcc/allAcc,
-    plus f1_macro and per-class f1_mean when log_test_f1=True) to
+    plus f1_macro and per-class f1_mean when log_test_f1=True, plus
+    per-class IoU mean/std/min/max from ``test/iou_<cls>``) to
     save_path/seed_ensemble_results.json.
 
     Use in place of GridProbeWinnerSelector, last in the hooks list, with
@@ -838,46 +901,36 @@ class GridProbeSeedEnsembleTester(HookBase):
                 len(missing), len(raw_model.probe_names), missing,
             )
 
-        def _stats(metric_key):
-            values = [
-                m[metric_key] for m in metrics_by_probe.values() if metric_key in m
-            ]
-            if not values:
-                return dict(mean=None, std=None, max=None, min=None)
-            arr = np.array(values, dtype=float)
-            return dict(
-                mean=float(arr.mean()), std=float(arr.std()),
-                max=float(arr.max()), min=float(arr.min()),
-            )
+        miou_stats = _metric_stats(metrics_by_probe, "test/mIoU")
+        macc_stats = _metric_stats(metrics_by_probe, "test/mAcc")
+        allacc_stats = _metric_stats(metrics_by_probe, "test/allAcc")
+        f1_macro_stats = _metric_stats(metrics_by_probe, "test/f1_macro")
 
-        miou_stats = _stats("test/mIoU")
-        macc_stats = _stats("test/mAcc")
-        allacc_stats = _stats("test/allAcc")
-        f1_macro_stats = _stats("test/f1_macro")
-
-        # Per-class F1 means: discover test/f1_{cls} keys (present only when
-        # log_test_f1=True). Prefer cfg.data.names order; fall back to first
-        # probe's key insertion order so this stays dataset-agnostic.
-        f1_cls_keys = []
+        # Per-class F1 (log_test_f1=True) and IoU (always written by
+        # GridProbeSemSegTester as test/iou_<cls>). Prefer cfg.data.names
+        # order; fall back to first-seen insertion order.
         names = getattr(cfg.data, "names", None) or []
-        for cls_name in names:
-            key = f"test/f1_{cls_name}"
-            if any(key in m for m in metrics_by_probe.values()):
-                f1_cls_keys.append(key)
-        if not f1_cls_keys:
-            seen = set()
-            for m in metrics_by_probe.values():
-                for key in m:
-                    if (
-                        key.startswith("test/f1_")
-                        and key != "test/f1_macro"
-                        and key not in seen
-                    ):
-                        seen.add(key)
-                        f1_cls_keys.append(key)
-        f1_cls_means = {
-            key: _stats(key)["mean"] for key in f1_cls_keys
+        f1_cls_keys = _discover_class_metric_keys(
+            metrics_by_probe,
+            "test/f1_",
+            names=names,
+            exclude=("test/f1_macro",),
+        )
+        f1_cls_stats = {
+            key: _metric_stats(metrics_by_probe, key) for key in f1_cls_keys
         }
+        f1_cls_flat = _flatten_class_stats(
+            f1_cls_keys, f1_cls_stats, "test/f1_", with_spread=False
+        )
+        iou_cls_keys = _discover_class_metric_keys(
+            metrics_by_probe, "test/iou_", names=names
+        )
+        iou_cls_stats = {
+            key: _metric_stats(metrics_by_probe, key) for key in iou_cls_keys
+        }
+        iou_cls_flat = _flatten_class_stats(
+            iou_cls_keys, iou_cls_stats, "test/iou_", with_spread=True
+        )
 
         summary = {
             "num_probes": len(raw_model.probe_names),
@@ -902,10 +955,8 @@ class GridProbeSeedEnsembleTester(HookBase):
             "test_f1_macro_std": f1_macro_stats["std"],
             "test_f1_macro_max": f1_macro_stats["max"],
             "test_f1_macro_min": f1_macro_stats["min"],
-            **{
-                f"test_f1_{key[len('test/f1_'):]}_mean": mean
-                for key, mean in f1_cls_means.items()
-            },
+            **f1_cls_flat,
+            **iou_cls_flat,
             "per_probe": {
                 name: {
                     "probe_config": dict(raw_model.probe_configs[name]),
@@ -945,6 +996,18 @@ class GridProbeSeedEnsembleTester(HookBase):
             summary["test_f1_macro_max"] or float("nan"),
             out_path,
         )
+        for key in iou_cls_keys:
+            st = iou_cls_stats[key]
+            if st["mean"] is None:
+                continue
+            self.trainer.logger.info(
+                "  IoU %-20s %.4f+/-%.4f [%.4f, %.4f]",
+                key[len("test/iou_") :],
+                st["mean"],
+                st["std"],
+                st["min"],
+                st["max"],
+            )
 
         if getattr(cfg, "enable_wandb", False) and wandb.run is not None:
             wandb_summary = {
@@ -967,9 +1030,13 @@ class GridProbeSeedEnsembleTester(HookBase):
                 "seed_ensemble/test_f1_macro_max": summary["test_f1_macro_max"],
                 "seed_ensemble/test_f1_macro_min": summary["test_f1_macro_min"],
             }
-            for key, mean in f1_cls_means.items():
+            for key, st in f1_cls_stats.items():
                 cls_name = key[len("test/f1_"):]
-                wandb_summary[f"seed_ensemble/test_f1_{cls_name}_mean"] = mean
+                wandb_summary[f"seed_ensemble/test_f1_{cls_name}_mean"] = st["mean"]
+            for key, st in iou_cls_stats.items():
+                cls_name = key[len("test/iou_"):]
+                wandb_summary[f"seed_ensemble/test_iou_{cls_name}_mean"] = st["mean"]
+                wandb_summary[f"seed_ensemble/test_iou_{cls_name}_std"] = st["std"]
             for key, value in wandb_summary.items():
                 wandb.run.summary[key] = value
             wandb.log(wandb_summary)
@@ -996,8 +1063,16 @@ class GridProbeSeedEnsembleTester(HookBase):
                 )
             wandb.log({"seed_ensemble/per_probe_table": table})
 
-            if f1_cls_means:
+            if f1_cls_stats:
                 cls_table = wandb.Table(columns=["class", "f1_mean"])
-                for key, mean in f1_cls_means.items():
-                    cls_table.add_data(key[len("test/f1_"):], mean)
+                for key, st in f1_cls_stats.items():
+                    cls_table.add_data(key[len("test/f1_"):], st["mean"])
                 wandb.log({"seed_ensemble/per_class_f1_table": cls_table})
+
+            if iou_cls_stats:
+                iou_table = wandb.Table(columns=["class", "iou_mean", "iou_std"])
+                for key, st in iou_cls_stats.items():
+                    iou_table.add_data(
+                        key[len("test/iou_"):], st["mean"], st["std"]
+                    )
+                wandb.log({"seed_ensemble/per_class_iou_table": iou_table})

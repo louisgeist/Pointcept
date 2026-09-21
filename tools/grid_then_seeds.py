@@ -395,6 +395,24 @@ def report(
     line("test mAcc", g("test_mAcc_mean"), g("test_mAcc_std"), g("test_mAcc_min"), g("test_mAcc_max"))
     line("test allAcc", g("test_allAcc_mean"), g("test_allAcc_std"), g("test_allAcc_min"), g("test_allAcc_max"))
     line("test F1-macro", g("test_f1_macro_mean"), g("test_f1_macro_std"), g("test_f1_macro_min"), g("test_f1_macro_max"))
+    iou_classes = []
+    seen_iou_cls = set()
+    for k in res:
+        if not (k.startswith("test_iou_") and k.endswith("_mean")):
+            continue
+        cls = k[len("test_iou_") : -len("_mean")]
+        if cls in seen_iou_cls:
+            continue
+        seen_iou_cls.add(cls)
+        iou_classes.append(cls)
+    for cls in iou_classes:
+        line(
+            f"test IoU {cls}",
+            g(f"test_iou_{cls}_mean"),
+            g(f"test_iou_{cls}_std"),
+            g(f"test_iou_{cls}_min"),
+            g(f"test_iou_{cls}_max"),
+        )
     print("=" * 72 + "\n", flush=True)
 
     row = {
