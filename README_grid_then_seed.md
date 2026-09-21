@@ -1,4 +1,4 @@
-# Grid → seed-ensemble runbook (H3D / DALES / ECLAIR + noRGB) — H100
+# Grid → seed-ensemble runbook (H3D / DALES / ECLAIR / OpenGF + noRGB) — H100
 
 Chained one-job pipeline: **lr sweep (grid) → pick winner by validation metric →
 generate + run the 10-init seed-ensemble → aggregate**.
@@ -12,14 +12,14 @@ Wrapper: [`submit_grid_then_seeds_h100.sh`](submit_grid_then_seeds_h100.sh) →
 
 - Slurm walltime is set automatically from the grid config path (override with
   `SLURM_TIME=HH:MM:SS` if needed):
-  **H3D → 4 h**, **DALES → 8 h**, **ECLAIR → 12 h**.
+  **H3D → 4 h**, **DALES → 8 h**, **OpenGF → 8 h** (untimed guess — see note below), **ECLAIR → 12 h**.
   `submit_*` auto-picks native Slurm (`/usr/bin/sbatch` + `--time` on the CLI)
   when available; on Jean-Zay with the IMAGINE wrapper in `PATH`, it falls back
   to injecting `#SBATCH --time=…` into a temporary copy of the batch script.
   Force native: `SBATCH_CMD=/usr/bin/sbatch ./submit_grid_then_seeds_h100.sh …`
 - Checkpoint selection metric is **`GridProbeEvaluator.select_metric`** baked into each
   grid config and propagated verbatim into the generated seed config:
-  **H3D grid/seed → `macro_f1`**, **ECLAIR (and DALES) → `mIoU`**.
+  **H3D grid/seed → `macro_f1`**, **ECLAIR (and DALES, OpenGF) → `mIoU`**.
 - `<weight>` is already written in every config (`weight = …`); the wrapper still
   requires it as arg 2 — pass the same path (or run `python tools/grid_then_seeds.py
   --grid-config <cfg>` directly, which falls back to the config's `weight=`).
@@ -176,6 +176,65 @@ $SB configs/eclair/spunet-v1m0-eclair-lin-grid-dec.py     $W_SPUNET eclair_spune
 $SB configs/eclair/spunet-v1m0-eclair-lin-grid-enc.py     $W_SPUNET eclair_spunet_enc
 $SB configs/eclair/spunet-v1m0-eclair-lin-grid-dec-hc.py  $W_SPUNET eclair_spunet_decHC
 $SB configs/eclair/spunet-v1m0-eclair-lin-grid-enc-dec.py $W_SPUNET eclair_spunet_encdec
+```
+
+## OpenGF — ground filtering (binary), grid (`select_metric=mIoU`)
+
+Cross-domain probe on [OpenGF](https://github.com/Nathan-UW/OpenGF) (Qin et al.
+CVPRW 2021 / ISPRS P&RS 2023) — 2-class ground/non-ground ALS benchmark, not yet
+run to completion on Jean-Zay (configs validated locally on hecate: real
+checkpoints load, forward+backward+eval complete cleanly on a small local
+smoke sample; no real grid/seed numbers exist yet — this section documents
+launch commands, not results). Preprocessing:
+`pointcept/datasets/preprocessing/opengf/preprocess_opengf.py` (chunks to
+~167 m tiles, matching DALES' own `chunking=3` point-density ballpark — see
+its docstring and `decision.md`-equivalent history for why a flat DALES-style
+factor alone isn't enough for OpenGF's unevenly-sized `Test/` region).
+
+Unlike DALES (no held-out val, `data.val`/`data.test` both point at
+`split="test"`), **OpenGF ships its own `val` split** (9 scenes, one per
+training terrain) — `data.val.split="val"` and `data.test.split="test"` are
+genuinely distinct here, same shape as H3D.
+
+On-disk `segment.npy` carries a 3rd raw label (`2` = "Outlier", low/high
+LiDAR noise per the OpenGF paper) that every shipped config merges into
+Non-ground via `RemapSegment(mapping={2: 1})` — Qin et al.'s official
+"Test II (w outliers)" training/eval convention. To instead reproduce
+"Test II (w/o outliers)" (outliers **physically removed** before the model
+sees them, not just excluded from the loss — see the preprocessing script's
+docstring), swap `RemapSegment` for `DropSegmentClass(labels=[2])` in
+`data.test.transform` on a `T2`-only eval (`include_names="T2"` — only
+`Test/T2.laz` carries outlier points; `T1`/`T3` have none). Validated locally
+(exact point-removal count matches the known T2 outlier count, real
+checkpoint forward pass succeeds on the outlier-removed cloud) but not yet
+wired into a ready-made config — build it from the shipped `sonata`/`litept`
+configs by that one-transform swap when a "w/o outliers" number is needed.
+
+`sonata-v1m2-opengf-lin-grid.py` is a genuine 12-LR grid search, **not** a
+copy of DALES' `sonata-v1m2-dales-lin-grid.py` (which is actually a
+seed-ensemble hardcoding `lr=0.02`, the winner from DALES' *own* prior grid
+search) — OpenGF has no completed grid search yet to pick a winner from, so
+run this grid first, then build a seed-ensemble config from its winner the
+same way DALES did.
+
+```bash
+SB=./submit_grid_then_seeds_h100.sh
+$SB configs/opengf/litept-b-v1m0-opengf-lin-grid-enc.py     $W_LPT     opengf_lpt_enc
+$SB configs/opengf/litept-b-v1m0-opengf-lin-grid-dec.py     $W_LPT     opengf_lpt_dec
+$SB configs/opengf/litept-b-v1m0-opengf-lin-grid-dec-ss.py  $W_LPT     opengf_lpt_decSS
+$SB configs/opengf/ptv3-v1m0-opengf-lin-grid-enc.py         $W_PTV3    opengf_ptv3_enc
+$SB configs/opengf/ptv3-v1m0-opengf-lin-grid.py             $W_PTV3    opengf_ptv3_dec
+$SB configs/opengf/spunet-v1m0-opengf-lin-grid-enc.py       $W_SPUNET  opengf_spunet_enc
+$SB configs/opengf/spunet-v1m0-opengf-lin-grid-dec.py       $W_SPUNET  opengf_spunet_dec
+$SB configs/opengf/spunet-v1m0-opengf-lin-grid-dec-hc.py    $W_SPUNET  opengf_spunet_decHC
+$SB configs/opengf/spunet-v1m0-opengf-lin-grid-enc-dec.py   $W_SPUNET  opengf_spunet_encdec
+$SB configs/opengf/kpconvx-v1m0-opengf-lin-grid-enc.py      $W_KPX     opengf_kpconvx_enc
+$SB configs/opengf/sonata-v1m2-opengf-lin-grid.py           $W_SONATA  opengf_sonata
+
+# Sonata-v1m1 indoor (official HF release, coord-scale ablation — see the H3D section above)
+$SB configs/opengf/sonata-v1m1-opengf-lin-grid.py           $W_SONATA_INDOOR  opengf_sonata_indoor_s25
+$SB configs/opengf/sonata-v1m1-opengf-lin-grid-scale10.py   $W_SONATA_INDOOR  opengf_sonata_indoor_s10
+$SB configs/opengf/sonata-v1m1-opengf-lin-grid-scale50.py   $W_SONATA_INDOOR  opengf_sonata_indoor_s50
 ```
 
 ## noRGB ablation — LitePT-B, grid + seed
