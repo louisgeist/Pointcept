@@ -40,6 +40,7 @@ W_SONATA=/lustre/fsn1/projects/rech/unv/usi32yh/logs/pointcept_logs/slurm/862680
 W_SONATA_INDOOR=ckpt/sonata/pretrain-sonata-v1m1-0-base.pth  # Meta/HF official indoor release
 W_NOGNL=$B/1288597/model/model_best.pth     # LitePT-B  multitask WITHOUT GradNormLite
 W_MONOLC=$B/1293025/model/model_best.pth    # LitePT-B  mono-task land-cover (segment v20) only
+W_REALGN=$B/1468317/model/model_best.pth    # LitePT-B  multitask with real GradNorm (Chen et al. 2018)
 W_PRECLAIR=$B/1330042/model/model_best.pth  # LitePT-B  supervised ECLAIR semseg from scratch
 
 SB=./submit_grid_then_seeds_h100.sh   # auto --time: H3D 4h / DALES 8h / ECLAIR 12h
@@ -263,7 +264,7 @@ $SB configs/experiment/w110/4/grid_eclair_norgb/litept-b-v1m0-eclair-lin_enc-nor
 | `grid/grid_search_results.json` | leaderboard + winner (`select_metric`, `best_val_mIoU`, `best_val_macro_f1`, `test_*`) |
 | `grid/grid_probe_miou_history.csv` | per-epoch per-probe `mIoU`/`mIoU_best`/`f1_macro`/`f1_macro_best` |
 | `seed_ensemble_config.py` | the 10-init config generated from the winner's full `probe_config` |
-| `seeds/seed_ensemble_results.json` | test `mIoU`/`mAcc`/`allAcc`/`f1_macro` mean ± std ± min/max, `select_metric`, per-probe rows |
+| `seeds/seed_ensemble_results.json` | test `mIoU`/`mAcc`/`allAcc`/`f1_macro` mean ± std ± min/max, per-class `test_iou_<cls>_mean/std/min/max` (and F1-per-class means), `select_metric`, per-probe rows |
 | `grid_then_seeds_summary.csv` | one row: `winner_select_metric`, `winner_val_mIoU`, `winner_val_f1_macro`, `test_*_mean/std`, … |
 
 W&B: two runs (grid + seeds) sharing group `gts-<jobid>`.
@@ -282,9 +283,9 @@ and packs `probe_best.pth` + provenance under `ckpt/lin_probe/` (see [`ckpt/READ
 python scripts/archive_external_lin_probe_ckpts.py --dry-run --verify-exp-name
 python scripts/archive_external_lin_probe_ckpts.py --copy \
   --dest $WORK/Pointcept/ckpt/lin_probe_pack
-# on hecate
-scp -J passerelle -r \
-  usi32yh@jean-zay.idris.fr:$WORK/Pointcept/ckpt/lin_probe_pack/. \
+# on hecate (rsync: trailing / on source = copy contents; avoid scp …/pack/.)
+rsync -avP -e 'ssh -J passerelle' \
+  usi32yh@jean-zay.idris.fr:$WORK/Pointcept/ckpt/lin_probe_pack/ \
   /data/geist/Pointcept/ckpt/lin_probe/
 ```
 
