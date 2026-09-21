@@ -52,7 +52,7 @@ size, only inferred from that gap.
 
 Same probe grid as litept-b-v1m0 (ce_lovasz, AdamW/wd0/
 OneCycleLR warmup5%, lr sweep {1e-4 … 5e-1}) for cross-backbone comparability.
-epoch=400 / eval_epoch=10.
+epoch=50 / eval_epoch=10.
 """
 
 _base_ = ["../_base_/default_runtime.py"]
@@ -71,7 +71,7 @@ kp_sigma = kp_radius
 radius_scaling = 3.0
 
 num_gpu = 1
-epoch = 400
+epoch = 50  # ~3900 iters (1359 train tiles // 24) -- roughly DALES's ballpark, see decision context
 eval_epoch = 10
 lr = 5e-2
 

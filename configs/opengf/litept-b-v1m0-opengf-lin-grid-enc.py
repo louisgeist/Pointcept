@@ -21,7 +21,13 @@ Flair3D [0,1]): OpenGF's observed intensity range (checked on a local
 download) tops out around 60000-65000, same order of magnitude as DALES'.
 
 Encoder levels (enc_mode), grid, probe grid, and hook wiring are copied
-verbatim from litept-b-v1m0-dales-lin-grid-enc.py.
+verbatim from litept-b-v1m0-dales-lin-grid-enc.py, except `epoch`: OpenGF has
+~5.2x more train tiles than DALES (1359 vs 261), so DALES' `epoch=400` would
+give ~5.2x more total iterations too -- lowered to `epoch=50` here so total
+iterations (epoch * train_tiles // batch_size, ~3900) land in DALES' own
+ballpark (~3900) instead. Same rationale applies to every other OpenGF
+lin-grid config (all at `epoch=50`) and the from-scratch
+semseg-litept-b-v1m0-opengf.py (`epoch=200`, DALES' from-scratch ballpark).
 """
 
 _base_ = ["../_base_/default_runtime.py"]
@@ -37,7 +43,7 @@ coord_feat_scale = 0.01  # must match Flair3D multitask pretrain
 strength_feat_scale = 1 / 60000  # OpenGF raw intensity -> Flair3D [0,1] convention (DALES-like range)
 
 num_gpu = 1
-epoch = 400
+epoch = 50  # ~3900 iters (1359 train tiles // 24) -- roughly DALES's ballpark, see decision context
 eval_epoch = 10
 lr = 5e-2
 patch_size = 1024

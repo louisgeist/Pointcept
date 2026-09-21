@@ -10,7 +10,7 @@ bottleneck into one 1024-dim vector per point (64+64+128+256 + 512). Same
 no-usable-RGB handling as the other PTv3/LitePT OpenGF lin configs.
 
 Grid (12 probes): ce_lovasz, AdamW/wd0/OneCycleLR warmup5%, lr sweep {1e-4 … 5e-1}.
-epoch=400 / eval_epoch=10. AMP enabled (fp16).
+epoch=50 / eval_epoch=10. AMP enabled (fp16).
 `bn_eval_mode=True` is a no-op for PT-v3-malibu (LayerNorm only);
 `drop_path_eval_mode=True` keeps DropPath(0.3) inactive during probe training.
 """
@@ -28,7 +28,7 @@ coord_feat_scale = 0.01  # must match Flair3D multitask pretrain
 strength_feat_scale = 1 / 60000  # OpenGF raw intensity → Flair3D [0,1] convention (DALES-like range)
 
 num_gpu = 1
-epoch = 400
+epoch = 50  # ~3900 iters (1359 train tiles // 24) -- roughly DALES's ballpark, see decision context
 eval_epoch = 10
 lr = 5e-2
 patch_size = 1024

@@ -23,7 +23,7 @@ get an OpenGF-specific winner, then build a seed-ensemble config the same
 way DALES did once a winner is known.
 
 Grid (12 probes): ce_lovasz, AdamW/wd0/OneCycleLR warmup5%, lr sweep
-{1e-4 ... 5e-1}. epoch=400 / eval_epoch=10.
+{1e-4 ... 5e-1}. epoch=50 / eval_epoch=10.
 """
 
 _base_ = ["../_base_/default_runtime.py"]
@@ -38,7 +38,7 @@ point_max = 102400
 strength_feat_scale = 1 / 60000  # OpenGF raw intensity → Flair3D [0,1] convention (DALES-like range)
 
 num_gpu = 1
-epoch = 400
+epoch = 50  # ~3900 iters (1359 train tiles // 24) -- roughly DALES's ballpark, see decision context
 eval_epoch = 10
 lr = 5e-2
 patch_size = 1024

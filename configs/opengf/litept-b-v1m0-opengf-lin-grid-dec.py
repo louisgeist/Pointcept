@@ -32,7 +32,7 @@ coord_feat_scale = 0.01  # must match Flair3D multitask pretrain
 strength_feat_scale = 1 / 60000  # OpenGF raw intensity → Flair3D [0,1] convention (DALES-like range)
 
 num_gpu = 1
-epoch = 400
+epoch = 50  # ~3900 iters (1359 train tiles // 24) -- roughly DALES's ballpark, see decision context
 eval_epoch = 10
 lr = 5e-2
 patch_size = 1024

@@ -25,7 +25,7 @@ tests/test_spunet_point_mode.py (`test_combined_point_mode_and_dec_point_mode_sh
 for the shape/row-alignment correctness check.
 
 Same probe grid as litept-b-v1m0-opengf-lin-grid-enc.py (ce_lovasz x 12 LRs,
-AdamW/wd0/OneCycleLR warmup5%, epoch=400/eval_epoch=10) for cross-backbone
+AdamW/wd0/OneCycleLR warmup5%, epoch=50/eval_epoch=10) for cross-backbone
 comparability. `bn_eval_mode=True` freezes SpUNet's BatchNorm running stats
 (real BatchNorm1d); `drop_path_eval_mode=True` is a no-op (SpUNet has no
 DropPath modules). Z_MinShift/Z_RandomOffset included in train/val/test per
@@ -46,7 +46,7 @@ coord_feat_scale = 0.01  # must match Flair3D multitask pretrain
 strength_feat_scale = 1 / 60000  # OpenGF raw intensity → Flair3D [0,1] convention (DALES-like range)
 
 num_gpu = 1
-epoch = 400
+epoch = 50  # ~3900 iters (1359 train tiles // 24) -- roughly DALES's ballpark, see decision context
 eval_epoch = 10
 lr = 5e-2
 

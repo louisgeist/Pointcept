@@ -16,8 +16,10 @@ here, unlike the GridProbe configs' `FillMissingFeat`).
 OpenGF ships its own held-out `val` split (unlike DALES, which reuses `test`
 for val) -- `data.val.split="val"`.
 
-epoch/eval_epoch/lr are carried over unchanged from the DALES reference
-(untuned for OpenGF specifically).
+lr/eval_epoch are carried over unchanged from the DALES reference (untuned
+for OpenGF specifically); `epoch` is lowered from DALES' 1000 to 200 so total
+iterations (epoch * train_tiles // batch_size) land in DALES' own ballpark
+despite OpenGF having ~5x more train tiles (1359 vs 261).
 
 This config is intentionally self-contained: it inherits only from
 default_runtime and can be read top-to-bottom without cross-referencing
@@ -53,7 +55,7 @@ patch_size = 1024
 
 # Optimization parameters
 lr = 1e-3
-epoch = 1000
+epoch = 200  # ~22600 iters (1359 train tiles // 12) -- roughly DALES's from-scratch ballpark
 eval_epoch = 100
 
 
