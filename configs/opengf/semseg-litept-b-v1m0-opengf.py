@@ -56,7 +56,7 @@ patch_size = 1024
 # Optimization parameters
 lr = 1e-3
 epoch = 200  # ~22600 iters (1359 train tiles // 12) -- roughly DALES's from-scratch ballpark
-eval_epoch = 100
+eval_epoch = 20
 
 
 # Dataset / task
