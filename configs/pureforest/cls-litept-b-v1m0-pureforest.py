@@ -15,11 +15,11 @@ num_exp = 1
 
 # Hardware parameters
 num_gpu = 1
-num_worker = 24 * num_gpu
-enable_amp = False
+num_worker = 12 * num_gpu
+enable_amp = True
 
 # Data parameters
-batch_size = 128 * num_gpu  # total batch size across all gpus
+batch_size = 48 * num_gpu  # total batch size across all gpus
 batch_size_val = batch_size // 2
 batch_size_test = batch_size // 2
 
@@ -29,7 +29,7 @@ patch_size = 1024
 
 # Optimization parameters
 lr = 1e-3
-epoch = 100
+epoch = 30
 eval_epoch = epoch // 10
 
 # Features (PureForest has no lidar intensity on disk)
