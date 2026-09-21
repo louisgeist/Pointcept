@@ -49,6 +49,8 @@ enable_amp = True  # LitePT-Base is heavier than Small; matches multi-litept-b-v
 
 # Data parameters
 batch_size = 12  # total batch size across all gpus; LitePT-Base convention (vs 24 for Small)
+batch_size_val = 1
+batch_size_test = 1
 
 grid_size = 0.1
 point_max = 102400
@@ -86,7 +88,7 @@ hooks = [
     dict(type="CheckpointLoader"),
     dict(type="ModelHook"),
     dict(type="IterationTimer", warmup_iter=2),
-    dict(type="InformationWriter", log_interval=1),
+    dict(type="InformationWriter", log_interval=100),
     dict(type="SemSegEvaluator", write_cls_iou=True),
     dict(type="CheckpointSaver", save_freq=3),
     dict(type="PreciseEvaluator", test_last=False),
