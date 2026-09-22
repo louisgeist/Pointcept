@@ -98,6 +98,13 @@ def read_las_laz(filepath: str) -> Dict[str, np.ndarray]:
     # by 8 bits (standard IGN/LAStools/PDAL convention: verified 0 exceptions across
     # all Mar18 files), not a continuous 16-bit sensor range — descale with a fixed
     # //256, never a per-tile max stretch (that invents a tile-dependent brightness).
+    raw_max = float(np.max(rgb))
+    off_multiple = int(np.count_nonzero(rgb % 256 != 0))
+    print(
+        f"[H3D] {os.path.basename(filepath)}: raw RGB max={raw_max:.0f}, "
+        f"{off_multiple} value(s) not a multiple of 256 "
+        f"(expect max=65280, 0 non-multiples if the 16-bit-shifted convention holds)"
+    )
     color = np.clip(rgb // 256, 0.0, 255.0).astype(np.float32)
 
     return {"coord": coord, "segment": segment, "color": color}
