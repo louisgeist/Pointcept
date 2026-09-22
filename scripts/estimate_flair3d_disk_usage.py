@@ -42,10 +42,10 @@ DEFAULT_EXCLUDE = (
 KNOWN_NPY_META: dict[str, tuple[str, str]] = {
     "coord.npy": ("float32", "(N, 3)"),
     "color.npy": ("uint8", "(N, 3)"),
-    "segment.npy": ("int32", "(N,)"),
+    "segment.npy": ("uint8", "(N,)"),
     "strength.npy": ("float32", "(N,)"),
     "forest.npy": ("int16", "(N,)"),
-    "natural_habitat.npy": ("int16", "(N,)"),
+    "natural_habitat.npy": ("uint8", "(N, 4)"),
     "land_use.npy": ("int16", "(N,)"),
     "elevation.npy": ("float32", "(N,)"),
     "coord_translation.npy": ("float64", "(3,)"),

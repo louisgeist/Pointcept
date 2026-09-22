@@ -20,7 +20,7 @@ Layout with predictions (add ``--network-graphs-root`` for the extra GT-graph ro
     [ Prob ROADS ] [ Prob RAIL ] [ Prob TL ]
     [ Bin@thr ROADS ] [ Bin RAIL ] [ Bin TL ]
     [ Pred graph ROADS ] [ Pred graph RAIL ] [ Pred graph TL ]     # yellow/orange
-    [ GT graph ROADS ]   [ GT graph RAIL ]   [ GT graph TL ]       # cyan/white
+    [ GT graph ROADS ]   [ GT graph RAIL ]   [ GT graph TL ]       # cyan / dark blue
     [-------- mean-pooled RGB --------]
 
 Example (GT only, subtile)::
@@ -52,7 +52,10 @@ The predicted graph is built from the binarized mask via the same mask -> graph
 post-processing pipeline used to evaluate APLS (see ``tools/eval_network_apls.py``):
 optional morphology -> pixel graph -> endpoint-fix -> RDP -> merge, defaults
 mirroring the GT export preset ``network=v5``.
-"""
+
+Export is **native 1 m resolution**: the figure is sized so each raster panel is at
+least ``W×H`` PNG pixels (one image pixel per 1 m grid cell), with
+``interpolation='nearest'``. Large ROIs (~1k×1k) therefore produce large PNGs."""
 
 from __future__ import annotations
 
@@ -64,7 +67,7 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.colors import ListedColormap
+from matplotlib.colors import LinearSegmentedColormap, ListedColormap
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if REPO_ROOT not in sys.path:
@@ -92,7 +95,11 @@ _LOGITS_SUFFIX = "_logits_network.npy"
 _PRED_EDGE_RGB = np.array([255, 220, 40], dtype=np.uint8)  # yellow (matches raster-utils default)
 _PRED_NODE_RGB = np.array([255, 140, 0], dtype=np.uint8)  # orange
 _GT_EDGE_RGB = np.array([80, 220, 255], dtype=np.uint8)  # cyan
-_GT_NODE_RGB = np.array([255, 255, 255], dtype=np.uint8)  # white
+_GT_NODE_RGB = np.array([20, 40, 140], dtype=np.uint8)  # dark blue
+# Node path-error heatmap: 0 (perfect) -> flashy blue, 1 (full miss) -> red.
+_ERROR_CMAP = LinearSegmentedColormap.from_list(
+    "error_blue_red", ["#00A3FF", "#ff3b30"]
+)
 
 
 def _load_gt_graph(network_graphs_root: Path, roi_dir: Path, network_type: str):
@@ -233,6 +240,274 @@ def _roi_apls(pred_graph, loaded_gt, *, roi_name: str, network_type: str) -> flo
     return None if result.denom == 0 else result.score
 
 
+def _error_to_rgb(error: np.ndarray) -> np.ndarray:
+    """Map per-node error in [0,1] (nan=unused) to RGB: green (0, perfect) -> red (1, full miss)."""
+    cmap = _ERROR_CMAP
+    out = np.zeros((error.shape[0], 3), dtype=np.uint8)
+    valid = np.isfinite(error)
+    if not np.any(valid):
+        return out
+    rgba = cmap(np.clip(error[valid], 0.0, 1.0))
+    out[valid] = np.clip(np.rint(rgba[:, :3] * 255), 0, 255).astype(np.uint8)
+    return out
+
+
+def _rgb_canvas(mean_rgb: np.ndarray, count: np.ndarray) -> np.ndarray:
+    """Opaque RGB image from mean-pooled LiDAR (black where empty)."""
+    h, w = count.shape
+    rgb = np.zeros((h, w, 3), dtype=np.uint8)
+    has = count > 0
+    if np.any(has):
+        rgb[has] = np.clip(np.rint(mean_rgb[has]), 0, 255).astype(np.uint8)
+    return rgb
+
+
+def _paint_segment_rgb(
+    rgb: np.ndarray,
+    p0: np.ndarray,
+    p1: np.ndarray,
+    grid,
+    color: np.ndarray,
+    *,
+    sample_step_m: float = 0.5,
+) -> None:
+    """Draw a straight segment onto an HxWx3 image in grid pixel coordinates."""
+    color = np.asarray(color, dtype=np.uint8).reshape(3)
+    seg = np.asarray([[p0, p1]], dtype=np.float64)
+    seg3 = np.concatenate([seg, np.zeros((1, 2, 1), dtype=np.float64)], axis=2)
+    samples = xy_rast.sample_segments_xy(seg3, sample_step_m=sample_step_m)
+    if samples.shape[0] == 0:
+        return
+    ix, iy = xy_rast.xy_to_indices(samples, grid)
+    inside = (ix >= 0) & (iy >= 0) & (ix < grid.width) & (iy < grid.height)
+    if np.any(inside):
+        rgb[iy[inside], ix[inside]] = color
+
+
+def _paint_disk_rgb(
+    rgb: np.ndarray, x: int, y: int, color: np.ndarray, *, radius_px: int = 2
+) -> None:
+    h, w = rgb.shape[:2]
+    color = np.asarray(color, dtype=np.uint8).reshape(3)
+    r = int(max(0, radius_px))
+    y0, y1 = max(0, y - r), min(h, y + r + 1)
+    x0, x1 = max(0, x - r), min(w, x + r + 1)
+    rgb[y0:y1, x0:x1] = color
+
+
+def _paint_nodes_rgb(
+    rgb: np.ndarray,
+    node_xy: np.ndarray,
+    grid,
+    colors: np.ndarray,
+    *,
+    radius_px: int = 2,
+) -> None:
+    ix, iy = xy_rast.xy_to_indices(node_xy, grid)
+    for k in range(node_xy.shape[0]):
+        x, y = int(ix[k]), int(iy[k])
+        if 0 <= x < grid.width and 0 <= y < grid.height:
+            _paint_disk_rgb(rgb, x, y, colors[k], radius_px=radius_px)
+
+
+def render_apls_diagnostics(
+    out: Path,
+    *,
+    title_name: str,
+    channel_diags: list[tuple[str, object, object, object]],
+    grid,
+    mean_rgb: np.ndarray,
+    count: np.ndarray,
+    worst_paths: int = 20,
+    dpi: int = 100,
+) -> Path | None:
+    """Write a 3-panel-per-channel APLS diagnostic PNG.
+
+    ``channel_diags`` entries are ``(name, gt_aps_graph, pred_aps_graph, diagnostics)``
+    where ``diagnostics`` is an ``ApsDiagnostics`` (skip channels with None).
+    Panels: (1) GT node mean path-error heatmap, (2) GT→pred match + collapse,
+    (3) worst-K GT shortest paths.
+    """
+    import apls_metric as apls  # type: ignore
+
+    rows = [(n, gt, pred, d) for (n, gt, pred, d) in channel_diags if d is not None]
+    if not rows:
+        return None
+
+    n_rows = len(rows)
+    h, w = grid.height, grid.width
+    fig_w_in, fig_h_in = _native_figsize(
+        w, h, n_rows, has_colorbar=True, dpi=dpi, title_band_px=max(48, w // 16)
+    )
+    # 3 panels + thin colorbar column
+    fig_w_in = fig_w_in * (3.2 / 3.06)  # slight bump for 3 equal panels + cbar
+    panel_fs = _fs_pt(max(14.0, w / 64.0), dpi)
+    sup_fs = _fs_pt(max(18.0, w / 48.0), dpi)
+    fig = plt.figure(figsize=(fig_w_in, fig_h_in), dpi=dpi, facecolor="white")
+    gs = fig.add_gridspec(
+        n_rows,
+        4,
+        width_ratios=[1.0, 1.0, 1.0, 0.06],
+        height_ratios=[1.0] * n_rows,
+        hspace=0.28,
+        wspace=0.06,
+    )
+
+    match_color = np.array([255, 0, 255], dtype=np.uint8)  # magenta
+    collapse_color = np.array([255, 30, 30], dtype=np.uint8)
+    path_color = np.array([255, 40, 40], dtype=np.uint8)
+    gt_edge_dim = np.array([60, 140, 160], dtype=np.uint8)
+
+    last_scatter = None
+    for row_i, (name, gt_aps, pred_aps, diag) in enumerate(rows):
+        base = _rgb_canvas(mean_rgb, count)
+
+        # --- Panel 1: node mean error heatmap ---
+        p1 = base.copy()
+        # faint GT edges for context
+        for e in range(gt_aps.edges.shape[0]):
+            u, v = int(gt_aps.edges[e, 0]), int(gt_aps.edges[e, 1])
+            _paint_segment_rgb(
+                p1, gt_aps.node_xy[u], gt_aps.node_xy[v], grid, gt_edge_dim
+            )
+        node_rgb = _error_to_rgb(diag.node_mean_error)
+        # unused nodes (nan) as dark blue GT markers
+        unused = ~np.isfinite(diag.node_mean_error)
+        node_rgb[unused] = _GT_NODE_RGB
+        _paint_nodes_rgb(p1, gt_aps.node_xy, grid, node_rgb, radius_px=3)
+        ax1 = fig.add_subplot(gs[row_i, 0])
+        ax1.imshow(np.flipud(p1), interpolation="nearest")
+        mean_err = float(np.nanmean(diag.node_mean_error)) if np.any(
+            np.isfinite(diag.node_mean_error)
+        ) else float("nan")
+        ax1.set_title(
+            f"{name}: GT node mean path-error\n"
+            f"APLS={diag.result.score:.3f}  mean_err={mean_err:.3f}",
+            fontsize=panel_fs,
+        )
+        ax1.set_xticks([])
+        ax1.set_yticks([])
+        ax1.set_aspect("equal")
+
+        # colorbar from a dummy ScalarMappable
+        sm = plt.cm.ScalarMappable(cmap=_ERROR_CMAP, norm=plt.Normalize(0.0, 1.0))
+        sm.set_array([])
+        cax = fig.add_subplot(gs[row_i, 3])
+        cb = fig.colorbar(sm, cax=cax)
+        cb.set_label("path error (1=bad)", fontsize=panel_fs * 0.85)
+        cb.ax.tick_params(labelsize=panel_fs * 0.75)
+        last_scatter = sm
+
+        # --- Panel 2: matching GT -> pred ---
+        p2 = base.copy()
+        for e in range(gt_aps.edges.shape[0]):
+            u, v = int(gt_aps.edges[e, 0]), int(gt_aps.edges[e, 1])
+            _paint_segment_rgb(
+                p2, gt_aps.node_xy[u], gt_aps.node_xy[v], grid, gt_edge_dim
+            )
+        n_collapse = 0
+        if pred_aps.node_xy.shape[0] > 0:
+            for gi in range(gt_aps.node_xy.shape[0]):
+                mi = int(diag.match_idx[gi])
+                if mi < 0:
+                    continue
+                col = collapse_color if int(diag.match_collapse_count[gi]) > 1 else match_color
+                if int(diag.match_collapse_count[gi]) > 1:
+                    n_collapse += 1
+                _paint_segment_rgb(
+                    p2, gt_aps.node_xy[gi], pred_aps.node_xy[mi], grid, col, sample_step_m=0.4
+                )
+            # pred nodes orange, GT nodes dark blue
+            pred_cols = np.repeat(_PRED_NODE_RGB[None, :], pred_aps.node_xy.shape[0], axis=0)
+            gt_cols = np.repeat(_GT_NODE_RGB[None, :], gt_aps.node_xy.shape[0], axis=0)
+            collapsed = diag.match_collapse_count > 1
+            gt_cols[collapsed] = collapse_color
+            _paint_nodes_rgb(p2, pred_aps.node_xy, grid, pred_cols, radius_px=2)
+            _paint_nodes_rgb(p2, gt_aps.node_xy, grid, gt_cols, radius_px=3)
+        ax2 = fig.add_subplot(gs[row_i, 1])
+        ax2.imshow(np.flipud(p2), interpolation="nearest")
+        n_unique_pred = (
+            int(np.unique(diag.match_idx[diag.match_idx >= 0]).shape[0])
+            if pred_aps.node_xy.shape[0] > 0
+            else 0
+        )
+        ax2.set_title(
+            f"{name}: GT→pred match (magenta)\n"
+            f"collapse(red)={n_collapse}/{gt_aps.node_xy.shape[0]}  "
+            f"unique_pred_targets={n_unique_pred}",
+            fontsize=panel_fs,
+        )
+        ax2.set_xticks([])
+        ax2.set_yticks([])
+        ax2.set_aspect("equal")
+
+        # --- Panel 3: worst-K GT shortest paths ---
+        p3 = base.copy()
+        for e in range(gt_aps.edges.shape[0]):
+            u, v = int(gt_aps.edges[e, 0]), int(gt_aps.edges[e, 1])
+            _paint_segment_rgb(
+                p3, gt_aps.node_xy[u], gt_aps.node_xy[v], grid, gt_edge_dim
+            )
+        k = max(0, int(worst_paths))
+        if k > 0 and diag.pair_error.shape[0] > 0:
+            order = np.argsort(-diag.pair_error)[:k]
+            for pi in order:
+                u = int(diag.pair_u[pi])
+                v = int(diag.pair_v[pi])
+                path = apls.reconstruct_gt_shortest_path(diag, u, v)
+                if not path or len(path) < 2:
+                    continue
+                # fade by error: full red at error=1
+                err = float(diag.pair_error[pi])
+                col = np.clip(
+                    np.rint(path_color.astype(np.float64) * (0.35 + 0.65 * err)),
+                    0,
+                    255,
+                ).astype(np.uint8)
+                for a, b in zip(path[:-1], path[1:]):
+                    _paint_segment_rgb(
+                        p3,
+                        gt_aps.node_xy[a],
+                        gt_aps.node_xy[b],
+                        grid,
+                        col,
+                        sample_step_m=0.35,
+                    )
+                # endpoints
+                for nid in (path[0], path[-1]):
+                    ix, iy = xy_rast.xy_to_indices(gt_aps.node_xy[nid : nid + 1], grid)
+                    if 0 <= int(ix[0]) < grid.width and 0 <= int(iy[0]) < grid.height:
+                        _paint_disk_rgb(p3, int(ix[0]), int(iy[0]), col, radius_px=3)
+        ax3 = fig.add_subplot(gs[row_i, 2])
+        ax3.imshow(np.flipud(p3), interpolation="nearest")
+        top_err = (
+            float(diag.pair_error[np.argsort(-diag.pair_error)[0]])
+            if diag.pair_error.shape[0] > 0
+            else float("nan")
+        )
+        ax3.set_title(
+            f"{name}: worst-{k} GT shortest paths\n"
+            f"top_pair_error={top_err:.3f}  scored_pairs={diag.result.denom}",
+            fontsize=panel_fs,
+        )
+        ax3.set_xticks([])
+        ax3.set_yticks([])
+        ax3.set_aspect("equal")
+
+    fig.suptitle(
+        f"APLS diagnostics: {title_name}  |  node error / GT→pred match / worst paths",
+        fontsize=sup_fs,
+        y=0.995,
+    )
+    fig.subplots_adjust(left=0.01, right=0.99, bottom=0.01, top=0.96, hspace=0.28, wspace=0.06)
+    out = Path(out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out, dpi=dpi)
+    plt.close(fig)
+    _ = last_scatter
+    return out
+
+
 def _load_network(tile: Path) -> tuple[np.ndarray, dict, list[str]]:
     meta = json.loads((tile / "meta.json").read_text())
     if "network" not in meta:
@@ -253,16 +528,85 @@ def _load_network(tile: Path) -> tuple[np.ndarray, dict, list[str]]:
     return network, net_meta, channel_order
 
 
-def _load_logits(path: Path, n_channels: int, h: int, w: int) -> np.ndarray:
+def _load_logits(path: Path, h: int, w: int) -> np.ndarray:
+    """Load ``(C, H, W)`` logits; ``C`` may be a subset of GT channels."""
     logits = np.load(path)
     if logits.ndim != 3:
         raise ValueError(f"logits must be (C, H, W), got shape {logits.shape}")
-    if logits.shape != (n_channels, h, w):
+    if logits.shape[1:] != (h, w):
         raise ValueError(
-            f"logits shape {logits.shape} != expected ({n_channels}, {h}, {w}) "
+            f"logits spatial shape {logits.shape[1:]} != expected ({h}, {w}) "
             f"from tile meta.network"
         )
     return logits.astype(np.float32, copy=False)
+
+
+def resolve_pred_channel_mapping(
+    channel_order: list[str],
+    n_logits: int,
+    network_types: list[str] | None = None,
+) -> list[tuple[int, int, str]]:
+    """Map logit channels onto GT ``channel_order`` by name.
+
+    Training often drops ``TRANSMISSION_LINES`` so logits are ``(2, H, W)`` while
+    on-disk GT stays ``(3, H, W)``. Returns ``[(gt_idx, logit_idx, name), ...]``
+    in logit order.
+
+    When ``network_types`` is None:
+      - identity if ``n_logits == len(channel_order)``;
+      - else ``ROADS``/``RAILROADS`` (same as
+        ``flair3d_config_utils.NETWORK_CHANNEL_NAMES``) if that length matches;
+      - else raises, asking for an explicit ``--network-types``.
+    """
+    # Keep in sync with pointcept.datasets.flair3d_config_utils.NETWORK_CHANNEL_NAMES
+    # (avoid importing pointcept here: pulls torch deps unused by this script).
+    default_pred_types = ("ROADS", "RAILROADS")
+
+    if network_types is not None:
+        names = [str(n) for n in network_types]
+        if len(names) != n_logits:
+            raise ValueError(
+                f"--network-types has {len(names)} names {names} but logits have "
+                f"{n_logits} channels"
+            )
+    elif n_logits == len(channel_order):
+        names = list(channel_order)
+    elif n_logits == len(default_pred_types):
+        names = list(default_pred_types)
+    else:
+        raise ValueError(
+            f"logits have {n_logits} channels but GT channel_order has "
+            f"{len(channel_order)} ({list(channel_order)}). Pass --network-types "
+            f"explicitly (e.g. ROADS RAILROADS)."
+        )
+
+    name_to_gt = {str(n): i for i, n in enumerate(channel_order)}
+    mapping: list[tuple[int, int, str]] = []
+    for logit_idx, name in enumerate(names):
+        if name not in name_to_gt:
+            raise ValueError(
+                f"pred channel {name!r} not in GT channel_order {list(channel_order)}"
+            )
+        mapping.append((name_to_gt[name], logit_idx, name))
+    return mapping
+
+
+def select_network_channels_for_preds(
+    network: np.ndarray,
+    channel_order: list[str],
+    n_logits: int,
+    network_types: list[str] | None = None,
+) -> tuple[np.ndarray, list[str], list[tuple[int, int, str]]]:
+    """Slice/reorder GT ``network`` so channel i matches logits channel i.
+
+    Returns ``(network_sel, names, mapping)`` with ``network_sel.shape[0] == n_logits``.
+    """
+    mapping = resolve_pred_channel_mapping(
+        channel_order, n_logits, network_types=network_types
+    )
+    gt_idxs = np.asarray([gt_i for gt_i, _, _ in mapping], dtype=np.int64)
+    names = [name for _, _, name in mapping]
+    return network[gt_idxs], names, mapping
 
 
 def _patch_id_from_logits(path: Path) -> str | None:
@@ -463,19 +807,33 @@ def _build_predicted_graph(
     *,
     connectivity: int,
     rdp_epsilon_m: float,
+    endpoint_fix_enabled: bool,
     endpoint_fix_stage: str,
-    merge_weight_threshold: float,
+    merge_hop_threshold: float,
+    radius_fix_radius_m: float | None = None,
+    min_component_nodes: int = 5,
 ):
-    """Predicted graph for one channel, via the same pipeline used for APLS eval."""
+    """Predicted graph for one channel, via the same pipeline used for APLS eval.
+
+    ``radius_fix_radius_m``: optional radius-based extension of endpoint-fix, applied
+    after merge (see ``network_graph_pipeline.build_processed_network_graph_from_mask``);
+    ``None`` (default) leaves it disabled.
+    """
+    extra: dict = {}
+    if radius_fix_radius_m is not None:
+        extra["radius_fix_enabled"] = True
+        extra["radius_fix_radius_m"] = float(radius_fix_radius_m)
     processed = ngp.build_processed_network_graph_from_mask(
         binary_mask.astype(bool),
         grid,
         connectivity=connectivity,
         rdp_epsilon_m=rdp_epsilon_m,
-        endpoint_fix_enabled=True,
+        endpoint_fix_enabled=endpoint_fix_enabled,
         endpoint_fix_stage=endpoint_fix_stage,
         merge_enabled=True,
-        merge_weight_threshold=merge_weight_threshold,
+        merge_hop_threshold=merge_hop_threshold,
+        min_component_nodes=min_component_nodes,
+        **extra,
     )
     return processed.graph_final
 
@@ -511,6 +869,55 @@ def _compose_rgb_with_graphs(mean_rgb: np.ndarray, count: np.ndarray, grid, laye
     return rgba
 
 
+def _fs_pt(size_px: float, dpi: int) -> float:
+    """Convert a desired on-image size in pixels to a matplotlib font size in points."""
+    return float(size_px) * 72.0 / float(dpi)
+
+
+def _native_figsize(
+    grid_w: int,
+    grid_h: int,
+    n_rows: int,
+    *,
+    has_colorbar: bool,
+    dpi: int,
+    n_img_cols: int = 3,
+    title_band_px: int = 64,
+    suptitle_px: int = 48,
+    hspace_px: int = 28,
+    wspace_px: int = 20,
+    margin_px: int = 20,
+    # Matplotlib titles / spacing steal axes area; oversize so the *image artist*
+    # still lands at ≥ grid_w × grid_h PNG pixels (verified empirically ~1.25–1.3).
+    panel_scale: float = 1.35,
+) -> tuple[float, float]:
+    """Figure size in inches so each raster panel is ≥ ``grid_w`` × ``grid_h`` PNG pixels.
+
+    ``figsize = target_px / dpi`` then ``savefig(dpi=dpi)`` yields ~``target_px`` output
+    pixels (dpi cancels), i.e. one grid cell (1 m) maps to one PNG pixel inside each
+    panel -- no matplotlib downsampling of the 1 m raster.
+    """
+    if n_img_cols < 1:
+        raise ValueError(f"n_img_cols must be >= 1, got {n_img_cols}")
+    panel_w = int(np.ceil(grid_w * panel_scale))
+    panel_h = int(np.ceil(grid_h * panel_scale))
+    cbar_px = max(48, panel_w // 16) if has_colorbar else 0
+    fig_w_px = (
+        margin_px * 2
+        + n_img_cols * panel_w
+        + (n_img_cols - 1) * wspace_px
+        + ((wspace_px + cbar_px) if has_colorbar else 0)
+    )
+    row_px = title_band_px + panel_h
+    fig_h_px = (
+        margin_px * 2
+        + suptitle_px
+        + n_rows * row_px
+        + (n_rows - 1) * hspace_px
+    )
+    return fig_w_px / float(dpi), fig_h_px / float(dpi)
+
+
 def render_arrays(
     out: Path,
     *,
@@ -529,16 +936,25 @@ def render_arrays(
     apls_mode: str = "subtile",
     connectivity: int = 4,
     rdp_epsilon_m: float = 2.0,
+    endpoint_fix_enabled: bool = True,
     endpoint_fix_stage: str = "pre_rdp",
-    merge_weight_threshold: float = 2.5,
+    merge_hop_threshold: float = 2.5,
+    min_component_nodes: int = 5,
     dpi: int = 150,
+    apls_diag: bool = False,
+    apls_worst_paths: int = 20,
 ) -> Path:
     """Shared figure layout for subtile and ROI modes.
 
     ``apls_mode``:
       - ``"subtile"``: clip GT to ``grid``, label APLS as local sanity-check
       - ``"roi"``: full GT graph, label APLS as official per-ROI score
+
+    If ``apls_diag`` and predictions + GT graphs are available, also writes
+    ``<out_stem>_apls_diag.png`` next to ``out``.
     """
+    import apls_metric as apls  # type: ignore
+
     if apls_mode not in ("subtile", "roi"):
         raise ValueError(f"apls_mode must be 'subtile' or 'roi', got {apls_mode!r}")
     if network_graphs_root is not None and graph_roi_dir is None:
@@ -549,23 +965,57 @@ def render_arrays(
     binary = _binarize(logits, threshold) if logits is not None else None
     rgb_show = np.flipud(np.clip(np.round(mean_rgb), 0, 255).astype(np.uint8))
     apls_scores: dict[str, float] = {}
+    channel_diags: list = []
+
+    n_ch = len(channel_order)
+    if n_ch == 0:
+        raise ValueError("channel_order is empty")
+    if network.shape[0] != n_ch:
+        raise ValueError(
+            f"network channels {network.shape[0]} != len(channel_order)={n_ch}"
+        )
+    if logits is not None and logits.shape[0] != n_ch:
+        raise ValueError(
+            f"logits channels {logits.shape[0]} != len(channel_order)={n_ch}"
+        )
 
     show_gt_graph_row = logits is not None and network_graphs_root is not None
     n_mask_rows = (4 + (1 if show_gt_graph_row else 0)) if logits is not None else 1
     n_rows = n_mask_rows + 1  # + RGB
-    fig_h = 4.0 * n_rows
-    n_cols = 4 if logits is not None else 3
-    width_ratios = [1.0, 1.0, 1.0, 0.06] if logits is not None else [1.0, 1.0, 1.0]
-    fig = plt.figure(figsize=(12.5 if logits is not None else 12, fig_h), facecolor="white")
+    has_colorbar = logits is not None
+    n_cols = n_ch + (1 if has_colorbar else 0)
+    # Colorbar column ~1/16 of a panel width (matches previous 0.06 ratio at 3 cols).
+    width_ratios = (
+        [1.0] * n_ch + [1.0 / 16.0] if has_colorbar else [1.0] * n_ch
+    )
+    title_band_px = max(48, w // 16)
+    fig_w_in, fig_h_in = _native_figsize(
+        w,
+        h,
+        n_rows,
+        n_img_cols=n_ch,
+        has_colorbar=has_colorbar,
+        dpi=dpi,
+        title_band_px=title_band_px,
+    )
+    panel_fs = _fs_pt(max(14.0, w / 64.0), dpi)
+    rgb_fs = _fs_pt(max(16.0, w / 56.0), dpi)
+    sup_fs = _fs_pt(max(18.0, w / 48.0), dpi)
+    fig = plt.figure(figsize=(fig_w_in, fig_h_in), dpi=dpi, facecolor="white")
     gs = fig.add_gridspec(
-        n_rows, n_cols, height_ratios=[1.0] * n_mask_rows + [1.2], width_ratios=width_ratios
+        n_rows,
+        n_cols,
+        height_ratios=[1.0] * n_rows,
+        width_ratios=width_ratios,
+        hspace=0.22,
+        wspace=0.06,
     )
 
     for i, name in enumerate(channel_order):
         ax = fig.add_subplot(gs[0, i])
         mask = network[i].astype(bool)
         _imshow_binary(ax, mask, _FG_COLORS.get(name, "#ffffff"))
-        ax.set_title(f"GT {name}\npositives={int(mask.sum())}", fontsize=10)
+        ax.set_title(f"GT {name}\npositives={int(mask.sum())}", fontsize=panel_fs)
         ax.set_xticks([])
         ax.set_yticks([])
         ax.set_aspect("equal")
@@ -586,7 +1036,7 @@ def render_arrays(
                 f"Pred prob {name}\n"
                 f"finite={int(finite.sum())}, "
                 f"max={float(np.nanmax(logits[i])) if np.any(finite) else float('nan'):.3f}",
-                fontsize=10,
+                fontsize=panel_fs,
             )
             ax.set_xticks([])
             ax.set_yticks([])
@@ -599,15 +1049,17 @@ def render_arrays(
             _imshow_binary(ax, bin_mask, _FG_COLORS.get(name, "#ffffff"))
             ax.set_title(
                 f"Pred bin @{threshold:g} {name}\npositives={int(bin_mask.sum())}",
-                fontsize=10,
+                fontsize=panel_fs,
             )
             ax.set_xticks([])
             ax.set_yticks([])
             ax.set_aspect("equal")
 
         if last_im is not None:
-            cax = fig.add_subplot(gs[1, 3])
-            fig.colorbar(last_im, cax=cax, label=f"P(fg) {scale_note}")
+            cax = fig.add_subplot(gs[1, n_ch])
+            cb = fig.colorbar(last_im, cax=cax, label=f"P(fg) {scale_note}")
+            cb.set_label(f"P(fg) {scale_note}", fontsize=panel_fs)
+            cb.ax.tick_params(labelsize=panel_fs * 0.85)
 
         for i, name in enumerate(channel_order):
             ax = fig.add_subplot(gs[3, i])
@@ -617,38 +1069,67 @@ def render_arrays(
                 grid,
                 connectivity=connectivity,
                 rdp_epsilon_m=rdp_epsilon_m,
+                endpoint_fix_enabled=endpoint_fix_enabled,
                 endpoint_fix_stage=endpoint_fix_stage,
-                merge_weight_threshold=merge_weight_threshold,
+                merge_hop_threshold=merge_hop_threshold,
+                min_component_nodes=min_component_nodes,
             )
             n_gt_nodes = None
             apls_score = None
             if network_graphs_root is not None:
                 assert graph_roi_dir is not None
                 loaded_gt = _load_gt_graph(network_graphs_root, graph_roi_dir, name)
+                pred_aps = apls.apls_graph_from_pixel_graph(pred_graph)
 
                 if apls_mode == "roi":
                     n_gt_nodes = int(loaded_gt.node_xy.shape[0])
-                    apls_score = _roi_apls(
-                        pred_graph,
-                        loaded_gt,
-                        roi_name=graph_roi_dir.name,
-                        network_type=name,
-                    )
+                    gt_aps = apls.apls_graph_from_loaded_graph(loaded_gt)
+                    diag = None
+                    if apls_diag:
+                        diag = apls.apls_pair_diagnostics(
+                            gt_aps,
+                            pred_aps,
+                            roi=graph_roi_dir.name,
+                            network_type=name,
+                        )
+                        apls_score = None if diag is None else diag.result.score
+                    else:
+                        apls_score = _roi_apls(
+                            pred_graph,
+                            loaded_gt,
+                            roi_name=graph_roi_dir.name,
+                            network_type=name,
+                        )
                     gt_xy_disp = loaded_gt.node_xy
                     gt_edges_disp = loaded_gt.edges
+                    if diag is not None:
+                        channel_diags.append((name, gt_aps, pred_aps, diag))
                 else:
                     gt_xy, gt_edges, gt_len = _clip_graph_to_grid(
                         loaded_gt.node_xy, loaded_gt.edges, loaded_gt.edge_length_m, grid
                     )
                     n_gt_nodes = int(gt_xy.shape[0])
-                    apls_score = _local_apls(
-                        pred_graph,
-                        gt_xy,
-                        gt_edges,
-                        gt_len,
-                        roi_name=graph_roi_dir.name,
-                        network_type=name,
+                    gt_aps = apls.ApsGraph(
+                        node_xy=gt_xy, edges=gt_edges, edge_length_m=gt_len
                     )
+                    diag = None
+                    if apls_diag and gt_xy.shape[0] > 0:
+                        diag = apls.apls_pair_diagnostics(
+                            gt_aps,
+                            pred_aps,
+                            roi=graph_roi_dir.name,
+                            network_type=name,
+                        )
+                        apls_score = None if diag is None else diag.result.score
+                    else:
+                        apls_score = _local_apls(
+                            pred_graph,
+                            gt_xy,
+                            gt_edges,
+                            gt_len,
+                            roi_name=graph_roi_dir.name,
+                            network_type=name,
+                        )
                     gt_xy_disp, gt_edges_disp, _ = _clip_graph_to_grid(
                         loaded_gt.node_xy,
                         loaded_gt.edges,
@@ -656,6 +1137,8 @@ def render_arrays(
                         grid,
                         truncate_partial_edges=True,
                     )
+                    if diag is not None:
+                        channel_diags.append((name, gt_aps, pred_aps, diag))
 
                 if apls_score is not None:
                     apls_scores[name] = apls_score
@@ -680,8 +1163,8 @@ def render_arrays(
                     else f"nodes (local, strict)={n_gt_nodes}"
                 )
                 ax_gt.set_title(
-                    f"GT graph {name} (cyan/white)\n{gt_node_note}",
-                    fontsize=10,
+                    f"GT graph {name} (cyan / dark blue)\n{gt_node_note}",
+                    fontsize=panel_fs,
                 )
                 ax_gt.set_xticks([])
                 ax_gt.set_yticks([])
@@ -704,17 +1187,19 @@ def render_arrays(
                     subtitle += f"\nAPLS vs GT={apls_score:.3f}"
                 else:
                     subtitle += f"\nAPLS vs GT (subtile-local)={apls_score:.3f}"
-            ax.set_title(f"Pred graph {name} (yellow/orange)\n{subtitle}", fontsize=10)
+            ax.set_title(
+                f"Pred graph {name} (yellow/orange)\n{subtitle}", fontsize=panel_fs
+            )
             ax.set_xticks([])
             ax.set_yticks([])
             ax.set_aspect("equal")
 
-    ax_rgb = fig.add_subplot(gs[n_mask_rows, :3])
+    ax_rgb = fig.add_subplot(gs[n_mask_rows, :n_ch])
     ax_rgb.imshow(rgb_show, interpolation="nearest")
     ax_rgb.set_title(
         f"Mean-pooled RGB (pixel_m={pixel_m}, grid={w}x{h}, "
         f"occupied={int((count > 0).sum())}/{h * w})",
-        fontsize=12,
+        fontsize=rgb_fs,
     )
     ax_rgb.set_xticks([])
     ax_rgb.set_yticks([])
@@ -726,7 +1211,7 @@ def render_arrays(
             title += f"  |  logits: {logits_label}"
         title += "  |  graph: pred=yellow/orange"
         if network_graphs_root is not None:
-            title += ", GT=cyan/white"
+            title += ", GT=cyan/dark-blue"
         if apls_scores:
             macro = float(np.mean(list(apls_scores.values())))
             per_channel = ", ".join(f"{k}={v:.3f}" for k, v in apls_scores.items())
@@ -737,12 +1222,30 @@ def render_arrays(
                     f"  |  APLS (subtile-local, NOT official): "
                     f"macro={macro:.3f} [{per_channel}]"
                 )
-    fig.suptitle(title, fontsize=13, y=0.995)
-    fig.tight_layout(rect=[0, 0, 1.0, 0.97])
+    fig.suptitle(title, fontsize=sup_fs, y=0.995)
+    # Leave room for suptitle. Avoid tight_layout (incompatible with colorbar axes and
+    # can shrink panels below native 1 m resolution).
+    fig.subplots_adjust(left=0.01, right=0.99, bottom=0.01, top=0.97, hspace=0.28, wspace=0.06)
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out, dpi=dpi, bbox_inches="tight")
+    fig.savefig(out, dpi=dpi)
     plt.close(fig)
+
+    if apls_diag and channel_diags:
+        diag_out = out.with_name(f"{out.stem}_apls_diag{out.suffix}")
+        written_diag = render_apls_diagnostics(
+            diag_out,
+            title_name=title_name,
+            channel_diags=channel_diags,
+            grid=grid,
+            mean_rgb=mean_rgb,
+            count=count,
+            worst_paths=apls_worst_paths,
+            dpi=dpi,
+        )
+        if written_diag is not None:
+            print(f"wrote {written_diag}")
+
     return out
 
 
@@ -756,9 +1259,14 @@ def render(
     network_graphs_root: Path | None = None,
     connectivity: int = 4,
     rdp_epsilon_m: float = 2.0,
+    endpoint_fix_enabled: bool = True,
     endpoint_fix_stage: str = "pre_rdp",
-    merge_weight_threshold: float = 2.5,
+    merge_hop_threshold: float = 2.5,
+    min_component_nodes: int = 5,
     dpi: int = 150,
+    apls_diag: bool = False,
+    apls_worst_paths: int = 20,
+    network_types: list[str] | None = None,
 ) -> Path:
     """Subtile mode: load one tile and render."""
     network, net_meta, channel_order = _load_network(tile)
@@ -775,7 +1283,10 @@ def render(
     logits = None
     logits_label = None
     if logits_path is not None:
-        logits = _load_logits(logits_path, len(channel_order), h, w)
+        logits = _load_logits(logits_path, h, w)
+        network, channel_order, _ = select_network_channels_for_preds(
+            network, channel_order, logits.shape[0], network_types=network_types
+        )
         logits_label = logits_path.name
 
     coord = np.load(tile / "coord.npy")
@@ -801,9 +1312,13 @@ def render(
         apls_mode="subtile",
         connectivity=connectivity,
         rdp_epsilon_m=rdp_epsilon_m,
+        endpoint_fix_enabled=endpoint_fix_enabled,
         endpoint_fix_stage=endpoint_fix_stage,
-        merge_weight_threshold=merge_weight_threshold,
+        merge_hop_threshold=merge_hop_threshold,
+        min_component_nodes=min_component_nodes,
         dpi=dpi,
+        apls_diag=apls_diag,
+        apls_worst_paths=apls_worst_paths,
     )
 
 
@@ -817,9 +1332,14 @@ def render_roi(
     network_graphs_root: Path | None = None,
     connectivity: int = 4,
     rdp_epsilon_m: float = 2.0,
+    endpoint_fix_enabled: bool = True,
     endpoint_fix_stage: str = "pre_rdp",
-    merge_weight_threshold: float = 2.5,
+    merge_hop_threshold: float = 2.5,
+    min_component_nodes: int = 5,
     dpi: int = 150,
+    apls_diag: bool = False,
+    apls_worst_paths: int = 20,
+    network_types: list[str] | None = None,
 ) -> Path:
     """ROI mode: stitch all subtiles, optionally stitch logits, render."""
     patch_dirs = _discover_roi_patch_dirs(roi_dir)
@@ -839,10 +1359,9 @@ def render_roi(
             raise ValueError(
                 f"Stitched logits grid {stitched_grid} != GT/RGB roi_grid {roi_grid}"
             )
-        if logits.shape[0] != len(channel_order):
-            raise ValueError(
-                f"Stitched logits channels {logits.shape[0]} != {len(channel_order)}"
-            )
+        network, channel_order, _ = select_network_channels_for_preds(
+            network, channel_order, logits.shape[0], network_types=network_types
+        )
         logits_label = f"{result_dir.name}/ (*{len(patch_dirs)} subtiles)"
 
     return render_arrays(
@@ -862,10 +1381,24 @@ def render_roi(
         apls_mode="roi",
         connectivity=connectivity,
         rdp_epsilon_m=rdp_epsilon_m,
+        endpoint_fix_enabled=endpoint_fix_enabled,
         endpoint_fix_stage=endpoint_fix_stage,
-        merge_weight_threshold=merge_weight_threshold,
+        merge_hop_threshold=merge_hop_threshold,
+        min_component_nodes=min_component_nodes,
         dpi=dpi,
+        apls_diag=apls_diag,
+        apls_worst_paths=apls_worst_paths,
     )
+
+
+def _parse_bool(s: str) -> bool:
+    """CLI helper: truthy/falsy strings -> bool."""
+    v = str(s).strip().lower()
+    if v in ("1", "true", "yes", "y", "on"):
+        return True
+    if v in ("0", "false", "no", "n", "off"):
+        return False
+    raise argparse.ArgumentTypeError(f"expected a boolean, got {s!r}")
 
 
 def main() -> None:
@@ -940,17 +1473,33 @@ def main() -> None:
         help="RDP simplification tolerance in meters for the predicted graph (default: 2.0).",
     )
     parser.add_argument(
+        "--endpoint-fix-enabled",
+        type=_parse_bool,
+        default=True,
+        help="Run degree-1 diagonal endpoint repair in the predicted-graph pipeline "
+        "(default: true). Pass false/0/off to skip.",
+    )
+    parser.add_argument(
         "--endpoint-fix-stage",
         type=str,
         default="pre_rdp",
         choices=["pre_rdp", "post_rdp"],
-        help="When to run degree-1 endpoint repair in the predicted-graph pipeline.",
+        help="When to run degree-1 endpoint repair in the predicted-graph pipeline "
+        "(ignored if --endpoint-fix-enabled=false).",
     )
     parser.add_argument(
-        "--merge-weight-threshold",
+        "--merge-hop-threshold",
         type=float,
         default=2.5,
-        help="Neighbor-node merge weight threshold for the predicted graph (default: 2.5).",
+        help="Neighbor-node merge hop-count threshold for the predicted graph (default: 2.5).",
+    )
+    parser.add_argument(
+        "--min-component-nodes",
+        type=int,
+        default=5,
+        help="Drop predicted-graph connected components with fewer than this many "
+        "nodes, applied last (after merge/radius-fix). Default: 5. Pass 0 or 1 "
+        "to disable.",
     )
     parser.add_argument(
         "--out",
@@ -958,7 +1507,38 @@ def main() -> None:
         default=None,
         help="Output PNG path (default: /tmp/<name>_network_mask_rgb.png).",
     )
-    parser.add_argument("--dpi", type=int, default=150)
+    parser.add_argument(
+        "--dpi",
+        type=int,
+        default=150,
+        help="savefig DPI (default: 150). Figure size is scaled so each raster panel "
+        "is still ≥ W×H PNG pixels (1 m cell = 1 pixel), independent of this value.",
+    )
+    parser.add_argument(
+        "--apls-diag",
+        action="store_true",
+        help="Also write <out>_apls_diag.png: per-channel panels for GT node path-error "
+        "heatmap, GT→pred match (collapse in red), and worst GT shortest paths. "
+        "Requires --network-graphs-root and predictions.",
+    )
+    parser.add_argument(
+        "--apls-worst-paths",
+        type=int,
+        default=20,
+        help="With --apls-diag: number of worst GT shortest paths to draw (default: 20).",
+    )
+    parser.add_argument(
+        "--network-types",
+        type=str,
+        nargs="+",
+        default=None,
+        help=(
+            "Channel names / order matching logits_network.npy channels. "
+            "Default: identity when C matches GT channel_order, else "
+            "ROADS RAILROADS when logits have 2 channels (training drop of "
+            "TRANSMISSION_LINES). Pass e.g. ROADS RAILROADS explicitly if needed."
+        ),
+    )
     args = parser.parse_args()
 
     if args.tile is not None and args.result_dir is not None:
@@ -986,15 +1566,29 @@ def main() -> None:
         if not network_graphs_root.is_dir():
             raise SystemExit(f"--network-graphs-root not found: {network_graphs_root}")
 
+    if args.apls_diag:
+        if network_graphs_root is None or not has_preds:
+            raise SystemExit(
+                "--apls-diag requires --network-graphs-root and predictions "
+                "(--logits / --result-dir)."
+            )
+        if args.apls_worst_paths < 0:
+            raise SystemExit(f"--apls-worst-paths must be >= 0, got {args.apls_worst_paths}")
+
     shared_kw = dict(
         threshold=args.threshold,
         prob_autoscale=args.prob_autoscale,
         network_graphs_root=network_graphs_root,
         connectivity=args.connectivity,
         rdp_epsilon_m=args.rdp_epsilon_m,
+        endpoint_fix_enabled=args.endpoint_fix_enabled,
         endpoint_fix_stage=args.endpoint_fix_stage,
-        merge_weight_threshold=args.merge_weight_threshold,
+        merge_hop_threshold=args.merge_hop_threshold,
+        min_component_nodes=args.min_component_nodes,
         dpi=args.dpi,
+        apls_diag=args.apls_diag,
+        apls_worst_paths=args.apls_worst_paths,
+        network_types=args.network_types,
     )
 
     if args.tile is not None:
