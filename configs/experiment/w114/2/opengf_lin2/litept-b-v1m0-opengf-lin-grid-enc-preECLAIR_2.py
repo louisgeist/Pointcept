@@ -1,0 +1,315 @@
+"""
+LitePT-Base grid-search linear probing on OpenGF (ground filtering) --
+encoder multiscale variant. Frozen backbone is the supervised ECLAIR
+from-scratch checkpoint (job 1330042, w110/1/abla1_preECLAIR), not the
+Flair3D+ multitask checkpoint (job 873542). Same LitePT-Base dims
+(in_channels=7, enc 54+108+216+432+576) and the same coord/strength scales
+(0.01 and 1/60000) as that ECLAIR run, so the encoder weights load.
+
+Binary task: 0=Ground, 1=Non-ground. On-disk `segment.npy` actually carries a
+3rd raw label (2=Outlier, ~0.05-0.5% of points depending on scene, see
+preprocessing/opengf/preprocess_opengf.py). Train/val merge it into
+Non-ground via `RemapSegment` -- Qin et al.'s official "outliers treated as
+NG" training convention (CVPRW 2021 Sec 4.4). **Test evaluates "Test II
+(w/o outliers)"**: `data.test` is restricted to `T2` (the only test region
+with outlier points; `include_names="T2"`) and uses `DropSegmentClass`
+instead of `RemapSegment` -- outliers are physically deleted before the
+model sees them (Sec 4.5), not just excluded from the loss/metric like
+`ignore_index` would do. To instead reproduce "Test II (w outliers)" or
+"Test I" (T1, no outliers either way), swap `DropSegmentClass` back for
+`RemapSegment` and/or change `include_names`.
+
+OpenGF ships its own held-out `val` split (9 scenes, one per training
+terrain) -- unlike DALES, val != test here (mirrors the H3D config shape).
+
+strength_feat_scale reuses DALES's `1/60000` convention (raw LAS intensity ->
+Flair3D [0,1]): OpenGF's observed intensity range (checked on a local
+download) tops out around 60000-65000, same order of magnitude as DALES'.
+
+Encoder levels (enc_mode), grid, probe grid, and hook wiring are copied
+verbatim from litept-b-v1m0-dales-lin-grid-enc.py, except `epoch` and
+`point_max`. OpenGF has ~5.2x more train tiles than DALES (1359 vs 261), so
+DALES' `epoch=400` would give ~5.2x more total iterations too -- lowered to
+`epoch=50` here so total iterations (epoch * train_tiles // batch_size,
+~3900) land in DALES' own ballpark (~3900) instead. Same epoch rationale
+applies to every other OpenGF lin-grid config (all at `epoch=50`) and the
+from-scratch semseg-litept-b-v1m0-opengf.py (`epoch=200`, DALES'
+from-scratch ballpark). `point_max` is 60000 rather than DALES' 102400:
+after a 0.1 m grid, OpenGF crops stay much sparser, so a 102400 SphereCrop
+still leaves ~1.5x more points than DALES at the first pool (0.3 m) and
+~2x at the second (0.9 m). 60000 brings those two levels within about
+±15% of a DALES 102400 crop.
+"""
+
+_base_ = ["../../../../_base_/default_runtime.py"]
+
+grp_exp = 1
+num_exp = 2
+
+num_classes = 2
+ignore_index = 2  # unreachable after RemapSegment merges raw label 2 into 1
+grid_size = 0.1
+point_max = 60000
+coord_feat_scale = 0.01  # must match the ECLAIR from-scratch pretrain (job 1330042)
+strength_feat_scale = 1 / 60000  # OpenGF raw intensity -> Flair3D [0,1] convention (DALES-like range)
+
+num_gpu = 1
+epoch = 50  # ~3900 iters (1359 train tiles // 24) -- roughly DALES's ballpark, see decision context
+eval_epoch = 10
+lr = 5e-2
+patch_size = 1024
+
+test_single_fragment = True
+
+# misc custom setting
+batch_size_per_gpu = 24
+batch_size = batch_size_per_gpu * num_gpu
+batch_size_val = 1
+batch_size_test = 1
+num_worker = 16  # H100 Jean-Zay
+num_worker_test = 2
+mix_prob = 0.8
+empty_cache = False
+enable_amp = True
+
+# dataset settings
+dataset_type = "OpenGFDataset"
+data_root = "data/opengf"
+
+weight = "/lustre/fswork/projects/rech/unv/usi32yh/Pointcept/logs/slurm/1330042/model/model_best.pth"
+
+wandb_project = f"pointcept_{dataset_type[:-7].lower()}"
+
+# Hooks
+# Order matters: GridProbeEvaluator before GridProbeCheckpointSaver/CheckpointSaver;
+# GridProbeWinnerSelector last (frees the per-probe optimizers/schedulers, then runs
+# its own SemSegTester pass on the winning probe — replaces PreciseEvaluator, which
+# never sets raw_model.active_probe and would break under GridProbeSegmentorV2).
+hooks = [
+    dict(
+        type="CheckpointLoader",
+        exclude_keys=("seg_heads", "reg_heads", "cls_heads", "pixel_seg_heads", "cls_attn_pools"),
+    ),
+    dict(type="ModelHook"),
+    dict(type="IterationTimer", warmup_iter=2),
+    dict(type="InformationWriter", log_interval=10),
+    dict(type="GridProbeEvaluator", write_cls_iou=True),
+    dict(type="GridProbeCheckpointSaver"),
+    dict(type="CheckpointSaver", save_freq=None),
+    dict(type="GridProbeWinnerSelector", skip_test=True),
+]
+
+feat_keys = ["coord", "color", "strength"]
+
+names = [
+    "Ground",
+    "Non-ground",
+]
+
+# Encoder levels (enc_mode): 54+108+216+432+576 = 1386
+enc_channels = (54, 108, 216, 432, 576)
+backbone_out_channels = sum(enc_channels)
+
+# Grid-search probes — ce_lovasz, AdamW/wd0/OneCycleLR warmup5%, lr sweep only (12 probes).
+_criteria = [
+    dict(type="CrossEntropyLoss", loss_weight=1.0, ignore_index=ignore_index),
+    dict(type="LovaszLoss", mode="multiclass", loss_weight=1.0, ignore_index=ignore_index),
+]
+_lrs = {
+    "1e-4": 1e-4,
+    "2e-4": 2e-4,
+    "5e-4": 5e-4,
+    "1e-3": 1e-3,
+    "2e-3": 2e-3,
+    "5e-3": 5e-3,
+    "1e-2": 1e-2,
+    "2e-2": 2e-2,
+    "5e-2": 5e-2,
+    "1e-1": 1e-1,
+    "2e-1": 2e-1,
+    "5e-1": 5e-1,
+}
+
+probes = {
+    f"ce_lovasz_lr{lr_name}": dict(
+        criteria=_criteria,
+        input_norm=None,
+        feat_norm=None,
+        dropout=0.0,
+        optimizer=dict(type="AdamW", lr=lr, weight_decay=0.0),
+        scheduler=dict(
+            type="OneCycleLR",
+            max_lr=lr,
+            pct_start=0.05,
+            anneal_strategy="cos",
+            div_factor=10.0,
+            final_div_factor=1000.0,
+        ),
+        grad_clip=3.0,
+    )
+    for lr_name, lr in _lrs.items()
+}
+del _criteria, _lrs
+
+wandb_run_name = (
+    f"LitePT-B GridProbe OpenGF {grp_exp}.{num_exp}) H100 encoder multiscale 1386ch, "
+    f"preECLAIR job1330042, {len(probes)} probes, epoch={epoch}, point_max={point_max}"
+)
+
+# model settings
+model = dict(
+    type="GridProbeSegmentorV2",
+    probes=probes,
+    num_classes=num_classes,
+    ignore_index=ignore_index,
+    target_key="segment",
+    backbone_out_channels=backbone_out_channels,
+    backbone=dict(
+        type="LitePT-v1",
+        in_channels=7,  # coord(3) + color(3, fake) + strength(1)
+        order=("z", "z-trans", "hilbert", "hilbert-trans"),
+        stride=(3, 3, 3, 3),
+        enc_depths=(3, 3, 3, 12, 3),
+        enc_channels=enc_channels,
+        enc_num_head=(3, 6, 12, 24, 32),
+        enc_patch_size=(patch_size, patch_size, patch_size, patch_size, patch_size),
+        enc_conv=(True, True, True, False, False),
+        enc_attn=(False, False, False, True, True),
+        enc_rope_freq=(100.0, 100.0, 100.0, 100.0, 100.0),
+        mlp_ratio=4,
+        qkv_bias=True,
+        qk_scale=None,
+        attn_drop=0.0,
+        proj_drop=0.0,
+        drop_path=0.3,
+        shuffle_orders=True,
+        pre_norm=True,
+        enc_mode=True,
+    ),
+    freeze_backbone=True,
+    bn_eval_mode=True,  # freeze BatchNorm running stats during probe training
+    drop_path_eval_mode=True,  # keep DropPath inactive during probe training
+    feature_mask_values=dict(
+        enable=True,
+        masked_feat_keys=["color", "strength"],
+    ),
+)
+
+# trainer settings — GridProbeTrainer builds one optimizer/scheduler per probe
+# (see probes above); no top-level optimizer/scheduler/param_dicts here.
+train = dict(type="GridProbeTrainer")
+
+data = dict(
+    num_classes=num_classes,
+    ignore_index=ignore_index,
+    names=names,
+    task_configs={
+        name: dict(
+            task_type="semantic",
+            num_classes=num_classes,
+            ignore_index=ignore_index,
+            names=names,
+        )
+        for name in probes
+    },
+    train=dict(
+        type=dataset_type,
+        split="train",
+        data_root=data_root,
+        transform=[
+            dict(type="RemapSegment", mapping={2: 1}),  # Qin et al. CVPRW 2021 §4.4: merge outliers into NG (they participate in training)
+            dict(type="CenterShift", apply_z=True),
+            dict(type="Z_MinShift"),
+            dict(type="Z_RandomOffset"),
+            dict(type="RandomDropout", dropout_ratio=0.2, dropout_application_ratio=0.2),
+            dict(type="RandomRotate", angle=[-1, 1], axis="z", center=[0, 0, 0], p=0.5),
+            dict(type="RandomScale", scale=[0.9, 1.1]),
+            dict(type="RandomFlip", p=0.5),
+            dict(type="RandomJitter", sigma=0.005, clip=0.02),
+            dict(
+                type="GridSample",
+                grid_size=grid_size,
+                hash_type="fnv",
+                mode="train",
+                return_grid_coord=True,
+            ),
+            dict(type="SphereCrop", point_max=point_max, mode="random"),
+            dict(type="CenterShift", apply_z=False),
+            dict(type="FillMissingFeat", feat_key="color", feat_dim=3),
+            dict(type="ToTensor"),
+            dict(type="Update", keys_dict={"grid_size": grid_size}),
+            dict(
+                type="Collect",
+                keys=("coord", "grid_coord", "segment", "grid_size"),
+                feat_keys=feat_keys,
+                feat_scales=dict(coord=coord_feat_scale, strength=strength_feat_scale),
+            ),
+        ],
+        test_mode=False,
+    ),
+    val=dict(
+        type=dataset_type,
+        split="val",
+        data_root=data_root,
+        transform=[
+            dict(type="RemapSegment", mapping={2: 1}),  # Qin et al. CVPRW 2021 §4.4: merge outliers into NG (they participate in training)
+            dict(type="CenterShift", apply_z=True),
+            dict(type="Z_MinShift"),
+            dict(type="Copy", keys_dict={"segment": "origin_segment"}),
+            dict(
+                type="GridSample",
+                grid_size=grid_size,
+                hash_type="fnv",
+                mode="train",
+                return_grid_coord=True,
+                return_inverse=True,
+            ),
+            dict(type="CenterShift", apply_z=False),
+            dict(type="FillMissingFeat", feat_key="color", feat_dim=3),
+            dict(type="ToTensor"),
+            dict(
+                type="Collect",
+                keys=("coord", "grid_coord", "segment", "origin_segment", "inverse"),
+                feat_keys=feat_keys,
+                feat_scales=dict(coord=coord_feat_scale, strength=strength_feat_scale),
+            ),
+        ],
+        test_mode=False,
+    ),
+    test=dict(
+        type=dataset_type,
+        split="test",
+        data_root=data_root,
+        include_names="T2",  # Test II specifically (T1/T3 have no outlier points)
+        transform=[
+            dict(type="DropSegmentClass", labels=[2]),  # Qin et al. CVPRW 2021 §4.5: Test II w/o outliers (physically deleted, not merged)
+            dict(type="CenterShift", apply_z=True),
+            dict(type="Z_MinShift"),
+            dict(type="FillMissingFeat", feat_key="color", feat_dim=3),
+        ],
+        test_mode=True,
+        test_cfg=dict(
+            voxelize=dict(
+                type="GridSample",
+                grid_size=grid_size,
+                hash_type="fnv",
+                mode="test",
+                return_grid_coord=True,
+                test_single_fragment=test_single_fragment,
+            ),
+            crop=None,
+            post_transform=[
+                dict(type="CenterShift", apply_z=False),
+                dict(type="ToTensor"),
+                dict(
+                    type="Collect",
+                    keys=("coord", "grid_coord", "index"),
+                    optional_keys=("inverse",),  # for test_single_fragment broadcast
+                    feat_keys=feat_keys,
+                    feat_scales=dict(coord=coord_feat_scale, strength=strength_feat_scale),
+                ),
+            ],
+            aug_transform=[[dict(type="RandomRotateTargetAngle", angle=[0], axis="z", center=[0, 0, 0], p=1)]],
+        ),
+    ),
+)
