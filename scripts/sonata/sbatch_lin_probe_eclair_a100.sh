@@ -1,18 +1,18 @@
 #!/bin/bash
 
-# Sonata linear probe on ECLAIR segment (1× H100, 100 classic epochs).
+# Sonata linear probe on ECLAIR segment (1× A100, 100 classic epochs).
 # Usage:
-#   sbatch scripts/sonata/sbatch_lin_probe_eclair_h100.sh <weight.pth> [exp_name]
+#   sbatch scripts/sonata/sbatch_lin_probe_eclair_a100.sh <weight.pth> [exp_name]
 # Or with env vars (LinProbeSbatchHook / watcher):
 #   WEIGHT=... EXP_NAME=... PRETRAIN_JOB_DIR=... PRETRAIN_EPOCH=... PRETRAIN_ITERS=... \
-#     sbatch scripts/sonata/sbatch_lin_probe_eclair_h100.sh
+#     sbatch scripts/sonata/sbatch_lin_probe_eclair_a100.sh
 #
 # Jean-Zay compute-accounting tags (IMAGINE wrapper):
 #   https://github.com/Archiel19/compute-accounting
 # --comment is required so LinProbeSbatchHook auto-submits never hang on interactive prompts.
 
-#SBATCH -A ppm@h100
-#SBATCH -C h100
+#SBATCH -A uhn@a100
+#SBATCH -C a100
 #SBATCH --comment=eclair,explore,evaluate
 #SBATCH --output=/lustre/fswork/projects/rech/unv/usi32yh/Pointcept/logs/slurm/%j/slurm.out
 #SBATCH --error=/lustre/fswork/projects/rech/unv/usi32yh/Pointcept/logs/slurm/%j/slurm.err
@@ -21,8 +21,8 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:1
-# H100 Jean-Zay: 24 CPU/GPU (gpu_p6, 96 CPUs / 4 GPUs).
-#SBATCH --cpus-per-task=24
+# A100 Jean-Zay: 8 CPU/GPU (gpu_p5). More CPUs = overcharge (e.g. 24 → billed as ~3 GPUs).
+#SBATCH --cpus-per-task=8
 #SBATCH --hint=nomultithread
 
 #SBATCH --job-name=sonata_eclair_lin
@@ -52,7 +52,7 @@ cp $0 ${JOB_DIR}/script.slurm
 } > ${JOB_DIR}/job_info.log
 
 module purge
-module load arch/h100
+module load arch/a100
 module load cuda/12.1.0
 module load miniforge/24.9.0
 
@@ -65,8 +65,8 @@ export WANDB_MODE=offline
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 cd ${REPO_ROOT}
 
-# Pointops built for H100 (train.sh prepends CODE_DIR but does not override an existing PYTHONPATH)
-POINTOPS_PATH=/lustre/fswork/projects/rech/unv/usi32yh/Pointcept/pointops_build_h100/lib/python3.10/site-packages/pointops-1.0-py3.10-linux-x86_64.egg
+# Pointops built for A100 (train.sh prepends CODE_DIR but does not override an existing PYTHONPATH)
+POINTOPS_PATH=/lustre/fswork/projects/rech/unv/usi32yh/Pointcept/pointops_build_a100/lib/python3.10/site-packages/pointops-1.0-py3.10-linux-x86_64.egg
 export PYTHONPATH="${POINTOPS_PATH}${PYTHONPATH:+:$PYTHONPATH}"
 
 START_TIME=$(date +%s)

@@ -95,10 +95,10 @@ All launchers live under [`scripts/sonata/`](scripts/sonata/):
 
 - [`scripts/sonata/sbatch_pretrain.sh`](scripts/sonata/sbatch_pretrain.sh) — 3×8 A100 (=24), `WANDB_MODE=offline` (+ hook submits probes)
 - [`scripts/sonata/sbatch_pretrain_h100.sh`](scripts/sonata/sbatch_pretrain_h100.sh) — 6×4 H100 (=24); overrides probe script to H100 via `EXTRA_OPTIONS`
-- [`scripts/sonata/sbatch_pretrain_eclair_h100.sh`](scripts/sonata/sbatch_pretrain_eclair_h100.sh) — ECLAIR, 6×4 H100, `ppm@h100`
+- [`scripts/sonata/sbatch_pretrain_eclair_h100.sh`](scripts/sonata/sbatch_pretrain_eclair_h100.sh) — ECLAIR, 6×4 H100, `unv@h100`
 - [`scripts/sonata/sbatch_lin_probe.sh`](scripts/sonata/sbatch_lin_probe.sh) — 1× A100, short walltime
 - [`scripts/sonata/sbatch_lin_probe_h100.sh`](scripts/sonata/sbatch_lin_probe_h100.sh) — 1× H100
-- [`scripts/sonata/sbatch_lin_probe_eclair_h100.sh`](scripts/sonata/sbatch_lin_probe_eclair_h100.sh) — ECLAIR lin probe, 1× H100, `ppm@h100`
+- [`scripts/sonata/sbatch_lin_probe_eclair_a100.sh`](scripts/sonata/sbatch_lin_probe_eclair_a100.sh) — ECLAIR lin probe, 1× A100, `uhn@a100`
 - [`scripts/sonata/sbatch_lin_grid_probe_mini_h100.sh`](scripts/sonata/sbatch_lin_grid_probe_mini_h100.sh) — 1× H100 array, mini grid-probe every 10 epochs (no test)
 - [`scripts/sonata/sbatch_pretrain_resume_h100.sh`](scripts/sonata/sbatch_pretrain_resume_h100.sh) — resume under a new config on 24× H100
 - [`scripts/sonata/periodic_lin_probe.py`](scripts/sonata/periodic_lin_probe.py) — **optional** watcher (local / replay only)
@@ -200,7 +200,7 @@ so the budget is independent of dataset size / batch size:
 
 Checkpoints: `CheckpointSaver(save_freq=1)` → `epoch_{1..150}.pth` (every 1000
 iters). Probes: `LinProbeSbatchHook(save_freq=10)` → **15 jobs** at epochs
-10, 20, …, 150 (`scripts/sonata/sbatch_lin_probe_eclair_h100.sh`).
+10, 20, …, 150 (`scripts/sonata/sbatch_lin_probe_eclair_a100.sh`).
 
 Strength is raw uint16 on disk; both configs apply `feat_scales` `1/60000`.
 No `coord_feat_scale` (Sonata pretrain does not use it). W&B project:
@@ -214,7 +214,7 @@ No `coord_feat_scale` (Sonata pretrain does not use it). W&B project:
 - Classic `epoch=100`, `eval_epoch=10`, `lr=1e-2`, `batch_size=24`, val=62 tiles
 - Hardware: **1× H100**, `num_worker=16`, walltime 12 h
 
-### Jean-Zay (`ppm@h100`)
+### Jean-Zay (pretrain `unv@h100`, lin probe `uhn@a100`)
 
 ```bash
 sbatch scripts/sonata/sbatch_pretrain_eclair_h100.sh sonata_pretrain_eclair_h100
@@ -225,8 +225,9 @@ tail -f logs/slurm/<PRETRAIN_JOB_ID>/lin_probe_results.csv
 ```
 
 IMAGINE `--comment` tags: pretrain `eclair,explore,pre-train`; lin-probe
-`eclair,explore,evaluate`. Account is **`ppm@h100`** for both (unlike Flair3D,
-which bills probes on `uhn@a100`).
+`eclair,explore,evaluate`. Pretrain bills on `unv@h100`; lin-probe now bills
+on `uhn@a100` (same account Flair3D already uses for its probes), rather than
+the shared `ppm@h100` both used previously.
 
 Manual single probe:
 
@@ -234,7 +235,7 @@ Manual single probe:
 WEIGHT=/path/to/epoch_10.pth EXP_NAME=sonata_eclair_lin_ep10 \
   PRETRAIN_JOB_DIR=logs/slurm/<PRETRAIN_JOB_ID> \
   PRETRAIN_EPOCH=10 PRETRAIN_ITERS=10000 \
-  sbatch scripts/sonata/sbatch_lin_probe_eclair_h100.sh
+  sbatch scripts/sonata/sbatch_lin_probe_eclair_a100.sh
 ```
 
 ## Batch size / VRAM on Jean-Zay

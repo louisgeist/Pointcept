@@ -7,14 +7,14 @@
 # --gres=gpu:N is per node; NUM_GPUS below must match N.
 # H100 nodes have 4 GPUs / 96 CPUs (vs 8 / 64 on A100).
 #
-# LinProbeSbatchHook submits scripts/sonata/sbatch_lin_probe_eclair_h100.sh
-# (1× H100) after epoch_{10,20,…,150}.pth.
+# LinProbeSbatchHook submits scripts/sonata/sbatch_lin_probe_eclair_a100.sh
+# (1× A100) after epoch_{10,20,…,150}.pth.
 #
 # Jean-Zay compute-accounting tags (IMAGINE wrapper):
 #   https://github.com/Archiel19/compute-accounting
 # Keep --comment set so non-interactive sbatch never prompts.
 
-#SBATCH -A ppm@h100
+#SBATCH -A unv@h100
 #SBATCH -C h100
 #SBATCH --comment=eclair,explore,pre-train
 #SBATCH --output=/lustre/fswork/projects/rech/unv/usi32yh/Pointcept/logs/slurm/%j/slurm.out

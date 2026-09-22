@@ -302,7 +302,7 @@ hooks = [
         type="LinProbeSbatchHook",
         enable=True,
         save_freq=lin_probe_save_freq,
-        sbatch_script="scripts/sonata/sbatch_lin_probe_eclair_h100.sh",
+        sbatch_script="scripts/sonata/sbatch_lin_probe_eclair_a100.sh",
         iter_per_epoch=iter_per_epoch,
     ),
 ]
