@@ -25,13 +25,18 @@ Flair3D [0,1]): OpenGF's observed intensity range (checked on a local
 download) tops out around 60000-65000, same order of magnitude as DALES'.
 
 Encoder levels (enc_mode), grid, probe grid, and hook wiring are copied
-verbatim from litept-b-v1m0-dales-lin-grid-enc.py, except `epoch`: OpenGF has
-~5.2x more train tiles than DALES (1359 vs 261), so DALES' `epoch=400` would
-give ~5.2x more total iterations too -- lowered to `epoch=50` here so total
-iterations (epoch * train_tiles // batch_size, ~3900) land in DALES' own
-ballpark (~3900) instead. Same rationale applies to every other OpenGF
-lin-grid config (all at `epoch=50`) and the from-scratch
-semseg-litept-b-v1m0-opengf.py (`epoch=200`, DALES' from-scratch ballpark).
+verbatim from litept-b-v1m0-dales-lin-grid-enc.py, except `epoch` and
+`point_max`. OpenGF has ~5.2x more train tiles than DALES (1359 vs 261), so
+DALES' `epoch=400` would give ~5.2x more total iterations too -- lowered to
+`epoch=50` here so total iterations (epoch * train_tiles // batch_size,
+~3900) land in DALES' own ballpark (~3900) instead. Same epoch rationale
+applies to every other OpenGF lin-grid config (all at `epoch=50`) and the
+from-scratch semseg-litept-b-v1m0-opengf.py (`epoch=200`, DALES'
+from-scratch ballpark). `point_max` is 60000 rather than DALES' 102400:
+after a 0.1 m grid, OpenGF crops stay much sparser, so a 102400 SphereCrop
+still leaves ~1.5x more points than DALES at the first pool (0.3 m) and
+~2x at the second (0.9 m). 60000 brings those two levels within about
+±15% of a DALES 102400 crop.
 """
 
 _base_ = ["../_base_/default_runtime.py"]
@@ -42,7 +47,7 @@ num_exp = 1
 num_classes = 2
 ignore_index = 2  # unreachable after RemapSegment merges raw label 2 into 1
 grid_size = 0.1
-point_max = 102400
+point_max = 60000
 coord_feat_scale = 0.01  # must match Flair3D multitask pretrain
 strength_feat_scale = 1 / 60000  # OpenGF raw intensity -> Flair3D [0,1] convention (DALES-like range)
 
