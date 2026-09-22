@@ -43,7 +43,7 @@ W_MONOLC=$B/1293025/model/model_best.pth    # LitePT-B  mono-task land-cover (se
 W_REALGN=$B/1468317/model/model_best.pth    # LitePT-B  multitask with real GradNorm (Chen et al. 2018)
 W_PRECLAIR=$B/1330042/model/model_best.pth  # LitePT-B  supervised ECLAIR semseg from scratch
 
-SB=./submit_grid_then_seeds_h100.sh   # auto --time: H3D 4h / DALES 8h / ECLAIR 12h
+SB=./submit_grid_then_seeds_h100.sh   # auto --time: H3D 4h / DALES 8h / OpenGF 8h / ECLAIR 12h
 ```
 
 ## H3D — grid + seed (best checkpoint = validation **macro-F1**)
@@ -66,11 +66,12 @@ Sonata checkpoint ([`pretrain-sonata-v1m1-0-base.pth`](https://huggingface.co/fa
 There is **no official outdoor Sonata release**; the Flair3D fork above (`W_SONATA`) is a
 separate line. Indoor configs use `in_channels=9` (`coord+color+normal`), zero-fill
 missing normals (and color on DALES), `stride=(2,2,2,2)`, **`grid_size=0.02`**
-(native indoor pretrain), and `FixedScaleCoord(1/N)` before `GridSample` with
-`N ∈ {1, 5, 10, 25, 50}` for the scale ablation (`N=1` = no `FixedScaleCoord`;
-`N=5` and extra scales live under `configs/experiment/w111/3/sonata_indoor/`).
-**Do not** reuse the lr winner from
-`W_SONATA` (Flair3D fork) or from another coord scale.
+(native indoor pretrain), and `FixedScaleCoord(1/N)` before `GridSample`.
+
+**Standardized on `N=10`** after the scale ablation below — the un-suffixed
+`configs/{dales,h3d,eclair}/sonata-v1m1-<dataset>-lin-grid.py` now bake in
+`coord_scale=1/10` and are the ones to launch going forward. **Do not** reuse
+the lr winner from `W_SONATA` (Flair3D fork) or from another coord scale.
 
 Download once (Jean-Zay or local):
 
@@ -82,21 +83,21 @@ huggingface-cli download facebook/sonata pretrain-sonata-v1m1-0-base.pth \
 
 ```bash
 SB=./submit_grid_then_seeds_h100.sh
-# coord /25
-$SB configs/dales/sonata-v1m1-dales-lin-grid.py            $W_SONATA_INDOOR  dales_sonata_indoor_s25
-$SB configs/h3d/sonata-v1m1-h3d-lin-grid.py              $W_SONATA_INDOOR  h3d_sonata_indoor_s25
-$SB configs/eclair/sonata-v1m1-eclair-lin-grid.py         $W_SONATA_INDOOR  eclair_sonata_indoor_s25
+$SB configs/dales/sonata-v1m1-dales-lin-grid.py    $W_SONATA_INDOOR  dales_sonata_indoor
+$SB configs/h3d/sonata-v1m1-h3d-lin-grid.py        $W_SONATA_INDOOR  h3d_sonata_indoor
+$SB configs/eclair/sonata-v1m1-eclair-lin-grid.py  $W_SONATA_INDOOR  eclair_sonata_indoor
+```
 
-# coord /10
-$SB configs/dales/sonata-v1m1-dales-lin-grid-scale10.py  $W_SONATA_INDOOR  dales_sonata_indoor_s10
-$SB configs/h3d/sonata-v1m1-h3d-lin-grid-scale10.py      $W_SONATA_INDOOR  h3d_sonata_indoor_s10
-$SB configs/eclair/sonata-v1m1-eclair-lin-grid-scale10.py $W_SONATA_INDOOR  eclair_sonata_indoor_s10
+<details>
+<summary>Historical scale ablation (N ∈ {1, 5, 10, 25, 50}) — kept for reference, not part of the standard launch set</summary>
 
-# coord /50
-$SB configs/dales/sonata-v1m1-dales-lin-grid-scale50.py  $W_SONATA_INDOOR  dales_sonata_indoor_s50
-$SB configs/h3d/sonata-v1m1-h3d-lin-grid-scale50.py      $W_SONATA_INDOOR  h3d_sonata_indoor_s50
-$SB configs/eclair/sonata-v1m1-eclair-lin-grid-scale50.py $W_SONATA_INDOOR  eclair_sonata_indoor_s50
+The `N=10` default above was picked from this sweep. The `N=25`/`N=50`
+configs have since been deleted as redundant now that `N=10` is the
+standard — see git history if you need to regenerate one. `N=5`/`N=1`
+variants still live under `configs/experiment/w111/3/sonata_indoor/`:
 
+```bash
+SB=./submit_grid_then_seeds_h100.sh
 # w111/3 — coord /5 and /1 (no rescale)
 EXP=configs/experiment/w111/3/sonata_indoor
 $SB $EXP/sonata-v1m1-dales-lin-grid-scale5_1.py   $W_SONATA_INDOOR  dales_sonata_indoor_s5
@@ -106,6 +107,8 @@ $SB $EXP/sonata-v1m1-dales-lin-grid-scale1_2.py   $W_SONATA_INDOOR  dales_sonata
 $SB $EXP/sonata-v1m1-h3d-lin-grid-scale1_4.py     $W_SONATA_INDOOR  h3d_sonata_indoor_s1
 $SB $EXP/sonata-v1m1-eclair-lin-grid-scale1_6.py   $W_SONATA_INDOOR  eclair_sonata_indoor_s1
 ```
+
+</details>
 
 ### LitePT-B pretraining ablations (backbone changes, probe recipe identical)
 
@@ -223,23 +226,35 @@ search) — OpenGF has no completed grid search yet to pick a winner from, so
 run this grid first, then build a seed-ensemble config from its winner the
 same way DALES did.
 
+Decoder tap configs (`*-lin-grid-dec*.py`, `*-enc-dec.py`) still live under
+`configs/opengf/` but are **not** part of this launch set. noRGB is skipped:
+OpenGF has no usable RGB (dummy LAS colour, `FillMissingFeat` zeros — see
+`preprocess_opengf.py`).
+
+### Encoder (main table)
+
 ```bash
 SB=./submit_grid_then_seeds_h100.sh
 $SB configs/opengf/litept-b-v1m0-opengf-lin-grid-enc.py     $W_LPT     opengf_lpt_enc
-$SB configs/opengf/litept-b-v1m0-opengf-lin-grid-dec.py     $W_LPT     opengf_lpt_dec
-$SB configs/opengf/litept-b-v1m0-opengf-lin-grid-dec-ss.py  $W_LPT     opengf_lpt_decSS
 $SB configs/opengf/ptv3-v1m0-opengf-lin-grid-enc.py         $W_PTV3    opengf_ptv3_enc
-$SB configs/opengf/ptv3-v1m0-opengf-lin-grid.py             $W_PTV3    opengf_ptv3_dec
 $SB configs/opengf/spunet-v1m0-opengf-lin-grid-enc.py       $W_SPUNET  opengf_spunet_enc
-$SB configs/opengf/spunet-v1m0-opengf-lin-grid-dec.py       $W_SPUNET  opengf_spunet_dec
-$SB configs/opengf/spunet-v1m0-opengf-lin-grid-dec-hc.py    $W_SPUNET  opengf_spunet_decHC
-$SB configs/opengf/spunet-v1m0-opengf-lin-grid-enc-dec.py   $W_SPUNET  opengf_spunet_encdec
 $SB configs/opengf/kpconvx-v1m0-opengf-lin-grid-enc.py      $W_KPX     opengf_kpconvx_enc
 $SB configs/opengf/sonata-v1m2-opengf-lin-grid.py           $W_SONATA  opengf_sonata
 ```
 
-No Sonata-v1m1 (official indoor release) variant on OpenGF — kept only for
-H3D/DALES/ECLAIR (see that section above).
+### LitePT-B pretraining ablations + Sonata-v1m1 indoor (coord /10)
+
+Same encoder-multiscale probe recipe as `opengf_lpt_enc`; only the frozen
+checkpoint changes. Indoor Sonata uses `in_channels=9`, `grid_size=0.02`,
+`FixedScaleCoord(1/10)` — do **not** reuse the outdoor `W_SONATA` lr winner.
+
+```bash
+SB=./submit_grid_then_seeds_h100.sh
+$SB configs/opengf/litept-b-v1m0-opengf-lin-grid-enc-nognl.py   $W_NOGNL          opengf_lpt_noGNL
+$SB configs/opengf/litept-b-v1m0-opengf-lin-grid-enc-realgn.py  $W_REALGN         opengf_lpt_realGN
+$SB configs/opengf/litept-b-v1m0-opengf-lin-grid-enc-monolc.py  $W_MONOLC         opengf_lpt_monoLC
+$SB configs/opengf/sonata-v1m1-opengf-lin-grid-scale10.py       $W_SONATA_INDOOR  opengf_sonata_indoor_s10
+```
 
 ## noRGB ablation — LitePT-B, grid + seed
 

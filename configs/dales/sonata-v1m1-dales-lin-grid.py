@@ -1,13 +1,12 @@
 """
-Sonata-v1m1 grid-search linear probing on DALES — official indoor release baseline
+Sonata-v1m1 grid-search linear probing on DALES (coord scale 1/10) — official indoor release baseline
 for suppmat (cross-domain aerial).
 
 Frozen PT-v3m2 encoder (enc_mode=True → multi-scale concat 1232ch) from the
 Meta/HuggingFace Sonata pretrain (pretrain-sonata-v1m1-0-base.pth). Indoor
 backbone: in_channels=9 (coord+color+normal), stride=(2,2,2,2). DALES has no
 RGB or normals — FillMissingFeat zero-fills both; intensity is not used (no
-strength channel). Scene coords are rescaled by 1/25 before GridSample;
-grid_size=0.02 (native indoor Sonata pretrain).
+strength channel). Scene coords are rescaled by 1/10 before GridSample; grid_size=0.02 (native indoor Sonata pretrain).
 
 AdamW / wd=0 / OneCycleLR warmup 5%, lr swept over 12 values. epoch=400 /
 eval_epoch=10. Chain into seed ensemble via tools/grid_then_seeds.py.
@@ -21,7 +20,7 @@ num_exp = 1
 num_classes = 8
 ignore_index = 8
 grid_size = 0.02
-coord_scale = 1 / 25  # aerial coord rescale; grid_size stays at native indoor 0.02
+coord_scale = 1 / 10  # aerial coord rescale; grid_size stays at native indoor 0.02
 point_max = 102400
 
 num_gpu = 1
@@ -146,7 +145,7 @@ del _wu_name, _pct_start, _optimizer, _name
 
 wandb_run_name = (
     f"Sonata-v1m1 indoor GridProbe DALES {grp_exp}.{num_exp}) HF pretrain, "
-    f"enc {backbone_out_channels}ch, coord/25, {len(probes)} probes, epoch={epoch}"
+    f"enc {backbone_out_channels}ch, coord/10, {len(probes)} probes, epoch={epoch}"
 )
 
 model = dict(

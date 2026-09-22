@@ -1,27 +1,27 @@
 """
-Sonata-v1m1 grid-search linear probing on H3D (coord scale 1/50) — official indoor release baseline
+Sonata-v1m1 grid-search linear probing on H3D (coord scale 1/10) — official indoor release baseline
 for suppmat (cross-domain aerial).
 
 Frozen PT-v3m2 encoder (enc_mode=True → multi-scale concat 1232ch) from the
 Meta/HuggingFace Sonata pretrain (pretrain-sonata-v1m1-0-base.pth). Indoor
 backbone: in_channels=9 (coord+color+normal), stride=(2,2,2,2). H3D provides
 RGB (NormalizeColor); normals are zero-filled via FillMissingFeat. Scene coords
-are rescaled by 1/50 before GridSample; grid_size=0.02 (native indoor Sonata pretrain).
+are rescaled by 1/10 before GridSample; grid_size=0.02 (native indoor Sonata pretrain).
 
 AdamW / wd=0 / OneCycleLR warmup 5%, lr swept over 12 values. select_metric=
 macro_f1. epoch=2000 / eval_epoch=10. Chain into seed ensemble via
 tools/grid_then_seeds.py.
 """
 
-_base_ = ["../_base_/default_runtime.py"]
+_base_ = ["../../../../_base_/default_runtime.py"]
 
 grp_exp = 1
-num_exp = 1
+num_exp = 6
 
 num_classes = 11
 ignore_index = 11
 grid_size = 0.02
-coord_scale = 1 / 50
+coord_scale = 1 / 10
 point_max = 102400
 
 num_gpu = 1
@@ -149,7 +149,7 @@ del _wu_name, _pct_start, _optimizer, _name
 
 wandb_run_name = (
     f"Sonata-v1m1 indoor GridProbe H3D {grp_exp}.{num_exp}) HF pretrain, "
-    f"enc {backbone_out_channels}ch, coord/50, {len(probes)} probes, epoch={epoch}"
+    f"enc {backbone_out_channels}ch, coord/10, {len(probes)} probes, epoch={epoch}"
 )
 
 model = dict(

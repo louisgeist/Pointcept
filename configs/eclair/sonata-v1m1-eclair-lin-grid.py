@@ -1,12 +1,12 @@
 """
-Sonata-v1m1 grid-search linear probing on ECLAIR — official indoor release
+Sonata-v1m1 grid-search linear probing on ECLAIR (coord scale 1/10) — official indoor release
 baseline for suppmat (cross-domain aerial).
 
 Frozen PT-v3m2 encoder (enc_mode=True → multi-scale concat 1232ch) from the
 Meta/HuggingFace Sonata pretrain (pretrain-sonata-v1m1-0-base.pth). Indoor
 backbone: in_channels=9 (coord+color+normal), stride=(2,2,2,2). ECLAIR provides
 RGB (NormalizeColor); normals are zero-filled via FillMissingFeat; intensity is
-not used. Scene coords are rescaled by 1/25 before GridSample while grid_size
+not used. Scene coords are rescaled by 1/10 before GridSample while grid_size
 stays 0.1.
 
 AdamW / wd=0 / OneCycleLR warmup 5%, lr swept over 12 values. epoch=200 /
@@ -21,7 +21,7 @@ num_exp = 1
 num_classes = 11
 ignore_index = -1
 grid_size = 0.02
-coord_scale = 1 / 25
+coord_scale = 1 / 10
 point_max = 102400
 
 num_gpu = 1
@@ -147,7 +147,7 @@ del _optimizer, _name
 
 wandb_run_name = (
     f"Sonata-v1m1 indoor GridProbe ECLAIR {grp_exp}.{num_exp}) HF pretrain, "
-    f"enc {backbone_out_channels}ch, coord/25, {len(probes)} probes, epoch={epoch}"
+    f"enc {backbone_out_channels}ch, coord/10, {len(probes)} probes, epoch={epoch}"
 )
 
 model = dict(
