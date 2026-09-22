@@ -94,13 +94,11 @@ def read_las_laz(filepath: str) -> Dict[str, np.ndarray]:
     g = np.asarray(las.green, dtype=np.float64)
     b = np.asarray(las.blue, dtype=np.float64)
     rgb = np.stack([r, g, b], axis=1)
-    # LAS RGB fields store 16-bit values with the true 8-bit source shifted left by 8
-    # bits (standard IGN/LAStools/PDAL convention), not a continuous 16-bit sensor
-    # range — descale with a fixed //256, never a per-tile max stretch (that invents a
-    # tile-dependent brightness instead of recovering the deterministic original byte).
-    if float(np.max(rgb)) > 255.5:
-        rgb = rgb // 256
-    color = np.clip(rgb, 0.0, 255.0).astype(np.float32)
+    # H3D's LAS RGB fields store 16-bit values with the true 8-bit source shifted left
+    # by 8 bits (standard IGN/LAStools/PDAL convention: verified 0 exceptions across
+    # all Mar18 files), not a continuous 16-bit sensor range — descale with a fixed
+    # //256, never a per-tile max stretch (that invents a tile-dependent brightness).
+    color = np.clip(rgb // 256, 0.0, 255.0).astype(np.float32)
 
     return {"coord": coord, "segment": segment, "color": color}
 
