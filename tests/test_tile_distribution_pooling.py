@@ -1,8 +1,9 @@
 """
 Tests for the tile_distribution task's shared pooling/KL/MAE/TV utilities
 (pointcept.utils.misc.pool_axis_distribution_from_probs / kl_divergence_rows /
-abs_freq_error_rows / tv_from_abs_errors), the WeightedKLDivLoss criterion, and
-MultiTaskSegmentorV2's tile_distribution loss branch.
+abs_freq_error_rows / tv_from_abs_errors), the WeightedKLDivLoss criterion,
+MultiTaskSegmentorV2's tile_distribution loss branch (KL and optional
+pointwise CE), and init_task_criteria for pointwise_supervision.
 
 Run with: PYTHONPATH=./ pytest tests/test_tile_distribution_pooling.py
 """
@@ -19,6 +20,11 @@ from pointcept.utils.misc import (
 )
 from pointcept.models.losses import build_criteria
 from pointcept.models.default import MultiTaskSegmentorV2
+from pointcept.datasets.flair3d_config_utils import (
+    enable_nathab_pointwise_supervision,
+    get_tile_distribution_config,
+    init_task_criteria,
+)
 
 
 class TestPoolAxisDistributionFromProbs(unittest.TestCase):
@@ -108,13 +114,59 @@ class TestWeightedKLDivLoss(unittest.TestCase):
         torch.testing.assert_close(loss, expected)
 
 
+class TestInitTaskCriteriaPointwiseSupervision(unittest.TestCase):
+    def test_default_tile_distribution_uses_weighted_kl(self):
+        cfg = get_tile_distribution_config("nathab_moisture_regime")
+        self.assertFalse(cfg.get("pointwise_supervision"))
+        criteria = init_task_criteria({"nathab_moisture_regime": cfg})
+        types = [c["type"] for c in criteria["nathab_moisture_regime"]]
+        self.assertEqual(types, ["WeightedKLDivLoss"])
+
+    def test_pointwise_supervision_uses_ce_and_lovasz(self):
+        cfg = get_tile_distribution_config("nathab_moisture_regime")
+        task_configs = {"nathab_moisture_regime": cfg}
+        enable_nathab_pointwise_supervision(task_configs)
+        self.assertTrue(task_configs["nathab_moisture_regime"]["pointwise_supervision"])
+        criteria = init_task_criteria(task_configs)
+        types = [c["type"] for c in criteria["nathab_moisture_regime"]]
+        self.assertEqual(types, ["CrossEntropyLoss", "LovaszLoss"])
+        for c in criteria["nathab_moisture_regime"]:
+            self.assertEqual(c["ignore_index"], cfg["ignore_index"])
+
+
 class TestMultiTaskSegmentorV2TileDistributionLoss(unittest.TestCase):
-    def _make_model_stub(self, num_classes=3):
+    def _make_model_stub(self, num_classes=3, pointwise_supervision=False):
         model = object.__new__(MultiTaskSegmentorV2)
-        task_config = dict(task_type="tile_distribution", num_classes=num_classes, ignore_index=-1)
+        task_config = dict(
+            task_type="tile_distribution",
+            num_classes=num_classes,
+            ignore_index=-1,
+            pointwise_supervision=pointwise_supervision,
+        )
         model.task_configs = {"axis_a": task_config}
         model.tasks = ("axis_a",)
-        model.criteria_by_task = {"axis_a": build_criteria([dict(type="WeightedKLDivLoss")])}
+        if pointwise_supervision:
+            model.criteria_by_task = {
+                "axis_a": build_criteria(
+                    [
+                        dict(
+                            type="CrossEntropyLoss",
+                            loss_weight=1.0,
+                            ignore_index=-1,
+                        ),
+                        dict(
+                            type="LovaszLoss",
+                            mode="multiclass",
+                            loss_weight=1.0,
+                            ignore_index=-1,
+                        ),
+                    ]
+                )
+            }
+        else:
+            model.criteria_by_task = {
+                "axis_a": build_criteria([dict(type="WeightedKLDivLoss")])
+            }
         model.task_weights = {"axis_a": 1.0}
         return model
 
@@ -152,6 +204,31 @@ class TestMultiTaskSegmentorV2TileDistributionLoss(unittest.TestCase):
         self.assertEqual(float(total_loss.item()), 0.0)
         total_loss.backward()  # must not raise (grad graph kept alive for DDP)
         self.assertIsNotNone(logits.grad)
+
+    def test_pointwise_ce_loss_computed_and_differentiable(self):
+        model = self._make_model_stub(pointwise_supervision=True)
+        logits = torch.tensor(
+            [
+                [2.0, 0.5, 0.1],
+                [1.8, 0.6, 0.1],
+                [0.2, 2.0, 0.1],
+                [0.0, 0.0, 0.0],
+                [0.1, 0.1, 2.0],
+            ],
+            requires_grad=True,
+        )
+        target = torch.tensor([0, 0, 1, -1, 2], dtype=torch.long)
+        offset = torch.tensor([3, 5])
+        input_dict = {"axis_a": target, "offset": offset}
+        total_loss, loss_by_task = model._compute_loss(
+            {"axis_a": logits}, {}, {}, input_dict
+        )
+        self.assertIn("axis_a", loss_by_task)
+        self.assertTrue(torch.isfinite(total_loss))
+        self.assertGreater(float(total_loss.item()), 0.0)
+        total_loss.backward()
+        self.assertIsNotNone(logits.grad)
+        self.assertTrue(torch.isfinite(logits.grad).all())
 
 
 if __name__ == "__main__":

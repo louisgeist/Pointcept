@@ -14,6 +14,9 @@ import torch
 from pointcept.engines.hooks.grid_probe import (
     GridProbeCheckpointSaver,
     GridProbeEvaluator,
+    _discover_class_metric_keys,
+    _flatten_class_stats,
+    _metric_stats,
 )
 from pointcept.models.grid_probe import (
     ProbeHead,
@@ -300,6 +303,74 @@ class TestGridProbeHistoryCsvFieldnames(unittest.TestCase):
         self.assertEqual(
             header, "epoch,probe_name,mIoU,mIoU_best,f1_macro,f1_macro_best"
         )
+
+
+class TestSeedEnsembleClassIoUStats(unittest.TestCase):
+    """Per-class test IoU mean±std for GridProbeSeedEnsembleTester."""
+
+    def test_discovers_names_order(self):
+        metrics = {
+            "s1": {"test/iou_Non-ground": 0.7, "test/iou_Ground": 0.9},
+            "s0": {"test/iou_Ground": 0.8, "test/iou_Non-ground": 0.6},
+        }
+        keys = _discover_class_metric_keys(
+            metrics, "test/iou_", names=["Ground", "Non-ground"]
+        )
+        self.assertEqual(keys, ["test/iou_Ground", "test/iou_Non-ground"])
+
+    def test_fallback_first_seen_when_no_names(self):
+        metrics = {
+            "s0": {"test/iou_Non-ground": 0.7, "test/iou_Ground": 0.9},
+        }
+        keys = _discover_class_metric_keys(metrics, "test/iou_")
+        self.assertEqual(keys, ["test/iou_Non-ground", "test/iou_Ground"])
+
+    def test_excludes_f1_macro(self):
+        metrics = {
+            "s0": {"test/f1_macro": 0.5, "test/f1_Ground": 0.6},
+        }
+        keys = _discover_class_metric_keys(
+            metrics, "test/f1_", exclude=("test/f1_macro",)
+        )
+        self.assertEqual(keys, ["test/f1_Ground"])
+
+    def test_ground_mean_std_ddof0(self):
+        metrics = {
+            "s0": {"test/iou_Ground": 0.90},
+            "s1": {"test/iou_Ground": 0.80},
+        }
+        stats = _metric_stats(metrics, "test/iou_Ground")
+        self.assertAlmostEqual(stats["mean"], 0.85)
+        self.assertAlmostEqual(stats["std"], 0.05)
+        self.assertAlmostEqual(stats["min"], 0.80)
+        self.assertAlmostEqual(stats["max"], 0.90)
+
+    def test_flatten_iou_with_spread(self):
+        metrics = {
+            "s0": {"test/iou_Ground": 0.90, "test/iou_Non-ground": 0.70},
+            "s1": {"test/iou_Ground": 0.80, "test/iou_Non-ground": 0.60},
+        }
+        keys = ["test/iou_Ground", "test/iou_Non-ground"]
+        stats_by_key = {k: _metric_stats(metrics, k) for k in keys}
+        flat = _flatten_class_stats(
+            keys, stats_by_key, "test/iou_", with_spread=True
+        )
+        self.assertAlmostEqual(flat["test_iou_Ground_mean"], 0.85)
+        self.assertAlmostEqual(flat["test_iou_Ground_std"], 0.05)
+        self.assertAlmostEqual(flat["test_iou_Non-ground_mean"], 0.65)
+        self.assertAlmostEqual(flat["test_iou_Non-ground_std"], 0.05)
+        self.assertIn("test_iou_Ground_min", flat)
+        self.assertIn("test_iou_Ground_max", flat)
+
+    def test_flatten_f1_mean_only_stays_backward_compatible(self):
+        metrics = {"s0": {"test/f1_Ground": 0.4}, "s1": {"test/f1_Ground": 0.6}}
+        keys = ["test/f1_Ground"]
+        stats_by_key = {k: _metric_stats(metrics, k) for k in keys}
+        flat = _flatten_class_stats(
+            keys, stats_by_key, "test/f1_", with_spread=False
+        )
+        self.assertEqual(set(flat), {"test_f1_Ground_mean"})
+        self.assertAlmostEqual(flat["test_f1_Ground_mean"], 0.5)
 
 
 if __name__ == "__main__":

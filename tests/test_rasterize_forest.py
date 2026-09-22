@@ -89,6 +89,47 @@ class TestProcessPatch(unittest.TestCase):
             self.assertEqual(meta["forest_2d"]["width"], 4)
             self.assertEqual(meta["forest_2d"]["height"], 4)
             self.assertEqual(meta["forest_2d"]["channel_order"], ["FOREST"])
+            # Same-res + phase-aligned -> native-window bypass (no resample).
+            self.assertFalse(meta["forest_2d"]["resampled"])
+
+    def test_native_resolution_bypass_at_0_2m(self):
+        # Native 0.2m tiff, target 0.2m grid: integer-window read, no mode resample.
+        # Checker-like pattern so a wrong window/flip would fail loudly.
+        native = np.zeros((10, 10), dtype=np.uint8)
+        native[0, 0] = 1  # north-west
+        native[0, 9] = 1  # north-east
+        native[9, 0] = 1  # south-west
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tiff_path = os.path.join(tmp, "FOREST.tif")
+            self._write_synthetic_tiff(
+                tiff_path, xmin=0.0, ymax=2.0, pixel_m=0.2, array=native
+            )
+
+            patch_dir = os.path.join(tmp, "patch")
+            os.makedirs(patch_dir)
+            coord = np.array([[0.1, 0.1, 0.0], [1.9, 1.9, 0.0]], dtype=np.float32)
+            np.save(os.path.join(patch_dir, "coord.npy"), coord)
+            np.save(
+                os.path.join(patch_dir, "coord_translation.npy"),
+                np.array([0.0, 0.0, 0.0], dtype=np.float64),
+            )
+
+            stats = process_patch(patch_dir, tiff_path, pixel_m=0.2, ignore_index=2)
+
+            forest = np.load(os.path.join(patch_dir, "forest_2d.npy"))
+            self.assertEqual(forest.shape, (1, 10, 10))
+            self.assertFalse(stats["resampled"])
+            # south-up: native north row -> last output row
+            self.assertEqual(int(forest[0, -1, 0]), 1)
+            self.assertEqual(int(forest[0, -1, 9]), 1)
+            self.assertEqual(int(forest[0, 0, 0]), 1)
+            self.assertEqual(int(forest.sum()), 3)
+
+            with open(os.path.join(patch_dir, "meta.json")) as f:
+                meta = json.load(f)
+            self.assertEqual(meta["forest_2d"]["pixel_m"], 0.2)
+            self.assertFalse(meta["forest_2d"]["resampled"])
 
     def test_resamples_non_integer_ratio_with_majority_vote(self):
         # Native 0.2m tiff, target 0.5m grid (2.5x downsample, non-integer ratio).
@@ -108,10 +149,14 @@ class TestProcessPatch(unittest.TestCase):
                 np.array([0.0, 0.0, 0.0], dtype=np.float64),
             )
 
-            process_patch(patch_dir, tiff_path, pixel_m=0.5, ignore_index=2)
+            stats = process_patch(patch_dir, tiff_path, pixel_m=0.5, ignore_index=2)
 
             forest = np.load(os.path.join(patch_dir, "forest_2d.npy"))
             self.assertTrue((forest == 1).all())
+            self.assertTrue(stats["resampled"])
+            with open(os.path.join(patch_dir, "meta.json")) as f:
+                meta = json.load(f)
+            self.assertTrue(meta["forest_2d"]["resampled"])
 
     def test_nodata_pixel_mapped_to_ignore_index(self):
         # Native tiff declares nodata=255 and has one pixel set to that

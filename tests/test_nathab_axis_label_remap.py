@@ -11,7 +11,49 @@ import unittest
 import numpy as np
 
 from pointcept.datasets.preprocessing.flair3d_plus import flair3d_label_remap as fr
+from pointcept.datasets.preprocessing.flair3d_plus import nathab_axes as na
 from pointcept.datasets.transform import Flair3DLabelRemap
+
+
+class TestNathabAxesHelper(unittest.TestCase):
+    def test_luts_match_stored_to_train(self):
+        storage = fr.get_definition("natural_habitat", "default")
+        for lut, definition in zip(na.NATHAB_AXIS_LUTS, na.NATHAB_AXIS_DEFINITIONS):
+            target = fr.get_definition("natural_habitat", definition)
+            expected = fr.build_stored_to_train_lut(storage, target)
+            np.testing.assert_array_equal(
+                np.asarray(lut, dtype=np.int32),
+                expected,
+                err_msg=f"LUT mismatch for {definition}",
+            )
+
+    def test_carhab_to_axes_matches_fanout(self):
+        raw = np.array([0, 6, 13, 25, 36, 37, 40, 42, 43], dtype=np.int32)
+        axes = na.carhab_to_nathab_axes(raw)
+        self.assertEqual(axes.dtype, np.uint8)
+        self.assertEqual(axes.shape, (raw.shape[0], 4))
+        unpacked = na.unpack_nathab_axes(axes)
+        np.testing.assert_array_equal(
+            unpacked["nathab_habitat_type"], [0, 1, 0, 0, 2, 2, 4, 4, 4]
+        )
+        np.testing.assert_array_equal(
+            unpacked["nathab_moisture_regime"], [0, 0, 1, 1, 3, 3, 3, 3, 3]
+        )
+        np.testing.assert_array_equal(
+            unpacked["nathab_soil_chemistry"], [0, 0, 0, 0, 0, 1, 2, 2, 2]
+        )
+        np.testing.assert_array_equal(
+            unpacked["nathab_bioclimatic_zone"], [0, 0, 1, 2, 3, 3, 3, 3, 3]
+        )
+
+    def test_already_baked_axes_validated(self):
+        baked = np.array([[0, 0, 0, 0], [1, 2, 1, 2]], dtype=np.uint8)
+        out = na.carhab_to_nathab_axes(baked)
+        np.testing.assert_array_equal(out, baked)
+
+    def test_rejects_out_of_range_carhab(self):
+        with self.assertRaises(ValueError):
+            na.carhab_to_nathab_axes(np.array([44], dtype=np.int32))
 
 
 class TestNathabAxisLabelDefinitions(unittest.TestCase):
