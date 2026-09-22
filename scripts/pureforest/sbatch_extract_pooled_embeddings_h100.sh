@@ -45,6 +45,11 @@ OUT_ROOT="${OUT_ROOT:-${REPO_ROOT}/stats/pureforest/embeddings}"
 DATA_ROOT="${DATA_ROOT:-}"          # empty -> use cfg data_root (data/pureforest)
 POINT_MAX="${POINT_MAX:-}"          # empty -> full tile after GridSample (no SphereCrop)
 SKIP_EXISTING="${SKIP_EXISTING:-0}"
+# DataLoader prefetch: --cpus-per-task=24 above gives headroom, but full-res
+# tiles x prefetch_factor can add up in CPU RAM (see test.py's packed-loader
+# note) -- stay modest by default.
+NUM_WORKERS="${NUM_WORKERS:-6}"
+PREFETCH_FACTOR="${PREFETCH_FACTOR:-1}"
 PREECLAIR_WEIGHT="${PREECLAIR_WEIGHT:-${REPO_ROOT}/logs/slurm/1330042/model/model_best.pth}"
 
 {
@@ -55,6 +60,8 @@ PREECLAIR_WEIGHT="${PREECLAIR_WEIGHT:-${REPO_ROOT}/logs/slurm/1330042/model/mode
     echo "DATA_ROOT=${DATA_ROOT:-<cfg default>}"
     echo "POINT_MAX=${POINT_MAX:-<none>}"
     echo "SKIP_EXISTING=${SKIP_EXISTING}"
+    echo "NUM_WORKERS=${NUM_WORKERS}"
+    echo "PREFETCH_FACTOR=${PREFETCH_FACTOR}"
     echo "PREECLAIR_WEIGHT=${PREECLAIR_WEIGHT}"
     echo "Starting job at: $(date)"
     echo "Running on host: $(hostname)"
@@ -109,6 +116,8 @@ extract_one() {
         --output-dir "${out_dir}"
         --splits ${SPLITS}
         --batch-size "${BATCH_SIZE}"
+        --num-workers "${NUM_WORKERS}"
+        --prefetch-factor "${PREFETCH_FACTOR}"
     )
     if [ -n "${DATA_ROOT}" ]; then
         cmd+=(--data-root "${DATA_ROOT}")
@@ -153,6 +162,33 @@ extract_one kpconvx_malibu3d_ms \
 extract_one litept_b_preECLAIR_ms \
     configs/pureforest/cls-litept-b-v1m0-pureforest-lin-grid-enc.py \
     "${PREECLAIR_WEIGHT}" || FAILS=$((FAILS + 1))
+
+# GradNorm / mono-task ablation checkpoints (same LitePT-B encoder, only the
+# multitask-loss-balancing / head setup differs at pretrain time -- see
+# README_grid_then_seed.md's Frozen-backbone checkpoints block and
+# ckpt/{1288597,1293025,1468317}/*.md).
+NOGNL_WEIGHT="${NOGNL_WEIGHT:-${REPO_ROOT}/logs/slurm/1288597/model/model_best.pth}"
+MONOLC_WEIGHT="${MONOLC_WEIGHT:-${REPO_ROOT}/logs/slurm/1293025/model/model_best.pth}"
+REALGN_WEIGHT="${REALGN_WEIGHT:-${REPO_ROOT}/logs/slurm/1468317/model/model_best.pth}"
+
+extract_one litept_b_noGNL_ms \
+    configs/pureforest/cls-litept-b-v1m0-pureforest-lin-grid-enc.py \
+    "${NOGNL_WEIGHT}" || FAILS=$((FAILS + 1))
+
+extract_one litept_b_monoLC_ms \
+    configs/pureforest/cls-litept-b-v1m0-pureforest-lin-grid-enc.py \
+    "${MONOLC_WEIGHT}" || FAILS=$((FAILS + 1))
+
+extract_one litept_b_realGN_ms \
+    configs/pureforest/cls-litept-b-v1m0-pureforest-lin-grid-enc.py \
+    "${REALGN_WEIGHT}" || FAILS=$((FAILS + 1))
+
+# noRGB ablation: reference multitask checkpoint (873542 / malibu3d), colour
+# replaced with the learned mask value on every forward -- see
+# configs/pureforest/cls-litept-b-v1m0-pureforest-lin-grid-enc-norgb.py.
+extract_one litept_b_malibu3d_norgb_ms \
+    configs/pureforest/cls-litept-b-v1m0-pureforest-lin-grid-enc-norgb.py \
+    "${REPO_ROOT}/ckpt/malibu3d/litept_b_multitask/model_best.pth" || FAILS=$((FAILS + 1))
 
 END_TIME=$(date +%s)
 ELAPSED=$((END_TIME - START_TIME))

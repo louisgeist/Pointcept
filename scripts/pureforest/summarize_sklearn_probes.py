@@ -51,6 +51,66 @@ def _pct(x: float | None, digits: int = 2) -> str:
     return f"{100.0 * x:.{digits}f}"
 
 
+def _or_dash(v: object) -> str:
+    return "—" if v is None else _escape(v)
+
+
+# Full fine-tuning (not a linear probe) reference row(s), manually pulled from
+# wandb (project pointcept_pureforest). Kept separate from _load_runs since
+# they don't come from a sklearn_probe/*/metrics.json folder.
+EXTRA_RUNS = [
+    {
+        "name": "litept_b_pureforest_scratch",
+        "note": (
+            "full fine-tuning from scratch, AdamW wd=0.005 (LitePT-B base wd), "
+            "30 epochs — wandb run 2wp8kn77"
+        ),
+        "agg": None,
+        "C": None,
+        "feat_dim": None,
+        "class_names": [
+            "deciduous_oak",
+            "evergreen_oak",
+            "beech",
+            "chestnut",
+            "black_locust",
+            "maritime_pine",
+            "scotch_pine",
+            "black_pine",
+            "aleppo_pine",
+            "fir",
+            "spruce",
+            "larch",
+            "douglas",
+        ],
+        "train": {},
+        "val": {"mIoU": 0.6849002200167486},
+        "test": {
+            "mIoU": 0.7834263714188924,
+            "allAcc": 0.8653008962868101,
+            "mAcc": 0.8619990711706349,
+            "macro_f1": 0.8430601349164866,
+            "per_class_iou": [
+                0.7678370514063986,
+                0.6410543329603342,
+                0.9559990382303208,
+                0.671232876712099,
+                0.9146341463411846,
+                0.9736842105262684,
+                0.850059031877197,
+                0.6725961538461215,
+                0.9557522123891692,
+                0.0,
+                0.9547461368652368,
+                0.9195402298847052,
+                0.9074074074065672,
+            ],
+        },
+        "test_miou": 0.7834263714188924,
+    },
+]
+
+
 def _load_runs(probe_root: Path) -> list[dict]:
     runs: list[dict] = []
     for metrics_path in sorted(probe_root.glob("*/metrics.json")):
@@ -104,13 +164,20 @@ def _escape(s: object) -> str:
     return html.escape(str(s), quote=True)
 
 
-def _metric_cell(values: list[float | None], idx: int, higher_better: bool = True) -> str:
+def _metric_cell(
+    values: list[float | None],
+    idx: int,
+    higher_better: bool = True,
+    highlight: bool = False,
+) -> str:
     v = values[idx]
     if v is None:
-        return "<td>—</td>"
+        cls_attr = ' class="hl"' if highlight else ""
+        return f"<td{cls_attr}>—</td>"
     present = [x for x in values if x is not None]
     is_best = present and (v == (max(present) if higher_better else min(present)))
-    cls = ' class="best"' if is_best else ""
+    classes = (["best"] if is_best else []) + (["hl"] if highlight else [])
+    cls = f' class="{" ".join(classes)}"' if classes else ""
     return f"<td{cls}>{_pct(v)}</td>"
 
 
@@ -144,7 +211,7 @@ def render_html(runs: list[dict], out_path: Path) -> str:
         f"<td>—</td>"
         f"<td>—</td>"
         f"<td>—</td>"
-        f"<td>{_pct(paper['test_miou'])}</td>"
+        f"<td class=\"hl\">{_pct(paper['test_miou'])}</td>"
         f"<td>{_pct(paper['test_oa'])}</td>"
         f"<td>—</td>"
         f"<td>—</td>"
@@ -152,17 +219,22 @@ def render_html(runs: list[dict], out_path: Path) -> str:
     )
     for i, run in enumerate(runs, start=1):
         bar_w = 100.0 * run["test_miou"] / max_bar if max_bar > 0 else 0.0
+        note_html = (
+            f"<div class='muted'>{_escape(run['note'])}</div>"
+            if run.get("note")
+            else ""
+        )
         ranking_rows.append(
             "<tr>"
             f"<td>{i}</td>"
             f"<td><code>{_escape(run['name'])}</code>"
-            f"<div class='bar'><span style='width:{bar_w:.1f}%'></span></div></td>"
-            f"<td>{_escape(run['agg'])}</td>"
-            f"<td>{_escape(run['C'])}</td>"
-            f"<td>{_escape(run['feat_dim'])}</td>"
+            f"<div class='bar'><span style='width:{bar_w:.1f}%'></span></div>{note_html}</td>"
+            f"<td>{_or_dash(run['agg'])}</td>"
+            f"<td>{_or_dash(run['C'])}</td>"
+            f"<td>{_or_dash(run['feat_dim'])}</td>"
             f"{_metric_cell(train_miou, i - 1)}"
             f"{_metric_cell(val_miou, i - 1)}"
-            f"{_metric_cell(test_miou, i - 1)}"
+            f"{_metric_cell(test_miou, i - 1, highlight=True)}"
             f"{_metric_cell(test_oa, i - 1)}"
             f"{_metric_cell(test_macc, i - 1)}"
             f"{_metric_cell(test_f1, i - 1)}"
@@ -222,6 +294,8 @@ def render_html(runs: list[dict], out_path: Path) -> str:
     --baseline: #eef3ff;
     --best: #1b7f3a;
     --bar: #3b82f6;
+    --hl-bg: #dbeafe;
+    --hl-ink: #1d4ed8;
   }}
   @media (prefers-color-scheme: dark) {{
     :root {{
@@ -233,6 +307,8 @@ def render_html(runs: list[dict], out_path: Path) -> str:
       --baseline: #1a2438;
       --best: #6ee7a0;
       --bar: #60a5fa;
+      --hl-bg: #1e3a5f;
+      --hl-ink: #93c5fd;
     }}
   }}
   body {{
@@ -271,6 +347,10 @@ def render_html(runs: list[dict], out_path: Path) -> str:
   th {{ background: var(--bg-alt); font-weight: 600; }}
   tr.baseline {{ background: var(--baseline); }}
   td.best {{ font-weight: 600; color: var(--best); }}
+  th.hl, td.hl {{ background: var(--hl-bg); }}
+  th.hl {{ color: var(--hl-ink); }}
+  td.hl {{ font-weight: 600; color: var(--hl-ink); }}
+  td.best.hl {{ color: var(--best); }}
   code {{ font-size: 0.84em; }}
   .bar {{
     height: 4px;
@@ -303,18 +383,23 @@ def render_html(runs: list[dict], out_path: Path) -> str:
   </div>
 
   <h2>Classement (test mIoU)</h2>
+  <p class="muted">
+    Sur le test-split <strong>without label leakage from train Malibu</strong> — 2170 tiles PureForest test
+    (2 forêts, <code>bdforetv2_id</code> 275/442) géographiquement dans le trainval Flair3D+/MALiBU3D ont
+    été exclues (voir <code>stats/pureforest/pureforest_flair3d_leakage.md</code>).
+  </p>
   <div class="scroll">
   <table>
     <thead>
       <tr>
         <th>#</th>
         <th>Run</th>
-        <th>agg</th>
+        <th>feat</th>
         <th>C</th>
         <th>dim</th>
         <th>train mIoU</th>
         <th>val mIoU</th>
-        <th>test mIoU</th>
+        <th class="hl">test mIoU</th>
         <th>test OA</th>
         <th>test mAcc</th>
         <th>test macro-F1</th>
@@ -376,6 +461,8 @@ def main() -> None:
     runs = _load_runs(probe_root)
     if not runs:
         raise SystemExit(f"No metrics.json found under {probe_root}")
+
+    runs = sorted(runs + EXTRA_RUNS, key=lambda r: -r["test_miou"])
 
     html_doc = render_html(runs, out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)

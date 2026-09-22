@@ -50,6 +50,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from _grid_probe_extract_common import build_model_for_extraction  # noqa: E402
+from pointcept.datasets.utils import pack_indices_by_voxel_budget  # noqa: E402
 
 
 def _safe_segment_csr_mean(feat, indptr):
@@ -142,6 +143,61 @@ def _move_batch_to_device(batch, device):
     return out
 
 
+def _compute_raw_sizes(dataset):
+    """Per-tile raw point count, read from coord.npy's file size (no load).
+
+    Used only for point-budget batch packing -- a fast upper-bound proxy for
+    the post-GridSample point count (real PureForest tiles are dense enough,
+    see project_pureforest_reprocess_dense_tiles memory, that GridSample(0.1)
+    only removes ~13-20% of points, so budgeting on the slightly larger raw
+    count is a safe, not overly loose, approximation).
+    """
+    import os
+
+    sizes = []
+    for idx in range(len(dataset.data_list)):
+        patch_stem = dataset.data_list[idx]
+        coord_path = os.path.join(
+            dataset.data_root, dataset.split, patch_stem, "coord.npy"
+        )
+        n_bytes = os.path.getsize(coord_path)
+        sizes.append(max(1, (n_bytes - 128) // (4 * 3)))
+    return sizes
+
+
+class _TileDataset(torch.utils.data.Dataset):
+    """Wraps get_data + pre/post transform so a DataLoader can prefetch them.
+
+    Each item does the CPU-bound work (disk read, GridSample voxelization) that
+    used to run serially in the main process between GPU forwards; workers run
+    this ahead of time so it overlaps with the previous batch's forward pass.
+    """
+
+    def __init__(self, dataset, pre_transform, post_transform):
+        self.dataset = dataset
+        self.pre_transform = pre_transform
+        self.post_transform = post_transform
+
+    def __len__(self):
+        return len(self.dataset.data_list)
+
+    def __getitem__(self, idx):
+        raw = self.dataset.get_data(idx)
+        name = self.dataset.get_data_name(idx)
+        category = int(raw["category"][0])
+        voxelized = _unwrap_grid_sample(self.pre_transform(raw))
+        sample = self.post_transform(voxelized)
+        return sample, name, category
+
+
+def _extract_collate(batch):
+    from pointcept.datasets import collate_fn
+
+    samples, names, categories = zip(*batch)
+    input_dict = collate_fn(list(samples))
+    return input_dict, list(names), list(categories)
+
+
 @torch.no_grad()
 def run_split(
     *,
@@ -152,34 +208,51 @@ def run_split(
     batch_size,
     device,
     use_amp,
+    num_workers,
+    prefetch_factor,
+    point_budget=None,
 ):
-    from pointcept.datasets import collate_fn
-
     n = len(dataset.data_list)
     names = []
     categories = []
     mean_chunks = []
     max_chunks = []
     already_pooled_warned = False
+    processed = 0
 
-    indices = list(range(n))
-    pbar = tqdm(range(0, n, batch_size), desc=f"extract[{dataset.split}]", leave=True)
-    for start in pbar:
-        batch_indices = indices[start : start + batch_size]
-        samples = []
-        batch_names = []
-        batch_cats = []
-        for idx in batch_indices:
-            raw = dataset.get_data(idx)
-            name = dataset.get_data_name(idx)
-            category = int(raw["category"][0])
-            voxelized = _unwrap_grid_sample(pre_transform(raw))
-            sample = post_transform(voxelized)
-            samples.append(sample)
-            batch_names.append(name)
-            batch_cats.append(category)
+    tile_dataset = _TileDataset(dataset, pre_transform, post_transform)
+    loader_kwargs = dict(
+        num_workers=num_workers,
+        collate_fn=_extract_collate,
+        pin_memory=(device.type == "cuda"),
+    )
+    if num_workers > 0:
+        loader_kwargs["prefetch_factor"] = prefetch_factor
 
-        input_dict = collate_fn(samples)
+    if point_budget is not None:
+        # Fixed tile-count batches are unsafe here: real PureForest tiles
+        # vary ~10x in point count and PureForestDataset.get_data_list()
+        # sorts alphabetically, which clusters same-forest tiles together --
+        # a fixed batch_size can silently pack several of the densest tiles
+        # in the whole split into one batch and OOM (see
+        # feedback_pureforest_no_point_max_extraction /
+        # project_pureforest_reprocess_dense_tiles memories: batch_size=8 was
+        # "safe" on one sampled worst-case cluster but still OOM'd 38GB on
+        # the true top-8-largest-tiles group). First-Fit-Decreasing packing
+        # by raw point count bounds total points/batch directly, regardless
+        # of tile count or ordering.
+        sizes = _compute_raw_sizes(dataset)
+        batches = pack_indices_by_voxel_budget(
+            sizes, voxel_budget=point_budget, max_batch_size=batch_size
+        )
+        loader_kwargs["batch_sampler"] = batches
+    else:
+        loader_kwargs["batch_size"] = batch_size
+        loader_kwargs["shuffle"] = False
+    loader = torch.utils.data.DataLoader(tile_dataset, **loader_kwargs)
+
+    pbar = tqdm(loader, total=len(loader), desc=f"extract[{dataset.split}]", leave=True)
+    for input_dict, batch_names, batch_cats in pbar:
         input_dict = _move_batch_to_device(input_dict, device)
 
         amp_enabled = bool(use_amp and device.type == "cuda")
@@ -200,11 +273,9 @@ def run_split(
         names.extend(batch_names)
         categories.extend(batch_cats)
 
-        del input_dict, mean_feat, max_feat, samples
-        if device.type == "cuda":
-            torch.cuda.empty_cache()
-
-        pbar.set_postfix(tiles=f"{min(start + batch_size, n)}/{n}")
+        processed += len(batch_names)
+        del input_dict, mean_feat, max_feat
+        pbar.set_postfix(tiles=f"{processed}/{n}")
 
     return {
         "names": np.asarray(names),
@@ -268,7 +339,39 @@ def parse_args():
         choices=["train", "val", "test"],
         help="Splits to extract (default: train val test).",
     )
-    parser.add_argument("--batch-size", type=int, default=4)
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=4,
+        help="Fixed tiles/batch (default), or the max tiles/batch cap when "
+        "--point-budget is set.",
+    )
+    parser.add_argument(
+        "--point-budget",
+        type=int,
+        default=None,
+        help="Pack batches by total raw point count instead of a fixed tile "
+        "count (First-Fit-Decreasing, see pointcept.datasets.utils). Real "
+        "PureForest tiles vary ~10x in size and cluster by forest in dataset "
+        "order, so a fixed --batch-size can OOM on an unlucky dense group "
+        "even if it survived a smaller sample. Strongly recommended for the "
+        "real (non-toy) dataset; --batch-size becomes the packer's "
+        "max-tiles-per-batch cap.",
+    )
+    parser.add_argument(
+        "--num-workers",
+        type=int,
+        default=6,
+        help="DataLoader workers for async load+transform (0 = main-process, "
+        "synchronous). Keep modest: full-res tiles x prefetch_factor can add "
+        "up in CPU RAM (see pointcept/engines/test.py's packed-loader note).",
+    )
+    parser.add_argument(
+        "--prefetch-factor",
+        type=int,
+        default=1,
+        help="Batches prefetched per worker (only used when --num-workers > 0).",
+    )
     parser.add_argument(
         "--point-max",
         type=int,
@@ -356,6 +459,9 @@ def main():
             batch_size=max(1, int(args.batch_size)),
             device=device,
             use_amp=args.amp,
+            num_workers=max(0, int(args.num_workers)),
+            prefetch_factor=max(1, int(args.prefetch_factor)),
+            point_budget=None if args.point_budget is None else int(args.point_budget),
         )
         if backbone_out_channels > 0 and payload["mean_feat"].shape[1] != backbone_out_channels:
             print(
