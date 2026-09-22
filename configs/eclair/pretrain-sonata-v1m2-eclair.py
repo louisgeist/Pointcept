@@ -173,6 +173,17 @@ scheduler = dict(
 # -----------------------------------------------------------------------------
 dataset_type = "ECLAIRDataset"
 data_root = "data/eclair"
+# Train split has a handful of near-empty "rejected" (pseudo-labeled) tiles —
+# 5 out of 1059 have well under 1500 points, isolated from the rest of the
+# distribution (next-smallest tile has ~5000 points; see
+# scripts/eclair/analyze_point_counts.py). MultiViewGenerator's
+# local_view_scale=(0.1, 0.4) then produces views as small as ~150 points on
+# these outliers, which destabilizes Sonata's teacher-student matching and
+# caused a NaN crash around iter ~20k (2026-09-19 pretrain run). Flair3D
+# guards against this class of tile via its own min_points; mirror it here
+# with a threshold picked from the actual size distribution, not copied from
+# Flair3D's 1000 (which wouldn't even exclude all of these outliers).
+min_points = {"train": 2000}
 
 transform = [
     dict(type="GridSample", grid_size=grid_size, hash_type="fnv", mode="train"),
@@ -272,6 +283,7 @@ data = dict(
         split="train",
         data_root=data_root,
         include_pseudo=True,
+        min_points=min_points,
         transform=transform,
         test_mode=False,
         loop=1,
