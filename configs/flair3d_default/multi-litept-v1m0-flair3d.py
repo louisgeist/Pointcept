@@ -53,7 +53,7 @@ patch_size = 1024
 
 # Optimization parameters
 lr = 1e-3
-total_iters = 30_000
+total_iters = 200_000
 
 # Features
 learned_masked_feat = True
