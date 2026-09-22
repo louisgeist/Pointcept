@@ -16,6 +16,10 @@
 #
 # Jean-Zay compute-accounting tags (IMAGINE wrapper):
 #   https://github.com/Archiel19/compute-accounting
+# Nested seed-array submit must NOT pass native Slurm flags (--array/--export/
+# --comment) to the IMAGINE `sbatch` in PATH. Prefer /usr/bin/sbatch; otherwise
+# export SEED_CONFIG_DIR/WEIGHT/WANDB_GROUP and submit the script as-is
+# (#SBATCH --array/--comment are already in the seed launcher).
 
 #SBATCH -A uhn@h100
 #SBATCH -C h100
@@ -128,6 +132,40 @@ python scripts/sonata/gen_flair3d_multitask_lin_seeds.py \
   --output-dir "${SEED_CONFIG_DIR}" \
   --n-seeds "${N_SEEDS}" \
   | tee -a "${JOB_DIR}/job_info.log"
+GEN_RC=${PIPESTATUS[0]}
+if [ "${GEN_RC}" -ne 0 ]; then
+    echo "ERROR: seed config generation failed rc=${GEN_RC}" | tee -a "${JOB_DIR}/job_info.log" >&2
+    exit 5
+fi
+if [ ! -f "${SEED_CONFIG_DIR}/multi-sonata-v1m2-flair3d-lin-seed_1.py" ]; then
+    echo "ERROR: missing ${SEED_CONFIG_DIR}/multi-sonata-v1m2-flair3d-lin-seed_1.py" \
+        | tee -a "${JOB_DIR}/job_info.log" >&2
+    exit 5
+fi
+
+# Jean-Zay: `sbatch` in PATH is often the IMAGINE compute-accounting wrapper
+# (argparse CLI: --project/--tags + script only). Native flags belong on
+# /usr/bin/sbatch, matching LinProbeSbatchHook / submit_grid_then_seeds_h100.sh.
+sbatch_supports_array_flag() {
+    local cmd="${1:?}"
+    "${cmd}" --help 2>&1 | grep -qE '(^|[[:space:]])--array'
+}
+
+resolve_sbatch() {
+    if [ -n "${SBATCH_CMD:-}" ]; then
+        echo "${SBATCH_CMD}"
+        return
+    fi
+    local cand
+    for cand in /usr/bin/sbatch "$(command -v sbatch 2>/dev/null)"; do
+        [ -n "${cand}" ] && [ -x "${cand}" ] || continue
+        if sbatch_supports_array_flag "${cand}"; then
+            echo "${cand}"
+            return
+        fi
+    done
+    command -v sbatch
+}
 
 # ---------------- Phase 2: submit seed array ----------------
 MARKER="${JOB_DIR}/seeds_submitted"
@@ -135,22 +173,41 @@ if [ -f "${MARKER}" ]; then
     echo "phase 2 (seeds): already submitted ($(cat "${MARKER}")) -- skipping" \
         | tee -a "${JOB_DIR}/job_info.log"
 else
-    echo "phase 2 (seeds): sbatch --array=1-${N_SEEDS} ${SEED_SBATCH}" \
-        | tee -a "${JOB_DIR}/job_info.log"
-    SUBMIT_OUT=$(
-      SEED_CONFIG_DIR="${SEED_CONFIG_DIR}" \
-      WEIGHT="${WEIGHT}" \
-      WANDB_GROUP="${WANDB_GROUP}" \
-      N_SEEDS="${N_SEEDS}" \
-      sbatch --comment=flair3d,explore,evaluate \
-        --array="1-${N_SEEDS}" \
-        --export=ALL,SEED_CONFIG_DIR="${SEED_CONFIG_DIR}",WEIGHT="${WEIGHT}",WANDB_GROUP="${WANDB_GROUP}" \
-        "${SEED_SBATCH}"
-    ) || {
-        echo "ERROR: sbatch of seed array failed" | tee -a "${JOB_DIR}/job_info.log" >&2
-        echo "${SUBMIT_OUT}" | tee -a "${JOB_DIR}/job_info.log" >&2
-        exit 4
-    }
+    SBATCH_BIN="$(resolve_sbatch)"
+    export SEED_CONFIG_DIR WEIGHT WANDB_GROUP N_SEEDS
+    SEED_SCRIPT="${SEED_SBATCH}"
+    SEED_SCRIPT_TMP=""
+    if sbatch_supports_array_flag "${SBATCH_BIN}"; then
+        echo "phase 2 (seeds): ${SBATCH_BIN} --array=1-${N_SEEDS} ${SEED_SBATCH}" \
+            | tee -a "${JOB_DIR}/job_info.log"
+        SUBMIT_OUT=$(
+          "${SBATCH_BIN}" --comment=flair3d,explore,evaluate \
+            --array="1-${N_SEEDS}" \
+            --export=ALL,SEED_CONFIG_DIR="${SEED_CONFIG_DIR}",WEIGHT="${WEIGHT}",WANDB_GROUP="${WANDB_GROUP}" \
+            "${SEED_SCRIPT}"
+        ) || {
+            echo "ERROR: sbatch of seed array failed" | tee -a "${JOB_DIR}/job_info.log" >&2
+            echo "${SUBMIT_OUT}" | tee -a "${JOB_DIR}/job_info.log" >&2
+            exit 4
+        }
+    else
+        echo "phase 2 (seeds): IMAGINE wrapper ${SBATCH_BIN} ${SEED_SBATCH} (no CLI flags)" \
+            | tee -a "${JOB_DIR}/job_info.log"
+        if [ "${N_SEEDS}" != "10" ]; then
+            SEED_SCRIPT_TMP="$(mktemp "${JOB_DIR}/seed_array.XXXXXX.slurm")"
+            sed "s/^#SBATCH --array=.*/#SBATCH --array=1-${N_SEEDS}/" "${SEED_SBATCH}" \
+                > "${SEED_SCRIPT_TMP}"
+            chmod +x "${SEED_SCRIPT_TMP}"
+            SEED_SCRIPT="${SEED_SCRIPT_TMP}"
+        fi
+        SUBMIT_OUT=$("${SBATCH_BIN}" "${SEED_SCRIPT}") || {
+            echo "ERROR: sbatch of seed array failed" | tee -a "${JOB_DIR}/job_info.log" >&2
+            echo "${SUBMIT_OUT}" | tee -a "${JOB_DIR}/job_info.log" >&2
+            [ -n "${SEED_SCRIPT_TMP}" ] && rm -f "${SEED_SCRIPT_TMP}"
+            exit 4
+        }
+        [ -n "${SEED_SCRIPT_TMP}" ] && rm -f "${SEED_SCRIPT_TMP}"
+    fi
     echo "${SUBMIT_OUT}" | tee -a "${JOB_DIR}/job_info.log"
     echo "${SUBMIT_OUT}" > "${MARKER}"
 fi

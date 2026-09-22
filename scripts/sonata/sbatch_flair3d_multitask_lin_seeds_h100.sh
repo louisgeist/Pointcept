@@ -9,10 +9,13 @@
 # Chained from sbatch_flair3d_lin_grid_then_seeds_h100.sh (SEED_CONFIG_DIR + WEIGHT
 # are exported; configs live in the grid job's seed_configs/ dir).
 #
-# Usage:
-#   sbatch scripts/sonata/sbatch_flair3d_multitask_lin_seeds_h100.sh
-#   WEIGHT=... sbatch scripts/sonata/sbatch_flair3d_multitask_lin_seeds_h100.sh
-#   SEED_CONFIG_DIR=/path/to/seed_configs sbatch --array=1,3,7 ...
+# Usage (IMAGINE-safe: do not pass --array/--export/--comment on the CLI;
+# those are already in #SBATCH below. Override array with /usr/bin/sbatch):
+#   SEED_CONFIG_DIR=/path/to/seed_configs WEIGHT=... WANDB_GROUP=... \
+#     sbatch scripts/sonata/sbatch_flair3d_multitask_lin_seeds_h100.sh
+#   SEED_CONFIG_DIR=... WEIGHT=... /usr/bin/sbatch --array=1,3,7 \
+#     --export=ALL,SEED_CONFIG_DIR=...,WEIGHT=... \
+#     scripts/sonata/sbatch_flair3d_multitask_lin_seeds_h100.sh
 
 # Jean-Zay compute-accounting tags (IMAGINE wrapper):
 #   https://github.com/Archiel19/compute-accounting

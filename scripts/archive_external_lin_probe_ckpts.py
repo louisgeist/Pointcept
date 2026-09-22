@@ -487,7 +487,7 @@ def emit_scp_pack_workflow(
     pack_remote: str,
     hecate_dest: str,
 ) -> str:
-    """Recommended workflow: pack on JZ, then one recursive scp."""
+    """Recommended workflow: pack on JZ, then one recursive rsync."""
     return "\n".join(
         [
             "# Recommended: build the pack on Jean-Zay, then pull once to hecate:",
@@ -496,7 +496,7 @@ def emit_scp_pack_workflow(
             "#   python scripts/archive_external_lin_probe_ckpts.py --copy \\",
             f"#     --dest {pack_remote}",
             f"mkdir -p {hecate_dest.split(':', 1)[-1]}",
-            f"scp -J passerelle -r {jz_host}:{pack_remote}/. {hecate_dest}/",
+            f"rsync -avP -e 'ssh -J passerelle' {jz_host}:{pack_remote}/ {hecate_dest}/",
         ]
     )
 
