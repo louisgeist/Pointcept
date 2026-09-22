@@ -57,18 +57,35 @@ sh scripts/train.sh -g 1 -d s3dis -c ptv3_nonormal -n ptv3_nonormal
 
 Label remaps are defined in `pointcept/datasets/preprocessing/flair3d_plus/flair3d_label_remap.py`.
 Use `--{task}_definition` flags to override defaults (segment=v20, land_use=default,
-natural_habitat=by_habitat_x_domain, forest=default). `segment=v20` matches Flair3D-build
+natural_habitat sampling=`default` CarHab, forest=default). `segment=v20` matches Flair3D-build
 label v20 (same finer12 taxonomy as v19; upstream other-infra filter only).
+On disk, `segment.npy` is **`uint8`**, and `natural_habitat.npy` is baked to
+**`uint8 (N, 4)` ecological axes** (same layout as the MALiBU3D HF release) via
+`nathab_axes.carhab_to_nathab_axes`. Meta sets `label_definitions.natural_habitat=ecological_axes`
+plus `natural_habitat_layout`. Multilabel is written from CarHab **in memory** before the bake.
 `climatic_domain.npy` is written by default when `--natural_habitat_definition default`;
 pass `--no-write-climatic-domain-category` to skip. Re-run with `--force` when
 definitions change.
 
-**On-the-fly label remapping (e.g. natural_habitat** `by_moisture`**):** preprocess once with
-`--natural_habitat_definition default` so `natural_habitat.npy` keeps the 44 fine CarHab ids.
-At training time, add `Flair3DLabelRemap` to the data pipeline and set
-`init_task_configs(..., definitions={"natural_habitat": "by_moisture"})` with
-`storage_definitions={"natural_habitat": "default"}`. No re-preprocessing is needed to try
-other LUT-compatible mappings in parallel jobs.
+**Nathab axes at train time:** `Flair3DDataset.get_data` unpacks the four columns into
+`nathab_*` (no `Flair3DLabelRemap` fan-out needed). Templates under
+`configs/flair3d_default/multi-*.py` use this path.
+
+**Deprecated / incompatible without CarHab on disk:** mono-task remaps that need raw CarHab
+ids (`by_moisture*`, `by_habitat_x_domain`, `by_domain`, …) and historical configs such as
+`configs/experiment/w101/5/nathab_moisture/*`. The loader still dual-reads legacy CarHab
+`(N,)` tiles for migration, but new preprocess output is axes-only.
+
+**Migrate existing CarHab tiles:**
+
+```bash
+PYTHONPATH=./ python scripts/flair3d/migrate_natural_habitat_to_axes.py \
+  --data_root data/flair3d_plus \
+  --csv_manifest data/flair3d_plus/raw/scene_split_manifest_D067.csv \
+  --splits train,val,test \
+  --write-multilabel \
+  --num_workers 8
+```
 
 ```bash
 python pointcept/datasets/preprocessing/flair3d_plus/preprocess_flair3d_v2.py \
@@ -94,12 +111,13 @@ python pointcept/datasets/preprocessing/flair3d_plus/preprocess_flair3d_v2.py \
  --force
 ```
 
-Training configs must match on-disk definitions for tasks without on-the-fly remap, or set
-`label_definitions` + `Flair3DLabelRemap` when remapping at load time (see
-`configs/experiment/w101/5/nathab_moisture/litept-v1m0-flair3d_1.py` and `_2` / `_3` for v2/v3).
+Training configs for segment / land_use / forest must still match on-disk definitions
+(or use `Flair3DLabelRemap` where applicable). Nathab multitask axes no longer use a
+CarHab storage remap.
 
 **Tile climatic domain fractions (**`by_climatic_domain`**):** maps CarHab ids 0–35 to Temperate /
 Mediterranean / Alpine; ids 36–43 (mineral, aquatic, cultivated, built, N/A, roads) → void.
+With baked axes, the same taxonomy is column 3 of `natural_habitat.npy`.
 Exports per-tile counts and fractions over all points for downstream analysis:
 
 ```bash
@@ -354,6 +372,8 @@ Y ≈ 6–7×10⁶ is ~0.5–1 m and breaks 1 m cell assignment.
 multi-hot per subtile (temperate, mediterranean, alpine, humid, mesic, dry, forest, open,
 acidic, basic, cultivated, built, road, mineral, aquatic). Each label is set when its point
 fraction is >= 1% of all subtile points (`coord.npy`). Computed **per subtile** (no 1 km²
+aggregation) from CarHab ids **before** baking `natural_habitat.npy` to `(N, 4)` axes.
+The offline `--multilabel-only` pass still requires legacy CarHab `(N,)` on disk.
 aggregation). Opt-in at preprocess time (`--write-natural-habitat-multilabel`); off by default.
 
 ```bash
@@ -810,7 +830,7 @@ Configs under `configs/eclair/`:
 
 # Brouillon
 
-python -m tools.train  --config-file configs/experiment/w108/3/debug/sonata-v1m2-flair3d-lin-grid_20.py
+python -m tools.train  --config-file pureforest/cls-litept-b-v1m0-pureforest.py
   --num-gpus 1  
   --num-machines 1  
   --machine-rank 0  
