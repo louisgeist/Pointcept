@@ -90,22 +90,20 @@ def read_las_laz(filepath: str) -> Dict[str, np.ndarray]:
     if not (hasattr(las, "red") and hasattr(las, "green") and hasattr(las, "blue")):
         raise ValueError(f"LAS/LAZ file has no RGB; H3D preprocessing requires color: {filepath}")
 
-    r = np.asarray(las.red, dtype=np.float64)
-    g = np.asarray(las.green, dtype=np.float64)
-    b = np.asarray(las.blue, dtype=np.float64)
-    rgb = np.stack([r, g, b], axis=1)
+    # Keep the native uint16 dtype from laspy: the bitwise diagnostic/descale below is
+    # ~20x cheaper on uint16 than on a float64 cast of the same array.
+    rgb = np.stack([np.asarray(las.red), np.asarray(las.green), np.asarray(las.blue)], axis=1)
     # H3D's LAS RGB fields store 16-bit values with the true 8-bit source shifted left
     # by 8 bits (standard IGN/LAStools/PDAL convention: verified 0 exceptions across
     # all Mar18 files), not a continuous 16-bit sensor range — descale with a fixed
-    # //256, never a per-tile max stretch (that invents a tile-dependent brightness).
-    raw_max = float(np.max(rgb))
-    off_multiple = int(np.count_nonzero(rgb % 256 != 0))
+    # right-shift, never a per-tile max stretch (that invents a tile-dependent brightness).
+    off_multiple = int(np.count_nonzero(rgb & 0xFF))
     print(
-        f"[H3D] {os.path.basename(filepath)}: raw RGB max={raw_max:.0f}, "
+        f"[H3D] {os.path.basename(filepath)}: raw RGB max={int(rgb.max())}, "
         f"{off_multiple} value(s) not a multiple of 256 "
         f"(expect max=65280, 0 non-multiples if the 16-bit-shifted convention holds)"
     )
-    color = np.clip(rgb // 256, 0.0, 255.0).astype(np.float32)
+    color = (rgb >> 8).astype(np.float32)  # uint16 >> 8 is always in [0, 255], no clip needed
 
     return {"coord": coord, "segment": segment, "color": color}
 
