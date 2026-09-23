@@ -28,7 +28,7 @@ Semantic class IDs are 0–10 (except 11 for Void).
 Requires: ``pip install laspy lazrs`` or ``mamba install -c conda-forge laspy lazrs-python``
 
 Usage:
-    python pointcept/datasets/preprocessing/h3d/preprocess_h3d.py --chunk-size 100
+    python pointcept/datasets/preprocessing/h3d/preprocess_h3d.py --chunk-size 100 --num_workers 8
 """
 
 from __future__ import annotations
