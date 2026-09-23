@@ -93,13 +93,16 @@ def read_pureforest_laz(filepath: str) -> Dict[str, np.ndarray]:
         ) from err
 
     las = laspy.read(filepath)
+    # Keep float64 here: las.x/y/z are absolute Lambert-93 (Y ~= 6-7e6), and float32's
+    # ULP at that magnitude is ~0.5-1 m (see README_geist.md's Flair3D+ note on the same
+    # trap) — cast down only after normalize_tile_coord has recentered to local coords.
     coord = np.column_stack(
         (
             np.asarray(las.x, dtype=np.float64),
             np.asarray(las.y, dtype=np.float64),
             np.asarray(las.z, dtype=np.float64),
         )
-    ).astype(np.float32)
+    )
 
     if not (hasattr(las, "red") and hasattr(las, "green") and hasattr(las, "blue")):
         raise ValueError(f"LAZ file has no RGB colorization: {filepath}")
@@ -124,15 +127,20 @@ def read_pureforest_laz(filepath: str) -> Dict[str, np.ndarray]:
 
 
 def normalize_tile_coord(coord: np.ndarray) -> np.ndarray:
-    """Center XY on mean, Z on minimum; scale to ~[-1, 1] (paper baseline)."""
+    """Center XY on mean, Z on minimum; scale to ~[-1, 1] (paper baseline).
+
+    ``coord`` must still be float64 absolute Lambert-93 here — recentering (mean/min)
+    has to happen before any float32 cast, or the ~0.5-1 m ULP at Y ~= 6-7e6 corrupts
+    point spacing before it's ever removed.
+    """
     if coord.shape[0] == 0:
         return coord.astype(np.float32, copy=False)
-    out = coord.astype(np.float32, copy=True)
-    out[:, 0] -= float(np.mean(out[:, 0]))
-    out[:, 1] -= float(np.mean(out[:, 1]))
-    out[:, 2] -= float(np.min(out[:, 2]))
+    out = coord.astype(np.float64, copy=True)
+    out[:, 0] -= np.mean(out[:, 0])
+    out[:, 1] -= np.mean(out[:, 1])
+    out[:, 2] -= np.min(out[:, 2])
     out /= COORD_SCALE_M
-    return out
+    return out.astype(np.float32)
 
 
 def _atomic_np_save(path: str, array: np.ndarray) -> None:
