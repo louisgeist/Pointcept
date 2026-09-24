@@ -31,11 +31,16 @@ EXTRA_ARGS="${EXTRA_ARGS:-}"
 
 TAGS=(
   sonata_outdoor_ms
+  sonata_indoor_ms
   litept_b_malibu3d_ms
+  litept_b_malibu3d_norgb_ms
+  litept_b_preECLAIR_ms
+  litept_b_noGNL_ms
+  litept_b_monoLC_ms
+  litept_b_realGN_ms
   ptv3_malibu3d_ms
   spunet_malibu3d_ms
   kpconvx_malibu3d_ms
-  litept_b_preECLAIR_ms
 )
 
 echo "[probes_gpu] REPO_ROOT=${REPO_ROOT}"
