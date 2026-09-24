@@ -3,7 +3,7 @@
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add a `forest_2d` pixel-semantic task — mean-pooled 2D grid forest/non-forest
-segmentation, at 0.5m resolution — as an independently-selectable alternative to the
+segmentation, at 1.0m resolution — as an independently-selectable alternative to the
 existing per-point (3D) `forest` task, following the design in
 `docs/superpowers/specs/2026-08-09-forest-2d-task-design.md`.
 
@@ -25,7 +25,7 @@ GeoTIFF instead of a vector graph.
   `"max"`, unchanged behavior).
 - `forest_2d`'s `enable_dilated_prf` field is `False`; `network`'s is unset (defaults to
   `True`, unchanged behavior).
-- Grid resolution for `forest_2d` is `pixel_m = 0.5` everywhere (preprocessing script default
+- Grid resolution for `forest_2d` is `pixel_m = 1.0` everywhere (preprocessing script default
   and registry — the registry itself does not store `pixel_m`, it is baked into
   `forest_2d.npy`'s `meta.json` entry at preprocessing time, read back at train time exactly
   like `network`'s `pixel_m`).
@@ -1968,8 +1968,8 @@ coverage at all**; this task adds it as part of the move.
   will be north/south-mirrored — a silent, severe correctness bug, not a crash. The test in
   Step 1 below exists specifically to catch a regression here.
 - The window read combines a decimated read (`out_shape` sized to the target grid) with
-  `resampling=Resampling.mode` (majority vote — the target 0.5m grid is a non-integer 2.5x
-  downsample of the native 0.2m source, so a manual block-reshape would not divide evenly) and
+  `resampling=Resampling.mode` (majority vote — the target 1.0m grid is a 5x downsample of
+  the native 0.2m source; `Resampling.mode` also handles non-integer ratios correctly) and
   `boundless=True` (a patch's bounding box can, in principle, extend slightly past the source
   tiff's own extent at a département boundary).
 
@@ -2399,7 +2399,7 @@ python pointcept/datasets/preprocessing/flair3d_plus/rasterize_forest.py \
     --data_root data/flair3d_plus \
     --source_dataset_root data/flair3d_plus/raw \
     --split_manifest_csv data/flair3d_plus/raw/scene_split_manifest_D067.csv \
-    --pixel_m 0.5
+    --pixel_m 1.0
 """
 
 from __future__ import annotations
@@ -2536,7 +2536,7 @@ def process_patch(
     patch_dir,
     forest_tiff_path,
     *,
-    pixel_m: float = 0.5,
+    pixel_m: float = 1.0,
     ignore_index: int = 2,
     force_reload_bounds: bool = False,
 ) -> dict:
@@ -2607,7 +2607,7 @@ def run(
     split_manifest_csv: Path,
     *,
     splits: Optional[List[str]] = None,
-    pixel_m: float = 0.5,
+    pixel_m: float = 1.0,
     ignore_index: int = 2,
     force_reload_bounds: bool = False,
     missing_tiles_file: Optional[Path] = None,
@@ -2668,7 +2668,7 @@ def build_argparser() -> argparse.ArgumentParser:
     )
     p.add_argument("--split_manifest_csv", type=str, required=True)
     p.add_argument("--splits", type=str, nargs="*", default=None)
-    p.add_argument("--pixel_m", type=float, default=0.5)
+    p.add_argument("--pixel_m", type=float, default=1.0)
     p.add_argument("--ignore_index", type=int, default=2)
     p.add_argument("--force_reload_bounds", action="store_true")
     p.add_argument("--missing_tiles_file", type=str, default=None)
@@ -2714,7 +2714,7 @@ git commit -m "Add rasterize_forest.py: precompute forest_2d.npy from the FOREST
 
 Standalone, additive script -- reads each tile's own point-cloud
 bounding box (via the newly-shared abs_xy_bounds_from_coord),
-resamples the source 0.2m FOREST tiff to a 0.5m grid via
+resamples the source 0.2m FOREST tiff to a 1.0m grid via
 majority-vote decimated read, and flips it to the south-up row
 convention used everywhere else in this pipeline."
 ```
@@ -2747,7 +2747,7 @@ Create `configs/experiment/w107/debug/multi-litept-v1m0-flair3d_forest2d_debug.p
 LitePT-Small on Flair3D+ multitask debug run: same task composition as
 w107/7/toward_bm/multi-litept-v1m0-flair3d_2.py (segment v20 + forest + elevation
 + 4 nathab tile_distribution axes), except forest is swapped for its 2D
-grid-pooled variant, forest_2d (mean-pooled 0.5m Lambert grid + linear head,
+grid-pooled variant, forest_2d (mean-pooled 1 m Lambert grid + linear head,
 see docs/superpowers/specs/2026-08-09-forest-2d-task-design.md).
 
 Debug speed overrides only (train_max_sample/val_max_sample/total_iters/

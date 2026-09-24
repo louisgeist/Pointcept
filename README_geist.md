@@ -231,7 +231,7 @@ python pointcept/datasets/preprocessing/flair3d_plus/rasterize_forest.py \
     --data_root data/flair3d_plus \
     --source_dataset_root data/flair3d_plus/raw \
     --split_manifest_csv data/flair3d_plus/raw/scene_split_manifest_D067.csv \
-    --pixel_m 0.5
+    --pixel_m 1.0
 ```
 
 On Jean Zay :
@@ -241,7 +241,7 @@ python pointcept/datasets/preprocessing/flair3d_plus/rasterize_forest.py \
     --data_root data/flair3d_plus \
     --source_dataset_root /lustre/fswork/projects/rech/unv/usi32yh/Pointcept/data/flair3d_plus/raw \
     --split_manifest_csv data/flair3d_plus/raw/scene_split_manifest.csv \
-    --pixel_m 0.5
+    --pixel_m 1.0
 ```
 
 **Visualize network masks** (GT binary panels + mean-pooled LiDAR RGB on the same 1 m grid).
@@ -645,7 +645,7 @@ python pointcept/datasets/preprocessing/flair3d_plus/rasterize_forest.py \
     --data_root data/flair3d_plus \
     --source_dataset_root data/flair3d_plus/raw \
     --split_manifest_csv data/flair3d_plus/raw/scene_split_manifest_D067.csv \
-    --pixel_m 0.5 \
+    --pixel_m 1.0 \
     --num_workers 8
 ```
 

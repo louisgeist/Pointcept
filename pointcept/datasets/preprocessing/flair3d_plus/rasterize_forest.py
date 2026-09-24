@@ -22,7 +22,7 @@ python pointcept/datasets/preprocessing/flair3d_plus/rasterize_forest.py \
     --data_root data/flair3d_plus \
     --source_dataset_root data/flair3d_plus/raw \
     --split_manifest_csv data/flair3d_plus/raw/scene_split_manifest_D067.csv \
-    --pixel_m 0.5
+    --pixel_m 1.0
 
 Example (Jean Zay, full manifest)::
 
@@ -30,7 +30,7 @@ python pointcept/datasets/preprocessing/flair3d_plus/rasterize_forest.py \
     --data_root data/flair3d_plus \
     --source_dataset_root /lustre/fswork/projects/rech/unv/usi32yh/Pointcept/data/flair3d_plus/raw \
     --split_manifest_csv data/flair3d_plus/raw/scene_split_manifest.csv \
-    --pixel_m 0.2 \
+    --pixel_m 1.0 \
     --num_workers 8
 """
 
@@ -198,7 +198,7 @@ def process_patch(
     patch_dir,
     forest_tiff_path,
     *,
-    pixel_m: float = 0.5,
+    pixel_m: float = 1.0,
     ignore_index: int = 2,
     force_reload_bounds: bool = False,
 ) -> dict:
@@ -321,7 +321,7 @@ def run(
     split_manifest_csv: Path,
     *,
     splits: Optional[List[str]] = None,
-    pixel_m: float = 0.5,
+    pixel_m: float = 1.0,
     ignore_index: int = 2,
     force_reload_bounds: bool = False,
     missing_tiles_file: Optional[Path] = None,
@@ -420,7 +420,7 @@ def build_argparser() -> argparse.ArgumentParser:
     )
     p.add_argument("--split_manifest_csv", type=str, required=True)
     p.add_argument("--splits", type=str, nargs="*", default=None)
-    p.add_argument("--pixel_m", type=float, default=0.5)
+    p.add_argument("--pixel_m", type=float, default=1.0)
     p.add_argument("--ignore_index", type=int, default=2)
     p.add_argument("--force_reload_bounds", action="store_true")
     p.add_argument("--missing_tiles_file", type=str, default=None)

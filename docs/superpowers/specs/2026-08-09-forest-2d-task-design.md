@@ -38,12 +38,11 @@ run both at once) simply by including one or both keys in a multi-task config's
 
 ## Resolution
 
-`pixel_m = 0.5`. Rationale: LiDAR HD has a nominal average density of ~10 pts/m². At 0.5m
-(0.25 m² cells) that's ~2.5 pts/pixel on average — enough for mean-pooling to have real
-denoising value while still resolving forest boundaries meaningfully finer than the existing
-1m `network` grid. At the native tiff resolution (0.2m, ~0.4 pts/pixel) most cells would
-contain 0 or 1 point, defeating the point of pooling and effectively duplicating the
-per-point 3D task.
+`pixel_m = 1.0`. Rationale: align `forest_2d` with the existing 1 m Lambert `network`
+grid so both pixel-semantic tasks share the same cell geometry. LiDAR HD (~10 pts/m²)
+gives ~10 pts/pixel on average — enough for mean-pooling to denoise without resolving
+at native tiff resolution (0.2 m, ~0.4 pts/pixel), where most cells would contain 0 or 1
+point and effectively duplicate the per-point 3D `forest` task.
 
 ## Design
 
@@ -88,15 +87,15 @@ New script `pointcept/datasets/preprocessing/flair3d_plus/rasterize_forest.py`, 
 
 - For each already-preprocessed tile: compute absolute XY bounds from `coord.npy` +
   `coord_translation.npy` (reuse `_abs_xy_bounds_from_coord` / `grid_from_xy_bounds` from
-  `network_xy_raster_utils.py`, `pixel_m=0.5`).
+  `network_xy_raster_utils.py`, `pixel_m=1.0`).
 - Resolve the source FOREST GeoTIFF path via the existing `build_modality_patch_path`
   helper (`preprocess_flair3d_v2.py`).
-- Read the corresponding window from the native 0.2m tiff and resample directly to the 0.5m
+- Read the corresponding window from the native 0.2m tiff and resample directly to the 1.0m
   target grid via a decimated `rasterio` read using `Resampling.mode` (majority vote) — this
-  handles the non-integer 0.5/0.2 = 2.5x downsampling ratio correctly (a manual block-reshape
-  would not divide evenly).
+  handles the non-integer 1.0/0.2 = 5x downsampling ratio correctly (and any non-integer
+  ratio in general; a manual block-reshape would not always divide evenly).
 - Write `forest_2d.npy` — shape `(1, H, W)` uint8 — and `meta.json["forest_2d"]` with
-  `origin_x, origin_y, pixel_m=0.5, width, height, crs="EPSG:2154", channel_order=["FOREST"]`.
+  `origin_x, origin_y, pixel_m=1.0, width, height, crs="EPSG:2154", channel_order=["FOREST"]`.
 - FOREST coverage is complete across all 74 (département, year) couples (unlike `network`,
   which can be legitimately absent for an ROI), so there is no "missing source" case to
   handle — every tile gets a `forest_2d.npy`.
@@ -280,7 +279,7 @@ Following the repo convention of one focused test file per piece of logic:
 ## Open items resolved during design review
 
 - Target key / asset name: `forest_2d` (confirmed).
-- Grid resolution: `0.5m` (confirmed).
+- Grid resolution: `1.0m` (confirmed; aligned with `network`).
 - Config scope: task-registry entry only, no mono-task config directory yet (confirmed).
 - Test pipeline: identical structure to train/val, no APLS-equivalent (confirmed).
 - Validation metrics: exact P/R/F1 + plain IoU/Acc only, no dilated P/R/F1 (confirmed).

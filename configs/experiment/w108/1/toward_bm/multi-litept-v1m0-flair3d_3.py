@@ -1,6 +1,6 @@
 """
 LitePT-Small on Flair3D+ multitask: toward_bm/_1 with forest swapped for its 2D
-grid-pooled pixel-semantic variant, forest_2d (mean-pooled 0.5 m Lambert grid +
+grid-pooled pixel-semantic variant, forest_2d (mean-pooled 1 m Lambert grid +
 linear head; see docs/superpowers/specs/2026-08-09-forest-2d-task-design.md).
 
 _3 (toward_bm): same as _1 (elevation in meters, no ×0.01 target scale,

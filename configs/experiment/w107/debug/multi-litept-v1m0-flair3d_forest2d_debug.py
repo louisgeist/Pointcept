@@ -2,7 +2,7 @@
 LitePT-Small on Flair3D+ multitask debug run: same task composition as
 w107/7/toward_bm/multi-litept-v1m0-flair3d_2.py (segment v20 + forest + elevation
 + 4 nathab tile_distribution axes), except forest is swapped for its 2D
-grid-pooled variant, forest_2d (mean-pooled 0.5m Lambert grid + linear head,
+grid-pooled variant, forest_2d (mean-pooled 1 m Lambert grid + linear head,
 see docs/superpowers/specs/2026-08-09-forest-2d-task-design.md).
 
 Debug speed overrides (train_max_sample/val_max_sample/total_iters/
