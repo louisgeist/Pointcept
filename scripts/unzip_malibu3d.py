@@ -11,7 +11,7 @@ replace it and continue.
 
 Example (Jean Zay Scratch)::
 
-    python scripts/hf_release/unzip_hf_dataset.py \\
+    python scripts/unzip_malibu3d.py \\
       --zip-root /lustre/fsn1/projects/rech/unv/usi32yh/MALiBU3D_zip \\
       --output-root /lustre/fsn1/projects/rech/unv/usi32yh/MALiBU3D \\
       --workers 8
