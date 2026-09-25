@@ -30,6 +30,7 @@ from .flair3d import Flair3DDataset
 from .flair3d_climatic_domain import Flair3DClimaticDomainDataset
 from .dales import DALESDataset
 from .eclair import ECLAIRDataset
+from .forinstancev2 import ForInstanceV2Dataset
 from .h3d import H3DDataset
 from .opengf import OpenGFDataset
 from .pureforest import PureForestDataset

@@ -826,7 +826,45 @@ Configs under `configs/eclair/`:
 - `sonata-v1m2-eclair-lin-grid.py` — Sonata GridProbe (Flair3D+ ckpt 862680)
 - `litept-b-v1m0-eclair-lin-grid.py` — LitePT-B GridProbe (Flair3D+ ckpt 873542)
 
+#### ForInstanceV2
 
+Raw dump on Hecate: `/data/geist/datasets/ForInstanceV2/` (`train_val_data/*.ply` +
+`test_data/*.ply`, split encoded in each filename). Used here as a plain 3-class semseg
+dataset (ground / low vegetation / tree) — the ForestFormer instance-seg checkpoint under
+`clean_forestformer/` is unrelated and not used by this integration.
+
+Every source is one/few plot(s) except `BlueCat_RN_merged_trees_*`, a single much
+denser/larger merged scan (~16,000 pts/m², 407M points for train alone) — writing it
+raw would make multi-GB .npy files, so it's the only one that gets offline-voxelized
+first (0.1 m, one random real point per occupied voxel — the exact selection a live
+`GridSample(mode="train")` does, just run once instead of every epoch; ~10.6x point
+reduction measured) and then XY-chunked (20 m tiles, post-voxelization) by the
+preprocessing script. Every other (already plot-sized) source stays one raw,
+unvoxelized scene folder per plot.
+
+```bash
+mkdir -p data/forinstancev2
+ln -sfn /data/geist/datasets/ForInstanceV2 data/forinstancev2/raw
+
+python pointcept/datasets/preprocessing/forinstancev2/preprocess_forinstancev2.py \
+  --dataset_root data/forinstancev2/raw \
+  --output_root data/forinstancev2 \
+  --num_workers 8
+# BlueCat's 3 files (~8GB/1.1GB/0.8GB) take ~20s-3min each to voxelize+chunk;
+# run with --max_files first for a quick sanity check if iterating on the script.
+```
+
+Sources written to each scene's `meta.json`: `BlueCat, CULS, NIBIO, NIBIO2, NIBIO_MLS,
+RMIT, SCION, TUWIEN, Yuchen` (`Yuchen` is the one ULS-style site — select it alone via
+`ForInstanceV2Dataset(sources=[...])`, no re-preprocessing needed):
+
+```bash
+sh scripts/train.sh -g 1 -d forinstancev2 -c semseg-litept-v1m0-forinstancev2 -n fi2_yuchen \
+  # or with CLI options: --options data.train.sources='["Yuchen"]' data.val.sources='["Yuchen"]'
+```
+
+Config: `configs/forinstancev2/semseg-litept-v1m0-forinstancev2.py` — LitePT-Small from
+scratch, coord-only features (no color/intensity in the raw PLYs, so `in_channels=3`).
 
 # Brouillon
 
