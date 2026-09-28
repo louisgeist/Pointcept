@@ -98,8 +98,9 @@ def _grad_norm_with_amp_probe(loss, params, probe_scale=1.0):
     """
     if not params:
         return 0.0
-    # Detached / constant losses (e.g. all-ignore batch → new_zeros) have no
-    # grad_fn; skip so GradNormLiteEMA keeps the previous scale for this task.
+    # Detached / constant losses have no grad_fn; skip so GradNormLiteEMA keeps
+    # the previous scale for this task. (An all-ignore batch gives an in-graph
+    # zero loss instead -> zero norm, which callers also drop.)
     if not isinstance(loss, torch.Tensor) or not loss.requires_grad:
         return 0.0
     scale = float(probe_scale)
@@ -394,7 +395,8 @@ def group_task_losses(loss_by_task, task_groups=None):
     Returns ``{group_name: float(L_group)}`` (detached). Mirrors the grouping
     that ``compute_task_last_layer_grad_norms`` applies to the gradient probe,
     so the per-group loss ratio L_g(t)/L_g(0) lines up with the per-group norm.
-    Tasks whose loss is detached / constant (all-ignore batch) are skipped.
+    Tasks whose loss is detached / constant are skipped (an all-ignore batch
+    yields an in-graph 0.0, which adds nothing to its group).
     """
     out = {}
     for task_name, task_loss in loss_by_task.items():

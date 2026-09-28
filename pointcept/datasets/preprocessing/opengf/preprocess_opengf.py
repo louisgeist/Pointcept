@@ -108,14 +108,20 @@ except ImportError as error:
 RAW2SEGMENT = np.asarray([2, 1, 0], dtype=np.int32)
 
 
-def build_scene(laz_path: str) -> Dict[str, np.ndarray]:
+def build_scene(laz_path: str) -> Tuple[Dict[str, np.ndarray], np.ndarray]:
+    """Return (scene, coord_translation); coord = absolute xyz - coord_translation."""
     las = laspy.read(laz_path)
     dim_names = set(las.point_format.dimension_names)
 
-    coord = np.stack(
+    xyz = np.stack(
         [np.asarray(las.x), np.asarray(las.y), np.asarray(las.z)],
         axis=1,
-    ).astype(np.float32)
+    ).astype(np.float64)
+    # Recenter in float64 BEFORE the float32 cast: absolute OpenGF coordinates
+    # (~1.3e6 / 5.0e6 m) have a float32 spacing of 0.125 m in X and 0.5 m in Y,
+    # which would snap every point onto a coarse XY lattice.
+    translation = np.floor(xyz.min(axis=0))
+    coord = (xyz - translation).astype(np.float32)
 
     if "classification" not in dim_names:
         raise KeyError(f"Missing 'classification' field in {laz_path}")
@@ -131,7 +137,7 @@ def build_scene(laz_path: str) -> Dict[str, np.ndarray]:
         raise KeyError(f"Missing 'intensity' field in {laz_path}")
     strength = np.asarray(las.intensity).astype(np.float32)
 
-    return {"coord": coord, "segment": segment, "strength": strength}
+    return {"coord": coord, "segment": segment, "strength": strength}, translation
 
 
 def save_scene(
@@ -155,13 +161,15 @@ def process_one_file(
     terrain: Optional[str],
     chunk_size: float,
 ) -> Tuple[str, int]:
-    scene = build_scene(laz_path=laz_path)
+    scene, translation = build_scene(laz_path=laz_path)
     scene_id = os.path.splitext(os.path.basename(laz_path))[0]
     meta = {
         "split": split,
         "scene": scene_name,
         "terrain": terrain,
         "source_file": os.path.basename(laz_path),
+        # absolute xyz = coord + coord_translation (float64, whole source file)
+        "coord_translation": translation.tolist(),
     }
     sub_scenes = split_scene_xy_by_chunk_size(scene=scene, chunk_size=chunk_size)
     single_tile = len(sub_scenes) == 1

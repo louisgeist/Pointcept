@@ -325,8 +325,11 @@ class RemapSegment(object):
 
     def __call__(self, data_dict):
         segment = data_dict["segment"]
-        for raw_id, new_id in self.mapping.items():
-            segment[segment == raw_id] = new_id
+        # Masks are taken on the original labels, so chained/swapped mappings
+        # (e.g. {0: 1, 1: 0}) don't cascade through earlier writes.
+        masks = [(segment == raw_id, new_id) for raw_id, new_id in self.mapping.items()]
+        for mask, new_id in masks:
+            segment[mask] = new_id
         data_dict["segment"] = segment
         return data_dict
 

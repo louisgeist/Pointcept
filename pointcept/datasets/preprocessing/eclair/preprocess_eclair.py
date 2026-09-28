@@ -52,17 +52,22 @@ except ImportError as error:
 RAW_MIN, RAW_MAX = 1, 11
 
 
-def build_scene(laz_path: str) -> Dict[str, np.ndarray]:
+def build_scene(laz_path: str) -> Tuple[Dict[str, np.ndarray], np.ndarray]:
+    """Return (scene, coord_translation); coord = absolute xyz - coord_translation."""
     las = laspy.read(laz_path)
     dim_names = set(las.point_format.dimension_names)
     gt_key = "classification" if "classification" in dim_names else "raw_classification"
     if gt_key not in dim_names:
         raise KeyError(f"Missing classification field in {laz_path}")
 
-    coord = np.stack(
+    xyz = np.stack(
         [np.asarray(las.x), np.asarray(las.y), np.asarray(las.z)],
         axis=1,
-    ).astype(np.float32)
+    ).astype(np.float64)
+    # Recenter in float64 BEFORE the float32 cast: projected coordinates in the
+    # 1e6 m range lose sub-decimetre (up to 0.5 m) precision in float32.
+    translation = np.floor(xyz.min(axis=0))
+    coord = (xyz - translation).astype(np.float32)
 
     segment_raw = np.asarray(las[gt_key]).astype(np.int32, copy=False)
     if np.any(segment_raw < RAW_MIN) or np.any(segment_raw > RAW_MAX):
@@ -104,7 +109,7 @@ def build_scene(laz_path: str) -> Dict[str, np.ndarray]:
         "return_number": return_number,
         "number_of_returns": number_of_returns,
         "segment": segment,
-    }
+    }, translation
 
 
 def save_scene(
@@ -141,12 +146,14 @@ def process_one_tile(
     tile_name: str,
     chunking: int,
 ) -> Tuple[str, int]:
-    scene = build_scene(laz_path=laz_path)
+    scene, translation = build_scene(laz_path=laz_path)
     scene_id = os.path.splitext(os.path.basename(laz_path))[0]
     meta = {
         "tile_name": tile_name,
         "split": split,
         "review_category": review_category,
+        # absolute xyz = coord + coord_translation (float64, whole source tile)
+        "coord_translation": translation.tolist(),
     }
     sub_scenes = split_scene_xy_regular(scene=scene, chunking=chunking)
     written = 0

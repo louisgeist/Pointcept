@@ -1826,8 +1826,18 @@ class MultiTaskTester(TesterBase):
                     batch_td_pred_np.append(td_pred)
                     batch_td_metrics.append(None)
             else:
-                # Extract the single fragment from each scene
-                fragments = [d.pop("fragment_list")[0] for d in batch]
+                # Extract the single fragment from each scene. Only fragment 0 is
+                # forwarded below, so more than one would leave the other points'
+                # accumulators at zero (-> argmax class 0): fail loudly instead.
+                fragment_lists = [d.pop("fragment_list") for d in batch]
+                n_fragments = [len(fl) for fl in fragment_lists]
+                if any(n != 1 for n in n_fragments):
+                    raise NotImplementedError(
+                        "MultiTaskTester supports exactly one fragment per scene "
+                        "(test_single_fragment=True, test_cfg.crop=None); got "
+                        f"{n_fragments} for {batch_data_names}."
+                    )
+                fragments = [fl[0] for fl in fragment_lists]
                 use_voxel_broadcast = "inverse" in fragments[0]
                 
                 input_dict = collate_fn(fragments)
@@ -2250,6 +2260,13 @@ class MultiTaskTester(TesterBase):
                         int(tc["num_classes"]),
                         int(tc["ignore_index"]),
                     )
+                    # Rides the semantic aggregation below (one sample per scene), so
+                    # test mIoU/mAcc/allAcc (+ macro-F1) are reported for this task.
+                    sem_metrics_scene[task_name] = dict(
+                        intersection=intersection,
+                        union=union,
+                        target=target_hist,
+                    )
                     mask = union != 0
                     iou_class = intersection / (union + 1e-10)
                     scene_m_iou = np.mean(iou_class[mask]) if mask.any() else 0.0
@@ -2419,9 +2436,13 @@ class MultiTaskTester(TesterBase):
                 merged.update(r)
                 del r
 
-            per_task_sem = {
-                t: None for t in semantic_tasks + pixel_semantic_tasks + tile_pw_miou_tasks
-            }
+            hist_tasks = (
+                semantic_tasks
+                + pixel_semantic_tasks
+                + tile_pw_miou_tasks
+                + classification_tasks
+            )
+            per_task_sem = {t: None for t in hist_tasks}
             per_task_pixel_prf = {t: {} for t in pixel_semantic_tasks}
             for _, payload in merged.items():
                 for task_name, meters in payload["semantic"].items():
@@ -2462,7 +2483,7 @@ class MultiTaskTester(TesterBase):
                             acc["r_denom"] = acc.get("r_denom", 0.0) + counts["r_denom"]
 
             per_task_metrics = {}
-            for task_name in semantic_tasks + pixel_semantic_tasks + tile_pw_miou_tasks:
+            for task_name in hist_tasks:
                 hist = per_task_sem[task_name]
                 if hist is None:
                     logger.warning(
@@ -3186,6 +3207,10 @@ class ClsTester(TesterBase):
                     log_dict[f"test/f1_{cls_name}"] = float(f1_class[i])
         else:
             log_dict = None
+
+        # Same contract as SemSegTester.test_metrics: read by in-process callers
+        # (GridProbeWinnerSelector for GridProbeClassifier / PureForest).
+        self.test_metrics = log_dict
 
         self.end_test_timing_and_log(extra_log_dict=log_dict)
         if comm.is_main_process():

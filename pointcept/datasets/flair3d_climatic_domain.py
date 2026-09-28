@@ -50,12 +50,18 @@ class Flair3DClimaticDomainDataset(Dataset):
                 f"got {len(self.class_names)}."
             )
 
+        # missing_tiles_manifest / too_small_tiles_manifest are no longer supported
+        # by Flair3DDataset (removed in d9ecb1f); kept in the signature so old
+        # configs still build, but they must not be forwarded.
+        if missing_tiles_manifest is not None or too_small_tiles_manifest is not None:
+            get_root_logger().warning(
+                "Flair3DClimaticDomainDataset: missing_tiles_manifest / "
+                "too_small_tiles_manifest are ignored (no longer supported)."
+            )
         self._manifest_dataset = Flair3DDataset(
             split=split,
             data_root=data_root,
             csv_manifest=csv_manifest,
-            missing_tiles_manifest=missing_tiles_manifest,
-            too_small_tiles_manifest=too_small_tiles_manifest,
             target_keys=("climatic_domain",),
             primary_target_key="climatic_domain",
             transform=[],
