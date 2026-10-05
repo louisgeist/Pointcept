@@ -1,6 +1,6 @@
 """
 no-Mix3D re-run (w116/1): verbatim copy of `configs/opengf/litept-b-v1m0-opengf-lin-grid-enc-monolc.py` (Mix3D run: Jean Zay job 26455)
-with only `mix_prob` 0.8 -> 0 (plus `grp_exp`/`num_exp`, `_base_` path, H100 `num_worker`, wandb name).
+with only `mix_prob` 0.8 -> 0 (plus `grp_exp`/`num_exp`, `_base_` path, A100 `num_worker`, wandb name).
 Motivation: on OpenGF from-scratch LitePT-B, turning Mix3D off took test T2 mIoU 60.5 -> 87.1
 (w115/5 run 4.7); checking whether the frozen-backbone probes are hurt the same way.
 Same 12-LR grid, re-searched rather than reusing the Mix3D winner.
@@ -67,7 +67,7 @@ batch_size_per_gpu = 24
 batch_size = batch_size_per_gpu * num_gpu
 batch_size_val = 1
 batch_size_test = 1
-num_worker = 16  # H100 Jean-Zay
+num_worker = 8 * num_gpu  # A100 Jean-Zay (8 CPU/task)
 num_worker_test = 2
 mix_prob = 0  # Mix3D off (was 0.8) -- see docstring
 empty_cache = False
@@ -153,7 +153,7 @@ probes = {
 del _criteria, _lrs
 
 wandb_run_name = (
-    f"LitePT-B GridProbe OpenGF {grp_exp}.{num_exp}) H100 noMix3D, enc monoLC job1293025, "
+    f"LitePT-B GridProbe OpenGF {grp_exp}.{num_exp}) A100 noMix3D, enc monoLC job1293025, "
     f"{len(probes)} probes, epoch={epoch}"
 )
 
