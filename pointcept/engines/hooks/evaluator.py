@@ -21,6 +21,7 @@ from pointcept.utils.misc import (
     mean_acc_from_hist,
     mean_iou_from_hist,
     pool_axis_distribution_from_probs,
+    tv_from_abs_errors,
 )
 from pointcept.utils.regression import (
     denorm_regression_prediction,
@@ -682,19 +683,16 @@ class MultiTaskEvaluator(HookBase):
         self.write_cls_iou = write_cls_iou
         self._best_neg_rmse = float("-inf")
         self._best_miou_by_task = {}
-        self._best_neg_kl_by_task = {}
 
     def state_dict(self):
         return {
             "best_neg_rmse": float(self._best_neg_rmse),
             "best_miou_by_task": dict(self._best_miou_by_task),
-            "best_neg_kl_by_task": dict(self._best_neg_kl_by_task),
         }
 
     def load_state_dict(self, state):
         self._best_neg_rmse = float(state.get("best_neg_rmse", self._best_neg_rmse))
         self._best_miou_by_task = dict(state.get("best_miou_by_task", {}))
-        self._best_neg_kl_by_task = dict(state.get("best_neg_kl_by_task", {}))
 
     def after_epoch(self):
         if self.should_evaluate():
@@ -1349,7 +1347,9 @@ class MultiTaskEvaluator(HookBase):
                 final_kl_by_task[task_name] = s["kl_weighted"] / s["weight"]
                 mae = s["abs_weighted"] / s["weight"]
                 final_mae_by_task[task_name] = mae
-                final_tv_by_task[task_name] = float(mae.sum())
+                final_tv_by_task[task_name] = float(
+                    tv_from_abs_errors(torch.as_tensor(mae))
+                )
 
         per_task_metrics = {}
         metric_task_names = (
@@ -1499,14 +1499,6 @@ class MultiTaskEvaluator(HookBase):
         current_epoch = self.trainer.epoch + 1
         main_task_type = task_configs[main_task].get("task_type")
         main_m_iou = per_task_metrics[main_task]["m_iou"] if main_task in per_task_metrics else None
-        neg_kl_best_by_task = {}
-        for task_name, kl in final_kl_by_task.items():
-            prev_best = self._best_neg_kl_by_task.get(task_name, float("-inf"))
-            if task_name == main_task:
-                prev_best = max(prev_best, self.trainer.best_metric_value)
-            best = max(prev_best, -kl)
-            self._best_neg_kl_by_task[task_name] = best
-            neg_kl_best_by_task[task_name] = best
         miou_best_by_task = {}
         for task_name, metric in per_task_metrics.items():
             task_m_iou = metric["m_iou"]
@@ -1681,42 +1673,61 @@ class MultiTaskEvaluator(HookBase):
                             )
                         )
                 if writer is not None:
-                    writer.add_scalar(f"val/weighted_kl/{task_name}", kl, current_epoch)
                     writer.add_scalar(
-                        f"val/weighted_kl_best_neg/{task_name}",
-                        neg_kl_best_by_task[task_name],
+                        metric_tag("val", f"weighted_kl/{task_name}", task="nathab"),
+                        kl,
                         current_epoch,
                     )
-                    writer.add_scalar(f"val/tv/{task_name}", tv, current_epoch)
+                    writer.add_scalar(
+                        metric_tag("val", f"tv/{task_name}", task="nathab"),
+                        tv,
+                        current_epoch,
+                    )
                     for class_idx in range(int(task_config["num_classes"])):
                         slug = class_name_slug(task_config["names"][class_idx])
                         writer.add_scalar(
-                            f"val/mae/{task_name}/{slug}",
+                            metric_tag(
+                                "val", f"mae/{task_name}/{slug}", task="nathab"
+                            ),
                             float(mae[class_idx]),
                             current_epoch,
                         )
                 if wandb_log is not None:
-                    wandb_log[f"val/weighted_kl/{task_name}"] = float(kl)
-                    wandb_log[f"val/weighted_kl_best_neg/{task_name}"] = float(
-                        neg_kl_best_by_task[task_name]
-                    )
-                    wandb_log[f"val/tv/{task_name}"] = float(tv)
+                    wandb_log[
+                        metric_tag("val", f"weighted_kl/{task_name}", task="nathab")
+                    ] = float(kl)
+                    wandb_log[
+                        metric_tag("val", f"tv/{task_name}", task="nathab")
+                    ] = float(tv)
                     for class_idx in range(int(task_config["num_classes"])):
                         slug = class_name_slug(task_config["names"][class_idx])
-                        wandb_log[f"val/mae/{task_name}/{slug}"] = float(
-                            mae[class_idx]
-                        )
+                        wandb_log[
+                            metric_tag(
+                                "val", f"mae/{task_name}/{slug}", task="nathab"
+                            )
+                        ] = float(mae[class_idx])
             if final_kl_by_task:
-                kl_total = sum(final_kl_by_task.values())
-                tv_total = sum(final_tv_by_task.values())
+                kl_sum = sum(final_kl_by_task.values())
+                # Unweighted mean over axes of the per-axis TV (each in [0, 1]).
+                tv_mean = sum(final_tv_by_task.values()) / len(final_tv_by_task)
                 if writer is not None:
                     writer.add_scalar(
-                        "val/weighted_kl/nathab_total", kl_total, current_epoch
+                        metric_tag("val", "weighted_kl/sum", task="nathab"),
+                        kl_sum,
+                        current_epoch,
                     )
-                    writer.add_scalar("val/tv/nathab_total", tv_total, current_epoch)
+                    writer.add_scalar(
+                        metric_tag("val", "tv/mean", task="nathab"),
+                        tv_mean,
+                        current_epoch,
+                    )
                 if wandb_log is not None:
-                    wandb_log["val/weighted_kl/nathab_total"] = float(kl_total)
-                    wandb_log["val/tv/nathab_total"] = float(tv_total)
+                    wandb_log[metric_tag("val", "weighted_kl/sum", task="nathab")] = (
+                        float(kl_sum)
+                    )
+                    wandb_log[metric_tag("val", "tv/mean", task="nathab")] = float(
+                        tv_mean
+                    )
 
         if comm.is_main_process():
             finalize_val_epoch_timing(

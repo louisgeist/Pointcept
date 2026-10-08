@@ -92,7 +92,6 @@ class TestMultiTaskEvaluatorResumeState(unittest.TestCase):
         hook = MultiTaskEvaluator()
         hook._best_neg_rmse = -0.3
         hook._best_miou_by_task = {"segment": 0.55, "network": 0.61}
-        hook._best_neg_kl_by_task = {"nathab_moisture_regime": -0.02}
 
         state = hook.state_dict()
         self.assertEqual(
@@ -100,7 +99,6 @@ class TestMultiTaskEvaluatorResumeState(unittest.TestCase):
             {
                 "best_neg_rmse": -0.3,
                 "best_miou_by_task": {"segment": 0.55, "network": 0.61},
-                "best_neg_kl_by_task": {"nathab_moisture_regime": -0.02},
             },
         )
 
@@ -108,9 +106,6 @@ class TestMultiTaskEvaluatorResumeState(unittest.TestCase):
         fresh.load_state_dict(state)
         self.assertEqual(fresh._best_neg_rmse, -0.3)
         self.assertEqual(fresh._best_miou_by_task, {"segment": 0.55, "network": 0.61})
-        self.assertEqual(
-            fresh._best_neg_kl_by_task, {"nathab_moisture_regime": -0.02}
-        )
         # Mutating the restored dict must not alias the saved state.
         fresh._best_miou_by_task["segment"] = 0.99
         self.assertEqual(state["best_miou_by_task"]["segment"], 0.55)
@@ -120,7 +115,6 @@ class TestMultiTaskEvaluatorResumeState(unittest.TestCase):
         hook.load_state_dict({"best_neg_rmse": -0.1})
         self.assertEqual(hook._best_neg_rmse, -0.1)
         self.assertEqual(hook._best_miou_by_task, {})
-        self.assertEqual(hook._best_neg_kl_by_task, {})
 
 
 class TestGridProbeEvaluatorResumeState(unittest.TestCase):

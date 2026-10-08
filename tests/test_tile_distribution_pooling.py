@@ -88,7 +88,7 @@ class TestAbsFreqErrorAndTv(unittest.TestCase):
         self.assertAlmostEqual(float(tv_from_abs_errors(abs_err).item()), 0.0)
 
     def test_known_simplexes_mae_and_tv(self):
-        # |[0.7,0.2,0.1] - [0.5,0.5,0.0]| = [0.2, 0.3, 0.1]; TV = 0.6
+        # |[0.7,0.2,0.1] - [0.5,0.5,0.0]| = [0.2, 0.3, 0.1]; TV = 0.5 * 0.6 = 0.3
         pi_hat = torch.tensor([[0.7, 0.2, 0.1], [0.0, 1.0, 0.0]])
         q_t = torch.tensor([[0.5, 0.5, 0.0], [0.0, 1.0, 0.0]])
         abs_err = abs_freq_error_rows(pi_hat, q_t)
@@ -96,10 +96,10 @@ class TestAbsFreqErrorAndTv(unittest.TestCase):
             abs_err, torch.tensor([[0.2, 0.3, 0.1], [0.0, 0.0, 0.0]])
         )
         tv = tv_from_abs_errors(abs_err)
-        torch.testing.assert_close(tv, torch.tensor([0.6, 0.0]))
-        # Set-level MAE (unweighted mean over rows) sums to set-level TV mean
+        torch.testing.assert_close(tv, torch.tensor([0.3, 0.0]))
+        # Set-level MAE (unweighted mean over rows) sums to 2x the set-level TV mean
         mae = abs_err.mean(dim=0)
-        self.assertAlmostEqual(float(mae.sum().item()), float(tv.mean().item()), places=5)
+        self.assertAlmostEqual(float(mae.sum().item()), float(2 * tv.mean().item()), places=5)
 
 
 class TestWeightedKLDivLoss(unittest.TestCase):

@@ -11,7 +11,7 @@ for pi_hat = uniform (m_unif) and pi_hat = q_bar, the global marginal
 
 KL uses natural log (nats), matching torch.nn.functional.kl_div.
 TV matches the evaluator convention in pointcept.utils.misc.tv_from_abs_errors:
-    TV(q, p) = sum_c |q_c - p_c|   (= L1 = 2 * classical total-variation distance).
+    TV(q, p) = 0.5 * sum_c |q_c - p_c|   (classical total-variation distance, in [0, 1]).
 
 Unlike KL, TV has no exact Pythagorean identity m(pi_hat) = H_a + D(q_bar, pi_hat);
 only the triangle inequality m_TV(pi_hat) <= H_a^TV + TV(q_bar, pi_hat) holds.
@@ -188,8 +188,8 @@ def kl(q: np.ndarray, p: np.ndarray, eps: float = 1e-12) -> float:
 
 
 def tv(q: np.ndarray, p: np.ndarray) -> float:
-    """L1 total variation matching evaluator TV: sum_c |q - p| (in [0, 2])."""
-    return float(np.sum(np.abs(q - p)))
+    """Total variation matching evaluator TV: 0.5 * sum_c |q - p| (in [0, 1])."""
+    return float(0.5 * np.sum(np.abs(q - p)))
 
 
 def load_axis_marginal_from_csv(csv_path: str, num_classes: int) -> np.ndarray:
@@ -257,9 +257,9 @@ def compute_axis_metrics(
     # TV analogue of the KL gap: no exact identity, but triangle inequality must hold.
     sanity_tv_triangle_unif_ok = m_unif_tv <= m_static_tv + tv_qbar_unif + 1e-6
     sanity_tv_bounds_ok = (
-        -1e-9 <= m_static_tv <= 2.0 + 1e-9
-        and -1e-9 <= m_unif_tv <= 2.0 + 1e-9
-        and -1e-9 <= tv_qbar_unif <= 2.0 + 1e-9
+        -1e-9 <= m_static_tv <= 1.0 + 1e-9
+        and -1e-9 <= m_unif_tv <= 1.0 + 1e-9
+        and -1e-9 <= tv_qbar_unif <= 1.0 + 1e-9
     )
 
     # For any fixed (non-tile-dependent) pi_hat: m_a_KL(pi_hat) = H_a + KL(q_bar || pi_hat).
@@ -503,15 +503,18 @@ def main() -> None:
     m_static_total = sum(r["m_static"] for r in results.values())
     m_unif_total = sum(r["m_unif"] for r in results.values())
     kl_unif_total = sum(r["gap_analytic"] for r in results.values())  # = sum KL(q_bar||U)
-    m_static_tv_total = sum(r["m_static_tv"] for r in results.values())
-    m_unif_tv_total = sum(r["m_unif_tv"] for r in results.values())
-    tv_unif_total = sum(r["tv_qbar_U"] for r in results.values())  # = sum TV(q_bar, U)
+    # TV aggregates are unweighted means over axes (matches val/test nathab/tv/mean);
+    # KL aggregates stay sums (matches nathab/weighted_kl/sum).
+    n_axes = len(results)
+    m_static_tv_mean = sum(r["m_static_tv"] for r in results.values()) / n_axes
+    m_unif_tv_mean = sum(r["m_unif_tv"] for r in results.values()) / n_axes
+    tv_unif_mean = sum(r["tv_qbar_U"] for r in results.values()) / n_axes  # mean TV(q_bar, U)
     extra_totals = {}
     if extra_name:
         extra_totals["m_a"] = sum(r["extra"][extra_name]["m_a"] for r in results.values())
         extra_totals["kl_qbar"] = sum(r["extra"][extra_name]["kl_qbar"] for r in results.values())
-        extra_totals["m_a_tv"] = sum(r["extra"][extra_name]["m_a_tv"] for r in results.values())
-        extra_totals["tv_qbar"] = sum(r["extra"][extra_name]["tv_qbar"] for r in results.values())
+        extra_totals["m_a_tv"] = sum(r["extra"][extra_name]["m_a_tv"] for r in results.values()) / n_axes
+        extra_totals["tv_qbar"] = sum(r["extra"][extra_name]["tv_qbar"] for r in results.values()) / n_axes
 
     # Main table, per the requested layout: H_a (heterogeneity term) alongside the two
     # AGGREGATE-level divergences KL(q_bar_test, pi_hat_train) and KL(q_bar_test, U) --
@@ -555,11 +558,11 @@ def main() -> None:
             f"(see sanity_decomp_ok below)."
         )
 
-    # TV table (same layout; TV = L1 in [0, 2], matching evaluator logging).
+    # TV table (same layout; TV = 0.5 * L1 in [0, 1], matching evaluator logging).
     tv_train_header = f" {'TV(qbar,train)':>15s}" if extra_name else ""
     width_tv = 88 + (16 if extra_name else 0)
     print("\n" + "=" * width_tv)
-    print("TV baselines (L1 = sum_c |pi - q|, matching val/test TV)")
+    print("TV baselines (0.5 * sum_c |pi - q|, matching val/test TV)")
     print(
         f"{'axis':20s} {'C_a':>4s} {'n_tiles':>8s} {'N_T':>10s} {'H_a^TV':>10s}"
         f"{tv_train_header} {'TV(qbar,U)':>11s} {'m_unif^TV':>10s}"
@@ -576,20 +579,20 @@ def main() -> None:
     print("-" * width_tv)
     tv_train_total_col = f" {extra_totals['tv_qbar']:>15.4f}" if extra_name else ""
     print(
-        f"{'TOTAL':20s} {'':>4s} {'':>8s} {'':>10s} {m_static_tv_total:>10.4f}"
-        f"{tv_train_total_col} {tv_unif_total:>11.4f} {m_unif_tv_total:>10.4f}"
+        f"{'MEAN':20s} {'':>4s} {'':>8s} {'':>10s} {m_static_tv_mean:>10.4f}"
+        f"{tv_train_total_col} {tv_unif_mean:>11.4f} {m_unif_tv_mean:>10.4f}"
     )
     print("=" * width_tv)
     print(
         "H_a^TV = m_static_TV = intra-test heterogeneity (tile-weighted avg TV(q_t, q_bar_test)); "
-        "TV(qbar,*) = single L1 between the AGGREGATE test distribution and the reference "
+        "TV(qbar,*) = single TV between the AGGREGATE test distribution and the reference "
         "(not tile-weighted). TV(qbar,pi_hat_test) omitted: 0 by construction. "
         "No exact KL-style decomposition; triangle: m(pi) <= H_a^TV + TV(qbar, pi)."
     )
     if extra_name:
         print(
             f"m_{extra_name}^TV (tile-weighted avg TV(q_t, {extra_name} marginal)) = "
-            f"{extra_totals['m_a_tv']:.4f} total; this is the TV a static-{extra_name}-prior "
+            f"{extra_totals['m_a_tv']:.4f} (mean over axes); this is the TV a static-{extra_name}-prior "
             f"predictor would incur on test."
         )
 
@@ -645,9 +648,9 @@ def main() -> None:
                 "axes": results,
                 "m_static_total": m_static_total,
                 "m_unif_total": m_unif_total,
-                "m_static_tv_total": m_static_tv_total,
-                "m_unif_tv_total": m_unif_tv_total,
-                "tv_qbar_U_total": tv_unif_total,
+                "m_static_tv_mean": m_static_tv_mean,
+                "m_unif_tv_mean": m_unif_tv_mean,
+                "tv_qbar_U_mean": tv_unif_mean,
                 "extra_pi_hat_name": args.extra_pi_hat_name if args.extra_pi_hat_csv_dir else None,
                 "extra_pi_hat_csv_dir": args.extra_pi_hat_csv_dir or None,
                 "extra_totals": extra_totals,
@@ -686,9 +689,9 @@ def main() -> None:
                 ]
             writer.writerow(row)
         total_row = [
-            "TOTAL", "", "", "",
+            "KL_SUM/TV_MEAN", "", "", "",
             f"{m_static_total:.6f}", f"{kl_unif_total:.6f}", "", "", f"{m_unif_total:.6f}",
-            f"{m_static_tv_total:.6f}", f"{tv_unif_total:.6f}", f"{m_unif_tv_total:.6f}",
+            f"{m_static_tv_mean:.6f}", f"{tv_unif_mean:.6f}", f"{m_unif_tv_mean:.6f}",
         ]
         if extra_name:
             total_row += [

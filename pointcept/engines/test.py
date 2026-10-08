@@ -39,6 +39,7 @@ from pointcept.utils.misc import (
     mean_acc_from_hist,
     mean_iou_from_hist,
     pool_axis_distribution_from_probs,
+    tv_from_abs_errors,
 )
 from pointcept.utils.dilated_metrics import (
     dilated_prf_enabled,
@@ -2693,7 +2694,7 @@ class MultiTaskTester(TesterBase):
                     continue
                 final_kl = s["kl_weighted"] / s["weight"]
                 mae = s["abs_weighted"] / s["weight"]
-                tv = float(mae.sum())
+                tv = float(tv_from_abs_errors(torch.as_tensor(mae)))
                 final_kl_by_task[task_name] = final_kl
                 final_tv_by_task[task_name] = tv
                 task_config = task_configs[task_name]
@@ -2713,17 +2714,21 @@ class MultiTaskTester(TesterBase):
                             float(mae[class_idx]),
                         )
                     )
-                log_dict[f"test/weighted_kl/{task_name}"] = float(final_kl)
-                log_dict[f"test/tv/{task_name}"] = tv
+                log_dict[metric_tag("test", f"weighted_kl/{task_name}", task="nathab")] = float(
+                    final_kl
+                )
+                log_dict[metric_tag("test", f"tv/{task_name}", task="nathab")] = tv
                 for class_idx in range(int(task_config["num_classes"])):
                     slug = class_name_slug(task_config["names"][class_idx])
-                    log_dict[f"test/mae/{task_name}/{slug}"] = float(mae[class_idx])
+                    log_dict[
+                        metric_tag("test", f"mae/{task_name}/{slug}", task="nathab")
+                    ] = float(mae[class_idx])
             if final_kl_by_task:
-                log_dict["test/weighted_kl/nathab_total"] = float(
+                log_dict[metric_tag("test", "weighted_kl/sum", task="nathab")] = float(
                     sum(final_kl_by_task.values())
                 )
-                log_dict["test/tv/nathab_total"] = float(
-                    sum(final_tv_by_task.values())
+                log_dict[metric_tag("test", "tv/mean", task="nathab")] = float(
+                    sum(final_tv_by_task.values()) / len(final_tv_by_task)
                 )
 
             log_test_f1 = getattr(self.cfg, "log_test_f1", False)

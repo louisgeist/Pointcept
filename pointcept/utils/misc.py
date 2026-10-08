@@ -136,8 +136,11 @@ def abs_freq_error_rows(pi_hat, q_t):
 
 
 def tv_from_abs_errors(abs_err):
-    """Per-row total variation (L1) ``sum_c |pi - q|`` for (B, C) -> (B,)."""
-    return abs_err.float().sum(dim=-1)
+    """Per-row total variation distance ``0.5 * sum_c |pi - q|`` for (B, C) -> (B,).
+
+    Classical TV distance (half the L1 norm), so it lies in [0, 1].
+    """
+    return 0.5 * abs_err.float().sum(dim=-1)
 
 
 def f1_scores_from_hist(intersection, union, target):
