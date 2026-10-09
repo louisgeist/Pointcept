@@ -59,7 +59,7 @@ names = [
     "Herbaceous",
     "Vineyard",
     "Brushwood",
-    "Other infrastructures",
+    "Infrastructure",
     "Swimming pool",
     "Water",
     "Deciduous",

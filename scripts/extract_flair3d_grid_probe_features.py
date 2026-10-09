@@ -73,7 +73,7 @@ from _grid_probe_extract_common import (  # noqa: E402
 
 _SEGMENT_V20_NAMES = (
     "Building", "Greenhouse", "Impervious surface", "Other soil", "Herbaceous",
-    "Vineyard", "Brushwood", "Other infrastructures", "Swimming pool", "Water",
+    "Vineyard", "Brushwood", "Infrastructure", "Swimming pool", "Water",
     "Deciduous", "Coniferous", "Bridge", "Agricultural soil", "Soil under vegetation",
 )
 

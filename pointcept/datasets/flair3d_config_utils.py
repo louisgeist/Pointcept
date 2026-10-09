@@ -32,7 +32,7 @@ FLAIR3D_SEMANTIC_TASKS: Dict[str, Dict[str, Any]] = {
     "segment": {
         "num_classes": 15,
         "ignore_index": 15,
-        # V14
+        # v20 (finer12)
         "names": [
             'Building',
             'Greenhouse',
@@ -40,8 +40,8 @@ FLAIR3D_SEMANTIC_TASKS: Dict[str, Dict[str, Any]] = {
             'Other soil',
             'Herbaceous',
             'Vineyard',
-            'Other vegetation',
-            'Other infrastructures',
+            'Brushwood',
+            'Infrastructure',
             'Swimming pool',
             'Water',
             'Deciduous',

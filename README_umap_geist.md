@@ -126,7 +126,7 @@ Notes :
   en concaténant les manifestes par département — `Flair3DDataset` n'accepte qu'un seul fichier). Pour un
   autre combo de départements, reconstruire ce CSV (voir le script pour l'exemple `csv`/`pandas`).
 - 15 classes segment v20/finer12 directement (pas de regroupement) : Building, Greenhouse, Impervious
-  surface, Other soil, Herbaceous, Vineyard, Brushwood, Other infrastructures, Swimming pool, Water,
+  surface, Other soil, Herbaceous, Vineyard, Brushwood, Infrastructure, Swimming pool, Water,
   Deciduous, Coniferous, Bridge, Agricultural soil, Soil under vegetation.
 - Chaque run prend quelques minutes (tuiles beaucoup plus petites que DALES : ~100-280k points bruts par
   sous-tuile contre ~11M pour un tuile DALES entière).

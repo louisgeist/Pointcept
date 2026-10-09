@@ -68,7 +68,7 @@ CLASS_COLORS = {
     "Herbaceous": "#AFC869",
     "Vineyard": "#7A34CE",
     "Brushwood": "#6B5854",
-    "Other infrastructures": "#E708D7",
+    "Infrastructure": "#E708D7",
     "Swimming pool": "#00F2DB",
     "Water": "#79A9CA",
     "Deciduous": "#798F48",
@@ -82,7 +82,7 @@ CLASS_COLORS = {
     # Flair3D doesn't split utility network objects into sub-classes).
     "Unassigned": "#C7C7C7",
     "Noise": "black",
-    "Transmission Wires": "#E708D7",  # = Flair3D "Other infrastructures"
+    "Transmission Wires": "#E708D7",  # = Flair3D "Infrastructure"
     "Distribution Wires": "#FF8AD8",
     "Transmission Towers": "#7A1163",
     "Fence": "orange",  # singular -- ECLAIR's own name, DALES has "Fences"
@@ -93,7 +93,7 @@ CLASS_COLORS = {
     # surface) rather than an arbitrary tab20 pick.
     "Low Vegetation": "#AFC869",  # = Flair3D "Herbaceous"
     "Impervious Surface": "#76828E",  # = Flair3D "Impervious surface"
-    "Urban Furniture": "#E708D7",  # = Flair3D "Other infrastructures"
+    "Urban Furniture": "#E708D7",  # = Flair3D "Infrastructure"
     "Roof": "#A44219",  # = Flair3D "Building"
     "Façade": "#8C97A0",  # hard-surface family (lighter companion to Vertical Surface below) -- kept off the brick/soil/shrub hue so it doesn't collide with Roof
     "Shrub": "#4F6B3A",  # darker olive green -- distinct from Tree/Low Vegetation greens and from the brick/soil browns
