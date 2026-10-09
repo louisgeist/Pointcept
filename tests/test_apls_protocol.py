@@ -160,9 +160,25 @@ class TestProtocolBehaviour(unittest.TestCase):
             node_xy=np.empty((0, 2)), edges=np.empty((0, 2), dtype=np.int64),
             edge_length_m=np.empty((0,)),
         )
-        self.assertEqual(_score(empty, empty).score, 1.0)
-        self.assertEqual(_score(_line_graph(0.0), empty).score, 0.0)
+        both = _score(empty, empty)
+        self.assertEqual((both.score, both.denom), (1.0, 0))  # nothing to score: zero weight
+        missed = _score(_line_graph(0.0), empty)  # GT routes, empty prediction
+        self.assertEqual(missed.score, 0.0)
+        self.assertGreater(missed.denom, 0)  # weighted by the GT pairs, not dropped
         self.assertEqual(_score(empty, _line_graph(0.0)).score, 0.0)
+
+    def test_empty_prediction_roi_lowers_dataset_average(self):
+        empty = apls.AplsGraph(
+            node_xy=np.empty((0, 2)), edges=np.empty((0, 2), dtype=np.int64),
+            edge_length_m=np.empty((0,)),
+        )
+        good = _score(_line_graph(0.0, 1000.0), _line_graph(0.0, 1000.0))
+        missed = _score(_line_graph(0.0, 1000.0), empty)
+        self.assertEqual(good.denom, missed.denom)
+        only_good = apls.aggregate_dataset_apls([good, good])["per_channel"]["ROADS"]
+        with_missed = apls.aggregate_dataset_apls([good, good, missed])["per_channel"]["ROADS"]
+        self.assertAlmostEqual(only_good, 1.0, places=9)
+        self.assertAlmostEqual(with_missed, 2.0 / 3.0, places=9)
 
     def test_diagnostics_match_gt_to_pred_direction(self):
         gt, pred = _line_graph(0.0, 100.0), _line_graph(1.0, 60.0)

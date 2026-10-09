@@ -28,6 +28,8 @@ Practical sum (undirected graphs, ``D`` symmetric):
 - **Source-disconnected pairs excluded**: if ``u`` and ``v`` lie in different connected
   components of the *source* graph (``L_uv = inf``), those pairs are dropped from both
   numerator and denominator.
+- **Empty graphs**: both empty -> score 1 with zero weight; GT with routes but an empty
+  prediction -> score 0 weighted by the GT pair count (the ROI is penalized, not dropped).
 
 Dataset-level aggregation is a pair-count-weighted average across ROIs (using the
 GT->pred denom), then an unweighted macro-average across network channels.
@@ -609,27 +611,28 @@ def apls_symmetric_score(
     shorter than ``APLS_MIN_PATH_LENGTH_M``, and combine them with a harmonic mean.
     Intentionally takes no tuning parameters.
     """
+    # Edgeless graphs (even with isolated nodes) count as empty for routing.
+    # Both empty -> nothing to score: perfect (1.0) but zero weight (denom 0).
+    # Exactly one empty falls through to the general path on purpose: the GT pairs are still
+    # counted in ``denom`` and all score 0, so a ROI whose routes were entirely missed (empty
+    # prediction) lowers the dataset average instead of silently dropping out of it.
     n_edges_gt_raw = int(gt.edges.shape[0])
     n_edges_pred_raw = int(pred.edges.shape[0])
-
-    # SpaceNet empty handling: both empty -> 1; exactly one empty -> 0.
-    # Edgeless graphs (even with isolated nodes) count as empty for routing.
-    if n_edges_gt_raw == 0 or n_edges_pred_raw == 0:
-        score = 1.0 if n_edges_gt_raw == n_edges_pred_raw else 0.0
+    if n_edges_gt_raw == 0 and n_edges_pred_raw == 0:
         return AplsResult(
             roi=roi,
             network_type=network_type,
-            score=score,
-            score_gt_to_pred=score,
-            score_pred_to_gt=score,
+            score=1.0,
+            score_gt_to_pred=1.0,
+            score_pred_to_gt=1.0,
             numerator=0.0,
             denom=0,
             numerator_pred_to_gt=0.0,
             denom_pred_to_gt=0,
             n_nodes_gt=int(gt.node_xy.shape[0]),
             n_nodes_pred=int(pred.node_xy.shape[0]),
-            n_edges_gt=n_edges_gt_raw,
-            n_edges_pred=n_edges_pred_raw,
+            n_edges_gt=0,
+            n_edges_pred=0,
         )
 
     gt_d = densify_apls_graph(gt, max_edge_len_m=APLS_DENSIFY_M)
