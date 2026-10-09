@@ -155,8 +155,6 @@ model = dict(
         freeze_encoder=False,
     ),
     freeze_backbone=True,
-    bn_eval_mode=True,
-    drop_path_eval_mode=True,
 )
 
 train = dict(type="GridProbeTrainer")

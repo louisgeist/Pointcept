@@ -7,8 +7,7 @@ only the native final decoder stage output (dec_channels[0]=72ch), not the
 1404ch hypercolumn concat of all decoder stages + bottleneck. Same signal as
 the multitask pretrain seg_head input.
 
-`bn_eval_mode=True` freezes BatchNorm running stats; `drop_path_eval_mode=True`
-keeps DropPath inactive.
+The frozen backbone is always in eval() mode (BatchNorm running stats frozen, DropPath inactive).
 
 Grid (12 probes): ce_lovasz x lr{1e-4..5e-1} x wd=0 x dropout=0 x
 input_norm=none x AdamW/OneCycleLR warmup5%. epoch=50 / eval_epoch=10.
@@ -170,8 +169,6 @@ model = dict(
         dec_traceable=False,
     ),
     freeze_backbone=True,
-    bn_eval_mode=True,  # freeze BatchNorm running stats during probe training
-    drop_path_eval_mode=True,  # keep DropPath inactive during probe training
     feature_mask_values=dict(
         enable=True,
         masked_feat_keys=["color", "strength"],

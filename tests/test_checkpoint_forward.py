@@ -28,6 +28,7 @@ cuda:1 is broken for spconv on hecate -> always cuda:0.
 import argparse
 import json
 import os
+import random
 import time
 from collections import OrderedDict
 
@@ -173,6 +174,7 @@ def run_supervised(cfg, model, inp):
 
 
 CELL = 6.0
+MIN_CLASS_TEST_PTS = 200
 
 
 @torch.no_grad()
@@ -201,6 +203,11 @@ def run_ssl(cfg, model, inp, k=20):
     res["knn_split"] = m
     bal = [float((pred[g == c] == c).mean()) for c in np.unique(g)]
     m["balanced_acc"] = float(np.mean(bal))
+    # Same, restricted to classes with >= MIN_CLASS_TEST_PTS test points: a class with a few dozen
+    # points flips its recall from ~0.2 to ~0.7 depending on which point GridSample draws per voxel,
+    # i.e. +-0.1 on the mean of ~5 classes, which makes the plain balanced_acc a coin flip.
+    n_per_class = np.array([int((g == c).sum()) for c in np.unique(g)])
+    m["balanced_acc_robust"] = float(np.mean(np.array(bal)[n_per_class >= MIN_CLASS_TEST_PTS]))
     # PCA-RGB of features for the figure
     centered = feat - feat.mean(0, keepdim=True)
     _, _, V = torch.pca_lowrank(centered, q=3, center=False)
@@ -255,6 +262,16 @@ DEFAULT_TILES = [("D067-2021_AU-S1-21_3-6", "val"), ("D067-2021_AN-S1-15_1-7", "
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
+SEED = 0
+
+
+def _seed_all(seed):
+    """Seed every RNG the data pipeline may touch (torch, numpy, random)."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+
+
 def run_model(mname, tiles, max_points=30000, control=False, out_dir=None, ds_cache=None):
     """Load + forward one model on `tiles`; returns the summary dict (and dumps if out_dir)."""
     ds_cache = {} if ds_cache is None else ds_cache
@@ -265,7 +282,7 @@ def run_model(mname, tiles, max_points=30000, control=False, out_dir=None, ds_ca
     ign = int(cfg.data.ignore_index)
     summary = {}
     for variant in ["trained"] + (["random_init"] if control else []):
-        torch.manual_seed(0)
+        _seed_all(SEED)
         model = build_model(cfg.model).cuda()
         if variant == "trained":
             summary["load"] = load_info = load_weights(model, ckpt_path, ssl=(kind == "ssl"))
@@ -275,6 +292,7 @@ def run_model(mname, tiles, max_points=30000, control=False, out_dir=None, ds_ca
         model.eval()
         for tile, split in tiles:
             t0 = time.time()
+            _seed_all(SEED)  # the val pipeline's GridSample(mode="train") draws np.random points per voxel
             inp = build_input(cfg, tile, split, max_points, ds_cache)
             n = int(inp["coord"].shape[0])
             res, dump = (run_supervised if kind == "supervised" else run_ssl)(cfg, model, inp)
@@ -318,8 +336,12 @@ def main():
 # Sonata balanced acc >= 0.89) so only real breakage trips them, not retraining noise.
 SEG_ACC_MIN = 0.75
 SEG_MIOU_MIN = 0.40
-SONATA_BALACC_MIN = 0.80
-SONATA_MARGIN_OVER_RANDOM = 0.05
+# Sonata thresholds, on balanced_acc_robust (classes with >= MIN_CLASS_TEST_PTS test points).
+# Measured over 24 seeds of the data draw (2026-10-09): trained 0.903-0.933, random-init control
+# 0.835-0.901, trained - random >= 0.027 (mean 0.04-0.05). The test is also seeded (SEED), so it is
+# deterministic; the thresholds still leave room for the seed-to-seed spread above.
+SONATA_BALACC_MIN = 0.85
+SONATA_MARGIN_OVER_RANDOM = 0.01
 SSL_EXPECTED_UNEXPECTED = ("student.mask_head", "student.unmask_head", "backbone.embedding.mask_token")
 
 _RESULTS = {}
@@ -385,8 +407,8 @@ def test_sonata_backbone_checkpoint_forward(ds_cache):
     for tile, _ in DEFAULT_TILES:
         trained = r["trained"][tile]
         assert trained["finite"], f"sonata/{tile}: non-finite features"
-        bal = trained["knn_split"]["balanced_acc"]
-        rand = r["random_init"][tile]["knn_split"]["balanced_acc"]
+        bal = trained["knn_split"]["balanced_acc_robust"]
+        rand = r["random_init"][tile]["knn_split"]["balanced_acc_robust"]
         assert bal >= SONATA_BALACC_MIN, f"sonata/{tile}: kNN balanced acc {bal:.3f} < {SONATA_BALACC_MIN}"
         assert bal >= rand + SONATA_MARGIN_OVER_RANDOM, (
             f"sonata/{tile}: trained features ({bal:.3f}) not better than random init ({rand:.3f})"

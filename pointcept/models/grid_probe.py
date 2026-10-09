@@ -23,7 +23,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch_scatter
-from timm.layers import DropPath
 
 from pointcept.models.losses import build_criteria
 from pointcept.models.utils.structure import Point
@@ -192,21 +191,12 @@ class GridProbeSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
     only sets requires_grad=False and otherwise lets the backbone follow the
     trainer's normal train()/eval() propagation), freeze_backbone=True here
     also wraps the backbone forward in torch.no_grad() (the VRAM/compute
-    saving) and, by default, pins the backbone's BatchNorm and DropPath
-    submodules to eval-mode *behavior* (nothing to do with requires_grad)
-    even while mode=True (i.e. during training) — re-applied on every
-    .train() call.
-
-    This eval-pinning turned out to matter a lot for backbones with
-    BatchNorm (e.g. LitePT-v1): DefaultSegmentorV2 never forces eval, so its
-    "frozen" backbone still lets BatchNorm running_mean/var drift toward the
-    downstream dataset on every training step (a free, gradient-free domain
-    recalibration — see project memory / README discussion), and DropPath
-    stays stochastically active. `bn_eval_mode` / `drop_path_eval_mode` let
-    each of those two effects be toggled independently of the other, for
-    ablating which one actually drives a given backbone's linear-probe
-    quality gap against DefaultSegmentorV2 (both default True = original,
-    fully-eval-pinned behavior, unchanged from before these flags existed).
+    saving) and keeps the *whole* backbone in eval() mode, even while
+    mode=True (i.e. during training) — re-applied on every .train() call.
+    A frozen feature extractor is thus deterministic: BatchNorm running
+    statistics do not drift toward the downstream dataset, and DropPath /
+    Dropout (including backbone-specific variants such as KPConvX's
+    DropPathPack) stay inactive. There is deliberately no per-module opt-out.
     """
 
     def __init__(
@@ -218,8 +208,6 @@ class GridProbeSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
         backbone=None,
         target_key="segment",
         freeze_backbone=True,
-        bn_eval_mode=True,
-        drop_path_eval_mode=True,
         feature_mask_values=None,
         drop_leading_channels=0,
         channel_blocks=None,
@@ -282,8 +270,6 @@ class GridProbeSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
 
         self._init_learned_masked_feat(feature_mask_values=feature_mask_values)
         self.freeze_backbone = freeze_backbone
-        self.bn_eval_mode = bn_eval_mode
-        self.drop_path_eval_mode = drop_path_eval_mode
         if self.freeze_backbone:
             for p in self.backbone.parameters():
                 p.requires_grad = False
@@ -300,20 +286,9 @@ class GridProbeSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
         super().train(mode)
         if self.freeze_backbone:
             # nn.Module.train() just recursively flipped every backbone
-            # submodule (BatchNorm, DropPath, LayerNorm, ...) to `mode`. Put
-            # back to eval() only the pieces this instance is configured to
-            # pin — independently, so BN running-stat drift and DropPath's
-            # stochastic depth can each be toggled on/off on its own (see
-            # class docstring). Everything else (LayerNorm, Linear, ...) is
-            # train/eval-invariant so leaving it at `mode` is harmless.
-            if self.bn_eval_mode or self.drop_path_eval_mode:
-                for m in self.backbone.modules():
-                    if self.bn_eval_mode and isinstance(
-                        m, nn.modules.batchnorm._BatchNorm
-                    ):
-                        m.eval()
-                    if self.drop_path_eval_mode and isinstance(m, DropPath):
-                        m.eval()
+            # submodule to `mode`; a frozen backbone must stay in eval()
+            # (BatchNorm running stats, DropPath/DropPathPack, Dropout).
+            self.backbone.eval()
         return self
 
     def backbone_parameters(self):
@@ -464,8 +439,6 @@ class GridProbeClassifier(GridProbeSegmentorV2):
         backbone=None,
         target_key="category",
         freeze_backbone=True,
-        bn_eval_mode=True,
-        drop_path_eval_mode=True,
         feature_mask_values=None,
         drop_leading_channels=0,
         channel_blocks=None,
@@ -479,8 +452,6 @@ class GridProbeClassifier(GridProbeSegmentorV2):
             backbone=backbone,
             target_key=target_key,
             freeze_backbone=freeze_backbone,
-            bn_eval_mode=bn_eval_mode,
-            drop_path_eval_mode=drop_path_eval_mode,
             feature_mask_values=feature_mask_values,
             drop_leading_channels=drop_leading_channels,
             channel_blocks=channel_blocks,

@@ -16,9 +16,7 @@ per-point feature at all).
 
 Same probe grid as litept-b-v1m0 (ce_lovasz x 12 LRs,
 AdamW/wd0/OneCycleLR warmup5%, epoch=50/eval_epoch=10) for cross-backbone
-comparability. `bn_eval_mode=True` freezes SpUNet's BatchNorm running stats
-(real BatchNorm1d, unlike PT-v3-malibu/LitePT's LayerNorm-dominated stages);
-`drop_path_eval_mode=True` is a no-op (SpUNet has no DropPath modules).
+comparability. The frozen backbone is always in eval() mode, which freezes SpUNet's BatchNorm running stats (real BatchNorm1d, unlike PT-v3-malibu/LitePT's LayerNorm-dominated stages); SpUNet has no DropPath modules.
 Z_MinShift/Z_RandomOffset included in train/val/test per the H3D/ECLAIR
 lin-grid convention. Same OpenGF-has-no-RGB handling as the other OpenGF lin
 configs.
@@ -155,8 +153,6 @@ model = dict(
         stride=3,
     ),
     freeze_backbone=True,
-    bn_eval_mode=True,  # freeze BatchNorm running stats during probe training (real BN here)
-    drop_path_eval_mode=True,  # no-op — SpUNet has no DropPath modules
     feature_mask_values=dict(
         enable=True,
         masked_feat_keys=["color", "strength"],

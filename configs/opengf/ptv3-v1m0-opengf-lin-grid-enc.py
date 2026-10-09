@@ -12,9 +12,7 @@ tapped feature changes, so the two are directly comparable.
 
 Same probe grid as litept-b-v1m0 (ce_lovasz x 12 LRs,
 AdamW/wd0/OneCycleLR warmup5%, epoch=50/eval_epoch=10) for cross-backbone
-comparability. `bn_eval_mode=True` is a no-op for PT-v3-malibu (LayerNorm
-only, no BatchNorm); `drop_path_eval_mode=True` keeps DropPath(0.3) inactive
-during probe training. Z_MinShift/Z_RandomOffset added to the train/val/test
+comparability. The frozen backbone is always in eval() mode (DropPath(0.3) inactive; PT-v3-malibu has no BatchNorm). Z_MinShift/Z_RandomOffset added to the train/val/test
 pipeline (missing from the older OpenGF PTv3/LitePT lin-grid configs) per the
 Z-normalization convention used by the H3D/ECLAIR lin-grid configs.
 Same no-usable-RGB handling as the other OpenGF lin configs.
@@ -167,8 +165,6 @@ model = dict(
         enc_mode=True,
     ),
     freeze_backbone=True,
-    bn_eval_mode=True,  # no-op for PT-v3-malibu (LayerNorm only, no BatchNorm) — set explicitly anyway
-    drop_path_eval_mode=True,  # keep DropPath(0.3) inactive during probe training
     feature_mask_values=dict(
         enable=True,
         masked_feat_keys=["color", "strength"],

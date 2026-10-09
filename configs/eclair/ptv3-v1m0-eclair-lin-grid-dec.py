@@ -10,9 +10,7 @@ DALES. Same probe grid as litept-b-v1m0-eclair-lin_dec.py (ce_lovasz x 12 LRs
 x wd=0 x dropout=0 x input_norm=None x AdamW x warmup=5%) for cross-backbone
 comparability. epoch=200 / eval_epoch=10.
 
-`bn_eval_mode=True` is a no-op for PT-v3-malibu (LayerNorm only, no
-BatchNorm); `drop_path_eval_mode=True` keeps DropPath(0.3) inactive during
-probe training.
+The frozen backbone is always in eval() mode (DropPath(0.3) inactive; PT-v3-malibu has no BatchNorm).
 """
 
 _base_ = ["../_base_/default_runtime.py"]
@@ -196,8 +194,6 @@ model = dict(
         traceable=True,
     ),
     freeze_backbone=True,
-    bn_eval_mode=True,  # no-op for PT-v3-malibu (LayerNorm only, no BatchNorm) — set explicitly anyway
-    drop_path_eval_mode=True,  # keep DropPath(0.3) inactive during probe training
     feature_mask_values=dict(
         enable=True,
         masked_feat_keys=["color", "strength"],

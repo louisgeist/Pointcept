@@ -4,8 +4,7 @@ multi-scale variant (transfer from Flair3D+ multitask supervised
 pretrain, job 873542).
 
 `dec_traceable=True` → 1404ch concat of decoder stages + bottleneck.
-`bn_eval_mode=True` freezes BatchNorm running stats;
-`drop_path_eval_mode=True` keeps DropPath inactive.
+The frozen backbone is always in eval() mode (BatchNorm running stats frozen, DropPath inactive).
 
 ECLAIR provides real RGB: ChromaticAutoContrast/Translation/Jitter (train)
 + NormalizeColor (like H3D / semseg-litept ECLAIR); strength uses 1/60000
@@ -198,8 +197,6 @@ model = dict(
         dec_traceable=True,
     ),
     freeze_backbone=True,
-    bn_eval_mode=True,
-    drop_path_eval_mode=True,
     feature_mask_values=dict(
         enable=True,
         masked_feat_keys=["color", "strength"],

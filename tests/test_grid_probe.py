@@ -10,6 +10,8 @@ import unittest
 
 import numpy as np
 import torch
+import torch.nn as nn
+from timm.layers import DropPath
 
 from pointcept.engines.hooks.grid_probe import (
     GridProbeCheckpointSaver,
@@ -18,7 +20,11 @@ from pointcept.engines.hooks.grid_probe import (
     _flatten_class_stats,
     _metric_stats,
 )
+from pointcept.models.builder import MODELS
+from pointcept.models.kpconvx.utils.generic_blocks import DropPathPack
 from pointcept.models.grid_probe import (
+    GridProbeClassifier,
+    GridProbeSegmentorV2,
     ProbeHead,
     _input_norm_cache,
     _prepare_shared_feat,
@@ -371,6 +377,59 @@ class TestSeedEnsembleClassIoUStats(unittest.TestCase):
         )
         self.assertEqual(set(flat), {"test_f1_Ground_mean"})
         self.assertAlmostEqual(flat["test_f1_Ground_mean"], 0.5)
+
+
+@MODELS.register_module("_TestStochasticBackbone")
+class _StochasticBackbone(nn.Module):
+    """Every train/eval-sensitive module family a real backbone may contain."""
+
+    def __init__(self):
+        super().__init__()
+        self.bn = nn.BatchNorm1d(4)
+        self.blocks = nn.ModuleList(
+            [DropPath(0.3), DropPathPack(0.3), nn.Dropout(0.5)]
+        )
+
+    def forward(self, point):
+        return point
+
+
+class TestFrozenBackboneStaysEval(unittest.TestCase):
+    """freeze_backbone=True keeps the *whole* backbone in eval(), always."""
+
+    def _build(self, cls=GridProbeSegmentorV2, **kwargs):
+        return cls(
+            probes={"p": dict(criteria=[])},
+            backbone_out_channels=4,
+            num_classes=2,
+            backbone=dict(type="_TestStochasticBackbone"),
+            **kwargs,
+        )
+
+    def test_backbone_eval_after_train_call(self):
+        for cls in (GridProbeSegmentorV2, GridProbeClassifier):
+            model = self._build(cls).train()
+            self.assertTrue(model.training)
+            self.assertTrue(model.heads.training)
+            for name, m in model.backbone.named_modules():
+                self.assertFalse(m.training, f"{cls.__name__}: {name} in train mode")
+
+    def test_batchnorm_running_stats_do_not_drift(self):
+        model = self._build().train()
+        bn = model.backbone.bn
+        before = bn.running_mean.clone(), bn.running_var.clone()
+        bn(torch.randn(32, 4) * 5 + 3)
+        self.assertTrue(torch.equal(bn.running_mean, before[0]))
+        self.assertTrue(torch.equal(bn.running_var, before[1]))
+
+    def test_unfrozen_backbone_follows_train_mode(self):
+        model = self._build(freeze_backbone=False).train()
+        self.assertTrue(model.backbone.bn.training)
+        self.assertTrue(model.backbone.blocks[1].training)
+
+    def test_legacy_flags_removed(self):
+        with self.assertRaises(TypeError):
+            self._build(bn_eval_mode=False)
 
 
 if __name__ == "__main__":

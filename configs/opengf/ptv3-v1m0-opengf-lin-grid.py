@@ -11,8 +11,7 @@ no-usable-RGB handling as the other PTv3/LitePT OpenGF lin configs.
 
 Grid (12 probes): ce_lovasz, AdamW/wd0/OneCycleLR warmup5%, lr sweep {1e-4 … 5e-1}.
 epoch=50 / eval_epoch=10. AMP enabled (fp16).
-`bn_eval_mode=True` is a no-op for PT-v3-malibu (LayerNorm only);
-`drop_path_eval_mode=True` keeps DropPath(0.3) inactive during probe training.
+The frozen backbone is always in eval() mode (DropPath(0.3) inactive; PT-v3-malibu has no BatchNorm).
 """
 
 _base_ = ["../_base_/default_runtime.py"]
@@ -168,8 +167,6 @@ model = dict(
         traceable=True,
     ),
     freeze_backbone=True,
-    bn_eval_mode=True,  # no-op for PT-v3-malibu (LayerNorm only, no BatchNorm) — set explicitly anyway
-    drop_path_eval_mode=True,  # keep DropPath(0.3) inactive during probe training
     feature_mask_values=dict(
         enable=True,
         masked_feat_keys=["color", "strength"],

@@ -172,8 +172,6 @@ model = dict(
         enc_mode=True,
     ),
     freeze_backbone=True,
-    bn_eval_mode=True,
-    drop_path_eval_mode=True,
     feature_mask_values=dict(
         enable=learned_masked_feat,
         masked_feat_keys=["color", "strength"],

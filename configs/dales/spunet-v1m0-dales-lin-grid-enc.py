@@ -26,9 +26,7 @@ probe grid, same checkpoint, only the tapped feature changes.
 
 Same probe grid as litept-b-v1m0-dales-lin-grid-enc.py (ce_lovasz x 12 LRs,
 AdamW/wd0/OneCycleLR warmup5%, epoch=400/eval_epoch=10) for cross-backbone
-comparability. `bn_eval_mode=True` freezes SpUNet's BatchNorm running stats
-(real BatchNorm1d); `drop_path_eval_mode=True` is a no-op (SpUNet has no
-DropPath modules). Z_MinShift/Z_RandomOffset included in train/val/test per
+comparability. The frozen backbone is always in eval() mode, which freezes SpUNet's BatchNorm running stats (real BatchNorm1d); SpUNet has no DropPath modules. Z_MinShift/Z_RandomOffset included in train/val/test per
 the H3D/ECLAIR lin-grid convention. Same DALES-has-no-RGB handling as the
 other DALES lin configs.
 """
@@ -172,8 +170,6 @@ model = dict(
         point_mode=True,
     ),
     freeze_backbone=True,
-    bn_eval_mode=True,  # freeze BatchNorm running stats during probe training (real BN here)
-    drop_path_eval_mode=True,  # no-op — SpUNet has no DropPath modules
     feature_mask_values=dict(
         enable=True,
         masked_feat_keys=["color", "strength"],

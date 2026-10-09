@@ -12,8 +12,7 @@ dict), onto this directory's own dataset settings (ECLAIR real RGB via
 ChromaticAutoContrast/Translation/Jitter + NormalizeColor, strength 1/60000,
 ignore_index=-1, no `_warmups` axis).
 
-`bn_eval_mode=True` freezes BatchNorm running stats; `drop_path_eval_mode=True`
-keeps DropPath inactive.
+The frozen backbone is always in eval() mode (BatchNorm running stats frozen, DropPath inactive).
 
 Grid (12 probes): ce_lovasz x 12 LRs x wd=0 x dropout=0 x
 input_norm=None x AdamW x warmup=5%. epoch=200 / eval_epoch=10.
@@ -203,8 +202,6 @@ model = dict(
         dec_traceable=False,
     ),
     freeze_backbone=True,
-    bn_eval_mode=True,
-    drop_path_eval_mode=True,
     feature_mask_values=dict(
         enable=True,
         masked_feat_keys=["color", "strength"],

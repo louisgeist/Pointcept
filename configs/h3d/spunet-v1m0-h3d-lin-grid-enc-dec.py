@@ -26,9 +26,7 @@ for the shape/row-alignment correctness check.
 
 Same probe grid as litept-b-v1m0-h3d-lin_enc.py (AdamW/wd0/OneCycleLR
 warmup5%, lr sweep over 12 values, epoch=2000/eval_epoch=10) for
-cross-backbone comparability. `bn_eval_mode=True` freezes SpUNet's BatchNorm
-running stats (real BatchNorm1d); `drop_path_eval_mode=True` is a no-op
-(SpUNet has no DropPath modules). H3D fill/aug/feature_mask_values unchanged
+cross-backbone comparability. The frozen backbone is always in eval() mode, which freezes SpUNet's BatchNorm running stats (real BatchNorm1d); SpUNet has no DropPath modules. H3D fill/aug/feature_mask_values unchanged
 from the LitePT-B H3D ref (no real intensity -> FillMissingFeat "strength").
 skip_test=False, log_test_f1=True (required for H3D lin-grid configs).
 """
@@ -206,8 +204,6 @@ model = dict(
         dec_point_mode=True,
     ),
     freeze_backbone=True,
-    bn_eval_mode=True,  # freeze BatchNorm running stats during probe training (real BN here)
-    drop_path_eval_mode=True,  # no-op — SpUNet has no DropPath modules
     feature_mask_values=dict(
         enable=True,
         masked_feat_keys=["color", "strength"],

@@ -19,9 +19,8 @@ DALES. Same probe grid as litept-b-v1m0-eclair-lin_dec.py (ce_lovasz x 12 LRs
 x wd=0 x dropout=0 x input_norm=None x AdamW x warmup=5%) for cross-backbone
 comparability. epoch=200 / eval_epoch=10.
 
-`bn_eval_mode=True` freezes SpUNet's BatchNorm running stats (real
-BatchNorm1d, unlike PT-v3-malibu/LitePT's LayerNorm-dominated stages);
-`drop_path_eval_mode=True` is a no-op (SpUNet has no DropPath modules).
+The frozen backbone is always in eval() mode, which freezes SpUNet's BatchNorm running stats (real
+BatchNorm1d, unlike PT-v3-malibu/LitePT's LayerNorm-dominated stages); SpUNet has no DropPath modules.
 """
 
 _base_ = ["../_base_/default_runtime.py"]
@@ -184,8 +183,6 @@ model = dict(
         stride=3,
     ),
     freeze_backbone=True,
-    bn_eval_mode=True,  # freeze BatchNorm running stats during probe training (real BN here)
-    drop_path_eval_mode=True,  # no-op — SpUNet has no DropPath modules
     feature_mask_values=dict(
         enable=True,
         masked_feat_keys=["color", "strength"],

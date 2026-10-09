@@ -209,8 +209,6 @@ model = dict(
         dec_traceable=False,
     ),
     freeze_backbone=True,
-    bn_eval_mode=True,  # freeze BatchNorm running stats during probe training
-    drop_path_eval_mode=True,  # keep DropPath inactive during probe training
     feature_mask_values=dict(
         enable=True,
         masked_feat_keys=["color", "strength"],

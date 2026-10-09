@@ -5,9 +5,7 @@ pretrain, job 873542).
 
 Same multi-scale mechanism as w109/3/dales_lin/litept-b-v1m0-dales-lin_5.py
 (`dec_traceable=True` → 1404ch concat of decoder stages + bottleneck).
-`bn_eval_mode=True` freezes BatchNorm running stats; for the BN-adapt
-variant see w109/4/grid_12h/litept-b-v1m0-dales-lin_1.py.
-`drop_path_eval_mode=True` keeps DropPath inactive.
+The frozen backbone is always in eval() mode (BatchNorm running stats frozen, DropPath inactive).
 
 Grid (16 probes): ce_lovasz x {5e-2, 1e-1, 2e-1, 5e-1} x {5e-3, 5e-2} wd x
 dropout {0, 0.3} x input_norm=None. epoch=50 / eval_epoch=10. AMP enabled
@@ -180,8 +178,6 @@ model = dict(
         dec_traceable=True,
     ),
     freeze_backbone=True,
-    bn_eval_mode=True,  # freeze BatchNorm running stats during probe training
-    drop_path_eval_mode=True,  # keep DropPath inactive during probe training
     feature_mask_values=dict(
         enable=True,
         masked_feat_keys=["color", "strength"],

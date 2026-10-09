@@ -12,9 +12,7 @@ Dataset-driven axes (num_worker/AMP/batch) match the LitePT-B H3D lin-grid
 configs. epoch=2000 / eval_epoch=10. H3D fill/aug/feature_mask_values
 unchanged from that ref (no real intensity -> FillMissingFeat "strength").
 
-`bn_eval_mode=True` is a no-op for PT-v3-malibu (LayerNorm only, no
-BatchNorm); `drop_path_eval_mode=True` keeps DropPath(0.3) inactive during
-probe training. skip_test=False, log_test_f1=True (required for H3D
+The frozen backbone is always in eval() mode (DropPath(0.3) inactive; PT-v3-malibu has no BatchNorm). skip_test=False, log_test_f1=True (required for H3D
 lin-grid configs — see project convention).
 """
 
@@ -209,8 +207,6 @@ model = dict(
         traceable=True,
     ),
     freeze_backbone=True,
-    bn_eval_mode=True,  # no-op for PT-v3-malibu (LayerNorm only, no BatchNorm) — set explicitly anyway
-    drop_path_eval_mode=True,  # keep DropPath(0.3) inactive during probe training
     feature_mask_values=dict(
         enable=True,
         masked_feat_keys=["color", "strength"],

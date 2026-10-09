@@ -23,6 +23,39 @@ def _safe_segment_csr_mean(feat, indptr):
     return torch.nan_to_num(pooled, nan=0.0, posinf=0.0, neginf=0.0)
 
 
+class FrozenBackboneEvalMixin:
+    """Keeps a frozen backbone in eval() mode, whatever train()/eval() is called.
+
+    ``requires_grad=False`` (or ``torch.no_grad()``) only stops gradient updates
+    of the *parameters*. BatchNorm running statistics are buffers: they keep
+    updating in the forward pass whenever the module is in train mode, and
+    DropPath / Dropout stay stochastic. A one-off ``backbone.eval()`` in
+    ``__init__`` is not enough either, since the trainer calls ``model.train()``
+    afterwards, which recursively flips the backbone back to train mode.
+
+    Hence, for classes using this mixin, ``freeze_backbone=True`` means
+    ``requires_grad=False`` *and* a backbone that is re-pinned to eval() on
+    every ``.train()`` call. There is deliberately no opt-out flag.
+
+    The mixin must come before ``nn.Module`` in the bases (so that its
+    ``train`` overrides ``nn.Module.train``).
+    """
+
+    def _pin_frozen_backbone_eval(self):
+        backbone = getattr(self, "backbone", None)
+        if (
+            getattr(self, "freeze_backbone", False)
+            and not getattr(self, "use_lora", False)
+            and backbone is not None
+        ):
+            backbone.eval()
+
+    def train(self, mode=True):
+        super().train(mode)
+        self._pin_frozen_backbone_eval()
+        return self
+
+
 class LearnedMaskedFeatMixin:
     def _init_learned_masked_feat(self, feature_mask_values=None):
         cfg = feature_mask_values or {}
@@ -111,7 +144,22 @@ class LearnedMaskedFeatMixin:
 
 
 @MODELS.register_module()
-class DefaultSegmentor(nn.Module, LearnedMaskedFeatMixin):
+class DefaultSegmentor(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeatMixin):
+    """Segmentor whose backbone owns the output classifier (legacy, pre-V2).
+
+    freeze_backbone=True means ALL of the following (there is no separate flag):
+      * every backbone parameter has requires_grad=False (no gradient, never
+        updated by the optimizer);
+      * the backbone is kept in eval() mode *permanently*: every .train() call
+        (the trainer issues one per epoch) re-pins it. BatchNorm therefore
+        uses its stored running statistics and does NOT update them, and
+        DropPath / Dropout are inactive. The backbone is a fixed, deterministic
+        feature extractor; only the heads are in train mode.
+      * exception: parameters under ``final.`` (the backbone-owned output
+        classifier of e.g. SpUNet / KPConvX) stay trainable; the module is
+        nevertheless in eval(), which is harmless for a linear classifier.
+    """
+
     def __init__(
         self,
         backbone=None,
@@ -132,6 +180,7 @@ class DefaultSegmentor(nn.Module, LearnedMaskedFeatMixin):
                 if name.startswith(keep_segmentation_head_prefixes):
                     continue
                 param.requires_grad = False
+            self._pin_frozen_backbone_eval()
 
     def forward(self, input_dict):
         self._fill_masked_feat_with_learned_value(input_dict)
@@ -159,7 +208,20 @@ class DefaultSegmentor(nn.Module, LearnedMaskedFeatMixin):
 
 
 @MODELS.register_module()
-class DefaultSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
+class DefaultSegmentorV2(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeatMixin):
+    """Backbone + linear ``seg_head`` point-wise segmentor.
+
+    freeze_backbone=True means ALL of the following (there is no separate flag):
+      * every backbone parameter has requires_grad=False (no gradient, never
+        updated by the optimizer);
+      * the backbone is kept in eval() mode *permanently*: every .train() call
+        (the trainer issues one per epoch) re-pins it. BatchNorm therefore
+        uses its stored running statistics and does NOT update them, and
+        DropPath / Dropout are inactive. The backbone is a fixed, deterministic
+        feature extractor; only the heads are in train mode.
+      * learned masked-feat fill values (feature_mask_values) are frozen too.
+    """
+
     def __init__(
         self,
         num_classes,
@@ -195,6 +257,7 @@ class DefaultSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
                     mask_value = getattr(self, f"{feat_key}_mask_value", None)
                     if mask_value is not None:
                         mask_value.requires_grad = False
+            self._pin_frozen_backbone_eval()
 
     def get_ignore_index(self) -> int:
         if self._ignore_index is not None:
@@ -265,10 +328,19 @@ class DefaultSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
 
 
 @MODELS.register_module()
-class DefaultRegressorV2(nn.Module, LearnedMaskedFeatMixin):
+class DefaultRegressorV2(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeatMixin):
     """Point-wise scalar regression (mirror of DefaultSegmentorV2).
 
     Reads float targets from input_dict[target_key] and writes predictions to reg_pred.
+
+    freeze_backbone=True means ALL of the following (there is no separate flag):
+      * every backbone parameter has requires_grad=False (no gradient, never
+        updated by the optimizer);
+      * the backbone is kept in eval() mode *permanently*: every .train() call
+        (the trainer issues one per epoch) re-pins it. BatchNorm therefore
+        uses its stored running statistics and does NOT update them, and
+        DropPath / Dropout are inactive. The backbone is a fixed, deterministic
+        feature extractor; only the heads are in train mode.
     """
 
     def __init__(
@@ -290,6 +362,7 @@ class DefaultRegressorV2(nn.Module, LearnedMaskedFeatMixin):
         if self.freeze_backbone:
             for p in self.backbone.parameters():
                 p.requires_grad = False
+            self._pin_frozen_backbone_eval()
 
     def _forward_backbone(self, input_dict):
         point = Point(input_dict)
@@ -324,7 +397,7 @@ class DefaultRegressorV2(nn.Module, LearnedMaskedFeatMixin):
 
 
 @MODELS.register_module()
-class MultiTaskSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
+class MultiTaskSegmentorV2(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeatMixin):
     """Backbone-shared multi-task segmentor (semantic classification + optional regression).
     
     "V2" because it is the MultiTask version of the DefaultSegmentorV2.
@@ -346,6 +419,15 @@ class MultiTaskSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
     - reg_pred_by_task: mapping task name -> 1D point-wise predictions for regression tasks,
     - cls_logits_by_task: scene-level classification logits,
     - loss and loss_by_task when the corresponding targets are present in the batch.
+
+    freeze_backbone=True means ALL of the following (there is no separate flag):
+      * every backbone parameter has requires_grad=False (no gradient, never
+        updated by the optimizer);
+      * the backbone is kept in eval() mode *permanently*: every .train() call
+        (the trainer issues one per epoch) re-pins it. BatchNorm therefore
+        uses its stored running statistics and does NOT update them, and
+        DropPath / Dropout are inactive. The backbone is a fixed, deterministic
+        feature extractor; only the heads are in train mode.
     """
 
     _TASK_TYPES = frozenset(
@@ -449,6 +531,7 @@ class MultiTaskSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
         if self.freeze_backbone:
             for p in self.backbone.parameters():
                 p.requires_grad = False
+            self._pin_frozen_backbone_eval()
 
     def backbone_parameters(self):
         return [p for p in self.backbone.parameters() if p.requires_grad]
@@ -961,7 +1044,22 @@ class MultiTaskSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
 
         return return_dict
 @MODELS.register_module()
-class DefaultLORASegmentorV2(nn.Module, LearnedMaskedFeatMixin):
+class DefaultLORASegmentorV2(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeatMixin):
+    """DefaultSegmentorV2 with optional LoRA adapters on the backbone encoder.
+
+    freeze_backbone=True means ALL of the following (there is no separate flag):
+      * every backbone parameter has requires_grad=False (no gradient, never
+        updated by the optimizer);
+      * the backbone is kept in eval() mode *permanently*: every .train() call
+        (the trainer issues one per epoch) re-pins it. BatchNorm therefore
+        uses its stored running statistics and does NOT update them, and
+        DropPath / Dropout are inactive. The backbone is a fixed, deterministic
+        feature extractor; only the heads are in train mode.
+      * exception: with use_lora=True the backbone is NOT pinned to eval():
+        the LoRA adapters (and their lora_dropout) need train mode. Only the
+        base weights are frozen (requires_grad=False) in that case.
+    """
+
     def __init__(
         self,
         num_classes,
@@ -1020,6 +1118,7 @@ class DefaultLORASegmentorV2(nn.Module, LearnedMaskedFeatMixin):
             for name, param in self.backbone.named_parameters():
                 if "lora_" in name:
                     param.requires_grad = True
+        self._pin_frozen_backbone_eval()
         self.backbone.enc.print_trainable_parameters()
     
     def get_ignore_index(self) -> int:
@@ -1089,7 +1188,20 @@ class DefaultLORASegmentorV2(nn.Module, LearnedMaskedFeatMixin):
 
 
 @MODELS.register_module()
-class DINOEnhancedSegmentor(nn.Module, LearnedMaskedFeatMixin):
+class DINOEnhancedSegmentor(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeatMixin):
+    """Segmentor on top of an optional backbone (``backbone=None`` allowed).
+
+    freeze_backbone=True means ALL of the following (there is no separate flag):
+      * every backbone parameter has requires_grad=False (no gradient, never
+        updated by the optimizer);
+      * the backbone is kept in eval() mode *permanently*: every .train() call
+        (the trainer issues one per epoch) re-pins it. BatchNorm therefore
+        uses its stored running statistics and does NOT update them, and
+        DropPath / Dropout are inactive. The backbone is a fixed, deterministic
+        feature extractor; only the heads are in train mode.
+      * the frozen backbone forward additionally runs under torch.no_grad().
+    """
+
     def __init__(
         self,
         num_classes,
@@ -1112,6 +1224,7 @@ class DINOEnhancedSegmentor(nn.Module, LearnedMaskedFeatMixin):
         if self.backbone is not None and self.freeze_backbone:
             for p in self.backbone.parameters():
                 p.requires_grad = False
+            self._pin_frozen_backbone_eval()
 
     def forward(self, input_dict, return_point=False):
         self._fill_masked_feat_with_learned_value(input_dict)
@@ -1206,7 +1319,20 @@ class AttentiveScenePool(nn.Module):
 
 
 @MODELS.register_module()
-class DefaultClassifier(nn.Module, LearnedMaskedFeatMixin):
+class DefaultClassifier(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeatMixin):
+    """Backbone + scene pooling + linear ``cls_head`` classifier.
+
+    freeze_backbone=True means ALL of the following (there is no separate flag):
+      * every backbone parameter has requires_grad=False (no gradient, never
+        updated by the optimizer);
+      * the backbone is kept in eval() mode *permanently*: every .train() call
+        (the trainer issues one per epoch) re-pins it. BatchNorm therefore
+        uses its stored running statistics and does NOT update them, and
+        DropPath / Dropout are inactive. The backbone is a fixed, deterministic
+        feature extractor; only the heads are in train mode.
+      * the frozen backbone forward additionally runs under torch.no_grad().
+    """
+
     def __init__(
         self,
         backbone=None,
@@ -1239,7 +1365,7 @@ class DefaultClassifier(nn.Module, LearnedMaskedFeatMixin):
         if self.freeze_backbone:
             for p in self.backbone.parameters():
                 p.requires_grad = False
-            self.backbone.eval()
+            self._pin_frozen_backbone_eval()
 
     def _pool_scene_feat(self, feat, offset):
         indptr = nn.functional.pad(offset, (1, 0))

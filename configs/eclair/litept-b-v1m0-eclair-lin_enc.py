@@ -4,8 +4,7 @@ LitePT-Base grid-search linear probing on ECLAIR — encoder multiscale variant
 
 `enc_mode=True` → 1386ch concat of the 5 raw encoder stages
 (54+108+216+432+576).
-`bn_eval_mode=True` freezes BatchNorm running stats;
-`drop_path_eval_mode=True` keeps DropPath inactive.
+The frozen backbone is always in eval() mode (BatchNorm running stats frozen, DropPath inactive).
 
 ECLAIR provides real RGB: ChromaticAutoContrast/Translation/Jitter (train)
 + NormalizeColor (like H3D / semseg-litept ECLAIR); strength uses 1/60000
@@ -190,8 +189,6 @@ model = dict(
         enc_mode=True,
     ),
     freeze_backbone=True,
-    bn_eval_mode=True,
-    drop_path_eval_mode=True,
     feature_mask_values=dict(
         enable=True,
         masked_feat_keys=["color", "strength"],

@@ -22,14 +22,12 @@ manual replay (max abs diff 0.0 against both a 0-hop and 1-hop manual
 gather) — see plan file / scratchpad/check_kpconvx_enc_mode.py.
 backbone_out_channels = 96+128+192+256+256 = 928.
 
-`drop_path_rate=0` on the backbone here is required, not optional: KPConvX's
-stochastic depth uses its own `DropPathPack` class
-(pointcept/models/kpconvx/utils/generic_blocks.py), not `timm.layers.DropPath`
-— so `GridProbeSegmentorV2`'s `drop_path_eval_mode` (which only checks
-`isinstance(m, timm.layers.DropPath)`) does NOT pin it to eval. Building with
-drop_path_rate=0 makes every block use `nn.Identity()` instead (no
-learnable params either way, so this is checkpoint-compatible with the
-drop_path_rate=0.3 pretrain).
+`drop_path_rate=0` on the backbone: KPConvX's stochastic depth uses its own
+`DropPathPack` class (pointcept/models/kpconvx/utils/generic_blocks.py), not
+`timm.layers.DropPath`. `GridProbeSegmentorV2` eval()s the whole frozen backbone, so
+DropPathPack is inactive regardless; drop_path_rate=0 additionally makes every
+block use `nn.Identity()` (no learnable params either way, so this is
+checkpoint-compatible with the drop_path_rate=0.3 pretrain).
 
 point_max=100_000 — deliberately larger than the KPConvX pretrain's own
 SphereCrop budget (40000); roughly matches the ~102400 convention used by
@@ -224,8 +222,6 @@ model = dict(
         enc_mode=True,
     ),
     freeze_backbone=True,
-    bn_eval_mode=True,  # freeze BatchNorm running stats during probe training
-    drop_path_eval_mode=True,  # no-op for KPConvX here (drop_path_rate=0 already removes DropPathPack)
     feature_mask_values=dict(
         enable=True,
         masked_feat_keys=["color", "strength"],
