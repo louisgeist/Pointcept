@@ -52,7 +52,7 @@ build_scene = _preprocess_mod.build_scene
 
 
 def visualize(laz_path: str, port: int) -> None:
-    scene = build_scene(laz_path)
+    scene, _translation = build_scene(laz_path)
     coord = scene["coord"]
     color = np.clip(scene["color"], 0, 255).astype(np.uint8)
     n = coord.shape[0]
