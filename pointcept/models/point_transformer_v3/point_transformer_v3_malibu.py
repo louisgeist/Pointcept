@@ -1,8 +1,14 @@
 """
-Point Transformer V3 — Malibu (in-house Flair3D+ / Malibu3D variant)
+Point Transformer V3 — Malibu
 
-PT-v3m2 (GridPooling, any integer stride) with the PT-v3m1 SubMConv3d stem.
-Forward sparsifies before embedding so the conv stem can read sparse_conv_feat.
+GridPooling computation follows PT-v3m2, which allows a flexible pooling
+stride: any integer, e.g. 3 instead of the usual 2.
+
+Still a PTv3 backbone (serialized attention, LayerNorm/GELU, no BatchNorm); the
+only architectural difference with PT-v3m2 is the stem: a SubMConv3d with
+kernel_size=5 (as in PT-v3m1) instead of PT-v3m2's Linear, followed by
+LayerNorm + GELU. Because of that, stem weights are not interchangeable with
+PT-v3m2 / Sonata checkpoints.
 """
 
 from addict import Dict
