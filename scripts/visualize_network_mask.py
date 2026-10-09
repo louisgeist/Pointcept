@@ -155,8 +155,9 @@ def _clip_graph_to_grid(
     The GT graph is exported at full-ROI granularity (spans many subtiles), but the
     predicted graph here is subtile-local -- clip the GT graph down to this subtile's
     bounds first so a local diagnostic is comparable (not dominated by the rest of the
-    ROI the predicted graph can never see). This is NOT the official per-ROI APLS
-    definition (see ``tools/eval_network_apls.py``), only a local sanity-check.
+    ROI the predicted graph can never see). The score uses the official (fixed) APLS
+    protocol, but on this clipped subtile it is NOT the official per-ROI number (see
+    ``tools/eval_network_apls.py``), only a local sanity-check.
 
     ``truncate_partial_edges=False`` (default, used for the local APLS score): drop any
     edge with a node outside the grid entirely -- keeps the diagnostic graph simple/exact.
@@ -222,10 +223,10 @@ def _local_apls(
 
     if gt_xy.shape[0] == 0:
         return None
-    gt_aps = apls.ApsGraph(node_xy=gt_xy, edges=gt_edges, edge_length_m=gt_len)
+    gt_aps = apls.AplsGraph(node_xy=gt_xy, edges=gt_edges, edge_length_m=gt_len)
     pred_aps = apls.apls_graph_from_pixel_graph(pred_graph)
-    result = apls.apls_pair_score(gt_aps, pred_aps, roi=roi_name, network_type=network_type)
-    return None if result.denom == 0 else result.score
+    result = apls.apls_symmetric_score(gt_aps, pred_aps, roi=roi_name, network_type=network_type)
+    return float(result.score) if np.isfinite(result.score) else None
 
 
 def _roi_apls(pred_graph, loaded_gt, *, roi_name: str, network_type: str) -> float | None:
@@ -236,8 +237,8 @@ def _roi_apls(pred_graph, loaded_gt, *, roi_name: str, network_type: str) -> flo
         return None
     gt_aps = apls.apls_graph_from_loaded_graph(loaded_gt)
     pred_aps = apls.apls_graph_from_pixel_graph(pred_graph)
-    result = apls.apls_pair_score(gt_aps, pred_aps, roi=roi_name, network_type=network_type)
-    return None if result.denom == 0 else result.score
+    result = apls.apls_symmetric_score(gt_aps, pred_aps, roi=roi_name, network_type=network_type)
+    return float(result.score) if np.isfinite(result.score) else None
 
 
 def _error_to_rgb(error: np.ndarray) -> np.ndarray:
@@ -324,7 +325,7 @@ def render_apls_diagnostics(
     """Write a 3-panel-per-channel APLS diagnostic PNG.
 
     ``channel_diags`` entries are ``(name, gt_aps_graph, pred_aps_graph, diagnostics)``
-    where ``diagnostics`` is an ``ApsDiagnostics`` (skip channels with None).
+    where ``diagnostics`` is an ``AplsDiagnostics`` (skip channels with None).
     Panels: (1) GT node mean path-error heatmap, (2) GT→pred match + collapse,
     (3) worst-K GT shortest paths.
     """
@@ -382,7 +383,7 @@ def render_apls_diagnostics(
         ) else float("nan")
         ax1.set_title(
             f"{name}: GT node mean path-error\n"
-            f"APLS={diag.result.score:.3f}  mean_err={mean_err:.3f}",
+            f"APLS={diag.score:.3f}  mean_err={mean_err:.3f}",
             fontsize=panel_fs,
         )
         ax1.set_xticks([])
@@ -487,7 +488,7 @@ def render_apls_diagnostics(
         )
         ax3.set_title(
             f"{name}: worst-{k} GT shortest paths\n"
-            f"top_pair_error={top_err:.3f}  scored_pairs={diag.result.denom}",
+            f"top_pair_error={top_err:.3f}  scored_pairs={diag.denom}",
             fontsize=panel_fs,
         )
         ax3.set_xticks([])
@@ -1092,7 +1093,7 @@ def render_arrays(
                             roi=graph_roi_dir.name,
                             network_type=name,
                         )
-                        apls_score = None if diag is None else diag.result.score
+                        apls_score = None if diag is None else diag.score
                     else:
                         apls_score = _roi_apls(
                             pred_graph,
@@ -1109,7 +1110,7 @@ def render_arrays(
                         loaded_gt.node_xy, loaded_gt.edges, loaded_gt.edge_length_m, grid
                     )
                     n_gt_nodes = int(gt_xy.shape[0])
-                    gt_aps = apls.ApsGraph(
+                    gt_aps = apls.AplsGraph(
                         node_xy=gt_xy, edges=gt_edges, edge_length_m=gt_len
                     )
                     diag = None
@@ -1120,7 +1121,7 @@ def render_arrays(
                             roi=graph_roi_dir.name,
                             network_type=name,
                         )
-                        apls_score = None if diag is None else diag.result.score
+                        apls_score = None if diag is None else diag.score
                     else:
                         apls_score = _local_apls(
                             pred_graph,

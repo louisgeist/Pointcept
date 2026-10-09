@@ -8,6 +8,10 @@ per-ROI rasters, builds a predicted graph per network channel by reusing the sam
 mask -> graph post-processing pipeline used to export the ground-truth graphs, and computes
 APLS (Average Path Length Similarity) against the GT graphs exported by Flair3D-build.
 
+The APLS metric itself has a fixed protocol (``apls_metric.APLS_PROTOCOL``: densify 50 m,
+snap 4 m, min path 5 m, bidirectional harmonic mean) and no CLI/config knobs; only the
+mask -> graph parameters below are tunable. The protocol is recorded in the output JSON.
+
 By default also writes ``{stem}_{NETWORK}_pred_graph.gpkg`` (same schema as GT) and
 ``{stem}_{NETWORK}_apls.json`` (score, G→G', G'→G) next to the dataset-wide metrics.
 Pass ``--no_save_pred_gpkg`` / ``network_apls_eval.save_pred_gpkg=False`` to skip those dumps.
@@ -27,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import inspect
 import json
 import os
 import sys
@@ -68,7 +73,7 @@ def _json_safe_number(value):
     return number
 
 
-def apls_sidecar_payload(stem: str, department: str, result: apls.ApsSymmetricResult) -> dict:
+def apls_sidecar_payload(stem: str, department: str, result: apls.AplsResult) -> dict:
     """Per-stem APLS sidecar written next to ``{stem}_{NETWORK}_pred_graph.gpkg``."""
     return {
         "stem": stem,
@@ -91,7 +96,7 @@ def dump_pred_graph_artifacts(
     department: str,
     network_type: str,
     graph,
-    result: apls.ApsSymmetricResult,
+    result: apls.AplsResult,
 ) -> tuple[Path, Path]:
     """Write predicted-graph GeoPackage + APLS JSON sidecar for one ROI/channel."""
     gpkg_path, json_path, stem = nlu.pred_graph_output_stem_paths(
@@ -205,31 +210,6 @@ def _parse_optional_float(s: str) -> Optional[float]:
     return float(s)
 
 
-def _parse_optional_int(s: str) -> Optional[int]:
-    """CLI helper: ``none``/``null``/``false`` -> None, else int."""
-    if str(s).strip().lower() in ("none", "null", "false", ""):
-        return None
-    return int(s)
-
-
-def _coerce_optional_meters(value, *, default_when_true: float, name: str) -> Optional[float]:
-    """Accept ``None``, a positive float (meters), or legacy bool (True->default, False->None)."""
-    if value is None:
-        return None
-    if isinstance(value, bool):
-        return default_when_true if value else None
-    v = float(value)
-    if v <= 0:
-        raise ValueError(f"{name} must be > 0 or None, got {value!r}")
-    return v
-
-
-def _coerce_densify(value) -> Optional[float]:
-    return _coerce_optional_meters(value, default_when_true=50.0, name="apls_densify")
-
-
-def _coerce_snap_to_edge(value) -> Optional[float]:
-    return _coerce_optional_meters(value, default_when_true=4.0, name="apls_snap_to_edge")
 
 
 def _parse_bool(s: str) -> bool:
@@ -292,6 +272,9 @@ def _build_predicted_graph(
     )
 
 
+# NOTE: the keyword defaults of ``run()`` below are the single source of truth for the
+# mask -> graph recipe behind the reported numbers (identical to every final config's
+# ``network_apls_eval``); the CLI defaults are read from this signature.
 def run(
     data_root: Path,
     save_path: Path,
@@ -300,24 +283,19 @@ def run(
     out_dir: Path,
     *,
     split: str = "val",
-    threshold: float = 0.5,
+    threshold: float = 0.2,
     overlap_combine: str = "nanmean",
-    connectivity: int = 4,
+    connectivity: int = 8,
     rdp_epsilon_m: float = 2.0,
-    endpoint_fix_enabled: bool = True,
+    endpoint_fix_enabled: bool = False,
     endpoint_fix_stage: str = "pre_rdp",
     merge_hop_threshold: float = 2.5,
-    apls_max_nodes_exact: Optional[int] = None,
     max_rois: Optional[int] = None,
-    apls_densify: Optional[float] = 50.0,
-    apls_snap_to_edge: Optional[float] = 4.0,
-    apls_symmetric: bool = True,
-    radius_fix_radius_m: Optional[float] = None,
-    apls_min_path_length_m: Optional[float] = None,
+    radius_fix_radius_m: Optional[float] = 5.0,
     open_iterations: int = 0,
-    close_iterations: int = 0,
-    morph_connectivity: int = 4,
-    remove_small_objects_enabled: bool = True,
+    close_iterations: int = 5,
+    morph_connectivity: int = 8,
+    remove_small_objects_enabled: bool = False,
     remove_small_objects_min_size_px: int = 8,
     skeletonize_enabled: bool = True,
     min_component_nodes: int = 5,
@@ -327,8 +305,6 @@ def run(
     profile: bool = False,
     save_pred_gpkg: bool = True,
 ) -> dict:
-    apls_densify = _coerce_densify(apls_densify)
-    apls_snap_to_edge = _coerce_snap_to_edge(apls_snap_to_edge)
     types = tuple(network_types) if network_types else NETWORK_TYPES
     profiler = _ProfileAggregator() if profile else None
 
@@ -379,7 +355,7 @@ def run(
 
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    results: List[apls.ApsSymmetricResult] = []
+    results: List[apls.AplsResult] = []
     n_rois_processed = 0
     n_rois_skipped = 0
     partial_rois: List[dict] = []
@@ -503,11 +479,6 @@ def run(
                         pred_graph,
                         roi=roi_dir.name,
                         network_type=network_type,
-                        densify=apls_densify,
-                        snap_to_edge=apls_snap_to_edge,
-                        symmetric=apls_symmetric,
-                        max_nodes_exact=apls_max_nodes_exact,
-                        min_path_length_m=apls_min_path_length_m,
                     )
                 results.append(result)
                 last_score = float(result.score)
@@ -574,12 +545,8 @@ def run(
             "endpoint_fix_enabled": endpoint_fix_enabled,
             "endpoint_fix_stage": endpoint_fix_stage,
             "merge_hop_threshold": merge_hop_threshold,
-            "apls_max_nodes_exact": apls_max_nodes_exact,
-            "apls_densify": apls_densify,
-            "apls_snap_to_edge": apls_snap_to_edge,
-            "apls_symmetric": apls_symmetric,
+            "apls_protocol": dict(apls.APLS_PROTOCOL),
             "radius_fix_radius_m": radius_fix_radius_m,
-            "apls_min_path_length_m": apls_min_path_length_m,
             "open_iterations": open_iterations,
             "close_iterations": close_iterations,
             "morph_connectivity": morph_connectivity,
@@ -674,6 +641,7 @@ def run(
 
 
 def build_argparser() -> argparse.ArgumentParser:
+    d = {k: v.default for k, v in inspect.signature(run).parameters.items()}
     p = argparse.ArgumentParser(
         description=(
             "Evaluate predicted network graphs (built from stitched per-ROI "
@@ -690,142 +658,92 @@ def build_argparser() -> argparse.ArgumentParser:
     p.add_argument("--network_graphs_root", type=str, required=True)
     p.add_argument("--split_manifest_csv", type=str, required=True)
     p.add_argument("--out_dir", type=str, required=True)
-    p.add_argument("--split", type=str, default="val")
-    p.add_argument("--threshold", type=float, default=0.5)
+    p.add_argument("--split", type=str, default=d["split"])
+    p.add_argument("--threshold", type=float, default=d["threshold"])
     p.add_argument(
         "--overlap_combine",
         type=str,
-        default="nanmean",
+        default=d["overlap_combine"],
         choices=["nanmean", "max", "first"],
     )
-    p.add_argument("--connectivity", type=int, default=4, choices=[4, 8])
-    p.add_argument("--rdp_epsilon_m", type=float, default=2.0)
+    p.add_argument("--connectivity", type=int, default=d["connectivity"], choices=[4, 8])
+    p.add_argument("--rdp_epsilon_m", type=float, default=d["rdp_epsilon_m"])
     p.add_argument(
         "--endpoint_fix_enabled",
         type=_parse_bool,
-        default=True,
+        default=d["endpoint_fix_enabled"],
         help="Run degree-1 diagonal endpoint repair in the predicted-graph pipeline "
-        "(default: true). Pass false/0/off to skip.",
+        "(default: false). Pass true/1/on to enable.",
     )
     p.add_argument(
         "--endpoint_fix_stage",
         type=str,
-        default="pre_rdp",
+        default=d["endpoint_fix_stage"],
         choices=["pre_rdp", "post_rdp"],
         help="When to run endpoint-fix relative to RDP (ignored if "
         "--endpoint_fix_enabled=false).",
     )
-    p.add_argument("--merge_hop_threshold", type=float, default=2.5)
+    p.add_argument("--merge_hop_threshold", type=float, default=d["merge_hop_threshold"])
     p.add_argument(
         "--min_component_nodes",
         type=int,
-        default=5,
+        default=d["min_component_nodes"],
         help=(
             "Drop predicted-graph connected components with fewer than this many nodes, "
             "applied last (after merge/radius-fix). Pass 0 or 1 to disable."
         ),
     )
     p.add_argument(
-        "--apls_max_nodes_exact",
-        type=_parse_optional_int,
-        default=None,
-        help=(
-            "Hard cap on exact O(V^2) APLS after densification (default: none = no cap). "
-            "Pass a positive int to enable."
-        ),
-    )
-    p.add_argument(
         "--max_rois", type=int, default=None, help="Optional limit on number of ROIs (debug)"
-    )
-    p.add_argument(
-        "--apls_densify",
-        type=_parse_optional_float,
-        default=50.0,
-        help=(
-            "Max edge length in meters for densification (default: 50). "
-            "Pass none/null to disable."
-        ),
-    )
-    p.add_argument(
-        "--apls_snap_to_edge",
-        type=_parse_optional_float,
-        default=4.0,
-        help=(
-            "Snap-to-edge radius in meters (default: 4). "
-            "Pass none/null for unrestricted nearest-node matching."
-        ),
-    )
-    p.add_argument(
-        "--apls_symmetric",
-        type=lambda s: str(s).lower() in ("1", "true", "yes"),
-        default=True,
-        help="Score both directions and take harmonic mean (default: true)",
-    )
-    p.add_argument(
-        "--no_apls_symmetric",
-        action="store_true",
-        help="Score only GT->pred (legacy unidirectional APLS)",
     )
     p.add_argument(
         "--radius_fix_radius_m",
         type=_parse_optional_float,
-        default=None,
+        default=d["radius_fix_radius_m"],
         help=(
             "Radius (meters) to connect every predicted-graph endpoint/isolated node to every "
             "other one within that radius, applied after merge (extension of endpoint-fix). "
-            "Pass none/null (default) to disable -- opt in explicitly, it changes the predicted "
-            "graph and therefore reported APLS numbers."
-        ),
-    )
-    p.add_argument(
-        "--apls_min_path_length_m",
-        type=_parse_optional_float,
-        default=None,
-        help=(
-            "SpaceNet-style short-path filter: GT/pred pairs whose shortest path is under this "
-            "many meters are excluded from APLS scoring (default: none/disabled -- e.g. pass 5 "
-            "for roads). Pass none/null to disable."
+            "Default: 5. Pass none/null to disable (changes the predicted graph and therefore "
+            "the reported APLS numbers)."
         ),
     )
     p.add_argument(
         "--open_iterations",
         type=int,
-        default=0,
+        default=d["open_iterations"],
         help="Erode-then-dilate pass count before remove_small/skeletonize, applied before "
-        "closing; 0 disables opening (default: 0, i.e. no morphology by default here, "
-        "unlike the visualization scripts -- kept off so the official metric stays "
-        "comparable to the baseline unless morphology is explicitly requested).",
+        "closing; 0 disables opening (default: 0).",
     )
     p.add_argument(
         "--close_iterations",
         type=int,
-        default=0,
+        default=d["close_iterations"],
         help="Dilate-then-erode pass count before remove_small/skeletonize, applied after "
-        "opening; 0 disables closing (default: 0).",
+        "opening; 0 disables closing (default: 5).",
     )
     p.add_argument(
         "--morph_connectivity",
         type=int,
-        default=4,
+        default=d["morph_connectivity"],
         choices=[4, 8],
-        help="Morphology structuring-element connectivity (default: 4)",
+        help="Morphology structuring-element connectivity (default: 8)",
     )
     p.add_argument(
         "--remove_small_objects_enabled",
         type=_parse_bool,
-        default=True,
-        help="Drop small connected components before skeletonize (default: true)",
+        default=d["remove_small_objects_enabled"],
+        help="Drop small connected components before skeletonize (default: false)",
     )
     p.add_argument(
         "--remove_small_objects_min_size_px",
         type=int,
-        default=8,
+        default=d["remove_small_objects_min_size_px"],
         help="Min connected-component size in pixels (default: 8)",
     )
     p.add_argument(
         "--skeletonize_enabled",
         type=_parse_bool,
-        default=True,
+        default=d["skeletonize_enabled"],
         help="Zhang-Suen skeletonize wide masks to 1px centerlines (default: true)",
     )
     p.add_argument(
@@ -877,7 +795,6 @@ def build_argparser() -> argparse.ArgumentParser:
 
 def main(argv: Optional[List[str]] = None) -> None:
     args = build_argparser().parse_args(argv)
-    apls_symmetric = False if args.no_apls_symmetric else bool(args.apls_symmetric)
     missing = (
         Path(args.missing_tiles_file).resolve()
         if args.missing_tiles_file
@@ -897,13 +814,8 @@ def main(argv: Optional[List[str]] = None) -> None:
         endpoint_fix_enabled=args.endpoint_fix_enabled,
         endpoint_fix_stage=args.endpoint_fix_stage,
         merge_hop_threshold=args.merge_hop_threshold,
-        apls_max_nodes_exact=args.apls_max_nodes_exact,
         max_rois=args.max_rois,
-        apls_densify=args.apls_densify,
-        apls_snap_to_edge=args.apls_snap_to_edge,
-        apls_symmetric=apls_symmetric,
         radius_fix_radius_m=args.radius_fix_radius_m,
-        apls_min_path_length_m=args.apls_min_path_length_m,
         open_iterations=args.open_iterations,
         close_iterations=args.close_iterations,
         morph_connectivity=args.morph_connectivity,

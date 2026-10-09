@@ -23,7 +23,7 @@ try:
 except ImportError:
     HAS_OGR = False
 
-from pointcept.datasets.preprocessing.flair3d_plus.apls_metric import ApsSymmetricResult
+from pointcept.datasets.preprocessing.flair3d_plus.apls_metric import AplsResult
 from pointcept.datasets.preprocessing.flair3d_plus.network_label_utils import (
     load_roi_exported_network_graph,
     pred_graph_output_stem_paths,
@@ -156,7 +156,7 @@ class TestPredGraphDump(unittest.TestCase):
     def test_dump_writes_gpkg_sidecar_and_metadata(self):
         eval_network_apls = _import_eval_network_apls()
         graph = _line_graph()
-        result = ApsSymmetricResult(
+        result = AplsResult(
             roi="UU-S1-4",
             network_type="ROADS",
             score=0.5,

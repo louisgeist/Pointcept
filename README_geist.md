@@ -288,35 +288,18 @@ won't appear in the real per-ROI prediction. With `--network-graphs-root` in til
 per-channel APLS score (GT clipped to the subtile) is a **local sanity-check only**. In
 `--roi` mode, stitching + APLS match the official per-ROI metric.
 
-Official APLS (`tools/eval_network_apls.py` / `cfg.network_apls_eval`) follows SpaceNet defaults:
-`apls_densify=50` (meters; `None` / `--apls_densify none` to disable), `apls_snap_to_edge=4`
-(meters; `None` / `--apls_snap_to_edge none` = unrestricted nearest-node matching), bidirectional
-harmonic mean (`--no_apls_symmetric` for GT→pred only). Same keys work in `network_apls_eval`.
-These `apls_*`-prefixed params are the ones that feed `apls_symmetric_score` directly (the APLS
-math itself); everything else in `network_apls_eval` (threshold, morphology, endpoint-fix, merge,
-...) controls upstream mask→graph construction instead.
-`apls_max_nodes_exact` applies **after** densification (`None` disables the cap).
+Official APLS (`tools/eval_network_apls.py` / `cfg.network_apls_eval`) uses a **fixed protocol**
+(`APLS_PROTOCOL` in `pointcept/datasets/preprocessing/flair3d_plus/apls_metric.py`, version `1.0`):
+edges densified to ≤ 50 m, control points snapped onto the other graph's skeleton within 4 m, pairs
+with a source path < 5 m ignored, both directions (G→G′ and G′→G) combined by harmonic mean. These
+values are module constants, **not** CLI flags or config keys: do not add `apls_*` keys to
+`network_apls_eval` (config parsing raises a `ValueError` if you do). The protocol is written to
+`network_apls_metrics.json` (`config.apls_protocol`). Everything else in `network_apls_eval`
+(threshold, morphology, endpoint-fix, merge, ...) controls upstream mask→graph construction and stays
+tunable.
 
 Export is sized for **native 1 m resolution**: each raster panel is ≥ `W×H` PNG pixels
 (one image pixel per 1 m grid cell, `interpolation='nearest'`). Full-ROI figures are large.
-
-**Interactive HTML viewer** (`scripts/network_html_viewer.py`, full-ROI only): same data path
-as `--roi` mode above (stitching, predicted-graph pipeline, APLS diagnostics), but renders a
-directory of native-resolution per-panel PNGs + a self-contained `index.html` that pans/zooms
-all panels in sync, with APLS worst-paths / GT↔pred node-collapse overlays as hoverable SVG
-(useful to zoom into exactly which pixel/edge breaks an APLS score, e.g. a 1-pixel mask gap
-splitting the predicted graph into two disconnected components):
-
-```bash
-python scripts/network_html_viewer.py \
-  --roi data/flair3d_plus/test/D075-2021_LIDARHD/UU-S1-4 \
-  --result-dir /data/geist/superpixel_transformer_dev/local/temp/network_UU-S1-4 \
-  --threshold 0.2 \
-  --network-graphs-root /data/geist/Flair3D-build/data/network_graphs \
-  --out-dir outputs/html_viewer
-```
-
-Then open `/tmp/AF-S1-22_viewer/index.html` in a browser (`file://` works directly, no server).
 
 **Nathab inference dumps** (point-wise linear-head class + tile-wise pooled class).
 `MultiTaskTester` writes, next to `{tile}_pred_segment.npy` / `{tile}_reg_elevation.npy`:

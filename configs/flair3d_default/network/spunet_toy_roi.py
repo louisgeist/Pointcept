@@ -171,17 +171,8 @@ network_apls_eval = dict(
     close_iterations=5,  # optional closing (dilate-then-erode) before remove_small; 0 disables
     morph_connectivity=8,  # 4 or 8
     min_component_nodes=5,  # drop connected components with fewer nodes than this after merge
-    # APLS scoring itself (parameters that feed apls_symmetric_score directly);
-    # everything above builds the predicted graph. See tools/eval_network_apls.py.
-    # Hard cap on exact O(V^2) APLS after densification (raises rather than silently
-    # subsampling). None disables the cap. The whole run_network_apls_eval_if_configured()
-    # call is one try/except around the *entire* eval_network_apls.run() -- a single
-    # oversized ROI with a finite cap would otherwise abort APLS for every other ROI.
-    apls_max_nodes_exact=None,
-    apls_densify=50.0,  # SpaceNet-aligned max edge length (meters) before matching; None to disable
-    apls_snap_to_edge=4.0,  # snap-to-edge control-point matching radius (meters); None = unrestricted NN
-    apls_symmetric=True,  # score both GT->pred and pred->GT, take the harmonic mean
-    apls_min_path_length_m=5,  # SpaceNet-style short-path filter (meters); None = disabled
+    # APLS metric parameters are fixed (apls_metric.APLS_PROTOCOL), not configurable;
+    # everything in this dict builds the predicted graph. See tools/eval_network_apls.py.
 )
 
 train_multitask_keys, val_multitask_keys, multitask_index_valid_keys = (

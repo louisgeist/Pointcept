@@ -18,6 +18,7 @@ from torch.nn.parallel import DistributedDataParallel
 import pointcept.utils.comm as comm
 from pointcept.utils.env import get_random_seed, set_seed
 from pointcept.utils.config import Config, ConfigDict, DictAction
+from pointcept.utils.network_apls import validate_network_apls_eval_cfg
 
 
 def create_ddp_model(model, *, fp16_compression=False, **kwargs):
@@ -177,6 +178,8 @@ def default_config_parser(file_path, options):
             "grad_norm (real GradNorm) and grad_norm_lite are mutually "
             "exclusive multitask loss-balancing schemes; enable at most one."
         )
+
+    validate_network_apls_eval_cfg(cfg)
 
     if "data" not in cfg:
         cfg.data = ConfigDict()

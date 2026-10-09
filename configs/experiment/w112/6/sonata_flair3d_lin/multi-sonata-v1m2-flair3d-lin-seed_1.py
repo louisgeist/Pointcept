@@ -228,11 +228,6 @@ network_apls_eval = dict(
     close_iterations=5,
     morph_connectivity=8,
     min_component_nodes=5,
-    apls_max_nodes_exact=None,
-    apls_densify=50.0,
-    apls_snap_to_edge=4.0,
-    apls_symmetric=True,
-    apls_min_path_length_m=5,
 )
 
 train_multitask_keys, val_multitask_keys, multitask_index_valid_keys = (

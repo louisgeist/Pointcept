@@ -13,6 +13,31 @@ from pathlib import Path
 
 from pointcept.utils.comm import is_main_process
 
+# Former ``network_apls_eval`` keys, now frozen as module constants in ``apls_metric.py``
+# (``APLS_PROTOCOL``). Kept here only to reject stale configs with an explicit message.
+_REMOVED_APLS_KEYS = (
+    "apls_densify",
+    "apls_snap_to_edge",
+    "apls_symmetric",
+    "apls_min_path_length_m",
+    "apls_max_nodes_exact",
+)
+
+
+def validate_network_apls_eval_cfg(cfg):
+    """Fail at config-parse time if ``cfg.network_apls_eval`` still sets fixed APLS params."""
+    opts = cfg.get("network_apls_eval", None)
+    if not opts:
+        return
+    stale = [k for k in _REMOVED_APLS_KEYS if k in opts]
+    if stale:
+        raise ValueError(
+            f"network_apls_eval: {stale} can no longer be set. The APLS metric parameters "
+            "are fixed (see APLS_PROTOCOL in pointcept/datasets/preprocessing/flair3d_plus/"
+            "apls_metric.py); remove these keys from the config. Only the mask->graph "
+            "parameters (threshold, morphology, merge, ...) remain configurable."
+        )
+
 
 def run_network_apls_eval_if_configured(cfg, logger):
     """Opt-in via `cfg.network_apls_eval` (a dict); no-op if absent.
