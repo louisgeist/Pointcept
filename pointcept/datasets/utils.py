@@ -58,8 +58,9 @@ def _summarize_pack_batches(batches, sizes, voxel_budget):
 
 
 def load_voxel_size_csv(path):
-    """Load patch_id -> n_voxels from an enriched scene_split_manifest CSV.
+    """Load tile_id -> n_voxels from tiles.csv or an enriched scene_split_manifest CSV.
 
+    The id column is ``tile_id`` (tiles.csv) or ``patch_id`` (legacy manifest).
     Rows with missing/non-positive n_voxels are skipped.
     """
     import csv
@@ -69,7 +70,8 @@ def load_voxel_size_csv(path):
         reader = csv.DictReader(handle)
         if reader.fieldnames is None:
             raise ValueError(f"Empty voxel size CSV: {path}")
-        required = {"patch_id", "n_voxels"}
+        id_column = "tile_id" if "tile_id" in reader.fieldnames else "patch_id"
+        required = {id_column, "n_voxels"}
         missing = required - set(reader.fieldnames)
         if missing:
             raise KeyError(f"Missing columns in {path}: {sorted(missing)}")
@@ -77,7 +79,7 @@ def load_voxel_size_csv(path):
             error = (row.get("error") or "").strip()
             if error:
                 continue
-            patch_id = (row.get("patch_id") or "").strip()
+            patch_id = (row.get(id_column) or "").strip()
             if not patch_id:
                 continue
             n_voxels = row.get("n_voxels")

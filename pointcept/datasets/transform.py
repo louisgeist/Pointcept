@@ -265,7 +265,7 @@ class Flair3DLabelRemap(object):
             target_def = get_definition(task_key, target_name)
             # Default *on-disk storage* definition -- NOT the same as the default
             # *training-target* definition (get_default_definition_name), which happen to
-            # coincide for segment/forest/land_use but not for natural_habitat: preprocessing
+            # coincide for segment/forest but not for natural_habitat: preprocessing
             # always writes natural_habitat.npy in the raw/finest "default" CarHab taxonomy
             # (43 raw classes) so several different targets can be fanned out from the same
             # on-disk file on the fly, but get_default_definition_name("natural_habitat")

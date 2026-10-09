@@ -20,11 +20,6 @@ data/
 │   │   ├── <Patch>.tif
 │   │   ├── ...
 │   └── ...
-├── LAND_USE/
-│   ├── <ROI>/
-│   │   ├── <Patch>.tif
-│   │   ├── ...
-│   └── ...
 └── NATURAL_HABITAT/
     ├── <ROI>/
     │   ├── <Patch>.tif
@@ -81,17 +76,6 @@ The forest/non-forest definition follows the **FAO (Food and Agriculture Organiz
 
 ---
 
-### LAND_USE — Land Use Map
-
-**Source:** Layer *Usage* of [OCS GE](https://cartes.gouv.fr/rechercher-une-donnee/dataset/IGNF_OCS-GE) (Occupation du Sol à Grande Échelle), IGN  
-**Format:** GeoTIFF raster, 20 cm/px  
-**Coverage:** 73 out of 74 (département, year) couples — when present, coverage within the couple is complete  
-**Classes:** 20 classes — see [`land_use_classes.txt`](land_use_classes.txt)
-
-A rasterized version of the *Usage* (functional land use) layer of OCS GE, a national high-resolution land occupation product. Each pixel is assigned one of 20 land use classes encoding the functional purpose of the land (agriculture, housing, industry, transport, etc.).
-
----
-
 ### NATURAL_HABITAT — Natural Habitat Map
 
 **Source:** [CarHab](https://cartes.gouv.fr/rechercher-une-donnee/dataset/INPN-CARHAB_HABITATS), INPN (Inventaire National du Patrimoine Naturel)  
@@ -127,7 +111,6 @@ The file `lidarhd_aerial_date_gap.gpkg` records, for each patch, the acquisition
 | DEM_ELEV | All 74 | Complete (copied from FLAIR-HUB) |
 | LIDARHD | All 74 | Partial — see `zone_completeness.json` |
 | FOREST | All 74 | Complete |
-| LAND_USE | 73 / 74 | Complete when present |
 | NATURAL_HABITAT | 55 / 74 | Complete when present |
 | LIDARHD / AERIAL_RGBI date gap | All 74 | Complete — patches with no LiDAR acquisition have `date_lidarhd` = `<NA>` and `date_gap_days` = `NULL` |
 

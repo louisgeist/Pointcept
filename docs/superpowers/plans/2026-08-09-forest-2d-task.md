@@ -1037,7 +1037,6 @@ In `pointcept/datasets/flair3d.py`, replace (currently lines 28-37):
 ```python
 FLAIR3D_SPECIFIC_ASSETS = (
     "forest",
-    "land_use",
     "natural_habitat",
     "elevation",
     "climatic_domain",
@@ -1052,7 +1051,6 @@ with:
 ```python
 FLAIR3D_SPECIFIC_ASSETS = (
     "forest",
-    "land_use",
     "natural_habitat",
     "elevation",
     "climatic_domain",

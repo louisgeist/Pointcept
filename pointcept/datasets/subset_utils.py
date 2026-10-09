@@ -407,14 +407,15 @@ def load_sidecar_keys(manifest_path: str) -> Set[Tuple[str, str]]:
         reader = csv.DictReader(handle)
         if reader.fieldnames is None:
             raise ValueError(f"Empty sidecar CSV: {manifest_path}")
-        missing = {"split", "patch_id"} - set(reader.fieldnames)
+        id_column = "tile_id" if "tile_id" in reader.fieldnames else "patch_id"
+        missing = {"split", id_column} - set(reader.fieldnames)
         if missing:
             raise KeyError(
                 f"Sidecar CSV missing columns {sorted(missing)}: {manifest_path}"
             )
         for row in reader:
             split = (row.get("split") or "").strip()
-            patch_id = (row.get("patch_id") or "").strip()
+            patch_id = (row.get(id_column) or "").strip()
             if split and patch_id:
                 keys.add((split, patch_id))
     return keys

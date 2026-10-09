@@ -10,10 +10,6 @@ raw/
 │   └── <DEPT_YEAR>_FOREST/
 │       └── <ROI>/
 │           └── <PATCH>.tif
-├── LAND_USE/
-│   └── <DEPT_YEAR>_LAND_USE/
-│       └── <ROI>/
-│           └── <PATCH>.tif
 ├── NATURAL_HABITAT/
 │   └── <DEPT_YEAR>_NATURAL_HABITAT/
 │       └── <ROI>/
@@ -27,7 +23,7 @@ raw/
 ## Naming Convention
 
 - `<DEPT_YEAR>` example: `D010-2019`
-- Raster folder suffixes: `_FOREST`, `_LAND_USE`, `_NATURAL_HABITAT`, `_DEM_ELEV`
+- Raster folder suffixes: `_FOREST`, `_NATURAL_HABITAT`, `_DEM_ELEV`
 - `<ROI>` (Region Of Interest) example: `AA-S1-1`
 - `<PATCH>=<DEPT_YEAR>_<LABELNAME>_<ROI>_<I-J>` example: `D010-2019_LIDARHD_AA-S1-1_1-1` (same patch id across modalities, only extension changes)
     - with `<I-J>`being the subtitle coordinates.
@@ -39,24 +35,26 @@ raw/
 discover scenes: every patch to process is taken from the manifest, and any
 on-disk discrepancy is reported in dedicated text files under `<output_root>`.
 
-Required manifest columns:
+Required columns (MALiBU3D `tiles.csv` names; a legacy
+`scene_split_manifest.csv` is also accepted, aliases in parentheses — see
+`tile_catalog.py` and `README_tiles_csv_geist.md` at the repo root):
 
 ```
-split, dept_year, roi, scene_i_j, patch_id,
-LIDARHD, NATURAL_HABITAT, LAND_USE, DEM_ELEV,
+split, dept_year, roi, scene_i_j, tile_id (patch_id),
+has_natural_habitat (NATURAL_HABITAT), has_elevation (DEM_ELEV),
 date_gap_days
 ```
 
 Rules applied per row:
 
-- `LIDARHD=False`: row skipped silently (no scene output).
-- `LIDARHD=True` with PLY missing on disk: reported as `Missing PLY`.
+- Legacy manifest only: `LIDARHD=False` rows are skipped silently (`tiles.csv`
+  only lists LiDAR tiles).
+- PLY missing on disk: reported as `Missing PLY`.
 - `FOREST` is sampled for every kept patch (no manifest column — assumed
   available everywhere); a missing FOREST raster is reported as
   `Missing modality raster`.
-- `NATURAL_HABITAT` / `LAND_USE` / `DEM_ELEV`: sampled only when the
-  corresponding column is `True`; a missing raster despite `True` is reported
-  as `Missing modality raster`.
+- `has_natural_habitat` / `has_elevation`: sampled only when the column is
+  `True`; a missing raster despite `True` is reported as `Missing modality raster`.
 - `date_gap_days` is read directly from the manifest and stored in
   `<scene>/meta.json` (no GeoPackage dependency).
 
@@ -97,5 +95,5 @@ axes-only storage.
 Use `--force` to reprocess every patch unconditionally. This is required when:
 
 - `--label_definition` is changed between runs.
-- Manifest modality flags (`NATURAL_HABITAT`, `LAND_USE`, `DEM_ELEV`) are
+- Manifest modality flags (`has_natural_habitat`, `has_elevation`) are
   toggled, since stale outputs from a previous run would otherwise be kept.

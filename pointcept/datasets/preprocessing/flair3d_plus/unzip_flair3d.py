@@ -36,7 +36,6 @@ from zipfile import ZipFile
 EXPECTED_MODALITIES = (
     "DEM_ELEV",
     "FOREST",
-    "LAND_USE",
     "LIDARHD",
     "NATURAL_HABITAT",
 )
@@ -44,7 +43,6 @@ EXPECTED_MODALITIES = (
 SOURCE_ROOT_SIDE_CAR_FILES = (
     "lidarhd_aerial_date_gap.gpkg",
     "natural_habitat_classes.txt",
-    "land_use_classes.txt",
     "missing_in_zone.json",
     "zone_completeness.json",
     "forest_classes.txt",

@@ -1,8 +1,8 @@
 """Standalone backfill: write network.npy (3, H, W) binary masks per Flair3D+ tile.
 
-Driven by the split manifest CSV (same contract as ``preprocess_flair3d_v2``):
-each ``LIDARHD=True`` row must already exist under ``data_root`` with
-``coord.npy``. Missing patches are hard errors (manifest is the source of
+Driven by the tile CSV (MALiBU3D ``tiles.csv`` or a legacy split manifest, read
+via ``tile_catalog.py``; same contract as ``preprocess_flair3d_v2``): each LiDAR
+tile must already exist under ``data_root`` with ``coord.npy``. Missing patches are hard errors (manifest is the source of
 truth; disk is only checked). Known-missing tiles listed in
 ``missing_coord_tiles.details.csv`` are skipped.
 
@@ -11,9 +11,10 @@ each ROI network once into unique 1 m Lambert cells (longitudinal step plus
 optional lateral ``± line_width_m / 2`` offsets), then slices those cells into
 per-patch grids. Empty masks write ``meta.network`` only (no ``network.npy``).
 
-Availability flags ``ROADS`` / ``RAILROADS`` / ``TRANSMISSION_LINES`` must be
-present in the split manifest (enriched by Flair3D-build). A ``True`` flag with
-a missing ``*_graph.gpkg`` is a hard error.
+Every ``*_graph.gpkg`` found under ``--network_graphs_root`` is rasterized. Only
+ROADS has a catalog flag (``has_roads_graph``, legacy ``ROADS``): a ``True`` flag
+with a missing ROADS graph is a hard error. RAILROADS / TRANSMISSION_LINES have
+no flag (not released) and are rasterized whenever their graph exists.
 
 Example::
 
@@ -27,7 +28,6 @@ python pointcept/datasets/preprocessing/flair3d_plus/rasterize_network.py \
 from __future__ import annotations
 
 import argparse
-import csv
 import json
 import sys
 from collections import defaultdict
@@ -48,8 +48,8 @@ try:
     from network_label_utils import (  # type: ignore
         NETWORK_TYPES,
         load_roi_exported_networks,
-        parse_bool_flag,
     )
+    from tile_catalog import iter_tiles, tile_csv_columns  # type: ignore
     from network_xy_raster_utils import (  # type: ignore
         abs_xy_bounds_from_coord,
         default_missing_coord_details_csv,
@@ -62,7 +62,10 @@ except ImportError:  # pragma: no cover
     from pointcept.datasets.preprocessing.flair3d_plus.network_label_utils import (
         NETWORK_TYPES,
         load_roi_exported_networks,
-        parse_bool_flag,
+    )
+    from pointcept.datasets.preprocessing.flair3d_plus.tile_catalog import (
+        iter_tiles,
+        tile_csv_columns,
     )
     from pointcept.datasets.preprocessing.flair3d_plus.network_xy_raster_utils import (
         abs_xy_bounds_from_coord,
@@ -75,14 +78,7 @@ except ImportError:  # pragma: no cover
 
 
 REQUIRED_MANIFEST_COLUMNS = frozenset(
-    {
-        "split",
-        "dept_year",
-        "roi",
-        "patch_id",
-        "LIDARHD",
-        *NETWORK_TYPES,
-    }
+    {"split", "dept_year", "roi", "tile_id", "has_roads_graph"}
 )
 
 
@@ -94,7 +90,7 @@ class ManifestPatch:
     dept_year: str
     roi: str
     patch_id: str
-    flags: Tuple[Tuple[str, bool], ...]  # frozen network flags
+    flags: Tuple[Tuple[str, bool], ...]  # frozen catalog flags (ROADS only)
 
     @property
     def flags_dict(self) -> Dict[str, bool]:
@@ -120,56 +116,38 @@ def load_manifest_patches(
     network_types: Sequence[str] = NETWORK_TYPES,
     known_missing: Optional[set[Tuple[str, str]]] = None,
 ) -> Tuple[List[ManifestPatch], int]:
-    """Load LIDARHD=True rows from the manifest (optionally filtered by split).
+    """Load LiDAR tiles from ``tiles.csv`` / legacy manifest (optionally filtered by split).
 
     Skips ``(split, patch_id)`` in ``known_missing`` (same exclusions as training).
-    Returns ``(patches, n_skipped_known_missing)``.
+    Returns ``(patches, n_skipped_known_missing)``. ``network_types`` is kept for
+    API compatibility; only ROADS carries a catalog flag.
     """
     if not split_manifest_csv.is_file():
         raise FileNotFoundError(f"split_manifest_csv not found: {split_manifest_csv}")
+    missing_cols = sorted(REQUIRED_MANIFEST_COLUMNS - tile_csv_columns(split_manifest_csv))
+    if missing_cols:
+        raise ValueError(
+            f"split_manifest_csv missing columns {missing_cols} "
+            "(expected tiles.csv or scene_split_manifest.csv with ROADS)."
+        )
 
-    splits_set = {s.strip().lower() for s in splits} if splits else None
-    types = tuple(network_types)
     skip = known_missing or set()
     patches: List[ManifestPatch] = []
     n_skipped = 0
-
-    with split_manifest_csv.open("r", encoding="utf-8", newline="") as f:
-        reader = csv.DictReader(f)
-        if reader.fieldnames is None:
-            raise ValueError(f"CSV has no header: {split_manifest_csv}")
-        missing_cols = [
-            c for c in REQUIRED_MANIFEST_COLUMNS if c not in reader.fieldnames
-        ]
-        if missing_cols:
-            raise ValueError(
-                f"split_manifest_csv missing columns {missing_cols}. "
-                "Enrich network flags via Flair3D-build export_network_graphs.py."
+    for tile in iter_tiles(split_manifest_csv, splits):
+        if (tile.split, tile.tile_id) in skip:
+            n_skipped += 1
+            continue
+        flags = (("ROADS", bool(tile.has_roads_graph)),) if "ROADS" in network_types else ()
+        patches.append(
+            ManifestPatch(
+                split=tile.split,
+                dept_year=tile.dept_year,
+                roi=tile.roi,
+                patch_id=tile.tile_id,
+                flags=flags,
             )
-        for row in reader:
-            split = (row.get("split") or "").strip().lower()
-            dept_year = (row.get("dept_year") or "").strip()
-            roi = (row.get("roi") or "").strip()
-            patch_id = (row.get("patch_id") or "").strip()
-            if not split or not dept_year or not roi or not patch_id:
-                continue
-            if splits_set is not None and split not in splits_set:
-                continue
-            if not parse_bool_flag(row.get("LIDARHD")):
-                continue
-            if (split, patch_id) in skip:
-                n_skipped += 1
-                continue
-            flags = tuple((t, parse_bool_flag(row.get(t))) for t in types)
-            patches.append(
-                ManifestPatch(
-                    split=split,
-                    dept_year=dept_year,
-                    roi=roi,
-                    patch_id=patch_id,
-                    flags=flags,
-                )
-            )
+        )
     return patches, n_skipped
 
 
@@ -322,7 +300,7 @@ def process_patch(
         "channel_order": list(NETWORK_TYPES),
         "sample_step_m": float(sample_step_m),
         "line_width_m": float(line_width_m),
-        "manifest_flags": {k: bool(flags.get(k, False)) for k in NETWORK_TYPES},
+        "manifest_flags": {k: bool(v) for k, v in flags.items()},
         "abs_xy_bounds": [xmin, ymin, xmax, ymax],
         "positive_pixel_counts": positive_counts,
         "empty": bool(is_empty),
@@ -540,8 +518,8 @@ def build_argparser() -> argparse.ArgumentParser:
         type=str,
         required=True,
         help=(
-            "scene_split_manifest.csv enriched with ROADS/RAILROADS/"
-            "TRANSMISSION_LINES; drives which patches to process"
+            "tiles.csv (or legacy scene_split_manifest.csv with ROADS); "
+            "drives which patches to process"
         ),
     )
     p.add_argument(

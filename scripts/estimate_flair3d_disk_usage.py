@@ -35,7 +35,6 @@ DEFAULT_EXCLUDE = (
     "forest.npy",
     "natural_habitat_multilabel.npy",
     "climatic_domain.npy",
-    "land_use.npy",
 )
 
 # Fallback when a .npy header cannot be read. Shapes use N / H / W placeholders.
@@ -46,7 +45,6 @@ KNOWN_NPY_META: dict[str, tuple[str, str]] = {
     "strength.npy": ("float32", "(N,)"),
     "forest.npy": ("int16", "(N,)"),
     "natural_habitat.npy": ("uint8", "(N, 4)"),
-    "land_use.npy": ("int16", "(N,)"),
     "elevation.npy": ("float32", "(N,)"),
     "coord_translation.npy": ("float64", "(3,)"),
     "climatic_domain.npy": ("int32", "()"),

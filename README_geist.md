@@ -56,7 +56,7 @@ sh scripts/train.sh -g 1 -d s3dis -c ptv3_nonormal -n ptv3_nonormal
 #### Preprocessing
 
 Label remaps are defined in `pointcept/datasets/preprocessing/flair3d_plus/flair3d_label_remap.py`.
-Use `--{task}_definition` flags to override defaults (segment=v20, land_use=default,
+Use `--{task}_definition` flags to override defaults (segment=v20,
 natural_habitat sampling=`default` CarHab, forest=default). `segment=v20` matches Flair3D-build
 label v20 (same finer12 taxonomy as v19; upstream other-infra filter only).
 On disk, `segment.npy` is **`uint8`**, and `natural_habitat.npy` is baked to
@@ -111,7 +111,7 @@ python pointcept/datasets/preprocessing/flair3d_plus/preprocess_flair3d_v2.py \
  --force
 ```
 
-Training configs for segment / land_use / forest must still match on-disk definitions
+Training configs for segment / forest must still match on-disk definitions
 (or use `Flair3DLabelRemap` where applicable). Nathab multitask axes no longer use a
 CarHab storage remap.
 
@@ -541,7 +541,6 @@ Configs under [configs/flair3d_default/](configs/flair3d_default/) — one folde
 configs/flair3d_default/
 ├── segment/       # litept|spunet|ptv3|kpconvx-v1m0-flair3d.py (self-contained each)
 ├── forest/
-├── land_use/
 └── natural_habitat/
 ```
 
@@ -550,7 +549,7 @@ Each file inherits only `default_runtime`; task wiring uses `init_task_configs` 
 Example:
 
 ```bash
-python tools/train.py --config-file configs/flair3d_default/land_use/litept-v1m0-flair3d.py --num-gpus 1
+python tools/train.py --config-file configs/flair3d_default/forest/litept-v1m0-flair3d.py --num-gpus 1
 ```
 
 ```bash
@@ -559,13 +558,13 @@ python tools/train.py --config-file configs/experiment/w96/6/flair_lp/segment-li
 
 Multi-target training (all semantic tasks + elevation) remains in `multi-*-v1m0-flair3d.py` at the root of `flair3d_default/`.
 
-#### Flair3D+ multi-target (segment, forest, land_use, natural_habitat, elevation)
+#### Flair3D+ multi-target (segment, forest, natural_habitat, elevation)
 
 Class names and `num_classes` / `ignore_index` per semantic target are defined in
 [pointcept/datasets/flair3d_config_utils.py](pointcept/datasets/flair3d_config_utils.py).
 
 - **Semantic targets**: set `target_key` on `Flair3DDataset` (train/val/test) to one of
-`segment`, `forest`, `land_use`, `natural_habitat`. The corresponding `*.npy` is
+`segment`, `forest`, `natural_habitat`. The corresponding `*.npy` is
 copied into `segment` for the existing GridSample / loss pipeline. Example config:
 [configs/flair3d_plus/litept_target_forest.py](configs/flair3d_plus/litept_target_forest.py).
 - 

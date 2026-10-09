@@ -1,7 +1,7 @@
 """
 Flair3D+ unified label definitions and LUT remapping. (LUT: look-up table)
 
-Single registry for all semantic tasks (segment, forest, land_use, natural_habitat).
+Single registry for all semantic tasks (segment, forest, natural_habitat).
 Used by preprocess_flair3d_v2 and flair3d_config_utils (training metadata).
 
 Source-agnostic: remapping applies the same whether labels come from a PLY field
@@ -18,7 +18,6 @@ import numpy as np
 SEMANTIC_TASK_KEYS: Tuple[str, ...] = (
     "segment",
     "forest",
-    "land_use",
     "natural_habitat",
 )
 
@@ -113,29 +112,6 @@ _SEGMENT_V19_NAMES: Tuple[str, ...] = (
 
 _FOREST_NAMES: Tuple[str, ...] = ("Not Forest", "Forest", "Void")
 
-_LAND_USE_NAMES: Tuple[str, ...] = (
-    "Agriculture",
-    "Sylviculture",
-    "Activites extraction",
-    "Peche et aquaculture",
-    "Autres productions primaires",
-    "Production secondaire",
-    "Production secondaire tertiaire residentiel",
-    "Production tertiaire",
-    "Reseaux routiers",
-    "Reseaux ferres",
-    "Reseaux aeriens",
-    "Reseaux fluvial maritime",
-    "Autres reseaux transport",
-    "Services logistiques stockage",
-    "Reseaux utilite publique",
-    "Usage residentiel",
-    "Zones en transition",
-    "Zones abandonnees",
-    "Sans usage",
-    "Usage inconnu",
-)
-
 _NATURAL_HABITAT_NAMES: Tuple[str, ...] = (
     "Habitat ouvert sur substrat acide et humide du domaine tempéré",
     "Habitat ouvert sur substrat acide et mésique du domaine tempéré",
@@ -181,59 +157,6 @@ _NATURAL_HABITAT_NAMES: Tuple[str, ...] = (
     "Zone bâtie et autre habitat artificiel",
     "Routes & voies verrées",
     "Void",
-)
-
-_LAND_USE_COARSE_NAMES: Tuple[str, ...] = (
-    "Production primaire",
-    "Production secondaire et tertiaire",
-    "Reseaux de transport",
-    "Services et utilite publique",
-    "Usage residentiel",
-    "Zones en transition ou abandonnees",
-    "Sans usage",
-    "Usage inconnu",
-)
-
-# Raw ids 0-19 match land_use_classes.txt keys 1-20 (0-indexed).
-# filtered: missing / mixed classes -> void (train id 10).
-_LAND_USE_FILTERED_NAMES: Tuple[str, ...] = (
-    "Agriculture",
-    "Sylviculture",
-    "Extraction activities",
-    "Secondary production",
-    "Tertiary production",
-    "Road networks",
-    "Rail networks",
-    "Air networks",
-    "Residential use",
-    "No land use",
-    "Void",
-)
-
-_LAND_USE_FILTERED_LUT = np.array(
-    [
-        0,   # 0  Agriculture
-        1,   # 1  Sylviculture
-        2,   # 2  Extraction activities
-        10,  # 3  Fishing and aquaculture -> void
-        10,  # 4  Other primary production -> void
-        3,   # 5  Secondary production
-        10,  # 6  Secondary, tertiary and residential (mixed) -> void
-        4,   # 7  Tertiary production
-        5,   # 8  Road networks
-        6,   # 9  Rail networks
-        7,   # 10 Air networks
-        10,  # 11 Inland and maritime transport networks -> void
-        10,  # 12 Other transport networks -> void
-        10,  # 13 Logistics and storage services -> void
-        10,  # 14 Utility networks -> void
-        8,   # 15 Residential use
-        10,  # 16 Transition zones -> void
-        10,  # 17 Abandoned zones -> void
-        9,   # 18 No land use
-        10,  # 19 Unknown use -> void
-    ],
-    dtype=np.int32,
 )
 
 _NATURAL_HABITAT_BY_DOMAIN_NAMES: Tuple[str, ...] = (
@@ -387,14 +310,12 @@ class PreprocessLabelDefinitions:
 
   segment: LabelDefinition
   forest: LabelDefinition
-  land_use: LabelDefinition
   natural_habitat: LabelDefinition
 
   def to_meta_dict(self) -> Dict[str, str]:
     return {
       "segment": self.segment.name,
       "forest": self.forest.name,
-      "land_use": self.land_use.name,
       "natural_habitat": self.natural_habitat.name,
     }
 
@@ -655,56 +576,6 @@ def _register_forest_definitions() -> Dict[str, LabelDefinition]:
   }
 
 
-def _register_land_use_definitions() -> Dict[str, LabelDefinition]:
-  identity = np.arange(20, dtype=np.int32)
-  coarse_lut = build_lut_from_groups(
-    20,
-    {
-      0: [0, 1, 2, 3, 4],
-      1: [5, 6, 7],
-      2: [8, 9, 10, 11, 12],
-      3: [13, 14],
-      4: [15],
-      5: [16, 17],
-      6: [18],
-      7: [19],
-    },
-    default_train_id=7,
-  )
-  return {
-    "default": _make_definition(
-      "land_use",
-      "default",
-      num_raw_classes=20,
-      lut=identity,
-      names=_LAND_USE_NAMES,
-      ignore_index=-1,
-      missing_fill_raw_id=19,
-      source_field="LAND_USE",
-    ),
-    "coarse": _make_definition(
-      "land_use",
-      "coarse",
-      num_raw_classes=20,
-      lut=coarse_lut,
-      names=_LAND_USE_COARSE_NAMES,
-      ignore_index=-1,
-      missing_fill_raw_id=19,
-      source_field="LAND_USE",
-    ),
-    "filtered": _make_definition(
-      "land_use",
-      "filtered",
-      num_raw_classes=20,
-      lut=_LAND_USE_FILTERED_LUT,
-      names=_LAND_USE_FILTERED_NAMES,
-      ignore_index=10,
-      missing_fill_raw_id=19,
-      source_field="LAND_USE",
-    ),
-  }
-
-
 def _register_natural_habitat_definitions() -> Dict[str, LabelDefinition]:
   default_lut = _build_natural_habitat_default_lut()
   by_domain_lut = build_lut_from_groups(
@@ -865,7 +736,6 @@ def _register_natural_habitat_definitions() -> Dict[str, LabelDefinition]:
 LABEL_DEFINITIONS: Dict[str, Dict[str, LabelDefinition]] = {
   "segment": _register_segment_definitions(),
   "forest": _register_forest_definitions(),
-  "land_use": _register_land_use_definitions(),
   "natural_habitat": _register_natural_habitat_definitions(),
 }
 
@@ -873,7 +743,6 @@ LABEL_DEFINITIONS: Dict[str, Dict[str, LabelDefinition]] = {
 DEFAULT_LABEL_DEFINITION_NAMES: Dict[str, str] = {
   "segment": "v20",
   "forest": "default",
-  "land_use": "default",
   "natural_habitat": "by_habitat_x_domain",
 }
 
@@ -908,13 +777,11 @@ def get_definition(task_key: str, name: str) -> LabelDefinition:
 def build_preprocess_label_definitions(
     segment: str = DEFAULT_LABEL_DEFINITION_NAMES["segment"],
     forest: str = DEFAULT_LABEL_DEFINITION_NAMES["forest"],
-    land_use: str = DEFAULT_LABEL_DEFINITION_NAMES["land_use"],
     natural_habitat: str = DEFAULT_LABEL_DEFINITION_NAMES["natural_habitat"],
 ) -> PreprocessLabelDefinitions:
   return PreprocessLabelDefinitions(
     segment=get_definition("segment", segment),
     forest=get_definition("forest", forest),
-    land_use=get_definition("land_use", land_use),
     natural_habitat=get_definition("natural_habitat", natural_habitat),
   )
 

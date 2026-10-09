@@ -1,8 +1,8 @@
 """
 List all patches from lidarhd_aerial_date_gap.gpkg, assign train/val/test from
 SPLIT/ FLAIR-HUB CSVs (same as convert_flair3d_splits_to_json.py), and write a
-CSV manifest with LiDAR / modality availability flags (including LAND_USE
-rasters on disk where present).
+CSV manifest with LiDAR / modality availability flags (NATURAL_HABITAT /
+DEM_ELEV rasters on disk where present).
 
 Uses the same patch_id convention as scripts/convert_flair3d_splits_to_json.py:
   patch_id = "{dept_year}_{roi}_{scene_i_j}"
@@ -187,21 +187,17 @@ def build_modality_patch_path(
 
 def modality_files_exist(
     dataset_root: str, dept_year: str, roi: str, scene_i_j: str
-) -> Tuple[bool, bool, bool]:
-    """Return (natural_habitat_exists, land_use_exists, dem_elev_exists)."""
+) -> Tuple[bool, bool]:
+    """Return (natural_habitat_exists, dem_elev_exists)."""
     stem = f"{dept_year}_LIDARHD_{roi}_{scene_i_j}"
     nh_path = build_modality_patch_path(
         dataset_root, "NATURAL_HABITAT", dept_year, roi, stem
-    )
-    lu_path = build_modality_patch_path(
-        dataset_root, "LAND_USE", dept_year, roi, stem
     )
     dem_path = build_modality_patch_path(
         dataset_root, "DEM_ELEV", dept_year, roi, stem
     )
     return (
         os.path.isfile(nh_path),
-        os.path.isfile(lu_path),
         os.path.isfile(dem_path),
     )
 
@@ -224,7 +220,7 @@ def main() -> None:
             f"Split CSVs: <dataset_root>/{_REL_SPLIT_DIR}/; "
             f"manifest: <dataset_root>/{_REL_MANIFEST_CSV}; "
             f"GeoPackage: <dataset_root>/{_REL_GPKG.replace(os.sep, '/')}. "
-            "Also used for NATURAL_HABITAT / LAND_USE / DEM_ELEV / optional .ply checks."
+            "Also used for NATURAL_HABITAT / DEM_ELEV / optional .ply checks."
         ),
     )
     parser.add_argument(
@@ -250,7 +246,7 @@ def main() -> None:
     if not check_files:
         print(
             "[WARN] dataset_root missing or not a directory — "
-            "NATURAL_HABITAT, LAND_USE, and DEM_ELEV set to False; --require_ply cannot be satisfied.",
+            "NATURAL_HABITAT and DEM_ELEV set to False; --require_ply cannot be satisfied.",
             file=sys.stderr,
         )
         if args.require_ply:
@@ -290,11 +286,11 @@ def main() -> None:
         lidarhd = bool(present_gpkg and ply_ok)
 
         if check_files and dept_year and roi and scene_i_j:
-            has_nh, has_lu, has_dem = modality_files_exist(
+            has_nh, has_dem = modality_files_exist(
                 dataset_root, dept_year, roi, scene_i_j
             )
         else:
-            has_nh, has_lu, has_dem = False, False, False
+            has_nh, has_dem = False, False
 
         rec = {
             "split": split,
@@ -304,7 +300,6 @@ def main() -> None:
             "patch_id": patch_id,
             "LIDARHD": lidarhd,
             "NATURAL_HABITAT": has_nh,
-            "LAND_USE": has_lu,
             "DEM_ELEV": has_dem,
             "date_aerial_rgb": d_aerial,
             "date_lidarhd": d_lidar,
@@ -333,7 +328,6 @@ def main() -> None:
         "patch_id",
         "LIDARHD",
         "NATURAL_HABITAT",
-        "LAND_USE",
         "DEM_ELEV",
         "date_aerial_rgb",
         "date_lidarhd",

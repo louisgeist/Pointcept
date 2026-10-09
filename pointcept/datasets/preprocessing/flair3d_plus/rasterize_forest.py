@@ -1,8 +1,8 @@
 """Standalone backfill: write forest_2d.npy (1, H, W) masks per Flair3D+ tile.
 
-Driven by the split manifest CSV (same contract as ``preprocess_flair3d_v2``):
-each ``LIDARHD=True`` row must already exist under ``data_root`` with
-``coord.npy``. Missing patches are hard errors (manifest is the source of
+Driven by the tile CSV (MALiBU3D ``tiles.csv`` or a legacy split manifest, read
+via ``tile_catalog.py``; same contract as ``preprocess_flair3d_v2``): each LiDAR
+tile must already exist under ``data_root`` with ``coord.npy``. Missing patches are hard errors (manifest is the source of
 truth; disk is only checked). Known-missing tiles listed in
 ``missing_coord_tiles.details.csv`` are skipped.
 
@@ -37,7 +37,6 @@ python pointcept/datasets/preprocessing/flair3d_plus/rasterize_forest.py \
 from __future__ import annotations
 
 import argparse
-import csv
 import json
 import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -52,7 +51,7 @@ _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 try:
-    from network_label_utils import parse_bool_flag  # type: ignore
+    from tile_catalog import iter_tiles, tile_csv_columns  # type: ignore
     from network_xy_raster_utils import (  # type: ignore
         abs_xy_bounds_from_coord,
         default_missing_coord_details_csv,
@@ -61,8 +60,9 @@ try:
     )
     from preprocess_flair3d_v2 import build_modality_patch_path  # type: ignore
 except ImportError:  # pragma: no cover
-    from pointcept.datasets.preprocessing.flair3d_plus.network_label_utils import (
-        parse_bool_flag,
+    from pointcept.datasets.preprocessing.flair3d_plus.tile_catalog import (
+        iter_tiles,
+        tile_csv_columns,
     )
     from pointcept.datasets.preprocessing.flair3d_plus.network_xy_raster_utils import (
         abs_xy_bounds_from_coord,
@@ -76,7 +76,7 @@ except ImportError:  # pragma: no cover
 
 
 REQUIRED_MANIFEST_COLUMNS = frozenset(
-    {"split", "dept_year", "roi", "scene_i_j", "patch_id", "LIDARHD"}
+    {"split", "dept_year", "roi", "scene_i_j", "tile_id"}
 )
 
 
@@ -105,38 +105,25 @@ def load_manifest_patches(
     splits: Optional[Sequence[str]] = None,
     known_missing: Optional[set] = None,
 ) -> Tuple[List[ManifestPatch], int]:
-    """Load LIDARHD=True rows from the manifest (optionally filtered by split)."""
+    """Load LiDAR tiles from ``tiles.csv`` / legacy manifest (optionally filtered by split)."""
     if not split_manifest_csv.is_file():
         raise FileNotFoundError(f"split_manifest_csv not found: {split_manifest_csv}")
+    missing_cols = sorted(REQUIRED_MANIFEST_COLUMNS - tile_csv_columns(split_manifest_csv))
+    if missing_cols:
+        raise ValueError(f"split_manifest_csv missing columns {missing_cols}.")
 
-    splits_set = {s.strip().lower() for s in splits} if splits else None
     skip = known_missing or set()
     patches: List[ManifestPatch] = []
     n_skipped = 0
-
-    with split_manifest_csv.open("r", encoding="utf-8", newline="") as f:
-        reader = csv.DictReader(f)
-        if reader.fieldnames is None:
-            raise ValueError(f"CSV has no header: {split_manifest_csv}")
-        missing_cols = [c for c in REQUIRED_MANIFEST_COLUMNS if c not in reader.fieldnames]
-        if missing_cols:
-            raise ValueError(f"split_manifest_csv missing columns {missing_cols}.")
-        for row in reader:
-            split = (row.get("split") or "").strip().lower()
-            dept_year = (row.get("dept_year") or "").strip()
-            roi = (row.get("roi") or "").strip()
-            scene_i_j = (row.get("scene_i_j") or "").strip()
-            patch_id = (row.get("patch_id") or "").strip()
-            if not split or not dept_year or not roi or not scene_i_j or not patch_id:
-                continue
-            if splits_set is not None and split not in splits_set:
-                continue
-            if not parse_bool_flag(row.get("LIDARHD")):
-                continue
-            if (split, patch_id) in skip:
-                n_skipped += 1
-                continue
-            patches.append(ManifestPatch(split, dept_year, roi, scene_i_j, patch_id))
+    for tile in iter_tiles(split_manifest_csv, splits):
+        if not tile.scene_i_j:
+            continue
+        if (tile.split, tile.tile_id) in skip:
+            n_skipped += 1
+            continue
+        patches.append(
+            ManifestPatch(tile.split, tile.dept_year, tile.roi, tile.scene_i_j, tile.tile_id)
+        )
     return patches, n_skipped
 
 

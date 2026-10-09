@@ -60,7 +60,7 @@ from pointcept.datasets.flair3d_config_utils import (
     init_multitask_collect_keys,
 )
 
-semantic_target_keys = ("segment", "forest", "land_use", "natural_habitat")
+semantic_target_keys = ("segment", "forest", "natural_habitat")
 target_keys = semantic_target_keys + ("elevation",)
 
 # Elevation in meters: no Collect key_scales, no denorm via target_scales
@@ -246,7 +246,6 @@ data = dict(
                 keys_dict={
                     "segment": "origin_segment",
                     "forest": "origin_forest",
-                    "land_use": "origin_land_use",
                     "natural_habitat": "origin_natural_habitat",
                     "elevation": "origin_elevation",
                 },

@@ -7,7 +7,6 @@ with assets: coord.npy, color.npy, segment.npy, optionally strength.npy, normal.
 """
 
 import os
-import csv
 from collections.abc import Sequence
 from copy import deepcopy
 
@@ -23,6 +22,7 @@ from .flair3d_config_utils import (
     FLAIR3D_TILE_DISTRIBUTION_TARGET_KEYS,
     get_missing_target_fill_value,
 )
+from pointcept.datasets.preprocessing.flair3d_plus.tile_catalog import iter_tiles
 from pointcept.datasets.preprocessing.flair3d_plus.nathab_axes import (
     NATHAB_AXIS_KEYS,
     is_nathab_axes_array,
@@ -33,7 +33,6 @@ from pointcept.utils.logger import get_root_logger
 
 FLAIR3D_SPECIFIC_ASSETS = (
     "forest",
-    "land_use",
     "natural_habitat",
     "elevation",
     "climatic_domain",
@@ -42,7 +41,7 @@ FLAIR3D_SPECIFIC_ASSETS = (
     "network",
     "forest_2d",
 )
-FLAIR3D_SEMANTIC_TARGETS = ("segment", "forest", "land_use", "natural_habitat")
+FLAIR3D_SEMANTIC_TARGETS = ("segment", "forest", "natural_habitat")
 FLAIR3D_CLASSIFICATION_TARGETS = FLAIR3D_CLASSIFICATION_TARGET_KEYS
 FLAIR3D_MULTILABEL_CLASSIFICATION_TARGETS = FLAIR3D_MULTILABEL_CLASSIFICATION_TARGET_KEYS
 FLAIR3D_PIXEL_SEMANTIC_TARGETS = FLAIR3D_PIXEL_SEMANTIC_TARGET_KEYS
@@ -64,19 +63,19 @@ class Flair3DDataset(DefaultDataset):
     
     
     
-    :param csv_manifest: CSV manifest file path
-        Lists all the scences in the dataset. It indicates wether the LIDARHD
-        is available for the scene.
-        
+    :param csv_manifest: Tile list CSV: the MALiBU3D ``tiles.csv`` (canonical) or a
+        legacy ``scene_split_manifest.csv`` (rows with ``LIDARHD!=True`` skipped).
+        Read via ``preprocessing/flair3d_plus/tile_catalog.py``.
+
     :param min_points: Optional dict mapping split name ("train"/"val") to a minimum
         point-count threshold. Tiles below the threshold are excluded, using the
-        "n_points" column of csv_manifest (populate it via
-        scripts/analyze_flair3d_test_point_voxel_counts.py --write_manifest). Raises if
+        "n_points" column of csv_manifest (filled in tiles.csv; for a legacy manifest
+        populate it via scripts/analyze_flair3d_test_point_voxel_counts.py --write_manifest). Raises if
         the "n_points" column is missing/empty for a row in a thresholded split, or if
         "test" is given a threshold.
 
     :param target_keys: Target keys. Supports semantic multitask for "segment", "forest",
-        "land_use", and "natural_habitat". "elevation" can be combined with semantic keys.
+        and "natural_habitat". "elevation" can be combined with semantic keys.
         Targets are exposed in the batch under their task name.
     :param primary_target_key: Primary semantic target. Must be included in target_keys when
         provided.
@@ -91,7 +90,6 @@ class Flair3DDataset(DefaultDataset):
     VALID_ASSETS = [*DefaultDataset.VALID_ASSETS, *FLAIR3D_SPECIFIC_ASSETS]
 
     FLAIR3D_OPTIONAL_TARGETS = (
-        "land_use",
         "natural_habitat",
         *NATHAB_AXIS_KEYS,
         "elevation",
@@ -197,26 +195,21 @@ class Flair3DDataset(DefaultDataset):
         logger = get_root_logger()
         data_list = []
         min_points_excluded = 0
-        with open(self.csv_manifest, 'r', encoding='utf-8') as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                if row['split'] in split_list and row.get('LIDARHD') == 'True':
-                    if self.min_points and row['split'] in self.min_points:
-                        n_points_raw = row.get('n_points')
-                        if not n_points_raw:
-                            raise ValueError(
-                                f"min_points is configured for split {row['split']!r} but the "
-                                f"'n_points' column is missing/empty for tile {row['patch_id']!r}. "
-                                "Run scripts/analyze_flair3d_test_point_voxel_counts.py "
-                                f"--write_manifest for split {row['split']!r} before enabling "
-                                "min_points on it."
-                            )
-                        if int(n_points_raw) < self.min_points[row['split']]:
-                            min_points_excluded += 1
-                            continue
-                    dept_year = row.get('dept_year') or row['patch_id'].split('_')[0]
-                    roi = row.get('roi') or row['patch_id'].split('_')[1]
-                    data_list.append(os.path.join(self.data_root, row['split'], f"{dept_year}_LIDARHD", roi, row['patch_id']))
+        for tile in iter_tiles(self.csv_manifest, split_list):
+            if self.min_points and tile.split in self.min_points:
+                if tile.n_points is None:
+                    raise ValueError(
+                        f"min_points is configured for split {tile.split!r} but the "
+                        f"'n_points' column is missing/empty for tile {tile.tile_id!r}. "
+                        "Use the MALiBU3D tiles.csv (n_points filled) or run "
+                        "scripts/analyze_flair3d_test_point_voxel_counts.py "
+                        f"--write_manifest for split {tile.split!r} before enabling "
+                        "min_points on it."
+                    )
+                if tile.n_points < self.min_points[tile.split]:
+                    min_points_excluded += 1
+                    continue
+            data_list.append(tile.tile_dir(self.data_root))
 
         if self.min_points:
             logger.info(

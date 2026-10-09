@@ -67,6 +67,10 @@ def _load_subset_utils():
 
 
 _subset_utils = _load_subset_utils()
+# Sibling-dir import (stdlib only) so this script never imports the torch-heavy
+# pointcept package.
+sys.path.insert(0, os.path.join(REPO_ROOT, "pointcept", "datasets", "preprocessing", "flair3d_plus"))
+from tile_catalog import iter_tiles  # noqa: E402
 NH_MULTILABEL_CLASS_NAMES = _subset_utils.NH_MULTILABEL_CLASS_NAMES
 build_scene_features = _subset_utils.build_scene_features
 select_stratified_subset = _subset_utils.select_stratified_subset
@@ -148,29 +152,16 @@ def load_scene_records(
     excluded_tiles: Set[Tuple[str, str]],
 ) -> List[SceneRecord]:
     records: List[SceneRecord] = []
-    with open(csv_manifest, "r", encoding="utf-8", newline="") as handle:
-        reader = csv.DictReader(handle)
-        required = {"split", "patch_id", "LIDARHD"}
-        missing_cols = required - set(reader.fieldnames or [])
-        if missing_cols:
-            raise KeyError(f"Missing required columns in manifest: {sorted(missing_cols)}")
-
-        for row in reader:
-            row_split = str(row["split"]).strip()
-            patch_id = str(row["patch_id"]).strip()
-            if row_split != split or not patch_id:
-                continue
-            if not parse_manifest_bool(row.get("LIDARHD")):
-                continue
-            if (row_split, patch_id) in excluded_tiles:
-                continue
-
-            dept_year = (row.get("dept_year") or "").strip() or patch_id.split("_", 2)[0]
-            roi = (row.get("roi") or "").strip() or patch_id.split("_", 2)[1]
-            scene_path = build_scene_path(data_root, row_split, patch_id, dept_year, roi)
-            records.append(
-                SceneRecord(split=row_split, patch_id=patch_id, scene_path=scene_path)
+    for tile in iter_tiles(csv_manifest, [split]):
+        if (tile.split, tile.tile_id) in excluded_tiles:
+            continue
+        records.append(
+            SceneRecord(
+                split=tile.split,
+                patch_id=tile.tile_id,
+                scene_path=tile.tile_dir(data_root),
             )
+        )
     return records
 
 

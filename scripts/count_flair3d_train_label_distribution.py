@@ -3,7 +3,7 @@
 Compute per-class label distributions on Flair3D+ train (or other splits).
 
 Uses the same scene list as Flair3DDataset (CSV manifest, LIDARHD=True, excluded tiles).
-Aggregates segment, forest, land_use, and natural_habitat (point-level) plus
+Aggregates segment, forest, and natural_habitat (point-level) plus
 natural_habitat_multilabel (scene-level multi-hot presence) in one pass per scene.
 
 Also emits point-level histograms for the four nathab tile-distribution axes
@@ -65,7 +65,7 @@ def _load_module_from_path(module_name: str, rel_path: str):
 
 # Keep in sync with flair3d_config_utils (avoid importing that module here: it pulls in
 # pointcept.datasets.__init__ -> pointops, which this numpy-only counter does not need).
-SEMANTIC_TASKS: Tuple[str, ...] = ("segment", "forest", "land_use", "natural_habitat")
+SEMANTIC_TASKS: Tuple[str, ...] = ("segment", "forest", "natural_habitat")
 FLAIR3D_TILE_DISTRIBUTION_TASKS: Dict[str, str] = {
     "nathab_habitat_type": "by_habitat_type_ecological",
     "nathab_moisture_regime": "by_moisture_regime",
@@ -230,7 +230,7 @@ def _make_remap_state(
 def _default_storage_definition_name(task: str, get_default_definition_name) -> str:
     """Default *on-disk storage* definition name for a task -- NOT the same as its default
     *training-target* definition (get_default_definition_name), which happen to coincide
-    for segment/forest/land_use but NOT for natural_habitat: preprocessing always writes
+    for segment/forest but NOT for natural_habitat: preprocessing always writes
     natural_habitat.npy in the raw/finest "default" CarHab taxonomy (43 raw classes) so
     that many different targets (by_habitat_x_domain, the 4 nathab axes, ...) can all be
     fanned out from the same on-disk file on the fly -- but
@@ -1076,7 +1076,7 @@ def main() -> None:
     parser.add_argument(
         "--skip_missing_optional",
         action="store_true",
-        help="Skip optional tasks (forest/land_use/natural_habitat) when .npy is absent "
+        help="Skip optional tasks (forest/natural_habitat) when .npy is absent "
         "(default: use ignore fill like Flair3DDataset).",
     )
     parser.add_argument(

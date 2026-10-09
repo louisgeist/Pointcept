@@ -2,14 +2,15 @@ r"""
 Flair3D+ v2 — manifest-driven preprocessing from pre-labeled PLY files.
 
 Semantic segment labels are read from upstream-enriched PLY ``semantic`` attributes.
-All semantic targets (segment, forest, land_use, natural_habitat) are remapped via
+All semantic targets (segment, forest, natural_habitat) are remapped via
 named definitions in ``flair3d_label_remap.py`` (CLI: ``--segment_definition``,
-``--forest_definition``, ``--land_use_definition``, ``--natural_habitat_definition``).
+``--forest_definition``, ``--natural_habitat_definition``).
 This script reads PLY from ``--ply_root`` and writes Pointcept scene folders.
 
-The split manifest CSV (e.g. ``data/flair3d_plus/raw/scene_split_manifest.csv``)
-is the single source of truth: one row per patch, and only rows with
-``LIDARHD=True`` produce a Pointcept scene folder containing:
+The tile CSV is the single source of truth: either the MALiBU3D ``tiles.csv``
+(canonical) or a legacy ``scene_split_manifest.csv`` (only ``LIDARHD=True`` rows
+are used), read via ``tile_catalog.py``. Each tile produces a Pointcept scene
+folder containing:
 
 - coord_translation.npy  (float64 XYZ offset subtracted from raw PLY coords; written before coord.npy)
 - coord.npy      (written LAST; acts as the completion marker for resume)
@@ -17,28 +18,26 @@ is the single source of truth: one row per patch, and only rows with
 - segment.npy    (from PLY ``semantic``; remapped via ``--segment_definition``)
 - strength.npy   (LiDAR intensity)
 - forest.npy     (FOREST GeoTIFF — always sampled; remapped via ``--forest_definition``)
-- natural_habitat.npy   (only when NATURAL_HABITAT=True; ``uint8 (N, 4)`` ecological axes
+- natural_habitat.npy   (only when has_natural_habitat=True; ``uint8 (N, 4)`` ecological axes
                         baked from CarHab via ``nathab_axes.carhab_to_nathab_axes``;
                         ``--natural_habitat_definition default`` still selects the CarHab
                         storage LUT used before bake)
-- land_use.npy          (only when LAND_USE=True; ``--land_use_definition``)
-- elevation.npy         (only when DEM_ELEV=True in the manifest)
+- elevation.npy         (only when has_elevation=True)
 - climatic_domain.npy   (opt-in via ``--write-climatic-domain-category``)
 - natural_habitat_multilabel.npy  (opt-in via ``--write-natural-habitat-multilabel``;
                         written from CarHab in memory before axes bake)
 - meta.json      (date_gap_days, label_definitions, natural_habitat_layout)
 
-Required manifest columns (extra columns are ignored):
-    split, dept_year, roi, scene_i_j, patch_id,
-    LIDARHD, NATURAL_HABITAT, LAND_USE, DEM_ELEV,
-    date_gap_days
+Required columns (tiles.csv names; legacy aliases in parentheses; extra columns ignored):
+    split, dept_year, roi, scene_i_j, tile_id (patch_id),
+    has_natural_habitat (NATURAL_HABITAT), has_elevation (DEM_ELEV), date_gap_days
 
 Conventions (must match scripts/build_csv_manifest.py):
-    patch_id = f"{dept_year}_{roi}_{scene_i_j}"
+    tile_id = f"{dept_year}_{roi}_{scene_i_j}"
     PLY path = {ply_root}/LIDARHD/{dept_year}_LIDARHD/{roi}/
                {dept_year}_LIDARHD_{roi}_{scene_i_j}.plydata/flair3d_plus/raw/scene_split_manifest_D075.csv
 
-Auxiliary rasters (FOREST, NATURAL_HABITAT, LAND_USE, DEM_ELEV) are read from
+Auxiliary rasters (FOREST, NATURAL_HABITAT, DEM_ELEV) are read from
 ``--dataset_root`` using the same layout as v1.
 
 Reports written under ``--output_root``:
@@ -51,7 +50,7 @@ Reports written under ``--output_root``:
 Resume behaviour:
 By default, scenes whose ``coord.npy`` already exists in the output directory
 are skipped (idempotent re-runs). Use ``--force`` to reprocess everything,
-which is required when manifest modality flags (NATURAL_HABITAT/LAND_USE/DEM_ELEV)
+which is required when modality flags (has_natural_habitat/has_elevation)
 changed since the previous run, when label definitions changed, or when upstream
 PLY labels were refreshed.
 
@@ -94,7 +93,6 @@ python pointcept/datasets/preprocessing/flair3d_plus/preprocess_flair3d_v2.py \
 """
 
 import argparse
-import csv
 import json
 import logging
 import os
@@ -126,6 +124,7 @@ from flair3d_label_remap import (  # noqa: E402
     build_preprocess_label_definitions,
     supported_definitions,
 )
+from tile_catalog import iter_tiles, tile_csv_columns  # noqa: E402
 from nathab_axes import (  # noqa: E402
     NATHAB_LAYOUT_META,
     NATHAB_ONDISK_DEFINITION,
@@ -140,23 +139,20 @@ PREPROCESS_LABEL_DEFINITION_DEFAULTS = {
     "natural_habitat": "default",
 }
 
-# Columns that must be present in --split_manifest_csv (others may be present and are ignored).
+# Columns (tiles.csv names, legacy aliases accepted) that must be present in
+# --split_manifest_csv; others may be present and are ignored.
 REQUIRED_MANIFEST_COLUMNS = frozenset(
     {
         "split",
         "dept_year",
         "roi",
         "scene_i_j",
-        "patch_id",
-        "LIDARHD",
-        "NATURAL_HABITAT",
-        "LAND_USE",
-        "DEM_ELEV",
+        "tile_id",
+        "has_natural_habitat",
+        "has_elevation",
         "date_gap_days",
     }
 )
-
-_DATE_NA_TOKENS = frozenset({"", "<na>", "na", "none", "n/a", "nan", "null"})
 
 
 @dataclass(frozen=True)
@@ -169,31 +165,8 @@ class PatchTask:
     scene_i_j: str
     patch_id: str
     has_natural_habitat: bool
-    has_land_use: bool
     has_dem_elev: bool
     date_gap_days: Optional[float]
-
-
-def _parse_csv_bool(raw: Optional[str], field: str, patch_id: str, csv_path: str) -> bool:
-    token = (raw or "").strip().lower()
-    if token in ("true", "1", "yes"):
-        return True
-    if token in ("false", "0", "no"):
-        return False
-    raise ValueError(
-        f"Invalid boolean for column '{field}' (patch_id={patch_id}) in {csv_path}: {raw!r}"
-    )
-
-
-def _parse_csv_float_optional(raw: Optional[str]) -> Optional[float]:
-    """Parse an optional float column; '<NA>'/'nan'/empty → None."""
-    token = (raw or "").strip().lower()
-    if token in _DATE_NA_TOKENS:
-        return None
-    try:
-        return float(token)
-    except ValueError:
-        return None
 
 
 def _segment_from_ply(
@@ -496,80 +469,48 @@ def write_missing_scenes_report(
 
 def load_manifest_tasks(csv_path: str, splits: List[str]) -> List[PatchTask]:
     """
-    Load ``scene_split_manifest.csv`` and return one PatchTask per row that:
-    - belongs to one of ``splits``,
-    - has ``LIDARHD=True``.
+    Load ``tiles.csv`` (or a legacy ``scene_split_manifest.csv``) and return one
+    PatchTask per LiDAR tile belonging to one of ``splits``.
 
     Other rows are filtered out silently. Duplicates with inconsistent flags
     raise a ``ValueError``.
     """
     if not os.path.isfile(csv_path):
         raise FileNotFoundError(f"Split manifest CSV not found: {csv_path}")
+    missing = REQUIRED_MANIFEST_COLUMNS - tile_csv_columns(csv_path)
+    if missing:
+        raise ValueError(
+            f"Invalid manifest CSV {csv_path}: missing required columns: {sorted(missing)}"
+        )
 
-    splits_set = set(splits)
     tasks_by_patch: Dict[str, PatchTask] = {}
-
-    with open(csv_path, "r", encoding="utf-8", newline="") as f:
-        reader = csv.DictReader(f)
-        if reader.fieldnames is None:
-            raise ValueError(f"Empty CSV or no header row: {csv_path}")
-        fields = set(reader.fieldnames)
-        missing = REQUIRED_MANIFEST_COLUMNS - fields
-        if missing:
+    for tile in iter_tiles(csv_path, splits):
+        if not tile.scene_i_j:
+            continue
+        expected_pid = f"{tile.dept_year}_{tile.roi}_{tile.scene_i_j}"
+        if tile.tile_id != expected_pid:
             raise ValueError(
-                f"Invalid manifest CSV {csv_path}: missing required columns: {sorted(missing)}"
+                f"Inconsistent tile_id in {csv_path}: "
+                f"row says '{tile.tile_id}' but components yield '{expected_pid}'."
             )
-
-        for row in reader:
-            split = (row.get("split") or "").strip().lower()
-            dept_year = (row.get("dept_year") or "").strip()
-            roi = (row.get("roi") or "").strip()
-            scene_i_j = (row.get("scene_i_j") or "").strip()
-            patch_id = (row.get("patch_id") or "").strip()
-            if not split or not dept_year or not roi or not scene_i_j or not patch_id:
-                continue
-            if split not in splits_set:
-                continue
-
-            expected_pid = f"{dept_year}_{roi}_{scene_i_j}"
-            if patch_id != expected_pid:
-                raise ValueError(
-                    f"Inconsistent patch_id in {csv_path}: "
-                    f"row says '{patch_id}' but components yield '{expected_pid}'."
-                )
-
-            lidarhd = _parse_csv_bool(row.get("LIDARHD", ""), "LIDARHD", patch_id, csv_path)
-            if not lidarhd:
-                continue
-
-            nh = _parse_csv_bool(
-                row.get("NATURAL_HABITAT", ""), "NATURAL_HABITAT", patch_id, csv_path
+        task = PatchTask(
+            split=tile.split,
+            dept_year=tile.dept_year,
+            roi=tile.roi,
+            scene_i_j=tile.scene_i_j,
+            patch_id=tile.tile_id,
+            has_natural_habitat=bool(tile.has_natural_habitat),
+            has_dem_elev=bool(tile.has_elevation),
+            date_gap_days=tile.date_gap_days,
+        )
+        prev = tasks_by_patch.get(tile.tile_id)
+        if prev is None:
+            tasks_by_patch[tile.tile_id] = task
+        elif prev != task:
+            raise ValueError(
+                f"Inconsistent duplicate tile_id '{tile.tile_id}' in {csv_path}: "
+                f"first={prev}, duplicate={task}"
             )
-            lu = _parse_csv_bool(row.get("LAND_USE", ""), "LAND_USE", patch_id, csv_path)
-            dem = _parse_csv_bool(row.get("DEM_ELEV", ""), "DEM_ELEV", patch_id, csv_path)
-            date_gap = _parse_csv_float_optional(row.get("date_gap_days", ""))
-
-            task = PatchTask(
-                split=split,
-                dept_year=dept_year,
-                roi=roi,
-                scene_i_j=scene_i_j,
-                patch_id=patch_id,
-                has_natural_habitat=nh,
-                has_land_use=lu,
-                has_dem_elev=dem,
-                date_gap_days=date_gap,
-            )
-
-            if patch_id in tasks_by_patch:
-                prev = tasks_by_patch[patch_id]
-                if prev != task:
-                    raise ValueError(
-                        f"Inconsistent duplicate patch_id '{patch_id}' in {csv_path}: "
-                        f"first={prev}, duplicate={task}"
-                    )
-            else:
-                tasks_by_patch[patch_id] = task
 
     return list(tasks_by_patch.values())
 
@@ -585,7 +526,7 @@ def _build_scene_from_subtile(
 
     Returns:
         scene: dict of numpy arrays to save (keys: coord, color, segment, and
-            optionally strength, forest, natural_habitat, land_use, elevation).
+            optionally strength, forest, natural_habitat, elevation).
         missing_modalities: list of {split, patch_id, modality, path} entries
             for rasters expected (per FOREST/manifest flags) but absent on disk.
 
@@ -684,34 +625,6 @@ def _build_scene_from_subtile(
                     "patch_id": task.patch_id,
                     "modality": "NATURAL_HABITAT",
                     "path": natural_habitat_raster_path,
-                }
-            )
-
-    if task.has_land_use:
-        land_use_raster_path = build_modality_patch_path(
-            dataset_root=dataset_root,
-            modality="LAND_USE",
-            dept_year=task.dept_year,
-            roi=task.roi,
-            lidar_patch_stem=lidar_patch_stem,
-        )
-        if os.path.isfile(land_use_raster_path):
-            lu_def = label_definitions.land_use
-            land_use_values, _ = sample_raster_to_points(
-                raster_path=land_use_raster_path,
-                xy=coord[:, :2],
-                fill_value=lu_def.missing_fill_raw_id,
-            )
-            out["land_use"] = apply_remap(land_use_values, lu_def).astype(
-                np.int16, copy=False
-            )
-        else:
-            missing_modalities.append(
-                {
-                    "split": task.split,
-                    "patch_id": task.patch_id,
-                    "modality": "LAND_USE",
-                    "path": land_use_raster_path,
                 }
             )
 
@@ -816,7 +729,6 @@ def _save_scene(
             enabled=False,
         )
 
-    _save_or_clean("land_use.npy", "land_use", np.int16, enabled=task.has_land_use)
     _save_or_clean("elevation.npy", "elevation", np.float32, enabled=task.has_dem_elev)
 
     # Write coord_translation.npy then coord.npy LAST (coord.npy is the completion
@@ -972,7 +884,7 @@ def main_process():
         type=str,
         required=True,
         help=(
-            "Required path to scene_split_manifest.csv with columns: "
+            "Required path to tiles.csv (or legacy scene_split_manifest.csv) with columns: "
             + ", ".join(sorted(REQUIRED_MANIFEST_COLUMNS))
             + ". See script docstring."
         ),
@@ -1047,7 +959,7 @@ def main_process():
             "Requires --natural_habitat_definition default. Off by default."
         ),
     )
-    for task_key in ("segment", "forest", "land_use", "natural_habitat"):
+    for task_key in ("segment", "forest", "natural_habitat"):
         parser.add_argument(
             f"--{task_key}_definition",
             type=str,
@@ -1073,7 +985,7 @@ def main_process():
     logger.info("Splits to process: %s", splits)
 
     tasks = load_manifest_tasks(args.split_manifest_csv, splits)
-    logger.info("Loaded %d tasks (LIDARHD=True) from manifest.", len(tasks))
+    logger.info("Loaded %d LiDAR tiles from manifest.", len(tasks))
     for split in splits:
         n = sum(1 for t in tasks if t.split == split)
         logger.info("  split '%s': %d tasks", split, n)
@@ -1086,7 +998,7 @@ def main_process():
             )
         if not any(t.has_natural_habitat for t in tasks):
             logger.warning(
-                "No manifest rows have NATURAL_HABITAT=True; multilabel vectors "
+                "No manifest rows have has_natural_habitat=True; multilabel vectors "
                 "will not be written for subtiles without natural_habitat.npy."
             )
         logger.info(
@@ -1117,7 +1029,6 @@ def main_process():
     label_definitions = build_preprocess_label_definitions(
         segment=args.segment_definition,
         forest=args.forest_definition,
-        land_use=args.land_use_definition,
         natural_habitat=args.natural_habitat_definition,
     )
     logger.info("Label definitions: %s", label_definitions.to_meta_dict())
@@ -1162,7 +1073,7 @@ def main_process():
             logger.warning(
                 "Skip is based on coord.npy presence only. If upstream PLY labels, "
                 "label definitions, or manifest modality flags "
-                "(NATURAL_HABITAT/LAND_USE/DEM_ELEV) changed since the previous run, "
+                "(has_natural_habitat/has_elevation) changed since the previous run, "
                 "re-run with --force to refresh outputs."
             )
         else:
@@ -1264,7 +1175,7 @@ def main_process():
         else:
             if not any(t.has_natural_habitat for t in tasks):
                 logger.warning(
-                    "No manifest rows have NATURAL_HABITAT=True; climatic domain labels "
+                    "No manifest rows have has_natural_habitat=True; climatic domain labels "
                     "will be -1 for all subtiles with coord.npy."
                 )
             logger.info(

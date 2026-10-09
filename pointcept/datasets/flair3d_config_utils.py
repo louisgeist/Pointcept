@@ -57,32 +57,6 @@ FLAIR3D_SEMANTIC_TASKS: Dict[str, Dict[str, Any]] = {
         "ignore_index": 2,
         "names": ["Not Forest", "Forest", "Void"],
     },
-    "land_use": {
-        "num_classes": 20,
-        "ignore_index": -1,
-        "names": [
-            "Agriculture",
-            "Sylviculture",
-            "Activites extraction",
-            "Peche et aquaculture",
-            "Autres productions primaires",
-            "Production secondaire",
-            "Production secondaire tertiaire residentiel",
-            "Production tertiaire",
-            "Reseaux routiers",
-            "Reseaux ferres",
-            "Reseaux aeriens",
-            "Reseaux fluvial maritime",
-            "Autres reseaux transport",
-            "Services logistiques stockage",
-            "Reseaux utilite publique",
-            "Usage residentiel",
-            "Zones en transition",
-            "Zones abandonnees",
-            "Sans usage",
-            "Usage inconnu",
-        ],
-    },
     "natural_habitat": {
         # CarHab raster uses 42=N/A and 43=Autre (routes). Preprocessing remaps to 43=void, 42=routes.
         # Missing raster samples use fill_value=42 (raw), then remap to ignore_index 43.
@@ -238,7 +212,6 @@ FLAIR3D_MULTITASK_INDEX_VALID_KEYS: Tuple[str, ...] = (
     "segment",
     "instance",
     "forest",
-    "land_use",
     # Legacy CarHab ``(N,)`` only — baked ``(N, 4)`` is unpacked in
     # ``Flair3DDataset.get_data`` and popped before GridSample.
     "natural_habitat",
@@ -288,7 +261,7 @@ def get_semantic_config(
     """Return a deep copy of the semantic config for the given target_key.
 
     When ``definition`` is omitted, uses ``DEFAULT_LABEL_DEFINITION_NAMES`` from
-    ``flair3d_label_remap`` (land_use=default, natural_habitat=by_habitat_x_domain, …).
+    ``flair3d_label_remap`` (forest=default, natural_habitat=by_habitat_x_domain, …).
 
     Adds task_type set to "semantic" for use with MultiTaskSegmentorV2.
     """
@@ -537,7 +510,7 @@ def get_missing_target_fill_value(
 
     - Semantic targets fallback to the on-disk *storage* definition's own ignore_index
       (not the training-taxonomy one). This matters when a target is remapped on the
-      fly (e.g. via Flair3DLabelRemap): a negative sentinel (e.g. land_use's -1) is
+      fly (e.g. via Flair3DLabelRemap): a negative sentinel (e.g. -1) is
       treated as an invalid/out-of-range raw id by the remap, which then correctly
       substitutes *its own* target-specific void id regardless of which training
       definition is in play; a non-negative storage ignore_index (e.g.
