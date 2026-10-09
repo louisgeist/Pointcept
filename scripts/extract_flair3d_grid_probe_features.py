@@ -25,7 +25,7 @@ D068/D075 test tiles are already mirrored locally under
 data/flair3d_plus/test/{D068,D075}-2021_LIDARHD/. Flair3DDataset only accepts
 a single csv_manifest, so --csv-manifest defaults to a locally-built
 concatenation of the two per-department manifests
-(data/flair3d_plus/raw/scene_split_manifest_D068_D075.csv) -- rebuild it with
+(data/flair3d_plus/raw/tiles_D068_D075.csv) -- rebuild it with
 `csv.writer`/pandas if you want a different department combo.
 
 Usage::
@@ -122,7 +122,7 @@ def main():
     parser.add_argument("--weight", default=None, help="Local checkpoint path (ckpt/862680/epoch_120.pth or ckpt/873542/model_best.pth). Required unless --rand-init.")
     parser.add_argument("--rand-init", action="store_true", help="Skip loading a checkpoint -- extract features from the backbone's fresh random init instead (from-scratch baseline, e.g. for a 'litept_enc_randinit' UMAP panel). --weight is ignored.")
     parser.add_argument("--output", required=True, help="Output .npz path.")
-    parser.add_argument("--csv-manifest", default="data/flair3d_plus/raw/scene_split_manifest_D068_D075.csv")
+    parser.add_argument("--csv-manifest", default="data/flair3d_plus/raw/tiles_D068_D075.csv")
     parser.add_argument("--split", default="test")
     parser.add_argument("--enc-mode", action="store_true", help="LitePT-B only: read the encoder-multiscale hypercolumn (1386ch, enc_mode=True) instead of the native decoder hypercolumn (1404ch). No-op for Sonata (already enc_mode=True in its config).")
     parser.add_argument("--points-per-class", type=int, default=3000)

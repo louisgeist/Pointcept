@@ -142,7 +142,7 @@ scheduler = dict(
 # -----------------------------------------------------------------------------
 dataset_type = "Flair3DDataset"
 data_root = "data/flair3d_plus"
-csv_manifest = "data/flair3d_plus/raw/scene_split_manifest_D067.csv"
+csv_manifest = "data/flair3d_plus/raw/tiles_D067.csv"
 min_points = {"train": 1000}
 
 # Opt-in APLS on PreciseEvaluator logits. Overfit uses train for data.test, and

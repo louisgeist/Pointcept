@@ -21,7 +21,7 @@ Example::
 python pointcept/datasets/preprocessing/flair3d_plus/rasterize_network.py \
     --data_root data/flair3d_plus \
     --network_graphs_root /data/geist/Flair3D-build/data/network_graphs \
-    --split_manifest_csv data/flair3d_plus/raw/scene_split_manifest_D067.csv \
+    --split_manifest_csv data/flair3d_plus/raw/tiles_D067.csv \
     --num_workers 24
 """
 

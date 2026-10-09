@@ -6,7 +6,7 @@ Example (val ~34k -> 2k):
 Hecate :
 python scripts/build_stratified_subset.py \
   --data_root data/flair3d_plus \
-  --csv_manifest data/flair3d_plus/raw/scene_split_manifest_D067.csv \
+  --csv_manifest data/flair3d_plus/raw/tiles_D067.csv \
   --split val \
   --max_sample 300 \
   --warm-random 150 \
@@ -18,7 +18,7 @@ Jean-Zay :
 VAL:
 python scripts/build_stratified_subset.py \
   --data_root data/flair3d_plus \
-  --csv_manifest data/flair3d_plus/raw/scene_split_manifest.csv \
+  --csv_manifest data/flair3d_plus/raw/tiles.csv \
   --split val \
   --max_sample 2000 \
   --warm-random 1000 \
@@ -29,7 +29,7 @@ python scripts/build_stratified_subset.py \
 TEST:
 python scripts/build_stratified_subset.py \
   --data_root data/flair3d_plus \
-  --csv_manifest data/flair3d_plus/raw/scene_split_manifest.csv \
+  --csv_manifest data/flair3d_plus/raw/tiles.csv \
   --split test \
   --max_sample 10000 \
   --seed 0 \

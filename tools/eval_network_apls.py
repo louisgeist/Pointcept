@@ -22,7 +22,7 @@ Example::
         --data_root data/flair3d_plus \\
         --save_path exp/flair3d/network_run/result \\
         --network_graphs_root /data/geist/Flair3D-build/data/network_graphs \\
-        --split_manifest_csv data/flair3d_plus/raw/scene_split_manifest_D067.csv \\
+        --split_manifest_csv data/flair3d_plus/raw/tiles_D067.csv \\
         --split val --threshold 0.5 \\
         --out_dir exp/flair3d/network_run/result
 """

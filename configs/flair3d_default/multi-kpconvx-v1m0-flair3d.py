@@ -228,7 +228,7 @@ scheduler = dict(
 # -----------------------------------------------------------------------------
 dataset_type = "Flair3DDataset"
 data_root = "data/flair3d_plus"
-csv_manifest = "data/flair3d_plus/raw/scene_split_manifest.csv"
+csv_manifest = "data/flair3d_plus/raw/tiles.csv"
 min_points = {"train": 1000}
 val_stratified_subset_manifest = "data/flair3d_plus/manifests/val_dev_subset_2000.csv"
 

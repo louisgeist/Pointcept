@@ -52,12 +52,12 @@ Examples::
   # Local dry run on Hecate (D067 has no local test split -- use val).
   export PYTHONPATH=$PWD
   python scripts/bench_inference_speed.py \\
-    --csv-manifest data/flair3d_plus/raw/scene_split_manifest_D067.csv --split val \\
+    --csv-manifest data/flair3d_plus/raw/tiles_D067.csv --split val \\
     --num-tiles 15 --num-warmup 5 --device cuda:0
 
   # Real run on A100 (Jean Zay, full national manifest, test split).
   python scripts/bench_inference_speed.py \\
-    --csv-manifest data/flair3d_plus/raw/scene_split_manifest.csv --split test \\
+    --csv-manifest data/flair3d_plus/raw/tiles.csv --split test \\
     --num-tiles 200 --num-warmup 10 --device cuda:0
 """
 

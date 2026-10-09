@@ -162,7 +162,7 @@ param_dicts = [dict(keyword="block", lr=lr / 10)]
 # -----------------------------------------------------------------------------
 dataset_type = "Flair3DDataset"
 data_root = "data/flair3d_plus"
-csv_manifest = "data/flair3d_plus/raw/scene_split_manifest.csv"
+csv_manifest = "data/flair3d_plus/raw/tiles.csv"
 min_points = {"train": 1000}
 
 train_multitask_keys, val_multitask_keys, multitask_index_valid_keys = (

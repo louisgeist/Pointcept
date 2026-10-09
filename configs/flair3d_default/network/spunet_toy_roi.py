@@ -144,7 +144,7 @@ scheduler = dict(
 # -----------------------------------------------------------------------------
 dataset_type = "Flair3DDataset"
 data_root = "data/flair3d_plus"
-csv_manifest = "data/flair3d_plus/raw/scene_split_manifest_D067-2021_AF-S1-22.csv"
+csv_manifest = "data/flair3d_plus/raw/tiles_D067-2021_AF-S1-22.csv"
 min_points = {"train": 1000}
 
 # Runs tools/eval_network_apls.py at the end of tools/test.py and from

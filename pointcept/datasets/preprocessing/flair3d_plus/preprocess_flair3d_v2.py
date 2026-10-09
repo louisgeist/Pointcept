@@ -35,7 +35,7 @@ Required columns (tiles.csv names; legacy aliases in parentheses; extra columns 
 Conventions (must match scripts/build_csv_manifest.py):
     tile_id = f"{dept_year}_{roi}_{scene_i_j}"
     PLY path = {ply_root}/LIDARHD/{dept_year}_LIDARHD/{roi}/
-               {dept_year}_LIDARHD_{roi}_{scene_i_j}.plydata/flair3d_plus/raw/scene_split_manifest_D075.csv
+               {dept_year}_LIDARHD_{roi}_{scene_i_j}.ply
 
 Auxiliary rasters (FOREST, NATURAL_HABITAT, DEM_ELEV) are read from
 ``--dataset_root`` using the same layout as v1.
@@ -69,7 +69,7 @@ Examples:
 JZ (multilabel only, on an already-preprocessed output_root):
 python pointcept/datasets/preprocessing/flair3d_plus/preprocess_flair3d_v2.py \
     --output_root data/flair3d_plus \
-    --split_manifest_csv data/flair3d_plus/raw/scene_split_manifest.csv \
+    --split_manifest_csv data/flair3d_plus/raw/tiles.csv \
     --num_workers 24 \
     --multilabel-only
 
@@ -78,7 +78,7 @@ python pointcept/datasets/preprocessing/flair3d_plus/preprocess_flair3d_v2.py \
     --ply_root /lustre/fsn1/projects/rech/unv/usi32yh/data_flair3d_build/flair3d_label_enhanced \
     --dataset_root /lustre/fswork/projects/rech/unv/usi32yh/Pointcept/data/flair3d_plus/raw \
     --output_root data/flair3d_plus \
-    --split_manifest_csv data/flair3d_plus/raw/scene_split_manifest.csv \
+    --split_manifest_csv data/flair3d_plus/raw/tiles.csv \
     --num_workers 24 \
     --force
 
@@ -87,7 +87,7 @@ python pointcept/datasets/preprocessing/flair3d_plus/preprocess_flair3d_v2.py \
     --ply_root /data/geist/Flair3D-build/data/flair3d_label_enhanced \
     --dataset_root data/flair3d_plus/raw \
     --output_root data/flair3d_plus \
-    --split_manifest_csv data/flair3d_plus/raw/scene_split_manifest_D067.csv \
+    --split_manifest_csv data/flair3d_plus/raw/tiles_D067.csv \
     --num_workers 12
     --force
 """
