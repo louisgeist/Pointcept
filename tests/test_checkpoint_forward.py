@@ -53,10 +53,6 @@ MODELS = {
     "sonata": ("configs/flair3d_default/probe/sonata-v1m2-flair3d-lin-grid.py",
                "ckpt/malibu3d/sonata_outdoor/epoch_120.pth", "ssl"),
 }
-# The malibu3d SpUNet ckpt was trained with stride=3 (3x3x3 down/up convs; downstream probe configs
-# such as configs/experiment/w110/2/grid_seed_h3d/spunet-*.py set it) but multi-spunet-v1m0-flair3d.py
-# leaves the default stride=2 -> 8 shape mismatches without this override.
-BACKBONE_OVERRIDES = {"spunet": dict(stride=3)}
 # Sonata SSL ckpt stores student/teacher; the probe config loads the student backbone.
 SSL_KEY_REPLACE = ("module.student.backbone", "module.backbone")
 MANIFESTS = {
@@ -277,7 +273,6 @@ def run_model(mname, tiles, max_points=30000, control=False, out_dir=None, ds_ca
     ds_cache = {} if ds_cache is None else ds_cache
     cfg_path, ckpt_path, kind = MODELS[mname]
     cfg = Config.fromfile(cfg_path)
-    cfg.model.backbone.update(BACKBONE_OVERRIDES.get(mname, {}))
     names = list(cfg.data.names)
     ign = int(cfg.data.ignore_index)
     summary = {}

@@ -32,9 +32,10 @@ grad_norm_lite_interval = 100
 grad_norm_lite_ema_alpha = 0.1
 grad_norm_lite_eps = 1e-3
 
-# Hardware parameters
-num_gpu = 1
-num_worker = 8 * num_gpu
+# Hardware parameters (released checkpoint: 4 x H100, 3 tiles/GPU, SyncBN)
+num_gpu = 4
+num_worker = 16
+sync_bn = True
 enable_amp = True
 
 # Data parameters
@@ -52,8 +53,8 @@ mix_prob = 0.8
 patch_size = 1024
 
 # Optimization parameters
-lr = 1e-3
-total_iters = 30_000
+lr = 2e-3
+total_iters = 200_000
 
 # Features
 learned_masked_feat = True
@@ -203,7 +204,7 @@ model = dict(
 # -----------------------------------------------------------------------------
 # Optimizer / scheduler
 # -----------------------------------------------------------------------------
-optimizer = dict(type="AdamW", lr=lr, weight_decay=0.05)
+optimizer = dict(type="AdamW", lr=lr, weight_decay=5e-3)
 scheduler = dict(
     type="OneCycleLR",
     max_lr=[lr, lr / 10],

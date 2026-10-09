@@ -1,14 +1,31 @@
 """
-SpUNet on Flair3D+ multitask: segment (v20) + forest_2d + elevation + 4 nathab
-tile_distribution axes (WeightedKL; Habitat Type / Moisture Regime / Soil
-Chemistry / Bioclimatic Zone, remapped on the fly from natural_habitat) +
-network (roads only, CE + foreground weight=5; railroads/transmission lines
-dropped; scored via APLS at test time). Aligned with w107/w108 toward_bm +
-network roads-only recipe.
+Sonata-v1m2 SSL-pretrained PT-v3m2 backbone (Flair3D+ fork, epoch 120; released as
+`sonata-pretrained/` in LouisGeist/MALiBU3D-backbones), fine-tuned in Flair3D+
+multitask mode: segment (v20) + forest_2d + elevation + 4 nathab tile_distribution
+axes (WeightedKL; Habitat Type / Moisture Regime / Soil Chemistry / Bioclimatic Zone, remapped on the fly from natural_habitat) + network
+(roads only, CE + foreground weight=5; railroads/transmission lines dropped;
+scored via APLS at test time).
 
-This config is intentionally self-contained: it inherits only from
-default_runtime and duplicates everything it needs so it can be read
-top-to-bottom without cross-referencing other Flair3D+ configs.
+Task set / criteria / hooks / Collect pipeline copied verbatim from the "classique"
+multi-task recipe (configs/flair3d_default/multi-litept-b-v1m0-flair3d.py, the
+LitePT-B checkpoint referenced as W_LPT/873542 in README_grid_then_seed.md) --
+only the model block differs.
+
+Backbone is PT-v3m2, not LitePT-B: the Sonata checkpoint's state_dict shapes
+only match a PT-v3m2 backbone built with the exact pretrain encoder hyperparams
+(configs/flair3d_default/pretrain-sonata-v1m2-flair3d.py) -- enc_depths=
+(3,3,3,12,3), enc_channels=(48,96,192,384,512), stride=(3,3,3,3). Loading into
+LitePT-B would hard-fail on a shape mismatch inside matching keys (strict=False
+only tolerates missing/extra *keys*, not mismatched *shapes*).
+
+Full fine-tune with a freshly-initialized decoder on top of the loaded Sonata
+encoder (enc_mode=False): dec_depths/dec_channels/dec_num_head/dec_patch_size
+match the upstream official Sonata full-FT reference
+(configs/sonata/semseg-sonata-v1m1-0c-scannet-ft.py), which uses the same
+enc_channels=(48,96,192,384,512) pretrain backbone. The decoder has no
+counterpart in the SSL checkpoint's state_dict, so CheckpointLoader's
+strict=False load leaves it randomly initialized (same mechanism the upstream
+config itself relies on).
 """
 
 # -----------------------------------------------------------------------------
@@ -36,10 +53,12 @@ num_worker = 8 * num_gpu
 enable_amp = True
 
 # Data parameters
+# batch_size carried over unchanged from the malibu/LitePT multitask baselines;
+# not recalibrated for this (decoder-less, lighter) backbone -- rerun
+# scripts/find_max_batch_size.py --mix-prob 0.8 before trusting it at scale.
 batch_size = 12  # total batch size across all gpus
 batch_size_val = 8 * num_gpu
 val_voxel_budget = 2_000_000
-# Cap scenes/batch; actual packing uses test_voxel_budget (w105/6/19h: 2M worked).
 batch_size_test = 8 * num_gpu
 test_voxel_budget = 2_000_000
 
@@ -47,8 +66,10 @@ grid_size = 0.1
 point_max = 102400
 mix_prob = 0.8
 
+patch_size = 1024
+
 # Optimization parameters
-lr = 2e-3
+lr = 1e-3
 total_iters = 200_000
 
 # Features
@@ -57,10 +78,17 @@ feat_keys = ["coord", "color", "strength"]
 coord_feat_scale = 0.01
 
 # Wandb parameters
-wandb_run_name = (
-    f"SpUNet multi {grp_exp}.{num_exp}) iter={total_iters}"
-)
+wandb_run_name = f"Sonata-FT multi {grp_exp}.{num_exp}) iter={total_iters}"
 wandb_project = "flair3d_multi"
+
+# -----------------------------------------------------------------------------
+# Pretrained weight
+# -----------------------------------------------------------------------------
+# Sonata-v1m2 SSL pretrain on Flair3D+ (job 862680), epoch_120 -- the canonical
+# checkpoint used as W_SONATA across cross-domain GridProbe evals
+# (README_grid_then_seed.md), not the final epoch_150.
+# hf download LouisGeist/MALiBU3D-backbones sonata-pretrained/model.pth --local-dir ckpt
+weight = "ckpt/sonata-pretrained/model.pth"
 
 # -----------------------------------------------------------------------------
 # Multitask configuration : targets configuraiton
@@ -69,7 +97,7 @@ from pointcept.datasets.flair3d_config_utils import (
     FLAIR3D_TILE_DISTRIBUTION_TASKS,
     init_task_configs,
     init_task_criteria,
-    FLAIR3D_COLLECT_PREFIX_GRID,
+    FLAIR3D_COLLECT_PREFIX_LITEPT,
     init_multitask_collect_keys,
 )
 
@@ -135,7 +163,14 @@ names = task_configs[main_task]["names"]
 # Hooks
 # -----------------------------------------------------------------------------
 hooks = [
-    dict(type="CheckpointLoader"),
+    # Remap the SSL teacher/student checkpoint's backbone onto this model's
+    # plain backbone; strict=False (default) tolerates the multi-task heads
+    # and teacher/momentum-encoder keys having no counterpart on either side.
+    dict(
+        type="CheckpointLoader",
+        keywords="module.student.backbone",
+        replacement="module.backbone",
+    ),
     dict(type="ModelHook"),
     dict(type="IterationTimer", warmup_iter=2),
     dict(type="InformationWriter", log_interval=100),
@@ -152,22 +187,44 @@ test = dict(type="MultiTaskTester", verbose=True, write_cls_iou=True)
 # -----------------------------------------------------------------------------
 # Model
 # -----------------------------------------------------------------------------
-# Backbone produces per-point features (num_classes=0 disables its final 1x1
-# conv). MultiTaskSegmentorV2 attaches per-task linear heads on top of these
-# features (one nn.Linear(backbone_out_channels, num_classes_task) per
-# semantic task, one nn.Linear(backbone_out_channels, 1) for elevation).
-backbone_channels = (32, 64, 128, 256, 256, 128, 96, 96)
-
+# MultiTaskSegmentorV2 attaches per-task heads on top of backbone features
+# (semantic: nn.Linear(backbone_out_channels, num_classes_task); elevation: 1).
+# PT-v3m2, enc_mode=False: encoder dims match the Sonata pretrain checkpoint
+# (loaded by CheckpointLoader below); dec_* is a freshly-initialized decoder,
+# dims copied from the upstream official Sonata full-FT reference
+# (configs/sonata/semseg-sonata-v1m1-0c-scannet-ft.py, same enc_channels).
 model = dict(
     type="MultiTaskSegmentorV2",
-    backbone_out_channels=backbone_channels[-1],
+    backbone_out_channels=64,
     backbone=dict(
-        type="SpUNet-v1m1",
+        type="PT-v3m2",
         in_channels=7,  # coord (3) + color (3) + strength (1)
-        num_classes=0,
-        channels=backbone_channels,
-        layers=(2, 3, 4, 6, 2, 2, 2, 2),
-        stride=3,
+        order=("z", "z-trans", "hilbert", "hilbert-trans"),
+        stride=(3, 3, 3, 3),
+        enc_depths=(3, 3, 3, 12, 3),
+        enc_channels=(48, 96, 192, 384, 512),
+        enc_num_head=(3, 6, 12, 24, 32),
+        enc_patch_size=(1024, 1024, 1024, 1024, 1024),
+        dec_depths=(2, 2, 2, 2),
+        dec_channels=(64, 96, 192, 384),
+        dec_num_head=(4, 6, 12, 24),
+        dec_patch_size=(1024, 1024, 1024, 1024),
+        mlp_ratio=4,
+        qkv_bias=True,
+        qk_scale=None,
+        attn_drop=0.0,
+        proj_drop=0.0,
+        drop_path=0.3,
+        shuffle_orders=True,
+        pre_norm=True,
+        enable_rpe=False,
+        enable_flash=True,
+        upcast_attention=False,
+        upcast_softmax=False,
+        traceable=False,
+        mask_token=False,
+        enc_mode=False,
+        freeze_encoder=False,
     ),
     feature_mask_values=dict(
         enable=learned_masked_feat,
@@ -177,29 +234,32 @@ model = dict(
     main_task=main_task,
     task_criteria=task_criteria,
     task_weights=task_weights,
+    # Real fine-tune, not a frozen probe (contrast with
+    # configs/flair3d_default/probe/sonata-v1m2-flair3d-lin.py's freeze_backbone=True).
+    freeze_backbone=False,
 )
-
 
 
 # -----------------------------------------------------------------------------
 # Optimizer / scheduler
 # -----------------------------------------------------------------------------
-optimizer = dict(type="AdamW", lr=lr, weight_decay=0.005)
+optimizer = dict(type="AdamW", lr=lr, weight_decay=0.05)
 scheduler = dict(
     type="OneCycleLR",
-    max_lr=lr,
+    max_lr=[lr, lr / 10],
     pct_start=0.05,
     anneal_strategy="cos",
     div_factor=10.0,
-    final_div_factor=10000.0,
+    final_div_factor=1000.0,
 )
+param_dicts = [dict(keyword="block", lr=lr / 10)]
 
 # -----------------------------------------------------------------------------
 # Dataset
 # -----------------------------------------------------------------------------
 dataset_type = "Flair3DDataset"
 data_root = "data/flair3d_plus"
-csv_manifest = "data/flair3d_plus/raw/tiles.csv"
+csv_manifest = "data/flair3d_plus/raw/scene_split_manifest.csv"
 min_points = {"train": 1000}
 val_stratified_subset_manifest = "data/flair3d_plus/manifests/val_dev_subset_2000.csv"
 
@@ -233,11 +293,11 @@ network_apls_eval = dict(
 
 train_multitask_keys, val_multitask_keys, multitask_index_valid_keys = (
     init_multitask_collect_keys(
-        target_keys, collect_prefix_keys=FLAIR3D_COLLECT_PREFIX_GRID
+        target_keys, collect_prefix_keys=FLAIR3D_COLLECT_PREFIX_LITEPT
     )
 )
 
-del FLAIR3D_COLLECT_PREFIX_GRID, init_multitask_collect_keys
+del FLAIR3D_COLLECT_PREFIX_LITEPT, init_multitask_collect_keys
 
 data = dict(
     num_classes=num_classes,
@@ -289,8 +349,8 @@ data = dict(
             dict(type="RandomDropStrength", drop_ratio=0.1, drop_application_ratio=0.5, keep_mask=True),
             dict(type="NetworkRasterToPointLabels"),
             dict(type="NetworkRasterToPointLabels", target_key="forest_2d"),
-            dict(type="ShufflePoint"),
             dict(type="ToTensor"),
+            dict(type="Update", keys_dict={"grid_size": grid_size}),
             dict(
                 type="Collect",
                 keys=train_multitask_keys,
@@ -335,6 +395,7 @@ data = dict(
             dict(type="NetworkRasterToPointLabels"),
             dict(type="NetworkRasterToPointLabels", target_key="forest_2d"),
             dict(type="ToTensor"),
+            dict(type="Update", keys_dict={"grid_size": grid_size}),
             dict(
                 type="Collect",
                 keys=val_multitask_keys,
