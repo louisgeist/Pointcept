@@ -143,6 +143,51 @@ def _read_patch_grid(patch_dir: Path) -> GridSpec:
     )
 
 
+def read_patch_meta(patch_dir: Path) -> dict | None:
+    """Raw ``meta.json`` for one patch, or ``None`` if missing/unreadable."""
+    meta_path = patch_dir / "meta.json"
+    if not meta_path.is_file():
+        return None
+    try:
+        with open(meta_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def patch_network_is_confirmed_empty(
+    patch_dir: Path, network_types: Sequence[str]
+) -> bool | None:
+    """Whether ``meta.json`` confirms zero GT pixels for every ``network_types`` channel.
+
+    ``rasterize_network.py`` skips writing ``network.npy`` for a subtile once it has
+    zero positive pixels across the requested channels (nothing to rasterize) -- that
+    is the common, harmless reason a ``{patch_id}_logits_network.npy`` prediction is
+    absent (myria3d/Pointcept never see a raster grid to predict onto). This lets
+    callers tell that apart from a genuine coverage gap.
+
+    Returns ``None`` when it can't be determined (missing/malformed meta.json, or a
+    requested channel has no recorded pixel count) -- treat that conservatively as
+    "not confirmed empty", since it may still be a real gap.
+    """
+    meta = read_patch_meta(patch_dir)
+    if meta is None:
+        return None
+    net = meta.get("network")
+    if not isinstance(net, dict):
+        return None
+    counts = net.get("positive_pixel_counts")
+    if not isinstance(counts, dict):
+        return None
+    for network_type in network_types:
+        count = counts.get(network_type)
+        if count is None:
+            return None
+        if count != 0:
+            return False
+    return True
+
+
 def stitch_roi_predictions(
     patch_dirs: Sequence[Path],
     save_path: Path,
