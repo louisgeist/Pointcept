@@ -827,10 +827,16 @@ class GridProbeTrainer(Trainer):
     what fits (~100 is a safe margin on an 80GB GPU; verify per-config with
     scripts/sonata/diagnose_grid_probe_vram.py rather than assuming).
 
-    self.optimizer / self.scheduler become dict[str, ...] here (one entry per
-    probe) instead of the base Trainer's single instance — hooks that assume
-    a single optimizer/scheduler (InformationWriter's Lr: line, CheckpointSaver,
-    CheckpointLoader) branch on `isinstance(trainer.optimizer, dict)`.
+    self.optimizer / self.scheduler / self.scaler become dict[str, ...] here
+    (one entry per probe) instead of the base Trainer's single instance —
+    hooks that assume a single optimizer/scheduler/scaler (InformationWriter's
+    Lr: line, CheckpointSaver, CheckpointLoader) branch on
+    `isinstance(trainer.optimizer, dict)` / `isinstance(trainer.scaler, dict)`.
+
+    Under AMP, each probe owns its own GradScaler so a fp16 overflow on one
+    head cannot collapse the shared scale or freeze every probe's scheduler.
+    One backward still runs on the sum of per-probe scaled losses (heads are
+    disjoint, so each scale only multiplies that probe's grads).
 
     Precision (enable_amp/amp_dtype) stays a single global setting: the
     backbone forward (the expensive part) runs once under one autocast
@@ -894,6 +900,15 @@ class GridProbeTrainer(Trainer):
             schedulers[name] = build_scheduler(sched_cfg, opt)
         return schedulers
 
+    def build_scaler(self):
+        if not self.cfg.enable_amp:
+            return None
+        if version.parse(torch.__version__) >= version.parse("2.4"):
+            grad_scaler = partial(torch.amp.GradScaler, device="cuda")
+        else:
+            grad_scaler = torch.cuda.amp.GradScaler
+        return {name: grad_scaler() for name in self._raw_model().probe_names}
+
     def run_step(self):
         if version.parse(torch.__version__) >= version.parse("2.4"):
             auto_cast = partial(torch.amp.autocast, device_type="cuda")
@@ -912,14 +927,15 @@ class GridProbeTrainer(Trainer):
                 opt.zero_grad()
 
         # One frozen-backbone forward, then one shared backward over the sum
-        # of every active probe's loss: heads share zero trainable params
-        # (only the frozen backbone), so one backward() on the sum gives every
-        # head exactly its own gradient. Cheaper in wall-clock than one
-        # backward() per probe (no repeated autograd-engine dispatch), at the
-        # cost of keeping every active probe's forward+loss graph alive at
-        # once until this point -- ~440MB/probe measured (batch_size=12,
-        # point_max=102400, wide-grid config), so cap probe count accordingly
-        # (see GridProbeSegmentorV2 docstring / scripts/sonata/diagnose_grid_probe_vram.py).
+        # of every active probe's (optionally AMP-scaled) loss: heads share
+        # zero trainable params (only the frozen backbone), so one backward()
+        # on the sum gives every head exactly its own gradient. Cheaper in
+        # wall-clock than one backward() per probe (no repeated autograd-
+        # engine dispatch), at the cost of keeping every active probe's
+        # forward+loss graph alive at once until this point -- ~440MB/probe
+        # measured (batch_size=12, point_max=102400, wide-grid config), so
+        # cap probe count accordingly (see GridProbeSegmentorV2 docstring /
+        # scripts/sonata/diagnose_grid_probe_vram.py).
         raw_model = self._raw_model()
         with auto_cast(
             enabled=self.cfg.enable_amp, dtype=AMP_DTYPE[self.cfg.amp_dtype]
@@ -934,23 +950,25 @@ class GridProbeTrainer(Trainer):
             target = input_dict.get(raw_model.target_key)
             loss_by_task = {}
             pred_by_task = {}
-            task_losses = []
+            scaled_losses = []
             for name in active:
                 logits = raw_model.probe_logits(name, feat_by_norm)
                 if target is not None:
                     task_loss = raw_model.criteria_by_task[name](logits, target)
-                    task_losses.append(task_loss)
                     loss_by_task[name] = task_loss.detach()
                     pred_by_task[name] = logits.argmax(dim=1).detach()
                     input_dict.setdefault(name, target)
+                    accum = self.cfg.gradient_accumulation_steps
+                    if self.cfg.enable_amp:
+                        scaled_losses.append(
+                            self.scaler[name].scale(task_loss / accum)
+                        )
+                    else:
+                        scaled_losses.append(task_loss / accum)
                 del logits
 
-            if task_losses:
-                total = sum(task_losses) / self.cfg.gradient_accumulation_steps
-                if self.cfg.enable_amp:
-                    self.scaler.scale(total).backward()
-                else:
-                    total.backward()
+            if scaled_losses:
+                sum(scaled_losses).backward()
 
         output_dict = {}
         if loss_by_task:
@@ -963,33 +981,30 @@ class GridProbeTrainer(Trainer):
         if self._gradient_accumulation_counter >= self.cfg.gradient_accumulation_steps:
             raw_model = self._raw_model()
             probe_configs = raw_model.probe_configs
-            scale_before = self.scaler.get_scale() if self.cfg.enable_amp else None
+            scale_before = (
+                {name: sc.get_scale() for name, sc in self.scaler.items()}
+                if self.cfg.enable_amp
+                else None
+            )
 
             for name, opt in self.optimizer.items():
                 if self.cfg.enable_amp:
-                    self.scaler.unscale_(opt)
+                    self.scaler[name].unscale_(opt)
                 grad_clip = probe_configs[name].get("grad_clip")
                 if grad_clip is not None:
                     torch.nn.utils.clip_grad_norm_(
                         raw_model.probe_head_parameters(name), grad_clip
                     )
                 if self.cfg.enable_amp:
-                    self.scaler.step(opt)
+                    self.scaler[name].step(opt)
+                    self.scaler[name].update()
+                    # Per-probe AMP guard: only this probe's scheduler skips
+                    # when its own scaler detected inf/nan and shrank.
+                    if scale_before[name] <= self.scaler[name].get_scale():
+                        self.scheduler[name].step()
                 else:
                     opt.step()
-
-            if self.cfg.enable_amp:
-                self.scaler.update()
-                # Skip the scheduler step this round if AMP detected an inf/nan
-                # and shrank the scale (mirrors the base Trainer's single-optimizer
-                # guard; GradScaler has one global scale regardless of how many
-                # optimizers share it, so one check covers every probe).
-                step_schedulers = scale_before <= self.scaler.get_scale()
-            else:
-                step_schedulers = True
-            if step_schedulers:
-                for sched in self.scheduler.values():
-                    sched.step()
+                    self.scheduler[name].step()
 
             # Reset grad accumulation counter
             self._gradient_accumulation_counter = 0

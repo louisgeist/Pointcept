@@ -785,17 +785,24 @@ class CheckpointSaver(HookBase):
             else:
                 optimizer_state = self.trainer.optimizer.state_dict()
                 scheduler_state = self.trainer.scheduler.state_dict()
+            if self.trainer.cfg.enable_amp:
+                if isinstance(self.trainer.scaler, dict):
+                    # GridProbeTrainer: one GradScaler per probe head.
+                    scaler_state = {
+                        name: s.state_dict()
+                        for name, s in self.trainer.scaler.items()
+                    }
+                else:
+                    scaler_state = self.trainer.scaler.state_dict()
+            else:
+                scaler_state = None
             torch.save(
                 {
                     "epoch": self.trainer.epoch + 1,
                     "state_dict": self.trainer.model.state_dict(),
                     "optimizer": optimizer_state,
                     "scheduler": scheduler_state,
-                    "scaler": (
-                        self.trainer.scaler.state_dict()
-                        if self.trainer.cfg.enable_amp
-                        else None
-                    ),
+                    "scaler": scaler_state,
                     "best_metric_value": self.trainer.best_metric_value,
                     "hook_states": hook_states,
                     "grad_norm_state": (
@@ -902,7 +909,26 @@ class CheckpointLoader(HookBase):
                 self.trainer.optimizer.load_state_dict(checkpoint["optimizer"])
                 self.trainer.scheduler.load_state_dict(checkpoint["scheduler"])
             if self.trainer.cfg.enable_amp:
-                self.trainer.scaler.load_state_dict(checkpoint["scaler"])
+                ckpt_scaler = checkpoint["scaler"]
+                if isinstance(self.trainer.scaler, dict):
+                    # Per-probe GradScalers. Older checkpoints stored a single
+                    # shared scaler state_dict — broadcast it to every probe.
+                    if isinstance(ckpt_scaler, dict) and all(
+                        isinstance(v, dict) and "scale" in v
+                        for v in ckpt_scaler.values()
+                    ):
+                        for name, sc in self.trainer.scaler.items():
+                            sc.load_state_dict(ckpt_scaler[name])
+                    else:
+                        for sc in self.trainer.scaler.values():
+                            sc.load_state_dict(ckpt_scaler)
+                        self.trainer.logger.info(
+                            "=> Restored legacy mono GradScaler into "
+                            "per-probe scalers"
+                        )
+                else:
+                    self.trainer.scaler.load_state_dict(ckpt_scaler)
+
             # Restore per-hook running state (older checkpoints predate this key,
             # hence .get) — see HookBase.state_dict / CheckpointSaver.after_epoch.
             hook_states = checkpoint.get("hook_states", {})
