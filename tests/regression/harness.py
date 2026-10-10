@@ -424,6 +424,9 @@ def compare(ref, new, mapping, rtol, atol):
         if "error" in rr or "skipped" in rr:
             continue
         nn = n.get(key)
+        if nn is None and not os.path.isfile(apply_map(rr.get("config", ""), paths_map)):
+            notes.append(f"forward {key}: config removed")
+            continue
         if nn is None or "error" in nn:
             fails.append(f"forward {key}: " + ("missing" if nn is None else nn["error"][:200]))
             continue
@@ -459,6 +462,9 @@ def compare(ref, new, mapping, rtol, atol):
         r = {}
     for key, rr in r.items():
         nn = n.get(key)
+        if nn is None and key not in cases.TRAIN:
+            notes.append(f"train {key}: case removed")
+            continue
         if nn is None:
             fails.append(f"train {key}: missing")
             continue

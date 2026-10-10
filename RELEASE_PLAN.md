@@ -70,7 +70,7 @@ Constats en cours de route :
   - OpenGF : `mix_prob = 0` partout (comme dans le papier) ; probe KPConvX avec `point_max = 60000` (comme le run du papier)
   - pas de configs de seeds à lr fixé (D1) ; les probes des backbones d'ablation et le PTv3 aléatoire = grilles canoniques avec `weight=` surchargé (à documenter)
 - [x] Supprimer `configs/experiment/` (+ `tools/gen_grid_seed_configs.py`, + `tests/test_resolve_config_file.py`, déjà cassé au tag)
-- [ ] Supprimer les configs amont (scannet, s3dis, concerto, utonia, sonata indoor, nuscenes, waymo, …)
+- [x] Supprimer les configs amont (scannet, s3dis, concerto, utonia, sonata indoor, nuscenes, waymo, forinstancev2, `_base_/dataset`), `configs/flair3d/` (ancien dev) et les configs debug/toy/LitePT-S de `flair3d_default`, `dales`, `h3d`, `pureforest`
 - [ ] Supprimer les modèles, datasets, preprocessing, `libs/` et tests inutilisés
 - [ ] Supprimer les scripts racine (`sbatch_*`, `test_*.sh`, `submit_*`), les `README_*_geist.md`, `stats/`, `docs/bug_review`, `docs/superpowers`, les CSV temporaires
 - [ ] Trier `scripts/` : garder l'outillage utilisateur, supprimer les analyses ponctuelles

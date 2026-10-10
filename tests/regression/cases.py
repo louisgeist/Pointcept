@@ -11,7 +11,6 @@ import glob
 BUILD_GLOBS = [
     "configs/_base_/**/*.py",
     "configs/flair3d_default/**/*.py",
-    "configs/flair3d/*.py",
     "configs/dales/*.py",
     "configs/h3d/*.py",
     "configs/eclair/**/*.py",
@@ -54,7 +53,6 @@ JOB_TO_CKPT = {
 PROBE_CKPT_OVERRIDE = {
     "flair3d_default/probe/sonata-v1m2-flair3d-lin-grid": "sonata-pretrained",
     "flair3d_default/probe/sonata-v1m2-flair3d-lin-grid-wide": "sonata-pretrained",
-    "flair3d_default/probe/sonata-v1m2-flair3d-lin-grid-toy": "sonata-pretrained",
     "flair3d_default/probe/sonata-v1m2-flair3d-lin": "sonata-pretrained",
 }
 
@@ -123,7 +121,6 @@ TRAIN = {
     "train-segment-litept-b": ("configs/flair3d_default/segment/litept-b-v1m0-flair3d.py", _FLAIR_SMALL),
     "train-elevation-litept-b": ("configs/flair3d_default/elevation/litept-b-v1m0-flair3d.py", _FLAIR_SMALL),
     "train-forest-litept": ("configs/flair3d_default/forest/litept-v1m0-flair3d.py", _FLAIR_SMALL),
-    "train-nathab-litept": ("configs/flair3d_default/natural_habitat/litept-v1m0-flair3d.py", _FLAIR_SMALL),
     "train-network-litept": ("configs/flair3d_default/network/litept-v1m0-flair3d.py", _FLAIR_SMALL),
     "train-pretrain-sonata": ("configs/flair3d_default/pretrain-sonata-v1m2-flair3d.py", [
         "seed=0", "enable_wandb=False", "num_worker=2", "batch_size=2",
