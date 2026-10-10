@@ -20,6 +20,11 @@ Suivi du nettoyage de la branche `malibu3d` avant la création du repo public.
 | KPConvX | Source : https://github.com/apple-aiml-research/ml-kpconvx/tree/main/Pointcept-wrapper. Copier leur LICENSE dans `pointcept/models/kpconvx/` et les citer |
 | Pointcept | Licence MIT : garder `LICENSE` + le copyright amont, ajouter « Built on Pointcept » (commit amont) dans le README |
 
+## À livrer sur Hugging Face avec le dataset
+
+- [ ] `manifests/val_dev_subset_2000.csv` (sous-ensemble stratifié de validation lu par les configs par défaut via `val_stratified_subset_manifest`). Aujourd'hui : `data/flair3d_plus/manifests/val_dev_subset_2000.csv`, ignoré par git. Une fois publié, faire pointer les configs et la doc vers le fichier HF.
+- [ ] Vérifier que le `tiles.csv` publié contient bien la colonne `n_voxels` (utilisée par les budgets de voxels en val/test). Elle est présente dans la copie locale.
+
 ## Phase 0 — Snapshot et harnais de non-régression
 
 - [x] Commiter les fichiers restants sur `flair3d`, poser le tag `malibu3d-submission`, créer la branche `malibu3d`
