@@ -5,8 +5,6 @@ Author: Xiaoyang Wu (xiaoyang.wu.cs@gmail.com)
 Please cite our work if the code is helpful to you.
 """
 
-import sys
-import glob
 import json
 import os
 import math
@@ -14,7 +12,6 @@ import re
 import shutil
 import subprocess
 import time
-import gc
 import wandb
 import torch
 import torch.utils.data
@@ -22,18 +19,13 @@ from collections import OrderedDict
 from datetime import datetime, timezone
 from pathlib import Path
 
-if sys.version_info >= (3, 10):
-    from collections.abc import Sequence
-else:
-    from collections import Sequence
 from pointcept.utils.epoch_timing import (
     begin_epoch_wall_timing,
     finalize_epoch_wall_timing,
 )
 from pointcept.utils.timer import Timer
-from pointcept.utils.comm import is_main_process, synchronize
+from pointcept.utils.comm import is_main_process
 from pointcept.utils.network_apls import run_network_apls_eval_if_configured
-from pointcept.utils.cache import shared_dict
 from pointcept.utils.scheduler import CosineScheduler
 import pointcept.utils.comm as comm
 from pointcept.utils.misc import intersection_and_union_gpu
@@ -1063,193 +1055,6 @@ class NetworkAPLSEvaluator(HookBase):
 
 
 @HOOKS.register_module()
-class DataCacheOperator(HookBase):
-    def __init__(self, data_root, split):
-        self.data_root = data_root
-        self.split = split
-        self.data_list = self.get_data_list()
-
-    def get_data_list(self):
-        if isinstance(self.split, str):
-            data_list = glob.glob(os.path.join(self.data_root, self.split))
-        elif isinstance(self.split, Sequence):
-            data_list = []
-            for split in self.split:
-                data_list += glob.glob(os.path.join(self.data_root, split))
-        else:
-            raise NotImplementedError
-        return data_list
-
-    def get_cache_name(self, data_path):
-        data_name = data_path.replace(os.path.dirname(self.data_root), "")
-        return "pointcept" + data_name.replace(os.path.sep, "-")
-
-    def before_train(self):
-        self.trainer.logger.info(
-            f"=> Caching dataset: {self.data_root}, split: {self.split} ..."
-        )
-        if is_main_process():
-            dataset = self.trainer.train_loader.dataset
-            for i in range(len(dataset)):
-                data_dict = dataset[i]
-                name = data_dict["name"]
-                shared_dict(f"Pointcept-{name}", data_dict)
-        synchronize()
-
-
-@HOOKS.register_module()
-class RuntimeProfiler(HookBase):
-    def __init__(
-        self,
-        forward=True,
-        backward=True,
-        interrupt=False,
-        warm_up=2,
-        sort_by="cuda_time_total",
-        row_limit=30,
-    ):
-        self.forward = forward
-        self.backward = backward
-        self.interrupt = interrupt
-        self.warm_up = warm_up
-        self.sort_by = sort_by
-        self.row_limit = row_limit
-
-    def before_train(self):
-        self.trainer.logger.info("Profiling runtime ...")
-        from torch.profiler import profile, record_function, ProfilerActivity
-
-        for i, input_dict in enumerate(self.trainer.train_loader):
-            if i == self.warm_up + 1:
-                break
-            for key in input_dict.keys():
-                if isinstance(input_dict[key], torch.Tensor):
-                    input_dict[key] = input_dict[key].cuda(non_blocking=True)
-            if self.forward:
-                with profile(
-                    activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
-                    record_shapes=True,
-                    profile_memory=True,
-                    with_stack=True,
-                ) as forward_prof:
-                    with record_function("model_inference"):
-                        output_dict = self.trainer.model(input_dict)
-            else:
-                output_dict = self.trainer.model(input_dict)
-            loss = output_dict["loss"]
-            if self.backward:
-                with profile(
-                    activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
-                    record_shapes=True,
-                    profile_memory=True,
-                    with_stack=True,
-                ) as backward_prof:
-                    with record_function("model_inference"):
-                        loss.backward()
-            self.trainer.logger.info(f"Profile: [{i + 1}/{self.warm_up + 1}]")
-        if self.forward:
-            self.trainer.logger.info(
-                "Forward profile: \n"
-                + str(
-                    forward_prof.key_averages().table(
-                        sort_by=self.sort_by, row_limit=self.row_limit
-                    )
-                )
-            )
-            forward_prof.export_chrome_trace(
-                os.path.join(self.trainer.cfg.save_path, "forward_trace.json")
-            )
-
-        if self.backward:
-            self.trainer.logger.info(
-                "Backward profile: \n"
-                + str(
-                    backward_prof.key_averages().table(
-                        sort_by=self.sort_by, row_limit=self.row_limit
-                    )
-                )
-            )
-            backward_prof.export_chrome_trace(
-                os.path.join(self.trainer.cfg.save_path, "backward_trace.json")
-            )
-        if self.interrupt:
-            sys.exit(0)
-
-
-@HOOKS.register_module()
-class RuntimeProfilerV2(HookBase):
-    def __init__(
-        self,
-        interrupt=False,
-        wait=1,
-        warmup=1,
-        active=10,
-        repeat=1,
-        sort_by="cuda_time_total",
-        row_limit=30,
-    ):
-        self.interrupt = interrupt
-        self.wait = wait
-        self.warmup = warmup
-        self.active = active
-        self.repeat = repeat
-        self.sort_by = sort_by
-        self.row_limit = row_limit
-
-    def before_train(self):
-        self.trainer.logger.info("Profiling runtime ...")
-        from torch.profiler import (
-            profile,
-            record_function,
-            ProfilerActivity,
-            schedule,
-            tensorboard_trace_handler,
-        )
-
-        prof = profile(
-            activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
-            schedule=schedule(
-                wait=self.wait,
-                warmup=self.warmup,
-                active=self.active,
-                repeat=self.repeat,
-            ),
-            on_trace_ready=tensorboard_trace_handler(self.trainer.cfg.save_path),
-            record_shapes=True,
-            profile_memory=True,
-            with_stack=True,
-        )
-        prof.start()
-        for i, input_dict in enumerate(self.trainer.train_loader):
-            if i >= (self.wait + self.warmup + self.active) * self.repeat:
-                break
-            for key in input_dict.keys():
-                if isinstance(input_dict[key], torch.Tensor):
-                    input_dict[key] = input_dict[key].cuda(non_blocking=True)
-            with record_function("model_forward"):
-                output_dict = self.trainer.model(input_dict)
-                loss = output_dict["loss"]
-            with record_function("model_backward"):
-                loss.backward()
-            prof.step()
-            self.trainer.logger.info(
-                f"Profile: [{i + 1}/{(self.wait + self.warmup + self.active) * self.repeat}]"
-            )
-        self.trainer.logger.info(
-            "Profile: \n"
-            + str(
-                prof.key_averages().table(
-                    sort_by=self.sort_by, row_limit=self.row_limit
-                )
-            )
-        )
-        prof.stop()
-
-        if self.interrupt:
-            sys.exit(0)
-
-
-@HOOKS.register_module()
 class WeightDecaySchedular(HookBase):
     def __init__(
         self,
@@ -1315,35 +1120,6 @@ class SpconvNativeConvAlgo(HookBase):
             self.trainer.logger.info(
                 "SpconvNativeConvAlgo: forced ConvAlgo.Native on %d spconv layer(s).", n
             )
-
-
-@HOOKS.register_module()
-class GarbageHandler(HookBase):
-    def __init__(self, interval=150, disable_auto=True, empty_cache=False):
-        self.interval = interval
-        self.disable_auto = disable_auto
-        self.empty_cache = empty_cache
-        self.iter = 1
-
-    def before_train(self):
-        if self.disable_auto:
-            gc.disable()
-            self.trainer.logger.info("Disable automatic garbage collection")
-
-    def before_epoch(self):
-        self.iter = 1
-
-    def after_step(self):
-        if self.iter % self.interval == 0:
-            gc.collect()
-            if self.empty_cache:
-                torch.cuda.empty_cache()
-            self.trainer.logger.info("Garbage collected")
-        self.iter += 1
-
-    def after_train(self):
-        gc.collect()
-        torch.cuda.empty_cache()
 
 
 @HOOKS.register_module()

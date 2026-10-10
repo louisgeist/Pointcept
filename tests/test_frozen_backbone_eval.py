@@ -37,7 +37,7 @@ def _cfg(model_type, **kwargs):
         backbone=dict(type="_FrozenEvalBackbone"),
         criteria=[],
     )
-    if model_type in ("DefaultSegmentorV2", "DINOEnhancedSegmentor"):
+    if model_type == "DefaultSegmentorV2":
         base.update(num_classes=2, backbone_out_channels=4)
     elif model_type == "DefaultRegressorV2":
         base.update(backbone_out_channels=4)
@@ -58,7 +58,6 @@ MODEL_TYPES = (
     "DefaultRegressorV2",
     "MultiTaskSegmentorV2",
     "DefaultClassifier",
-    "DINOEnhancedSegmentor",
 )
 
 

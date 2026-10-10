@@ -18,7 +18,6 @@ import torch.nn as nn
 import torch.utils.data
 from packaging import version
 from functools import partial
-import itertools
 
 if sys.version_info >= (3, 10):
     from collections.abc import Iterator
@@ -53,7 +52,6 @@ from pointcept.utils.gradient_norm import (
 )
 from pointcept.utils.registry import Registry
 from pointcept.datasets.dataloader import (
-    DistributedImbalancedSampler,
     IterLimitedDistributedSampler,
     IterLimitedSampler,
 )
@@ -736,82 +734,6 @@ class Trainer(TrainerBase):
             grad_scaler = torch.cuda.amp.GradScaler
         scaler = grad_scaler() if self.cfg.enable_amp else None
         return scaler
-
-
-@TRAINERS.register_module("PartialSampledTrainer")
-class PartialSampledTrainer(Trainer):
-    def __init__(self, cfg):
-        if getattr(cfg, "total_iters", None) is not None:
-            raise ValueError(
-                "total_iters is not supported with PartialSampledTrainer; "
-                "use DefaultTrainer instead."
-            )
-        super().__init__(cfg)
-
-    def build_train_loader(self):
-        train_data = build_dataset(self.cfg.data.train)
-        sampled_dataset_index = self.cfg.data.sampled_dataset_index
-        sampled_dataset_limit = self.cfg.data.sampled_dataset_limit
-
-        train_sampler = DistributedImbalancedSampler(
-            dataset=train_data,
-            sampled_dataset_index=sampled_dataset_index,
-            sampled_dataset_limit=sampled_dataset_limit,
-            num_replicas=comm.get_world_size(),
-            rank=comm.get_rank(),
-            shuffle=True,
-            seed=self.cfg.seed if self.cfg.seed is not None else 0,
-        )
-
-        init_fn = (
-            partial(
-                worker_init_fn,
-                num_workers=self.cfg.num_worker_per_gpu,
-                rank=comm.get_rank(),
-                seed=self.cfg.seed,
-            )
-            if self.cfg.seed is not None
-            else None
-        )
-
-        train_loader = torch.utils.data.DataLoader(
-            train_data,
-            batch_size=self.cfg.batch_size_per_gpu,
-            shuffle=False,
-            num_workers=self.cfg.num_worker_per_gpu,
-            sampler=train_sampler,
-            collate_fn=partial(point_collate_fn, mix_prob=self.cfg.mix_prob),
-            pin_memory=True,
-            worker_init_fn=init_fn,
-            drop_last=len(train_data) > self.cfg.batch_size,
-            persistent_workers=True,
-        )
-        return train_loader
-
-
-@TRAINERS.register_module("MultiDatasetTrainer")
-class MultiDatasetTrainer(Trainer):
-    def __init__(self, cfg):
-        if getattr(cfg, "total_iters", None) is not None:
-            raise ValueError(
-                "total_iters is not supported with MultiDatasetTrainer; "
-                "use DefaultTrainer instead."
-            )
-        super().__init__(cfg)
-
-    def build_train_loader(self):
-        from pointcept.datasets import MultiDatasetDataloader
-
-        train_data = build_dataset(self.cfg.data.train)
-        train_loader = MultiDatasetDataloader(
-            train_data,
-            self.cfg.batch_size_per_gpu,
-            self.cfg.num_worker_per_gpu,
-            self.cfg.mix_prob,
-            self.cfg.seed,
-        )
-        self.comm_info["iter_per_epoch"] = len(train_loader)
-        return train_loader
 
 
 @TRAINERS.register_module("GridProbeTrainer")
