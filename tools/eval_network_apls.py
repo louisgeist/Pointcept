@@ -278,7 +278,7 @@ def _build_predicted_graph(
 def run(
     data_root: Path,
     save_path: Path,
-    network_graphs_root: Path,
+    network_graphs_root: Optional[Path],
     split_manifest_csv: Path,
     out_dir: Path,
     *,
@@ -579,7 +579,7 @@ def run(
             "skeletonize_enabled": skeletonize_enabled,
             "min_component_nodes": min_component_nodes,
             "save_path": str(save_path),
-            "network_graphs_root": str(network_graphs_root),
+            "network_graphs_root": str(network_graphs_root) if network_graphs_root else None,
             "split_manifest_csv": str(split_manifest_csv),
             "network_types": list(types),
             "max_rois": max_rois,
@@ -679,7 +679,13 @@ def build_argparser() -> argparse.ArgumentParser:
         required=True,
         help="Test/PreciseEvaluator output dir containing {patch_id}_logits_network.npy",
     )
-    p.add_argument("--network_graphs_root", type=str, required=True)
+    p.add_argument(
+        "--network_graphs_root",
+        type=str,
+        default=None,
+        help="Directory of {dept}_{roi}_{NETWORK}_graph.gpkg files. Default: read each graph from its "
+        "ROI directory (Hugging Face layout of the dataset).",
+    )
     p.add_argument("--split_manifest_csv", type=str, required=True)
     p.add_argument("--out_dir", type=str, required=True)
     p.add_argument("--split", type=str, default=d["split"])
@@ -827,7 +833,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     run(
         Path(args.data_root).resolve(),
         Path(args.save_path).resolve(),
-        Path(args.network_graphs_root).resolve(),
+        Path(args.network_graphs_root).resolve() if args.network_graphs_root else None,
         Path(args.split_manifest_csv).resolve(),
         Path(args.out_dir).resolve(),
         split=args.split,

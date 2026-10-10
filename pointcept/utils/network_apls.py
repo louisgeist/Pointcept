@@ -62,13 +62,8 @@ def run_network_apls_eval_if_configured(cfg, logger):
         return None
 
     opts = dict(opts)
-    try:
-        network_graphs_root = opts.pop("network_graphs_root")
-    except KeyError:
-        logger.warning(
-            "cfg.network_apls_eval requires 'network_graphs_root' -- skipping APLS eval."
-        )
-        return None
+    # None: GT graphs sit in each ROI directory (Hugging Face layout of the dataset).
+    network_graphs_root = opts.pop("network_graphs_root", None)
 
     # Align APLS channels with the trained head (e.g. ROADS+RAILROADS only).
     if "network_types" not in opts and task_configs and "network" in task_configs:
@@ -87,7 +82,7 @@ def run_network_apls_eval_if_configured(cfg, logger):
         return eval_network_apls.run(
             Path(cfg.data_root),
             save_path,
-            Path(network_graphs_root),
+            Path(network_graphs_root) if network_graphs_root else None,
             Path(cfg.csv_manifest),
             out_dir,
             **opts,

@@ -171,10 +171,10 @@ min_points = {"train": 1000}
 
 # Opt-in APLS scoring of PreciseEvaluator test logits (see NetworkAPLSEvaluator /
 # tools/test.py). ``split`` must match ``data.test.split`` so stitched ROIs find
-# ``{patch_id}_logits_network.npy``. Jean Zay graphs root (Hecate uses
-# /data/geist/Flair3D-build/data/network_graphs).
+# ``{patch_id}_logits_network.npy``. ``network_graphs_root=None`` reads each ground-truth
+# road graph from its ROI directory (Hugging Face layout of the dataset).
 network_apls_eval = dict(
-    network_graphs_root="/lustre/fsn1/projects/rech/unv/usi32yh/data_flair3d_build/network_graphs",
+    network_graphs_root=None,
     split="test",
     threshold=0.2,
     overlap_combine="nanmean",

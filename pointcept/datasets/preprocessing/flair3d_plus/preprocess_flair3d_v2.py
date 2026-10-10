@@ -861,13 +861,13 @@ def main_process():
     parser.add_argument(
         "--dataset_root",
         type=str,
-        default="/data/geist/datasets/sample_flairhub_3d",
+        default=None,
         help="Root directory containing auxiliary modality GeoTIFFs (FOREST, etc.)",
     )
     parser.add_argument(
         "--output_root",
         type=str,
-        default="/data/geist/Pointcept/data/flair3d",
+        default="data/flair3d_plus",
         help="Output root directory for Pointcept-formatted scenes",
     )
     parser.add_argument(
@@ -974,6 +974,8 @@ def main_process():
 
     if not args.multilabel_only and not args.ply_root:
         parser.error("--ply_root is required unless --multilabel-only is set")
+    if not args.multilabel_only and not args.dataset_root:
+        parser.error("--dataset_root is required unless --multilabel-only is set")
 
     os.makedirs(args.output_root, exist_ok=True)
     log_file_path = args.log_file or os.path.join(args.output_root, "preprocess_flair3d.log")

@@ -109,6 +109,9 @@ _FLAIR_SMALL = [
     "data.val.stratified_subset_manifest=", "data.val.max_sample=4",
     # D075/D068 test tiles lack forest_2d.npy locally: test on D067 val tiles instead.
     "data.test.split=val", f"data.test.csv_manifest={FLAIR3D_MANIFEST['val']}", "data.test.max_sample=2",
+    # APLS on those tiles, with hecate's copy of the ground-truth road graphs.
+    "network_apls_eval.split=val", f"csv_manifest={FLAIR3D_MANIFEST['val']}",
+    "network_apls_eval.network_graphs_root=/data/geist/Flair3D-build/data/network_graphs",
 ]
 _PROBE_BASE = [
     "seed=0", "enable_wandb=False", "num_worker=2", "num_worker_test=2",

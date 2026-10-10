@@ -78,10 +78,10 @@ Constats en cours de route :
 
 ## Phase 3 — Réorganisation
 
-- [ ] Ranger les configs en `configs/malibu3d/{segment,forest,natural_habitat,network,elevation,multitask,probe,pretrain}` et `configs/{dales,h3d,eclair,opengf,pureforest}`
+- [ ] (fait avec le renommage, Phase 4) Ranger les configs en `configs/malibu3d/{segment,forest,natural_habitat,network,elevation,multitask,probe,pretrain}` et `configs/{dales,h3d,eclair,opengf,pureforest}`
 - [x] Remplacer les chemins `weight=` (`/lustre/...`, numéros de job, `ckpt/malibu3d/*`) par la convention de `README_checkpoints.md` : `ckpt/<nom>/model.pth` (873542 → `litept-b`, 1095469 → `ptv3`, 1052217 → `spunet`, 1159986 → `kpconvx`, 862680 → `sonata-pretrained`). Backbones d'ablation non publiés (noGNL, monoLC, realGN, preECLAIR) : les 3 configs OpenGF qui ne différaient que par `weight` sont supprimées → surcharge `--options weight=...` à documenter (Phase 7). Le checkpoint Sonata indoor officiel garde `ckpt/sonata/pretrain-sonata-v1m1-0-base.pth` (à documenter)
-- [ ] `network_graphs_root` (APLS) pointe vers `/lustre/...` : les graphes GT sont dans le dataset HF, à la racine de chaque zip de ROI (`data/{split}/{dept}_LIDARHD/{roi}/*_ROADS_graph.gpkg`), alors que `network_label_utils.py` attend un dossier plat `{root}/{dept}_{zone}_{NETWORK}_graph.gpkg` → résolution à adapter au layout HF
-- [ ] Retirer les chemins `/lustre` et `/data/geist` des docstrings/defaults (`preprocess_flair3d_v2.py`, `rasterize_forest.py`, `rasterize_network.py`, `unzip_malibu3d.py`), le lien wandb de `multi-litept-b-v1m0-flair3d.py`
+- [x] `network_graphs_root` (APLS) pointe vers `/lustre/...` : les graphes GT sont dans le dataset HF, à la racine de chaque zip de ROI (`data/{split}/{dept}_LIDARHD/{roi}/*_ROADS_graph.gpkg`), alors que `network_label_utils.py` attend un dossier plat `{root}/{dept}_{zone}_{NETWORK}_graph.gpkg` → `network_graphs_root=None` lit chaque graphe dans le dossier de sa ROI (nouveau défaut des configs, test unitaire `tests/test_network_graph_paths.py`) ; APLS vérifié de bout en bout sur hecate avec un dossier explicite, et désormais exercé par le harnais
+- [x] Valeurs par défaut personnelles retirées du code (`preprocess_flair3d_v2.py`) ; les docstrings et le lien wandb sont traités en Phase 6, l'audit global en Phase 8. ~~Retirer les chemins `/lustre` et `/data/geist` des docstrings/defaults (`preprocess_flair3d_v2.py`, `rasterize_forest.py`, `rasterize_network.py`, `unzip_malibu3d.py`), le lien wandb de `multi-litept-b-v1m0-flair3d.py`~~
 - [x] Lanceurs Slurm : tous supprimés en Phase 2 (spécifiques à Jean Zay) ; le README expliquera l'usage générique
 - [ ] Harnais (avec une table de correspondance des chemins) + commit
 

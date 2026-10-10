@@ -5,6 +5,9 @@ Expects / produces GeoPackages with layers ``nodes`` / ``edges`` / ``metadata``
 
     {network_graphs_root}/{dept}_{zone}_{NETWORK}_graph.gpkg
     {out_dir}/{dept}_{zone}_{NETWORK}_pred_graph.gpkg
+
+With ``network_graphs_root=None`` the graphs are read from each ROI directory, which is
+where the Hugging Face release of the dataset stores them.
 """
 
 from __future__ import annotations
@@ -57,8 +60,13 @@ def graph_output_stem(roi_dir: Path | str) -> Optional[str]:
     return f"{dept}_{roi_path.name}"
 
 
+def _graph_dir(network_graphs_root: Optional[Path | str], roi_dir: Path | str) -> Path:
+    """Directory holding the GT graphs: ``network_graphs_root``, or the ROI directory if None."""
+    return Path(roi_dir) if network_graphs_root is None else Path(network_graphs_root)
+
+
 def resolve_exported_graph_gpkg(
-    network_graphs_root: Path | str,
+    network_graphs_root: Optional[Path | str],
     roi_dir: Path | str,
     network_type: str,
 ) -> Optional[Path]:
@@ -70,12 +78,12 @@ def resolve_exported_graph_gpkg(
     stem = graph_output_stem(roi_dir)
     if stem is None:
         return None
-    path = Path(network_graphs_root) / f"{stem}_{network_type}_graph.gpkg"
+    path = _graph_dir(network_graphs_root, roi_dir) / f"{stem}_{network_type}_graph.gpkg"
     return path if path.is_file() else None
 
 
 def expected_exported_graph_path(
-    network_graphs_root: Path | str,
+    network_graphs_root: Optional[Path | str],
     roi_dir: Path | str,
     network_type: str,
 ) -> Path:
@@ -89,7 +97,7 @@ def expected_exported_graph_path(
         raise ValueError(
             f"Cannot derive graph stem from ROI directory: {roi_dir}"
         )
-    return Path(network_graphs_root) / f"{stem}_{network_type}_graph.gpkg"
+    return _graph_dir(network_graphs_root, roi_dir) / f"{stem}_{network_type}_graph.gpkg"
 
 
 def _iter_linestrings(geom: BaseGeometry) -> list[LineString]:
@@ -294,7 +302,7 @@ def load_roi_exported_network_graph(gpkg_path: Path | str) -> LoadedNetworkGraph
 
 
 def load_roi_exported_networks(
-    network_graphs_root: Path | str,
+    network_graphs_root: Optional[Path | str],
     roi_dir: Path | str,
     *,
     flags: Dict[str, bool],
@@ -309,7 +317,7 @@ def load_roi_exported_networks(
         corresponding ``*_graph.gpkg`` to exist.
     """
     out: Dict[str, np.ndarray] = {}
-    root = Path(network_graphs_root)
+    root = network_graphs_root
     for network_type in network_types:
         expect = bool(flags.get(network_type, False))
         path = resolve_exported_graph_gpkg(root, roi_dir, network_type)
