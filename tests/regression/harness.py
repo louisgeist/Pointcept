@@ -416,8 +416,10 @@ def compare(ref, new, mapping, rtol, atol):
             with open(os.path.join(new, "removed_configs.txt"), "w") as f:
                 f.write("\n".join(gone) + "\n")
 
-    # forward
+    # forward (skipped when the new capture did not run this stage)
     r, n = read_jsonl(os.path.join(ref, "forward.jsonl")), read_jsonl(os.path.join(new, "forward.jsonl"))
+    if not n:
+        r = {}
     for key, rr in r.items():
         if "error" in rr or "skipped" in rr:
             continue
@@ -451,8 +453,10 @@ def compare(ref, new, mapping, rtol, atol):
                 fails.append(f"forward {key}: {k} max|diff|={d.max():.3g} mean rel={rel:.2g} argmax agree={agree:.5f}")
         notes.append(f"forward {key}: max|diff|={worst:.3g} mean rel={worst_rel:.2g}")
 
-    # train
+    # train (skipped when the new capture did not run this stage)
     r, n = read_jsonl(os.path.join(ref, "train.jsonl")), read_jsonl(os.path.join(new, "train.jsonl"))
+    if not n:
+        r = {}
     for key, rr in r.items():
         nn = n.get(key)
         if nn is None:

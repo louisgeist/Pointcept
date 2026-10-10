@@ -20,7 +20,7 @@ from tools.grid_then_seeds import (
 
 # A representative grid-probe config: loop-built `probes`, a `_base_`, unicode
 # class names, PT-v3m2 enc_mode backbone.
-GRID_CONFIG = "configs/experiment/w110/1/sonata_h3d_Ztrans_warm5/sonata-v1m2-h3d-lin-grid.py"
+GRID_CONFIG = "configs/h3d/sonata-v1m2-h3d-lin-grid.py"
 
 # ...and a cartesian_probes one (import inside the config file).
 GRID_CONFIG_CARTESIAN = "configs/flair3d_default/probe/sonata-v1m2-flair3d-lin-grid-wide.py"

@@ -69,7 +69,7 @@ Constats en cours de route :
   - LitePT depuis zéro : `configs/eclair/semseg-litept-b-v1m0-eclair.py` (nouveau) ; `configs/h3d/semseg-litept-b-v1m0-h3d.py` corrigé (4000 époques, lr 5e-4)
   - OpenGF : `mix_prob = 0` partout (comme dans le papier) ; probe KPConvX avec `point_max = 60000` (comme le run du papier)
   - pas de configs de seeds à lr fixé (D1) ; les probes des backbones d'ablation et le PTv3 aléatoire = grilles canoniques avec `weight=` surchargé (à documenter)
-- [ ] Supprimer `configs/experiment/`
+- [x] Supprimer `configs/experiment/` (+ `tools/gen_grid_seed_configs.py`, + `tests/test_resolve_config_file.py`, déjà cassé au tag)
 - [ ] Supprimer les configs amont (scannet, s3dis, concerto, utonia, sonata indoor, nuscenes, waymo, …)
 - [ ] Supprimer les modèles, datasets, preprocessing, `libs/` et tests inutilisés
 - [ ] Supprimer les scripts racine (`sbatch_*`, `test_*.sh`, `submit_*`), les `README_*_geist.md`, `stats/`, `docs/bug_review`, `docs/superpowers`, les CSV temporaires
