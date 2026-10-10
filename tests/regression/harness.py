@@ -151,7 +151,10 @@ def capture_build(out, only=None):
                 if key not in ds_cache:
                     try:
                         ds = build_dataset(dcfg)
-                        names = [str(n) for n in getattr(ds, "data_list", [])]
+                        root = str(dcfg.get("data_root", ""))
+                        # Relative to data_root, so moving the data directory does not change the hash.
+                        names = [os.path.relpath(str(n), root) if root and str(n).startswith(root) else str(n)
+                                 for n in getattr(ds, "data_list", [])]
                         ds_cache[key] = dict(type=dcfg["type"], len=len(ds), n_list=len(names),
                                              list_sha=sha("\n".join(names).encode()), head=names[:3])
                         del ds
@@ -427,7 +430,8 @@ def compare(ref, new, mapping, rtol, atol):
     for key, rr in r.items():
         if "error" in rr or "skipped" in rr:
             continue
-        nn = n.get(key)
+        nkey = apply_map(key, paths_map)
+        nn = n.get(nkey)
         if nn is None and not os.path.isfile(apply_map(rr.get("config", ""), paths_map)):
             notes.append(f"forward {key}: config removed")
             continue
@@ -439,8 +443,8 @@ def compare(ref, new, mapping, rtol, atol):
         if rr["inputs"] != nn["inputs"]:
             ks = [k for k in set(rr["inputs"]) | set(nn["inputs"]) if rr["inputs"].get(k) != nn["inputs"].get(k)]
             fails.append(f"forward {key}: input tensors differ {sorted(ks)}")
-        fn = key.replace("/", "__") + ".npz"
-        a, b = np.load(os.path.join(ref, "forward", fn)), np.load(os.path.join(new, "forward", fn))
+        a = np.load(os.path.join(ref, "forward", key.replace("/", "__") + ".npz"))
+        b = np.load(os.path.join(new, "forward", nkey.replace("/", "__") + ".npz"))
         worst = worst_rel = 0.0
         for k in a.files:
             if k not in b.files or a[k].shape != b[k].shape:
@@ -465,8 +469,8 @@ def compare(ref, new, mapping, rtol, atol):
     if not n:
         r = {}
     for key, rr in r.items():
-        nn = n.get(key)
-        if nn is None and key not in cases.TRAIN:
+        nn = n.get(apply_map(key, paths_map))
+        if nn is None and apply_map(key, paths_map) not in cases.TRAIN:
             notes.append(f"train {key}: case removed")
             continue
         if nn is None:
