@@ -365,10 +365,13 @@ def capture_train(out, only=None):
         os.makedirs(save, exist_ok=True)
         cmd = [py, os.path.join(os.path.dirname(os.path.abspath(__file__)), "train_entry.py"), "--config-file", cfg_path, "--num-gpus", "1",
                "--options", f"save_path={save}", *opts]
+        if os.environ.get("REGRESSION_COVERAGE_RC"):  # optional: measure which code the cases execute
+            cmd = [py, "-m", "coverage", "run", "--rcfile", os.environ["REGRESSION_COVERAGE_RC"]] + cmd[1:]
         t0 = time.time()
         with open(os.path.join(save, "stdout.log"), "w") as f:
             rc = subprocess.run(cmd, stdout=f, stderr=subprocess.STDOUT,
-                                env=dict(os.environ, PYTHONPATH=os.getcwd())).returncode
+                                env=dict(os.environ, PYTHONPATH=os.pathsep.join(
+                                    p for p in (os.getcwd(), os.environ.get("PYTHONPATH")) if p))).returncode
         shutil.rmtree(os.path.join(save, "model"), ignore_errors=True)  # checkpoints: 0.2-1.5 GB per case
         scalars = read_scalars(save) if glob.glob(os.path.join(save, "events.out.tfevents*")) else {}
         evals = eval_lines(open(os.path.join(save, "stdout.log"), errors="replace").read())

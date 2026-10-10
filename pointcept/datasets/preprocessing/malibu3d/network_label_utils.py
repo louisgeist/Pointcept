@@ -1,4 +1,4 @@
-"""Load and write @@MALIBU3D_BUILD@@ network graphs for Pointcept preprocessing.
+"""Load and write Flair3D-build network graphs for Pointcept preprocessing.
 
 Expects / produces GeoPackages with layers ``nodes`` / ``edges`` / ``metadata``
 (EPSG:2154)::
@@ -194,7 +194,7 @@ def load_roi_network_flags_from_manifest(
         if missing:
             raise ValueError(
                 f"split_manifest_csv missing network columns {missing}. "
-                "Enrich it via @@MALIBU3D_BUILD@@ export_network_graphs.py "
+                "Enrich it via Flair3D-build export_network_graphs.py "
                 "(split_manifest_csv=...)."
             )
         for row in reader:
@@ -214,7 +214,7 @@ class LoadedNetworkGraph:
 
     Unlike ``load_graph_edge_segments`` (which discards node identity and just
     returns raw LineString endpoints), this preserves the actual node-shared
-    topology written by @@MALIBU3D_BUILD@@'s ``write_pixel_graph_gpkg`` -- this IS the
+    topology written by Flair3D-build's ``write_pixel_graph_gpkg`` -- this IS the
     ground-truth graph for APLS, no re-derivation/re-rasterization needed.
     """
 

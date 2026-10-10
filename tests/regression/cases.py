@@ -111,7 +111,7 @@ _FLAIR_SMALL = [
     "data.test.split=val", f"data.test.csv_manifest={MALIBU3D_MANIFEST['val']}", "data.test.max_sample=2",
     # APLS on those tiles, with hecate's copy of the ground-truth road graphs.
     "network_apls_eval.split=val", f"csv_manifest={MALIBU3D_MANIFEST['val']}",
-    "network_apls_eval.network_graphs_root=/data/geist/@@MALIBU3D_BUILD@@/data/network_graphs",
+    "network_apls_eval.network_graphs_root=/data/geist/Flair3D-build/data/network_graphs",
 ]
 _PROBE_BASE = [
     "seed=0", "enable_wandb=False", "num_worker=2", "num_worker_test=2",

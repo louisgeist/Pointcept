@@ -44,7 +44,7 @@ _SEGMENT_NAMES: Tuple[str, ...] = (
     "Void",
 )
 
-# @@MALIBU3D_BUILD@@ label=v17 (finer13): building split by land use, soil under vegetation.
+# Flair3D-build label=v17 (finer13): building split by land use, soil under vegetation.
 _SEGMENT_V17_NAMES: Tuple[str, ...] = (
     "Residential building",
     "Greenhouse",
@@ -67,7 +67,7 @@ _SEGMENT_V17_NAMES: Tuple[str, ...] = (
     "Void",
 )
 
-# @@MALIBU3D_BUILD@@ label=v18 (finer14): unknown building usage merged into void.
+# Flair3D-build label=v18 (finer14): unknown building usage merged into void.
 _SEGMENT_V18_NAMES: Tuple[str, ...] = (
     "Residential building",
     "Greenhouse",
@@ -89,7 +89,7 @@ _SEGMENT_V18_NAMES: Tuple[str, ...] = (
     "Void",
 )
 
-# @@MALIBU3D_BUILD@@ label=v19/v20 (finer12): single Building class, no land-use split.
+# Flair3D-build label=v19/v20 (finer12): single Building class, no land-use split.
 # v20 differs from v19 only upstream (other_infrastructure_filter v3); same train taxonomy.
 _SEGMENT_V19_NAMES: Tuple[str, ...] = (
     "Building",
@@ -346,21 +346,21 @@ def _build_segment_lut(num_raw: int = 256, void_train_id: int = 15) -> np.ndarra
 
 
 def _build_segment_v17_lut(num_raw: int = 256, void_train_id: int = 18) -> np.ndarray:
-  """Identity for 0..18 (@@MALIBU3D_BUILD@@ finer13); overflow maps to void."""
+  """Identity for 0..18 (Flair3D-build finer13); overflow maps to void."""
   lut = np.full(num_raw, void_train_id, dtype=np.int32)
   lut[: void_train_id + 1] = np.arange(void_train_id + 1, dtype=np.int32)
   return lut
 
 
 def _build_segment_v18_lut(num_raw: int = 256, void_train_id: int = 17) -> np.ndarray:
-  """Identity for 0..17 (@@MALIBU3D_BUILD@@ finer14); overflow maps to void."""
+  """Identity for 0..17 (Flair3D-build finer14); overflow maps to void."""
   lut = np.full(num_raw, void_train_id, dtype=np.int32)
   lut[: void_train_id + 1] = np.arange(void_train_id + 1, dtype=np.int32)
   return lut
 
 
 def _build_segment_v19_lut(num_raw: int = 256, void_train_id: int = 15) -> np.ndarray:
-  """Identity for 0..15 (@@MALIBU3D_BUILD@@ finer12); overflow maps to void."""
+  """Identity for 0..15 (Flair3D-build finer12); overflow maps to void."""
   lut = np.full(num_raw, void_train_id, dtype=np.int32)
   lut[: void_train_id + 1] = np.arange(void_train_id + 1, dtype=np.int32)
   return lut
@@ -539,7 +539,7 @@ def _register_segment_definitions() -> Dict[str, LabelDefinition]:
     missing_fill_raw_id=segment_v19_void,
     source_field="semantic",
   )
-  # Same LUT/names as v19; name tracks @@MALIBU3D_BUILD@@ label=v20 for meta.json cleanliness.
+  # Same LUT/names as v19; name tracks Flair3D-build label=v20 for meta.json cleanliness.
   v20 = _make_definition(
     "segment",
     "v20",

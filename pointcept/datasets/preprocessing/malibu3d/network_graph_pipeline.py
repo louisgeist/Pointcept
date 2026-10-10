@@ -1,11 +1,11 @@
 """Mask/segment -> pixel-graph post-processing pipeline (numpy/scipy only).
 
-Mirrors ``@@MALIBU3D_BUILD@@``'s ``scripts/network_graph_pipeline.py`` orchestration
+Mirrors ``Flair3D-build``'s ``scripts/network_graph_pipeline.py`` orchestration
 (``build_processed_network_graph``: mask -> optional morphology -> pixel graph ->
 endpoint-fix -> RDP -> optional merge) but adds ``build_processed_network_graph_from_mask``,
 which starts directly from an already-thresholded boolean mask (e.g. a predicted
 probability raster) instead of vector line segments -- skipping the
-``centerline_pixel_mask`` step. No geopandas/GDAL dependency here (unlike @@MALIBU3D_BUILD@@'s
+``centerline_pixel_mask`` step. No geopandas/GDAL dependency here (unlike Flair3D-build's
 version, which also handles GeoPackage export); this module only builds/simplifies graphs.
 
 The from-mask path also depends on ``scikit-image`` (unlike ``network_xy_raster_utils``,
@@ -378,7 +378,7 @@ def build_processed_network_graph_from_mask(
     """Build the final pixel graph from an already-thresholded boolean mask.
 
     Same optional morphology -> pixel graph -> endpoint-fix -> RDP -> merge chain as
-    @@MALIBU3D_BUILD@@'s ``build_processed_network_graph``, but starting directly from
+    Flair3D-build's ``build_processed_network_graph``, but starting directly from
     ``mask`` instead of deriving it from vector segments via ``centerline_pixel_mask``
     -- used to turn a predicted probability raster (already thresholded by the caller)
     into a graph comparable to the GT graph. Defaults mirror the GT export preset

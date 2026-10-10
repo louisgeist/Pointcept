@@ -1,6 +1,6 @@
 """Stitch per-subtile predicted network probability rasters into one ROI-level raster.
 
-The GT network graphs (exported by @@MALIBU3D_BUILD@@) are per-ROI, but Pointcept trains and
+The GT network graphs (exported by Flair3D-build) are per-ROI, but Pointcept trains and
 predicts per-subtile (see ``rasterize_network.py`` module docstring for the subtile/ROI
 distinction). ``MultiTaskTester`` (``pointcept/engines/test.py``) already writes one
 ``{patch_id}_logits_network.npy`` ``(C, H, W)`` soft-probability raster per subtile, using the

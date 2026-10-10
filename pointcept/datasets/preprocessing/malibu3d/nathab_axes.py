@@ -2,7 +2,7 @@
 
 Pointcept preprocess bakes CarHab ids ``(N,)`` into ``uint8 (N, 4)`` using the
 same column order / LUTs as the MALiBU3D Hugging Face release
-(``@@MALIBU3D_BUILD@@/scripts/hf_release/common.py``).
+(``Flair3D-build/scripts/hf_release/common.py``).
 
 Column ``i`` matches ``NATHAB_AXIS_KEYS[i]`` and is produced by remapping
 storage definition ``default`` (CarHab 0..43) through

@@ -6,7 +6,7 @@ probability rasters (``{patch_id}_logits_network.npy``) already written to ``sav
 ``MultiTaskTester``/``PreciseEvaluator`` (see pointcept/engines/test.py), stitches them into
 per-ROI rasters, builds a predicted graph per network channel by reusing the same
 mask -> graph post-processing pipeline used to export the ground-truth graphs, and computes
-APLS (Average Path Length Similarity) against the GT graphs exported by @@MALIBU3D_BUILD@@.
+APLS (Average Path Length Similarity) against the GT graphs exported by Flair3D-build.
 
 The APLS metric itself has a fixed protocol (``apls_metric.APLS_PROTOCOL``: densify 50 m,
 snap 4 m, min path 5 m, bidirectional harmonic mean) and no CLI/config knobs; only the
@@ -21,7 +21,7 @@ Example::
     python tools/eval_network_apls.py \\
         --data_root data/malibu3d \\
         --save_path exp/malibu3d/network_run/result \\
-        --network_graphs_root /data/geist/@@MALIBU3D_BUILD@@/data/network_graphs \\
+        --network_graphs_root /data/geist/Flair3D-build/data/network_graphs \\
         --split_manifest_csv data/malibu3d/tiles_D067.csv \\
         --split val --threshold 0.5 \\
         --out_dir exp/malibu3d/network_run/result
@@ -669,7 +669,7 @@ def build_argparser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description=(
             "Evaluate predicted network graphs (built from stitched per-ROI "
-            "probability rasters) against @@MALIBU3D_BUILD@@-exported GT graphs via APLS."
+            "probability rasters) against Flair3D-build-exported GT graphs via APLS."
         )
     )
     p.add_argument("--data_root", type=str, required=True)

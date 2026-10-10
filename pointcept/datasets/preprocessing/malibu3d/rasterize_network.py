@@ -6,7 +6,7 @@ tile must already exist under ``data_root`` with ``coord.npy``. Missing patches 
 truth; disk is only checked). Known-missing tiles listed in
 ``missing_coord_tiles.details.csv`` are skipped.
 
-Loads graphs exported by @@MALIBU3D_BUILD@@ ``export_network_graphs.py``, densifies
+Loads graphs exported by Flair3D-build ``export_network_graphs.py``, densifies
 each ROI network once into unique 1 m Lambert cells (longitudinal step plus
 optional lateral ``± line_width_m / 2`` offsets), then slices those cells into
 per-patch grids. Empty masks write ``meta.network`` only (no ``network.npy``).
@@ -20,7 +20,7 @@ Example::
 
 python pointcept/datasets/preprocessing/malibu3d/rasterize_network.py \
     --data_root data/malibu3d \
-    --network_graphs_root /data/geist/@@MALIBU3D_BUILD@@/data/network_graphs \
+    --network_graphs_root /data/geist/Flair3D-build/data/network_graphs \
     --split_manifest_csv data/malibu3d/tiles_D067.csv \
     --num_workers 24
 """
@@ -497,7 +497,7 @@ def run(
 def build_argparser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description=(
-            "Rasterize @@MALIBU3D_BUILD@@ exported network graphs into network.npy "
+            "Rasterize Flair3D-build exported network graphs into network.npy "
             "binary masks on MALiBU3D tiles."
         )
     )
@@ -511,7 +511,7 @@ def build_argparser() -> argparse.ArgumentParser:
         "--network_graphs_root",
         type=str,
         required=True,
-        help="Root of exported *_graph.gpkg files (@@MALIBU3D_BUILD@@ network_graphs)",
+        help="Root of exported *_graph.gpkg files (Flair3D-build network_graphs)",
     )
     p.add_argument(
         "--split_manifest_csv",

@@ -84,7 +84,7 @@ python pointcept/datasets/preprocessing/malibu3d/preprocess_malibu3d.py \
 
 hecate:
 python pointcept/datasets/preprocessing/malibu3d/preprocess_malibu3d.py \
-    --ply_root /data/geist/@@MALIBU3D_BUILD@@/data/malibu3d_label_enhanced \
+    --ply_root /data/geist/Flair3D-build/data/malibu3d_label_enhanced \
     --dataset_root data/malibu3d/raw \
     --output_root data/malibu3d \
     --split_manifest_csv data/malibu3d/tiles_D067.csv \
