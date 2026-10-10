@@ -1,7 +1,7 @@
 """
 PT-v3-malibu grid-search linear probing on DALES — decoder hypercolumn /
-multi-scale variant (transfer from Flair3D+ multitask supervised pretrain at
-w109/2/ptv3_wd/multi-ptv3-v1m0-flair3d_5.py, job 1052200).
+multi-scale variant (transfer from MALiBU3D multitask supervised pretrain at
+w109/2/ptv3_wd/multi-ptv3-v1m0-malibu3d_5.py, job 1052200).
 
 Unlike w109/4/ptv3_lin/ptv3-v1m0-dales-lin_1.py (finest decoder stage only,
 64ch), this config sets `traceable=True` so GridProbeSegmentorV2 concatenates
@@ -23,8 +23,8 @@ num_classes = 8
 ignore_index = 8
 grid_size = 0.1
 point_max = 102400
-coord_feat_scale = 0.01  # must match Flair3D multitask pretrain
-strength_feat_scale = 1 / 60000  # DALES raw intensity → Flair3D [0,1] convention
+coord_feat_scale = 0.01  # must match MALiBU3D multitask pretrain
+strength_feat_scale = 1 / 60000  # DALES raw intensity → MALiBU3D [0,1] convention
 
 num_gpu = 1
 epoch = 400

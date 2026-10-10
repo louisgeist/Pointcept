@@ -1,10 +1,10 @@
 """
-Sonata-v1m2 grid-search linear probing on OpenGF — our own Flair3D+ outdoor
+Sonata-v1m2 grid-search linear probing on OpenGF — our own MALiBU3D outdoor
 Sonata SSL pretrain (job 862680, epoch_120). Official indoor Sonata-v1m1 is
 `sonata-v1m1-opengf-lin-grid-scale10.py` (coord /10).
 
 Frozen PT-v3m2 encoder (enc_mode=True -> multi-scale concat 1232ch), trained
-natively on Flair3D+ outdoor aerial LiDAR (see README_sonata_geist.md) rather
+natively on MALiBU3D outdoor aerial LiDAR (see README_sonata_geist.md) rather
 than an indoor domain, so no FixedScaleCoord rescale is needed here (unlike
 v1m1's coord_scale ablations) -- native grid_size=0.1 at real coordinates,
 same convention as the LitePT/PT-v3-malibu/SpUNet/KPConvX OpenGF configs.
@@ -34,7 +34,7 @@ num_classes = 2
 ignore_index = 2  # unreachable after RemapSegment merges raw label 2 into 1
 grid_size = 0.1
 point_max = 102400
-strength_feat_scale = 1 / 60000  # OpenGF raw intensity → Flair3D [0,1] convention (DALES-like range)
+strength_feat_scale = 1 / 60000  # OpenGF raw intensity → MALiBU3D [0,1] convention (DALES-like range)
 
 num_gpu = 1
 epoch = 50  # ~3900 iters (1359 train tiles // 24) -- roughly DALES's ballpark, see decision context

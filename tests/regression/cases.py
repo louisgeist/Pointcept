@@ -10,7 +10,7 @@ import glob
 # Every config matched here is parsed, its model built (seeded init) and its datasets instantiated.
 BUILD_GLOBS = [
     "configs/_base_/**/*.py",
-    "configs/flair3d_default/**/*.py",
+    "configs/malibu3d/**/*.py",
     "configs/dales/*.py",
     "configs/h3d/*.py",
     "configs/eclair/**/*.py",
@@ -57,17 +57,17 @@ JOB_TO_CKPT = {
 }
 # Probe configs whose `weight` is unset (filled in at launch time).
 PROBE_CKPT_OVERRIDE = {
-    "flair3d_default/probe/sonata-v1m2-flair3d-lin-grid": "sonata-pretrained",
-    "flair3d_default/probe/sonata-v1m2-flair3d-lin-grid-wide": "sonata-pretrained",
-    "flair3d_default/probe/sonata-v1m2-flair3d-lin": "sonata-pretrained",
+    "malibu3d/probe/sonata-v1m2-malibu3d-lin-grid": "sonata-pretrained",
+    "malibu3d/probe/sonata-v1m2-malibu3d-lin-grid-wide": "sonata-pretrained",
+    "malibu3d/probe/sonata-v1m2-malibu3d-lin": "sonata-pretrained",
 }
 
 # Local tiles. D075/D068/D073 lack forest_2d.npy on hecate, so everything uses D067.
-FLAIR3D_MANIFEST = {
-    "train": "data/flair3d_plus/raw/tiles_D067.csv",
-    "val": "data/flair3d_plus/raw/tiles_D067.csv",
+MALIBU3D_MANIFEST = {
+    "train": "data/malibu3d/tiles_D067.csv",
+    "val": "data/malibu3d/tiles_D067.csv",
 }
-FLAIR3D_TILES = [
+MALIBU3D_TILES = [
     ("D067-2021_AU-S1-21_3-6", "val"),
     ("D067-2021_AN-S1-15_1-7", "val"),
     ("D067-2021_FF-S1-29_1-2", "val"),
@@ -75,17 +75,17 @@ FLAIR3D_TILES = [
 
 # Supervised multitask models: full forward, every output head dumped.
 MULTITASK = {
-    "multi-litept-b-test-norgb": ("configs/flair3d_default/ablations/multi-litept-b-v1m0-flair3d-test-norgb.py",
+    "multi-litept-b-test-norgb": ("configs/malibu3d/ablations/multi-litept-b-v1m0-malibu3d-test-norgb.py",
                                   "litept-b"),
-    "multi-litept-b": ("configs/flair3d_default/multi-litept-b-v1m0-flair3d.py", "litept-b"),
-    "multi-ptv3": ("configs/flair3d_default/multi-ptv3-v1m0-flair3d.py", "ptv3"),
-    "multi-spunet": ("configs/flair3d_default/multi-spunet-v1m0-flair3d.py", "spunet"),
-    "multi-kpconvx": ("configs/flair3d_default/multi-kpconvx-v1m0-flair3d.py", "kpconvx"),
-    "multi-sonata-ft": ("configs/flair3d_default/multi-sonata-ft-v1m0-flair3d.py", "sonata-ft"),
+    "multi-litept-b": ("configs/malibu3d/multi-litept-b-v1m0-malibu3d.py", "litept-b"),
+    "multi-ptv3": ("configs/malibu3d/multi-ptv3-v1m0-malibu3d.py", "ptv3"),
+    "multi-spunet": ("configs/malibu3d/multi-spunet-v1m0-malibu3d.py", "spunet"),
+    "multi-kpconvx": ("configs/malibu3d/multi-kpconvx-v1m0-malibu3d.py", "kpconvx"),
+    "multi-sonata-ft": ("configs/malibu3d/multi-sonata-ft-v1m0-malibu3d.py", "sonata-ft"),
 }
 
 PROBE_DIRS = ["configs/dales", "configs/h3d", "configs/eclair", "configs/opengf", "configs/pureforest",
-              "configs/flair3d_default/probe"]
+              "configs/malibu3d/probe"]
 
 
 def probe_cases():
@@ -104,14 +104,14 @@ _FLAIR_SMALL = [
     "seed=0", "enable_wandb=False", "num_worker=2", "num_worker_test=2",
     "batch_size=2", "batch_size_val=1", "batch_size_test=1",
     "total_iters=40", "iter_per_epoch=20", "eval_every=1",
-    f"data.train.csv_manifest={FLAIR3D_MANIFEST['train']}",
-    f"data.val.csv_manifest={FLAIR3D_MANIFEST['val']}",
+    f"data.train.csv_manifest={MALIBU3D_MANIFEST['train']}",
+    f"data.val.csv_manifest={MALIBU3D_MANIFEST['val']}",
     "data.val.stratified_subset_manifest=", "data.val.max_sample=4",
     # D075/D068 test tiles lack forest_2d.npy locally: test on D067 val tiles instead.
-    "data.test.split=val", f"data.test.csv_manifest={FLAIR3D_MANIFEST['val']}", "data.test.max_sample=2",
+    "data.test.split=val", f"data.test.csv_manifest={MALIBU3D_MANIFEST['val']}", "data.test.max_sample=2",
     # APLS on those tiles, with hecate's copy of the ground-truth road graphs.
-    "network_apls_eval.split=val", f"csv_manifest={FLAIR3D_MANIFEST['val']}",
-    "network_apls_eval.network_graphs_root=/data/geist/Flair3D-build/data/network_graphs",
+    "network_apls_eval.split=val", f"csv_manifest={MALIBU3D_MANIFEST['val']}",
+    "network_apls_eval.network_graphs_root=/data/geist/@@MALIBU3D_BUILD@@/data/network_graphs",
 ]
 _PROBE_BASE = [
     "seed=0", "enable_wandb=False", "num_worker=2", "num_worker_test=2",
@@ -121,32 +121,32 @@ _PROBE_SMALL = _PROBE_BASE + ["data.train.max_sample=8", "data.val.max_sample=2"
 # PureForestDataset has no max_sample: use the 26-tile-per-split toy copy instead.
 _PUREFOREST_SMALL = _PROBE_BASE + [f"data.{s}.data_root=data/pureforest_toy" for s in ("train", "val", "test")]
 TRAIN = {
-    "train-multi-litept-b": ("configs/flair3d_default/multi-litept-b-v1m0-flair3d.py", _FLAIR_SMALL),
-    "train-multi-spunet": ("configs/flair3d_default/multi-spunet-v1m0-flair3d.py", _FLAIR_SMALL),
-    "train-multi-ptv3": ("configs/flair3d_default/multi-ptv3-v1m0-flair3d.py", _FLAIR_SMALL),
-    "train-multi-kpconvx": ("configs/flair3d_default/multi-kpconvx-v1m0-flair3d.py", _FLAIR_SMALL),
-    "train-multi-sonata-ft": ("configs/flair3d_default/multi-sonata-ft-v1m0-flair3d.py",
+    "train-multi-litept-b": ("configs/malibu3d/multi-litept-b-v1m0-malibu3d.py", _FLAIR_SMALL),
+    "train-multi-spunet": ("configs/malibu3d/multi-spunet-v1m0-malibu3d.py", _FLAIR_SMALL),
+    "train-multi-ptv3": ("configs/malibu3d/multi-ptv3-v1m0-malibu3d.py", _FLAIR_SMALL),
+    "train-multi-kpconvx": ("configs/malibu3d/multi-kpconvx-v1m0-malibu3d.py", _FLAIR_SMALL),
+    "train-multi-sonata-ft": ("configs/malibu3d/multi-sonata-ft-v1m0-malibu3d.py",
                               _FLAIR_SMALL + [f"weight={CKPT['sonata-pretrained']}"]),
-    "train-segment-litept-b": ("configs/flair3d_default/segment/litept-b-v1m0-flair3d.py", _FLAIR_SMALL),
-    "train-elevation-litept-b": ("configs/flair3d_default/elevation/litept-b-v1m0-flair3d.py", _FLAIR_SMALL),
-    "train-forest-litept": ("configs/flair3d_default/forest/litept-v1m0-flair3d.py", _FLAIR_SMALL),
-    "train-network-litept": ("configs/flair3d_default/network/litept-v1m0-flair3d.py", _FLAIR_SMALL),
-    "train-pretrain-sonata": ("configs/flair3d_default/pretrain-sonata-v1m2-flair3d.py", [
+    "train-segment-litept-b": ("configs/malibu3d/segment/litept-b-v1m0-malibu3d.py", _FLAIR_SMALL),
+    "train-elevation-litept-b": ("configs/malibu3d/elevation/litept-b-v1m0-malibu3d.py", _FLAIR_SMALL),
+    "train-forest-litept": ("configs/malibu3d/forest/litept-v1m0-malibu3d.py", _FLAIR_SMALL),
+    "train-network-litept": ("configs/malibu3d/network/litept-v1m0-malibu3d.py", _FLAIR_SMALL),
+    "train-pretrain-sonata": ("configs/malibu3d/pretrain-sonata-v1m2-malibu3d.py", [
         "seed=0", "enable_wandb=False", "num_worker=2", "batch_size=2",
-        "total_iters=40", "iter_per_epoch=20", f"data.train.csv_manifest={FLAIR3D_MANIFEST['train']}"]),
+        "total_iters=40", "iter_per_epoch=20", f"data.train.csv_manifest={MALIBU3D_MANIFEST['train']}"]),
     "train-probe-h3d-litept-b": ("configs/h3d/litept-b-v1m0-h3d-lin_enc.py",
                                  _PROBE_SMALL + [f"weight={CKPT['litept-b']}"]),
     "train-probe-opengf-spunet": ("configs/opengf/spunet-v1m0-opengf-lin-grid-enc.py",
                                   _PROBE_SMALL + [f"weight={CKPT['spunet']}"]),
     "train-probe-pureforest-litept-b": ("configs/pureforest/cls-litept-b-v1m0-pureforest-lin-grid-enc.py",
                                         _PUREFOREST_SMALL + [f"weight={CKPT['litept-b']}"]),
-    "train-ablation-nognl": ("configs/flair3d_default/ablations/multi-litept-b-v1m0-flair3d-nognl.py", _FLAIR_SMALL),
-    "train-ablation-gradnorm": ("configs/flair3d_default/ablations/multi-litept-b-v1m0-flair3d-gradnorm.py",
+    "train-ablation-nognl": ("configs/malibu3d/ablations/multi-litept-b-v1m0-malibu3d-nognl.py", _FLAIR_SMALL),
+    "train-ablation-gradnorm": ("configs/malibu3d/ablations/multi-litept-b-v1m0-malibu3d-gradnorm.py",
                                 _FLAIR_SMALL),
     "train-ablation-nathab-pointwise": (
-        "configs/flair3d_default/ablations/multi-litept-b-v1m0-flair3d-nathab-pointwise.py", _FLAIR_SMALL),
-    "train-ablation-segment-only": ("configs/flair3d_default/ablations/litept-b-v1m0-flair3d-segment-only.py",
+        "configs/malibu3d/ablations/multi-litept-b-v1m0-malibu3d-nathab-pointwise.py", _FLAIR_SMALL),
+    "train-ablation-segment-only": ("configs/malibu3d/ablations/litept-b-v1m0-malibu3d-segment-only.py",
                                     _FLAIR_SMALL),
-    "train-probe-flair3d-sonata": ("configs/flair3d_default/probe/sonata-v1m2-flair3d-lin-grid.py",
+    "train-probe-malibu3d-sonata": ("configs/malibu3d/probe/sonata-v1m2-malibu3d-lin-grid.py",
                                    _FLAIR_SMALL + [f"weight={CKPT['sonata-pretrained']}"]),
 }

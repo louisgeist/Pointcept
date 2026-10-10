@@ -10,7 +10,7 @@ import unittest
 
 import numpy as np
 
-from pointcept.datasets.flair3d_config_utils import get_pixel_semantic_config
+from pointcept.datasets.malibu3d_config_utils import get_pixel_semantic_config
 from pointcept.utils.dilated_metrics import (
     dilated_prf_enabled,
     dilated_precision_recall_counts,

@@ -11,7 +11,7 @@ import pathlib
 import tempfile
 import unittest
 
-from pointcept.datasets.preprocessing.flair3d_plus.tile_catalog import (
+from pointcept.datasets.preprocessing.malibu3d.tile_catalog import (
     Tile,
     read_tiles,
 )
@@ -130,7 +130,7 @@ class TestTileCatalog(unittest.TestCase):
         self.assertEqual(load_voxel_size_csv(self.legacy_csv), expected)
 
     def test_rasterize_network_loader_both_schemas(self):
-        from pointcept.datasets.preprocessing.flair3d_plus.rasterize_network import (
+        from pointcept.datasets.preprocessing.malibu3d.rasterize_network import (
             load_manifest_patches,
         )
 
@@ -146,7 +146,7 @@ class TestTileCatalog(unittest.TestCase):
             )
 
     def test_rasterize_forest_loader_both_schemas(self):
-        from pointcept.datasets.preprocessing.flair3d_plus.rasterize_forest import (
+        from pointcept.datasets.preprocessing.malibu3d.rasterize_forest import (
             load_manifest_patches,
         )
 
@@ -159,7 +159,7 @@ class TestTileCatalog(unittest.TestCase):
 
     def test_preprocess_loader_both_schemas(self):
         try:
-            from pointcept.datasets.preprocessing.flair3d_plus.preprocess_flair3d_v2 import (
+            from pointcept.datasets.preprocessing.malibu3d.preprocess_malibu3d import (
                 load_manifest_tasks,
             )
         except ImportError as exc:  # plyfile / rasterio missing

@@ -8,7 +8,7 @@ Run with: PYTHONPATH=./ pytest tests/test_dilated_prf_opt_out.py
 
 import unittest
 
-from pointcept.datasets.flair3d_config_utils import get_pixel_semantic_config
+from pointcept.datasets.malibu3d_config_utils import get_pixel_semantic_config
 from pointcept.utils.dilated_metrics import dilated_prf_enabled
 
 

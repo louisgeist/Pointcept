@@ -1,6 +1,6 @@
 """
 Sonata-v1m1 (PT-v3m2) GridProbeClassifier on PureForest — official Meta/HuggingFace
-indoor SSL release (pretrain-sonata-v1m1-0-base.pth), not the Flair3D-fork outdoor
+indoor SSL release (pretrain-sonata-v1m1-0-base.pth), not the MALiBU3D-fork outdoor
 checkpoint used by cls-sonata-v1m2-pureforest-lin-grid-enc.py.
 
 Indoor backbone: in_channels=9 (coord+color+normal), stride=(2,2,2,2),
@@ -258,7 +258,7 @@ data = dict(
     test=dict(
         type=dataset_type,
         split="test",
-        exclude_flair3d_leakage_tiles=True,
+        exclude_malibu3d_leakage_tiles=True,
         data_root=data_root,
         class_names=class_names,
         transform=_val_test_transform,

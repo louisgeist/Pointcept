@@ -80,7 +80,7 @@ def build_scene(laz_path: str) -> Tuple[Dict[str, np.ndarray], np.ndarray]:
         raise KeyError(f"Missing 'intensity' field in {laz_path}")
     strength = np.asarray(las.intensity).astype(np.float32)
 
-    # Store RGB in Flair3D-compatible [0, 255] float range (16-bit LAZ → 8-bit scale).
+    # Store RGB in MALiBU3D-compatible [0, 255] float range (16-bit LAZ → 8-bit scale).
     # Config pipelines then apply NormalizeColor (/255 → [0, 1]).
     if not {"red", "green", "blue"}.issubset(dim_names):
         raise KeyError(f"Missing RGB fields in {laz_path}")

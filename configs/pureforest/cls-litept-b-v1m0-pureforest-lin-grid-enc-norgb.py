@@ -1,5 +1,5 @@
 """
-NO-RGB ABLATION (LitePT-B): reference Malibu3D/Flair3D+ multitask checkpoint
+NO-RGB ABLATION (LitePT-B): reference Malibu3D/MALiBU3D multitask checkpoint
 (job 873542 / ckpt/malibu3d/litept_b_multitask), but colour is removed on
 every forward -- RandomDropColor(1.0, 1.0, keep_mask=True) right after
 NormalizeColor in train/val/test, so GridProbeClassifier's frozen
@@ -270,7 +270,7 @@ data = dict(
     test=dict(
         type=dataset_type,
         split="test",
-        exclude_flair3d_leakage_tiles=True,
+        exclude_malibu3d_leakage_tiles=True,
         data_root=data_root,
         class_names=class_names,
         transform=_val_test_transform,

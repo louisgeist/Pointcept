@@ -6,7 +6,7 @@ Motivation: on OpenGF from-scratch LitePT-B, turning Mix3D off took test T2 mIoU
 Same 12-LR grid, re-searched rather than reusing the Mix3D winner.
 
 KPConvX grid-search linear probing on OpenGF — encoder multiscale variant
-(Flair3D+ multitask supervised pretrain, configs/flair3d_default/multi-kpconvx-v1m0-flair3d.py
+(MALiBU3D multitask supervised pretrain, configs/malibu3d/multi-kpconvx-v1m0-malibu3d.py
 recipe: input_channels=7, kp_radius=3.2, radius_scaling=3.0,
 neighbor_limits=(12,16,20,20,20), layer_blocks=(3,3,9,12,3), init_channels=64,
 channel_scaling=1.414, grid_size=0.1, point_max=40000, drop_path_rate=0.3 at
@@ -46,8 +46,8 @@ two levels within about ±15% of a DALES 102400 crop. SphereCrop point_max
 is a data-pipeline parameter, not part of the backbone architecture, so
 this does not break checkpoint loading.
 
-weight = Jean Zay job 1159986 (KPConvX multitask Flair3D+, same recipe as
-configs/flair3d_default/multi-kpconvx-v1m0-flair3d.py) — not reachable from
+weight = Jean Zay job 1159986 (KPConvX multitask MALiBU3D, same recipe as
+configs/malibu3d/multi-kpconvx-v1m0-malibu3d.py) — not reachable from
 Hecate (Jean-Zay-only lustre path, see CLAUDE.md local-vs-JZ data note), so
 CheckpointLoader can only be exercised on Jean Zay.
 
@@ -71,8 +71,8 @@ num_classes = 2
 ignore_index = 2  # unreachable after RemapSegment merges raw label 2 into 1
 grid_size = 0.1
 point_max = 60000  # OpenGF pool-count match to a DALES 102400 crop — see docstring
-coord_feat_scale = 0.01  # must match Flair3D multitask pretrain
-strength_feat_scale = 1 / 60000  # OpenGF raw intensity → Flair3D [0,1] convention (DALES-like range)
+coord_feat_scale = 0.01  # must match MALiBU3D multitask pretrain
+strength_feat_scale = 1 / 60000  # OpenGF raw intensity → MALiBU3D [0,1] convention (DALES-like range)
 kp_radius = 3.2
 kp_sigma = kp_radius
 radius_scaling = 3.0

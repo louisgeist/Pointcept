@@ -45,7 +45,7 @@ num_exp = 1
 # Hardware parameters
 num_gpu = 1
 num_worker = 8 * num_gpu
-enable_amp = True  # LitePT-Base is heavier than Small; matches multi-litept-b-v1m0-flair3d.py
+enable_amp = True  # LitePT-Base is heavier than Small; matches multi-litept-b-v1m0-malibu3d.py
 
 # Data parameters
 batch_size = 12  # total batch size across all gpus; LitePT-Base convention (vs 24 for Small)
@@ -72,7 +72,7 @@ ignore_index = 2  # unreachable after RemapSegment merges raw label 2 into 1
 learned_masked_feat = True
 feat_keys = ["coord", "strength"]
 coord_feat_scale = 0.01
-strength_feat_scale = 1 / 60000  # OpenGF raw intensity → Flair3D [0,1] convention (DALES-like range)
+strength_feat_scale = 1 / 60000  # OpenGF raw intensity → MALiBU3D [0,1] convention (DALES-like range)
 
 # Test
 test_single_fragment = True
@@ -107,7 +107,7 @@ model = dict(
         type="LitePT-v1",
         in_channels=4,  # coord (3) + strength (1) -- OpenGF has no usable color/RGB
         order=("z", "z-trans", "hilbert", "hilbert-trans"),
-        # LitePT-Base dims (matches multi-litept-b-v1m0-flair3d.py backbone).
+        # LitePT-Base dims (matches multi-litept-b-v1m0-malibu3d.py backbone).
         stride=(3, 3, 3, 3),
         enc_depths=(3, 3, 3, 12, 3),
         enc_channels=(54, 108, 216, 432, 576),

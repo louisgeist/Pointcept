@@ -1,6 +1,6 @@
 """
 LitePT-Base grid-search linear probing on OpenGF — decoder hypercolumn /
-multi-scale variant (transfer from Flair3D+ multitask supervised
+multi-scale variant (transfer from MALiBU3D multitask supervised
 pretrain, job 873542).
 
 Same multi-scale mechanism as the DALES sibling's own reference,
@@ -26,8 +26,8 @@ num_classes = 2
 ignore_index = 2  # unreachable after RemapSegment merges raw label 2 into 1
 grid_size = 0.1
 point_max = 102400
-coord_feat_scale = 0.01  # must match Flair3D multitask pretrain
-strength_feat_scale = 1 / 60000  # OpenGF raw intensity → Flair3D [0,1] convention (DALES-like range)
+coord_feat_scale = 0.01  # must match MALiBU3D multitask pretrain
+strength_feat_scale = 1 / 60000  # OpenGF raw intensity → MALiBU3D [0,1] convention (DALES-like range)
 
 num_gpu = 1
 epoch = 50  # ~3900 iters (1359 train tiles // 24) -- roughly DALES's ballpark, see decision context

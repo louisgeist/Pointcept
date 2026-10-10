@@ -3,7 +3,7 @@ Sonata-v1m2 linear probing on ECLAIR semantic segmentation.
 
 Frozen PT-v3m2 encoder (enc_mode); classic 100-epoch schedule for periodic
 probes launched from the ECLAIR Sonata pretrain job. Full val split (62 tiles);
-no test. Strength uses 1/60000 (raw uint16 intensity → Flair3D [0,1]).
+no test. Strength uses 1/60000 (raw uint16 intensity → MALiBU3D [0,1]).
 """
 
 _base_ = ["../../_base_/default_runtime.py"]
@@ -24,7 +24,7 @@ evaluate = True
 
 grid_size = 0.1
 point_max = 102400
-strength_feat_scale = 1 / 60000  # raw uint16 intensity → Flair3D [0,1] convention
+strength_feat_scale = 1 / 60000  # raw uint16 intensity → MALiBU3D [0,1] convention
 
 # Classic schedule: 100 dataset passes, 10 trainer epochs (val each).
 epoch = 100

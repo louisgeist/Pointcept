@@ -1,6 +1,6 @@
 """
 LitePT-Base grid-search linear probing on H3D — decoder Single Scale ablation
-(same frozen checkpoint as litept-b-v1m0-h3d-lin_dec.py, job 873542, Flair3D+
+(same frozen checkpoint as litept-b-v1m0-h3d-lin_dec.py, job 873542, MALiBU3D
 multitask supervised pretrain).
 
 Ablation vs litept-b-v1m0-h3d-lin_dec.py: `dec_traceable=False` probes only
@@ -25,7 +25,7 @@ num_classes = 11
 ignore_index = 11
 grid_size = 0.1
 point_max = 102400  # keep pretrain SphereCrop budget; do not raise for denser H3D
-coord_feat_scale = 0.01  # must match Flair3D multitask pretrain
+coord_feat_scale = 0.01  # must match MALiBU3D multitask pretrain
 
 num_gpu = 1
 epoch = 2000

@@ -2,7 +2,7 @@
 NO-RGB ABLATION (LitePT-B): probes are trained AND evaluated with colour removed on every forward -- RandomDropColor(1.0, 1.0, keep_mask=True) after NormalizeColor in train/val/test, so GridProbeSegmentorV2's frozen feature_mask_values replaces the 3 colour channels with the checkpoint's learned color_mask_value. Strength/geometry untouched. Chromatic* train augs dropped (they'd only jitter a channel that is then fully masked). Otherwise identical to the RGB reference below.
 
 LitePT-Base grid-search linear probing on ECLAIR — encoder multiscale variant
-(transfer from Flair3D+ multitask supervised pretrain, job 873542).
+(transfer from MALiBU3D multitask supervised pretrain, job 873542).
 
 `enc_mode=True` → 1386ch concat of the 5 raw encoder stages
 (54+108+216+432+576).
@@ -24,8 +24,8 @@ num_classes = 11
 ignore_index = -1
 grid_size = 0.1
 point_max = 102400
-coord_feat_scale = 0.01  # must match Flair3D multitask pretrain
-strength_feat_scale = 1 / 60000  # raw uint16 intensity → Flair3D [0,1] convention
+coord_feat_scale = 0.01  # must match MALiBU3D multitask pretrain
+strength_feat_scale = 1 / 60000  # raw uint16 intensity → MALiBU3D [0,1] convention
 
 num_gpu = 1
 epoch = 200

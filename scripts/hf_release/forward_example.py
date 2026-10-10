@@ -29,12 +29,12 @@ from pointcept.utils.config import Config
 REPO = Path(__file__).resolve().parents[2]
 HF_REPO = "LouisGeist/MALiBU3D-backbones"
 CONFIGS = {  # released folder -> default config of this repository
-    "sonata-ft": "configs/flair3d_default/multi-sonata-ft-v1m0-flair3d.py",
-    "litept-b": "configs/flair3d_default/multi-litept-b-v1m0-flair3d.py",
-    "ptv3": "configs/flair3d_default/multi-ptv3-v1m0-flair3d.py",
-    "spunet": "configs/flair3d_default/multi-spunet-v1m0-flair3d.py",
-    "kpconvx": "configs/flair3d_default/multi-kpconvx-v1m0-flair3d.py",
-    "sonata-pretrained": "configs/flair3d_default/probe/sonata-v1m2-flair3d-lin-grid.py",
+    "sonata-ft": "configs/malibu3d/multi-sonata-ft-v1m0-malibu3d.py",
+    "litept-b": "configs/malibu3d/multi-litept-b-v1m0-malibu3d.py",
+    "ptv3": "configs/malibu3d/multi-ptv3-v1m0-malibu3d.py",
+    "spunet": "configs/malibu3d/multi-spunet-v1m0-malibu3d.py",
+    "kpconvx": "configs/malibu3d/multi-kpconvx-v1m0-malibu3d.py",
+    "sonata-pretrained": "configs/malibu3d/probe/sonata-v1m2-malibu3d-lin-grid.py",
 }
 
 

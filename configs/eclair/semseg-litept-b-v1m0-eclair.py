@@ -1,26 +1,26 @@
 """
 LitePT-Base full-supervision semantic segmentation on ECLAIR, trained from
 scratch (no pretrained weight). Ablation baseline (abla1_preECLAIR) against
-the Sonata / Flair3D-multitask-pretrained ECLAIR probes in sibling
+the Sonata / MALiBU3D-multitask-pretrained ECLAIR probes in sibling
 w110 folders (abla_grid_on_eclair, grid_eclair_18h, ...): this config
 measures what full end-to-end supervised training on ECLAIR alone reaches,
 with no pretraining.
 
 Architecture, hooks and augmentation pipeline mirror
-configs/flair3d_default/multi-litept-b-v1m0-flair3d.py / segment/litept-b-v1m0-flair3d.py
+configs/malibu3d/multi-litept-b-v1m0-malibu3d.py / segment/litept-b-v1m0-malibu3d.py
 (LitePT-Base backbone dims, MultiTaskSegmentorV2 wired for the single
 "segment" task, MultiTaskEvaluator/MultiTaskTester) rather than the plainer
 DefaultSegmentorV2 used in configs/dales/semseg-litept-b-v1m0-dales.py, so
-this stays directly comparable to the Flair3D multitask recipe. ECLAIR has
+this stays directly comparable to the MALiBU3D multitask recipe. ECLAIR has
 real RGB (unlike DALES), so ChromaticAutoContrast/Translation/Jitter +
 RandomDropColor are kept, and strength uses 1/60000 (raw uint16 intensity ->
-Flair3D [0,1] convention), matching configs/eclair/litept-b-v1m0-eclair-lin_enc.py.
+MALiBU3D [0,1] convention), matching configs/eclair/litept-b-v1m0-eclair-lin_enc.py.
 
 This config is intentionally self-contained: it inherits only from
 default_runtime and can be read top-to-bottom without cross-referencing
-other Flair3D / ECLAIR configs (task_configs/criteria are hand-written here
-rather than going through pointcept.datasets.flair3d_config_utils, which is
-tied to the Flair3D label taxonomy).
+other MALiBU3D / ECLAIR configs (task_configs/criteria are hand-written here
+rather than going through pointcept.datasets.malibu3d_config_utils, which is
+tied to the MALiBU3D label taxonomy).
 """
 
 # -----------------------------------------------------------------------------
@@ -59,7 +59,7 @@ eval_epoch = 40
 learned_masked_feat = True
 feat_keys = ["coord", "color", "strength"]
 coord_feat_scale = 0.01
-strength_feat_scale = 1 / 60000  # raw uint16 intensity -> Flair3D [0,1] convention
+strength_feat_scale = 1 / 60000  # raw uint16 intensity -> MALiBU3D [0,1] convention
 
 # Wandb parameters
 wandb_run_name = f"ECLAIR LitePT-B semseg from-scratch ({grp_exp}.{num_exp}) H100 epoch={epoch}"
@@ -122,7 +122,7 @@ test = dict(type="MultiTaskTester", verbose=True, write_cls_iou=True)
 # -----------------------------------------------------------------------------
 # Model
 # -----------------------------------------------------------------------------
-# LitePT-Base official dims (matches multi-litept-b-v1m0-flair3d.py backbone).
+# LitePT-Base official dims (matches multi-litept-b-v1m0-malibu3d.py backbone).
 model = dict(
     type="MultiTaskSegmentorV2",
     backbone_out_channels=72,

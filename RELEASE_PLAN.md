@@ -78,7 +78,7 @@ Constats en cours de route :
 
 ## Phase 3 — Réorganisation
 
-- [ ] (fait avec le renommage, Phase 4) Ranger les configs en `configs/malibu3d/{segment,forest,natural_habitat,network,elevation,multitask,probe,pretrain}` et `configs/{dales,h3d,eclair,opengf,pureforest}`
+- [x] (fait avec le renommage, Phase 4) Ranger les configs en `configs/malibu3d/{segment,forest,natural_habitat,network,elevation,multitask,probe,pretrain}` et `configs/{dales,h3d,eclair,opengf,pureforest}`
 - [x] Remplacer les chemins `weight=` (`/lustre/...`, numéros de job, `ckpt/malibu3d/*`) par la convention de `README_checkpoints.md` : `ckpt/<nom>/model.pth` (873542 → `litept-b`, 1095469 → `ptv3`, 1052217 → `spunet`, 1159986 → `kpconvx`, 862680 → `sonata-pretrained`). Backbones d'ablation non publiés (noGNL, monoLC, realGN, preECLAIR) : les 3 configs OpenGF qui ne différaient que par `weight` sont supprimées → surcharge `--options weight=...` à documenter (Phase 7). Le checkpoint Sonata indoor officiel garde `ckpt/sonata/pretrain-sonata-v1m1-0-base.pth` (à documenter)
 - [x] `network_graphs_root` (APLS) pointe vers `/lustre/...` : les graphes GT sont dans le dataset HF, à la racine de chaque zip de ROI (`data/{split}/{dept}_LIDARHD/{roi}/*_ROADS_graph.gpkg`), alors que `network_label_utils.py` attend un dossier plat `{root}/{dept}_{zone}_{NETWORK}_graph.gpkg` → `network_graphs_root=None` lit chaque graphe dans le dossier de sa ROI (nouveau défaut des configs, test unitaire `tests/test_network_graph_paths.py`) ; APLS vérifié de bout en bout sur hecate avec un dossier explicite, et désormais exercé par le harnais
 - [x] Valeurs par défaut personnelles retirées du code (`preprocess_flair3d_v2.py`) ; les docstrings et le lien wandb sont traités en Phase 6, l'audit global en Phase 8. ~~Retirer les chemins `/lustre` et `/data/geist` des docstrings/defaults (`preprocess_flair3d_v2.py`, `rasterize_forest.py`, `rasterize_network.py`, `unzip_malibu3d.py`), le lien wandb de `multi-litept-b-v1m0-flair3d.py`~~
@@ -87,12 +87,14 @@ Constats en cours de route :
 
 ## Phase 4 — Renommage Flair3D → MALiBU3D
 
-- [ ] Générer la liste exhaustive des identifiants, chemins et chaînes qui contiennent `flair3d` → table de correspondance relue par Louis
-- [ ] Appliquer la table par script et faire les `git mv` (un seul commit dédié)
-- [ ] Régénérer les configs livrées avec les checkpoints HF
-- [ ] Vérifier les clés de `meta.json` lues par le dataset ; symlink `data/malibu3d → flair3d_plus` pour les données existantes
-- [ ] Vérifier que `grep -ri flair3d` ne renvoie plus rien et que FLAIR-HUB est intact
-- [ ] Harnais (table `strings`) + commit
+- [x] Table de renommage appliquée par script (`local/release_inventory/rename_malibu3d.py`, ordre : `Flair3D-build` protégé ; `data/flair3d_plus/raw/tiles` → `data/malibu3d/tiles` ; `preprocess_flair3d_v2` → `preprocess_malibu3d` ; `unzip_flair3d` → `unzip_raw_archives` ; `flair3d_plus`/`flair3d_default` → `malibu3d` ; `Flair3D+`/`Flair3D` → `MALiBU3D` ; `FLAIR3D` → `MALIBU3D` ; `flair3d` → `malibu3d`) : 138 fichiers modifiés, 37 déplacés (`git mv`), un seul commit
+- [x] `configs/flair3d_default/` → `configs/malibu3d/` ; `MALiBU3DDataset`, `MALiBU3DLabelRemap`, `MALIBU3D_*` ; `pointcept/datasets/malibu3d*.py` ; `preprocessing/malibu3d/`
+- [x] Layout des données = layout HF : `data/malibu3d/{train,val,test}`, `data/malibu3d/tiles.csv`, `data/malibu3d/manifests/`. En local (hecate) : `data/malibu3d/` = liens symboliques vers `data/flair3d_plus/` (à refaire sur Jean Zay)
+- [x] Clés de `meta.json` sur disque : aucune ne contient « flair3d » → format des données inchangé ; clés des checkpoints inchangées
+- [x] `grep -i flair3d` vide hors `Flair3D-build` (Phase 6), `RELEASE_*` et READMEs internes ; FLAIR-HUB intact
+- [x] Harnais complet avec la table de renommage : 0 échec (configs, poids initiaux, datasets, forwards, entraînements). `local/regression/ref` = capture post-renommage
+- [ ] `scripts/unzip_malibu3d.py` écrit dans `{output_root}/data/{split}` alors que les configs lisent `data/malibu3d/{split}` → à aligner (Phase 7, avec la doc d'installation)
+- [ ] Régénérer / vérifier les configs citées dans le README des checkpoints HF (`multi-*-v1m0-malibu3d.py`) au moment de la mise à jour de la model card
 
 ## Phase 5 — Code obsolète dans les fichiers conservés
 

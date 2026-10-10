@@ -1,7 +1,7 @@
 """
 SpUNet-v1m1 grid-search linear probing on ECLAIR — decoder (standard U-Net
-forward) variant, transfer from Flair3D+ multitask supervised pretrain (job
-1052217, w109/1/sp_final/multi-spunet-v1m0-flair3d_1.py: channels=(32,64,128,
+forward) variant, transfer from MALiBU3D multitask supervised pretrain (job
+1052217, w109/1/sp_final/multi-spunet-v1m0-malibu3d_1.py: channels=(32,64,128,
 256,256,128,96,96), layers=(2,3,4,6,2,2,2,2), stride=3).
 
 Unlike LitePT/PT-v3-malibu, SpUNetBase's forward never returns a `Point`
@@ -32,8 +32,8 @@ num_classes = 11
 ignore_index = -1
 grid_size = 0.1
 point_max = 102400
-coord_feat_scale = 0.01  # must match Flair3D multitask pretrain
-strength_feat_scale = 1 / 60000  # raw uint16 intensity → Flair3D [0,1] convention
+coord_feat_scale = 0.01  # must match MALiBU3D multitask pretrain
+strength_feat_scale = 1 / 60000  # raw uint16 intensity → MALiBU3D [0,1] convention
 
 num_gpu = 1
 epoch = 200

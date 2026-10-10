@@ -26,18 +26,18 @@ from pointcept.datasets.preprocessing.pureforest.preprocess_pureforest import (
 )
 
 # Forest-level (bdforetv2_id) exclusion list: PureForest test patches that geographically
-# overlap the Flair3D+ (MALiBU3D) train/val split. See file header for how this was derived.
-FLAIR3D_LEAKAGE_EXCLUDE_FILE = os.path.join(
+# overlap the MALiBU3D (MALiBU3D) train/val split. See file header for how this was derived.
+MALIBU3D_LEAKAGE_EXCLUDE_FILE = os.path.join(
     os.path.dirname(__file__),
     "preprocessing",
     "pureforest",
-    "flair3d_leakage_excluded_test_tiles.txt",
+    "malibu3d_leakage_excluded_test_tiles.txt",
 )
 
 
 @lru_cache(maxsize=1)
-def _load_flair3d_leakage_excluded_tiles():
-    with open(FLAIR3D_LEAKAGE_EXCLUDE_FILE) as f:
+def _load_malibu3d_leakage_excluded_tiles():
+    with open(MALIBU3D_LEAKAGE_EXCLUDE_FILE) as f:
         return frozenset(
             line.strip()
             for line in f
@@ -57,7 +57,7 @@ class PureForestDataset(Dataset):
         test_cfg=None,
         loop=1,
         class_names=None,
-        exclude_flair3d_leakage_tiles=False,
+        exclude_malibu3d_leakage_tiles=False,
     ):
         super().__init__()
         self.data_root = data_root
@@ -67,7 +67,7 @@ class PureForestDataset(Dataset):
         self.test_mode = test_mode
         self.test_cfg = test_cfg if test_mode else None
         self.class_names = class_names if class_names is not None else CLASS_NAMES
-        self.exclude_flair3d_leakage_tiles = exclude_flair3d_leakage_tiles
+        self.exclude_malibu3d_leakage_tiles = exclude_malibu3d_leakage_tiles
         if len(self.class_names) != NUM_CLASSES:
             raise ValueError(
                 f"Expected {NUM_CLASSES} class names, got {len(self.class_names)}."
@@ -100,12 +100,12 @@ class PureForestDataset(Dataset):
         )
         if not names:
             raise FileNotFoundError(f"No preprocessed scenes under {split_dir}.")
-        if self.exclude_flair3d_leakage_tiles:
-            excluded = _load_flair3d_leakage_excluded_tiles()
+        if self.exclude_malibu3d_leakage_tiles:
+            excluded = _load_malibu3d_leakage_excluded_tiles()
             filtered = [name for name in names if name not in excluded]
             logger = get_root_logger()
             logger.info(
-                "PureForest {} set: excluded {} / {} Flair3D+-trainval-leaking tile(s).".format(
+                "PureForest {} set: excluded {} / {} MALiBU3D-trainval-leaking tile(s).".format(
                     self.split, len(names) - len(filtered), len(names)
                 )
             )

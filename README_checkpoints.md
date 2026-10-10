@@ -4,14 +4,14 @@ Released backbones for MALiBU3D, hosted on Hugging Face at
 [`LouisGeist/MALiBU3D-backbones`](https://huggingface.co/LouisGeist/MALiBU3D-backbones) (model card with the
 mIoU table: see that page). Every checkpoint is rebuilt from a **default config of this repository**:
 
-| HF folder | Params | Config (`configs/flair3d_default/`) | Trained on |
+| HF folder | Params | Config (`configs/malibu3d/`) | Trained on |
 |---|---|---|---|
-| `sonata-ft/` | 124.8 M | `multi-sonata-ft-v1m0-flair3d.py` | 1 GPU, batch 12 |
-| `litept-b/` | 45.1 M | `multi-litept-b-v1m0-flair3d.py` | 1 GPU, batch 12 |
-| `ptv3/` | 46.2 M | `multi-ptv3-v1m0-flair3d.py` | 4 GPUs, batch 12 (3/GPU), SyncBN |
-| `spunet/` | 42.3 M | `multi-spunet-v1m0-flair3d.py` | 1 GPU, batch 12 |
-| `kpconvx/` | 13.6 M | `multi-kpconvx-v1m0-flair3d.py` | 6 GPUs, batch 24 (4/GPU), SyncBN |
-| `sonata-pretrained/` | 108.5 M | `probe/sonata-v1m2-flair3d-lin-grid.py` (backbone only) | SSL pre-training, `pretrain-sonata-v1m2-flair3d.py` |
+| `sonata-ft/` | 124.8 M | `multi-sonata-ft-v1m0-malibu3d.py` | 1 GPU, batch 12 |
+| `litept-b/` | 45.1 M | `multi-litept-b-v1m0-malibu3d.py` | 1 GPU, batch 12 |
+| `ptv3/` | 46.2 M | `multi-ptv3-v1m0-malibu3d.py` | 4 GPUs, batch 12 (3/GPU), SyncBN |
+| `spunet/` | 42.3 M | `multi-spunet-v1m0-malibu3d.py` | 1 GPU, batch 12 |
+| `kpconvx/` | 13.6 M | `multi-kpconvx-v1m0-malibu3d.py` | 6 GPUs, batch 24 (4/GPU), SyncBN |
+| `sonata-pretrained/` | 108.5 M | `probe/sonata-v1m2-malibu3d-lin-grid.py` (backbone only) | SSL pre-training, `pretrain-sonata-v1m2-malibu3d.py` |
 
 The five multitask models (all but `sonata-pretrained`) hold a backbone and the heads of the eight targets
 (`segment`, `forest_2d`, `elevation`, four `nathab_*` axes, `network`). `sonata-pretrained` is the Sonata
@@ -21,7 +21,7 @@ student backbone without any head. All supervised runs: 200k iterations, AMP.
 
 The repo is private for now: log in once (`hf auth login`, token with read access).
 
-One model, into `ckpt/` (the path expected by `multi-sonata-ft-v1m0-flair3d.py` for `sonata-pretrained`):
+One model, into `ckpt/` (the path expected by `multi-sonata-ft-v1m0-malibu3d.py` for `sonata-pretrained`):
 
 ```bash
 hf download LouisGeist/MALiBU3D-backbones litept-b/model.pth --local-dir ckpt
@@ -60,7 +60,7 @@ result per task:
 export PYTHONPATH=$PWD
 python scripts/hf_release/forward_example.py --model litept-b \
     --tile D067-2021_AU-S1-21_3-6 --split val \
-    --csv-manifest data/flair3d_plus/raw/scene_split_manifest_D067.csv --max-points 30000 \
+    --csv-manifest data/malibu3d/raw/scene_split_manifest_D067.csv --max-points 30000 \
     --save out_litept_b.npz
 ```
 
@@ -73,8 +73,8 @@ elevation                  mean=0.83 std=1.96 min=-0.30 max=10.67
 ```
 
 - `--tile` is the tile directory name as listed in the tile table (`tiles.csv`, or a regional manifest passed with
-  `--csv-manifest`); the tile must be preprocessed on disk under `data/flair3d_plus/` (see
-  `README_flair3dplus.md` and the dataset card).
+  `--csv-manifest`); the tile must be preprocessed on disk under `data/malibu3d/` (see
+  `README_malibu3dplus.md` and the dataset card).
 - `--model` is one of `sonata-ft litept-b ptv3 spunet kpconvx sonata-pretrained`. `sonata-pretrained` has no head:
   the script prints the backbone features (`(N, 1232)`).
 - `--max-points N` keeps the N voxels nearest the tile centre (fits any GPU); `0` runs the whole tile.
@@ -88,7 +88,7 @@ from huggingface_hub import hf_hub_download
 from pointcept.models import build_model
 from pointcept.utils.config import Config
 
-cfg = Config.fromfile("configs/flair3d_default/multi-litept-b-v1m0-flair3d.py")
+cfg = Config.fromfile("configs/malibu3d/multi-litept-b-v1m0-malibu3d.py")
 model = build_model(cfg.model).cuda().eval()
 sd = torch.load(hf_hub_download("LouisGeist/MALiBU3D-backbones", "litept-b/model.pth"), weights_only=True)["state_dict"]
 model.load_state_dict(sd)          # strict: every key matches
@@ -121,9 +121,9 @@ Multitask fine-tuning of Sonata from the released SSL weights (`weight = ckpt/so
 
 ```bash
 hf download LouisGeist/MALiBU3D-backbones sonata-pretrained/model.pth --local-dir ckpt
-sh scripts/train.sh -g 1 -d flair3d -c flair3d_default/multi-sonata-ft-v1m0-flair3d -n sonata_ft
+sh scripts/train.sh -g 1 -d malibu3d -c malibu3d/multi-sonata-ft-v1m0-malibu3d -n sonata_ft
 ```
 
 The other configs reproduce the supervised runs; use the GPU count of the table above, e.g.
-`sh scripts/train.sh -g 4 -d flair3d -c flair3d_default/multi-ptv3-v1m0-flair3d -n ptv3_multi`. They read the
+`sh scripts/train.sh -g 4 -d malibu3d -c malibu3d/multi-ptv3-v1m0-malibu3d -n ptv3_multi`. They read the
 full national tile table, so they only run where the whole dataset is preprocessed.

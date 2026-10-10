@@ -247,7 +247,7 @@ def flair_dcfg(cfg, split):
     dcfg = dict(cfg.data.val)
     dcfg.pop("stratified_subset_manifest", None)
     dcfg.pop("max_sample", None)
-    dcfg.update(split=split, csv_manifest=cases.FLAIR3D_MANIFEST[split], min_points=None)
+    dcfg.update(split=split, csv_manifest=cases.MALIBU3D_MANIFEST[split], min_points=None)
     return dcfg
 
 
@@ -287,7 +287,7 @@ def capture_forward(out, only=None):
                 seed_all(0)
                 model = build_model(cfg.model).cuda().eval()
                 load = load_ckpt(model, cases.CKPT[ck])
-                for tile, split in cases.FLAIR3D_TILES:
+                for tile, split in cases.MALIBU3D_TILES:
                     inp, hashes, _ = make_input(flair_dcfg(cfg, split), tile, ds_cache)
                     with torch.no_grad():
                         flat = flatten_out(model(inp))
@@ -308,8 +308,8 @@ def capture_forward(out, only=None):
                 load = load_ckpt(model, ckpt, loader.get("keywords", ""), loader.get("replacement"),
                                  tuple(loader.get("exclude_keys") or ()))
                 load["missing"] = [k for k in load["missing"] if k.startswith("backbone.")]
-                if cfg.data.val.get("type") == "Flair3DDataset":
-                    dcfg, pick = flair_dcfg(cfg, "val"), cases.FLAIR3D_TILES[0][0]
+                if cfg.data.val.get("type") == "MALiBU3DDataset":
+                    dcfg, pick = flair_dcfg(cfg, "val"), cases.MALIBU3D_TILES[0][0]
                 else:
                     dcfg, pick = dict(cfg.data.val), 0
                 inp, hashes, sample = make_input(dcfg, pick, ds_cache)

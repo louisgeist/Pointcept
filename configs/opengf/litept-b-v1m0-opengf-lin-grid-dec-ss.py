@@ -1,6 +1,6 @@
 """
 LitePT-Base grid-search linear probing on OpenGF — decoder Single Scale
-ablation (transfer from Flair3D+ multitask supervised pretrain, job 873542).
+ablation (transfer from MALiBU3D multitask supervised pretrain, job 873542).
 
 Ablation vs litept-b-v1m0-opengf-lin-grid-dec.py: `dec_traceable=False` probes
 only the native final decoder stage output (dec_channels[0]=72ch), not the
@@ -23,8 +23,8 @@ num_classes = 2
 ignore_index = 2  # unreachable after RemapSegment merges raw label 2 into 1
 grid_size = 0.1
 point_max = 102400
-coord_feat_scale = 0.01  # must match Flair3D multitask pretrain
-strength_feat_scale = 1 / 60000  # OpenGF raw intensity → Flair3D [0,1] convention (DALES-like range)
+coord_feat_scale = 0.01  # must match MALiBU3D multitask pretrain
+strength_feat_scale = 1 / 60000  # OpenGF raw intensity → MALiBU3D [0,1] convention (DALES-like range)
 
 num_gpu = 1
 epoch = 50  # ~3900 iters (1359 train tiles // 24) -- roughly DALES's ballpark, see decision context

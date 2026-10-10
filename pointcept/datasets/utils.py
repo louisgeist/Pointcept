@@ -105,7 +105,7 @@ def resolve_dataset_voxel_sizes(dataset):
         raise ValueError(
             "Voxel-budget packing requires dataset.csv_manifest with an n_voxels "
             "column. Set data.*.csv_manifest, then enrich it with:\n"
-            "  python scripts/analyze_flair3d_test_point_voxel_counts.py "
+            "  python scripts/analyze_malibu3d_test_point_voxel_counts.py "
             "--write_manifest <manifest.csv> ..."
         )
     if not os.path.isfile(manifest_path):
@@ -123,7 +123,7 @@ def resolve_dataset_voxel_sizes(dataset):
             f"Voxel-budget packing requires column 'n_voxels' in csv_manifest, "
             f"but it was not found in:\n  {manifest_path}\n"
             "Enrich the manifest after preprocess, e.g.:\n"
-            "  python scripts/analyze_flair3d_test_point_voxel_counts.py \\\n"
+            "  python scripts/analyze_malibu3d_test_point_voxel_counts.py \\\n"
             f"    --csv_manifest {manifest_path} \\\n"
             f"    --write_manifest {manifest_path} \\\n"
             "    --splits val,test --grid_size 0.1"
@@ -150,7 +150,7 @@ def resolve_dataset_voxel_sizes(dataset):
             f"Voxel-budget packing: {len(missing_ids)}/{len(data_list)} scenes have "
             f"no positive n_voxels in csv_manifest:\n  {manifest_path}\n"
             f"Examples: {examples}{more}\n"
-            "Re-run analyze_flair3d_test_point_voxel_counts.py --write_manifest "
+            "Re-run analyze_malibu3d_test_point_voxel_counts.py --write_manifest "
             "for the missing splits/scenes."
         )
     return sizes, 0

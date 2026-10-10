@@ -24,7 +24,7 @@ batch_size_val = batch_size // 2
 batch_size_test = batch_size // 2
 
 grid_size = 0.1
-point_max = 102400  # aligned with Flair3D / DALES / H3D recipe
+point_max = 102400  # aligned with MALiBU3D / DALES / H3D recipe
 patch_size = 1024
 
 # Optimization parameters
@@ -72,7 +72,7 @@ model = dict(
         type="LitePT-v1",
         in_channels=6,  # coord (3) + color (3)
         order=("z", "z-trans", "hilbert", "hilbert-trans"),
-        # LitePT-Base dims (matches multi-litept-b-v1m0-flair3d.py backbone).
+        # LitePT-Base dims (matches multi-litept-b-v1m0-malibu3d.py backbone).
         stride=(3, 3, 3, 3),
         enc_depths=(3, 3, 3, 12, 3),
         enc_channels=(54, 108, 216, 432, 576),
@@ -216,7 +216,7 @@ data = dict(
     test=dict(
         type=dataset_type,
         split="test",
-        exclude_flair3d_leakage_tiles=True,
+        exclude_malibu3d_leakage_tiles=True,
         data_root=data_root,
         class_names=class_names,
         transform=_val_test_transform,

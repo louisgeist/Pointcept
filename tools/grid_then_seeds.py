@@ -3,7 +3,7 @@
 Chain a GridProbe hyperparameter sweep into a seed-ensemble robustness run.
 
 Phase 1 -- grid probe: run the given GridProbeSegmentorV2 / GridProbeTrainer
-config (any ``*-lin-grid*`` config: h3d / dales / eclair / flair3d, any frozen
+config (any ``*-lin-grid*`` config: h3d / dales / eclair / malibu3d, any frozen
 backbone). ``GridProbeWinnerSelector`` writes
 ``<grid_dir>/grid_search_results.json`` with the probe that had the best
 *validation* mIoU over the whole run.

@@ -1,6 +1,6 @@
 """
 LitePT-Base grid-search linear probing on ECLAIR — decoder Single Scale
-ablation (transfer from Flair3D+ multitask supervised pretrain, job 873542).
+ablation (transfer from MALiBU3D multitask supervised pretrain, job 873542).
 
 Ablation vs litept-b-v1m0-eclair-lin_dec.py: `dec_traceable=False` probes
 only the native final decoder stage output (dec_channels[0]=72ch), not the
@@ -27,8 +27,8 @@ num_classes = 11
 ignore_index = -1
 grid_size = 0.1
 point_max = 102400
-coord_feat_scale = 0.01  # must match Flair3D multitask pretrain
-strength_feat_scale = 1 / 60000  # raw uint16 intensity → Flair3D [0,1] convention
+coord_feat_scale = 0.01  # must match MALiBU3D multitask pretrain
+strength_feat_scale = 1 / 60000  # raw uint16 intensity → MALiBU3D [0,1] convention
 
 num_gpu = 1
 epoch = 200

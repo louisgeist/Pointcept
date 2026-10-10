@@ -1,7 +1,7 @@
 """
 LitePT-Base grid-search linear probing on OpenGF (ground filtering) --
 encoder multiscale variant. Same frozen backbone checkpoint (job 873542,
-Flair3D+ multitask supervised pretrain) as the DALES/H3D/ECLAIR LitePT-B
+MALiBU3D multitask supervised pretrain) as the DALES/H3D/ECLAIR LitePT-B
 lin-grid-enc siblings, for cross-domain comparability.
 
 Binary task: 0=Ground, 1=Non-ground. On-disk `segment.npy` actually carries a
@@ -21,7 +21,7 @@ OpenGF ships its own held-out `val` split (9 scenes, one per training
 terrain) -- unlike DALES, val != test here (mirrors the H3D config shape).
 
 strength_feat_scale reuses DALES's `1/60000` convention (raw LAS intensity ->
-Flair3D [0,1]): OpenGF's observed intensity range (checked on a local
+MALiBU3D [0,1]): OpenGF's observed intensity range (checked on a local
 download) tops out around 60000-65000, same order of magnitude as DALES'.
 
 Encoder levels (enc_mode), grid, probe grid, and hook wiring are copied
@@ -43,8 +43,8 @@ num_classes = 2
 ignore_index = 2  # unreachable after RemapSegment merges raw label 2 into 1
 grid_size = 0.1
 point_max = 102400
-coord_feat_scale = 0.01  # must match Flair3D multitask pretrain
-strength_feat_scale = 1 / 60000  # OpenGF raw intensity -> Flair3D [0,1] convention (DALES-like range)
+coord_feat_scale = 0.01  # must match MALiBU3D multitask pretrain
+strength_feat_scale = 1 / 60000  # OpenGF raw intensity -> MALiBU3D [0,1] convention (DALES-like range)
 
 num_gpu = 1
 epoch = 50  # ~3900 iters (1359 train tiles // 24) -- roughly DALES's ballpark, see decision context

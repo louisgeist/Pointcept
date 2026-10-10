@@ -42,23 +42,23 @@ from pointcept.models import build_model
 from pointcept.utils.config import Config
 
 MODELS = {
-    "litept_b": ("configs/flair3d_default/multi-litept-b-v1m0-flair3d.py",
+    "litept_b": ("configs/malibu3d/multi-litept-b-v1m0-malibu3d.py",
                  "ckpt/malibu3d/litept_b_multitask/model_best.pth", "supervised"),
-    "ptv3": ("configs/flair3d_default/multi-ptv3-v1m0-flair3d.py",
+    "ptv3": ("configs/malibu3d/multi-ptv3-v1m0-malibu3d.py",
              "ckpt/malibu3d/ptv3_multitask/model_best.pth", "supervised"),
-    "spunet": ("configs/flair3d_default/multi-spunet-v1m0-flair3d.py",
+    "spunet": ("configs/malibu3d/multi-spunet-v1m0-malibu3d.py",
                "ckpt/malibu3d/spunet_multitask/model_best.pth", "supervised"),
-    "kpconvx": ("configs/flair3d_default/multi-kpconvx-v1m0-flair3d.py",
+    "kpconvx": ("configs/malibu3d/multi-kpconvx-v1m0-malibu3d.py",
                 "ckpt/malibu3d/kpconvx_multitask/model_best.pth", "supervised"),
-    "sonata": ("configs/flair3d_default/probe/sonata-v1m2-flair3d-lin-grid.py",
+    "sonata": ("configs/malibu3d/probe/sonata-v1m2-malibu3d-lin-grid.py",
                "ckpt/malibu3d/sonata_outdoor/epoch_120.pth", "ssl"),
 }
 # Sonata SSL ckpt stores student/teacher; the probe config loads the student backbone.
 SSL_KEY_REPLACE = ("module.student.backbone", "module.backbone")
 MANIFESTS = {
-    "val": "data/flair3d_plus/raw/scene_split_manifest_D067.csv",
-    "test": "data/flair3d_plus/raw/scene_split_manifest_D075.csv",
-    "train": "data/flair3d_plus/raw/scene_split_manifest_D067.csv",
+    "val": "data/malibu3d/raw/scene_split_manifest_D067.csv",
+    "test": "data/malibu3d/raw/scene_split_manifest_D075.csv",
+    "train": "data/malibu3d/raw/scene_split_manifest_D067.csv",
 }
 
 
@@ -352,7 +352,7 @@ def _require_env(mname):
         pytest.skip(f"checkpoint not available locally: {ckpt_path}")
     for tile, split in DEFAULT_TILES:
         dept, roi = tile.split("_")[0], tile.split("_")[1]
-        if not os.path.isdir(os.path.join(REPO_ROOT, "data/flair3d_plus", split, f"{dept}_LIDARHD", roi, tile)):
+        if not os.path.isdir(os.path.join(REPO_ROOT, "data/malibu3d", split, f"{dept}_LIDARHD", roi, tile)):
             pytest.skip(f"tile not mirrored locally: {tile}")
 
 

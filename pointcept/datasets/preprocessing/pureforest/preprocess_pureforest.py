@@ -94,7 +94,7 @@ def read_pureforest_laz(filepath: str) -> Dict[str, np.ndarray]:
 
     las = laspy.read(filepath)
     # Keep float64 here: las.x/y/z are absolute Lambert-93 (Y ~= 6-7e6), and float32's
-    # ULP at that magnitude is ~0.5-1 m (see README_geist.md's Flair3D+ note on the same
+    # ULP at that magnitude is ~0.5-1 m (see README_geist.md's MALiBU3D note on the same
     # trap) — cast down only after normalize_tile_coord has recentered to local coords.
     coord = np.column_stack(
         (

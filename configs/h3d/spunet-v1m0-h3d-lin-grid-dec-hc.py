@@ -1,7 +1,7 @@
 """
 SpUNet-v1m1 grid-search linear probing on H3D — decoder hypercolumn /
 multi-scale variant (same frozen checkpoint as
-spunet-v1m0-h3d-lin-grid-{enc,dec,enc-dec}.py, job 1052217, Flair3D+ multitask
+spunet-v1m0-h3d-lin-grid-{enc,dec,enc-dec}.py, job 1052217, MALiBU3D multitask
 supervised pretrain: channels=(32,64,128,256,256,128,96,96),
 layers=(2,3,4,6,2,2,2,2), stride=3).
 
@@ -31,7 +31,7 @@ num_classes = 11
 ignore_index = 11
 grid_size = 0.1
 point_max = 102400  # keep pretrain SphereCrop budget; do not raise for denser H3D
-coord_feat_scale = 0.01  # must match Flair3D multitask pretrain
+coord_feat_scale = 0.01  # must match MALiBU3D multitask pretrain
 
 num_gpu = 1
 epoch = 2000

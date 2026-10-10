@@ -1,7 +1,7 @@
 """
 PT-v3-malibu grid-search linear probing on OpenGF — encoder multiscale variant
-(same frozen checkpoint as ptv3-v1m0-opengf-lin-grid.py, job 1095469, Flair3D+
-multitask supervised pretrain at w109/2/ptv3_wd/multi-ptv3-v1m0-flair3d_5.py).
+(same frozen checkpoint as ptv3-v1m0-opengf-lin-grid.py, job 1095469, MALiBU3D
+multitask supervised pretrain at w109/2/ptv3_wd/multi-ptv3-v1m0-malibu3d_5.py).
 
 `enc_mode=True` drops the decoder entirely; GridProbeSegmentorV2's generic
 encoder-side multiscale concat (walking `pooling_parent` links — see
@@ -27,8 +27,8 @@ num_classes = 2
 ignore_index = 2  # unreachable after RemapSegment merges raw label 2 into 1
 grid_size = 0.1
 point_max = 102400
-coord_feat_scale = 0.01  # must match Flair3D multitask pretrain
-strength_feat_scale = 1 / 60000  # OpenGF raw intensity → Flair3D [0,1] convention (DALES-like range)
+coord_feat_scale = 0.01  # must match MALiBU3D multitask pretrain
+strength_feat_scale = 1 / 60000  # OpenGF raw intensity → MALiBU3D [0,1] convention (DALES-like range)
 
 num_gpu = 1
 epoch = 50  # ~3900 iters (1359 train tiles // 24) -- roughly DALES's ballpark, see decision context

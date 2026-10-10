@@ -203,21 +203,21 @@ class Update(object):
 
 
 @TRANSFORMS.register_module()
-class Flair3DLabelRemap(object):
-    """Remap Flair3D+ semantic targets from on-disk storage defs to training defs."""
+class MALiBU3DLabelRemap(object):
+    """Remap MALiBU3D semantic targets from on-disk storage defs to training defs."""
 
     @staticmethod
     def _load_label_remap_module():
         import importlib.util
 
-        module_name = "flair3d_label_remap"
+        module_name = "malibu3d_label_remap"
         if module_name in sys.modules:
             return sys.modules[module_name]
         path = os.path.join(
             os.path.dirname(os.path.abspath(__file__)),
             "preprocessing",
-            "flair3d_plus",
-            "flair3d_label_remap.py",
+            "malibu3d",
+            "malibu3d_label_remap.py",
         )
         spec = importlib.util.spec_from_file_location(module_name, path)
         mod = importlib.util.module_from_spec(spec)
@@ -313,7 +313,7 @@ class Flair3DLabelRemap(object):
 @TRANSFORMS.register_module()
 class RemapSegment(object):
     """In-place ``segment`` label remap via a small id->id dict (e.g. merge one raw class
-    into another). Unlike ``Flair3DLabelRemap``, this has no notion of on-disk storage
+    into another). Unlike ``MALiBU3DLabelRemap``, this has no notion of on-disk storage
     definitions -- just a literal mapping applied to whatever ``segment`` already holds.
     IDs not present in ``mapping`` pass through unchanged.
     """
@@ -434,7 +434,7 @@ class CenterShift(object):
 class ExtractAbsZ(object):
     """Save absolute altitude before geometric shifts normalize it away.
 
-    If ``coord_translation`` is present (Flair3D+ preprocessing offset), reconstruct
+    If ``coord_translation`` is present (MALiBU3D preprocessing offset), reconstruct
     absolute Z as ``coord_z + translation_z``. Otherwise fall back to ``coord[:, 2]``.
     """
 
@@ -452,7 +452,7 @@ class ExtractAbsXY(object):
     """Save absolute Lambert XY before geometric shifts normalize them away.
 
     Reconstructs absolute XY in **float64** as ``coord.astype(f64) + coord_translation``
-    (Flair3D+ stores ``coord_translation`` as float64 and local ``coord`` as float32).
+    (MALiBU3D stores ``coord_translation`` as float64 and local ``coord`` as float32).
     Do **not** cast the translation to float32 — that loses ~0.5–1 m at Lambert Y
     and breaks 1 m network cell binning.
 

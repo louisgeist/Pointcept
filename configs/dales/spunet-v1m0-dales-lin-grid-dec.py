@@ -1,7 +1,7 @@
 """
 SpUNet-v1m1 grid-search linear probing on DALES — decoder (standard U-Net
-forward) variant, transfer from Flair3D+ multitask supervised pretrain (job
-1052217, w109/1/sp_final/multi-spunet-v1m0-flair3d_1.py: channels=(32,64,128,
+forward) variant, transfer from MALiBU3D multitask supervised pretrain (job
+1052217, w109/1/sp_final/multi-spunet-v1m0-malibu3d_1.py: channels=(32,64,128,
 256,256,128,96,96), layers=(2,3,4,6,2,2,2,2), stride=3).
 
 Unlike LitePT/PT-v3-malibu, SpUNetBase's forward never returns a `Point`
@@ -9,7 +9,7 @@ object (no `pooling_parent`/`unpooling_parent`), so GridProbeSegmentorV2's
 automatic multiscale hypercolumn concat does not apply here: with
 `num_classes=0` (final 1x1 conv disabled), the backbone just returns the
 standard full-resolution decoder output — 96ch (`channels[-1]`), the same
-per-point feature `multi-spunet-v1m0-flair3d.py` feeds its own task heads
+per-point feature `multi-spunet-v1m0-malibu3d.py` feeds its own task heads
 from. See spunet-v1m0-dales-lin-grid-enc.py for the encoder-multiscale
 counterpart (needs a new `point_mode` backbone flag to get a comparable
 per-point feature at all).
@@ -31,8 +31,8 @@ num_classes = 8
 ignore_index = 8
 grid_size = 0.1
 point_max = 102400
-coord_feat_scale = 0.01  # must match Flair3D multitask pretrain
-strength_feat_scale = 1 / 60000  # DALES raw intensity → Flair3D [0,1] convention
+coord_feat_scale = 0.01  # must match MALiBU3D multitask pretrain
+strength_feat_scale = 1 / 60000  # DALES raw intensity → MALiBU3D [0,1] convention
 
 num_gpu = 1
 epoch = 400

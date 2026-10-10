@@ -21,9 +21,9 @@ class ECLAIRDataset(DefaultDataset):
             threshold. Tiles below it are excluded, checked against
             `coord.npy`'s shape (read via `mmap_mode="r"`, so this doesn't
             load full tiles into memory — cheap even for the whole split).
-            Unlike `Flair3DDataset.min_points`, no manifest column is needed
+            Unlike `MALiBU3DDataset.min_points`, no manifest column is needed
             since ECLAIR has no national-scale csv_manifest. Mirrors
-            Flair3DDataset's restriction: "test" cannot be thresholded.
+            MALiBU3DDataset's restriction: "test" cannot be thresholded.
     """
 
     def __init__(self, include_pseudo=True, min_points=None, **kwargs):

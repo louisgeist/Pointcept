@@ -48,7 +48,7 @@ while getopts "p:d:c:n:w:g:m:r:" opt; do
   esac
 done
 
-rm -rf exp/flair3d/${EXP_NAME}
+rm -rf exp/malibu3d/${EXP_NAME}
 
 if [ "${NUM_GPU}" = 'None' ]
 then

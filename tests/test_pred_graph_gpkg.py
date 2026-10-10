@@ -23,13 +23,13 @@ try:
 except ImportError:
     HAS_OGR = False
 
-from pointcept.datasets.preprocessing.flair3d_plus.apls_metric import AplsResult
-from pointcept.datasets.preprocessing.flair3d_plus.network_label_utils import (
+from pointcept.datasets.preprocessing.malibu3d.apls_metric import AplsResult
+from pointcept.datasets.preprocessing.malibu3d.network_label_utils import (
     load_roi_exported_network_graph,
     pred_graph_output_stem_paths,
     write_pixel_graph_gpkg,
 )
-from pointcept.datasets.preprocessing.flair3d_plus.network_xy_raster_utils import (
+from pointcept.datasets.preprocessing.malibu3d.network_xy_raster_utils import (
     GridSpec,
     PixelGraph,
     pixel_centers_xy,

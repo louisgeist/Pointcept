@@ -1,5 +1,5 @@
 """Shared, dataset-agnostic pieces for the extract_<dataset>_grid_probe_features.py
-scripts (currently DALES and Flair3D+). See extract_dales_grid_probe_features.py
+scripts (currently DALES and MALiBU3D). See extract_dales_grid_probe_features.py
 for the full design rationale (flash-attn shim, spconv ConvAlgo.Native
 workaround, per-class stratified sampling). Only the dataset/transform-pipeline
 construction is dataset-specific and stays in each script.

@@ -18,7 +18,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from pointcept.datasets.preprocessing.flair3d_plus import apls_metric as apls
+from pointcept.datasets.preprocessing.malibu3d import apls_metric as apls
 from pointcept.utils.network_apls import validate_network_apls_eval_cfg
 
 _REMOVED_KEYS = (
@@ -109,7 +109,7 @@ class TestPredictionDefaultsMatchConfigs(unittest.TestCase):
             import eval_network_apls
         finally:
             sys.path.pop(0)
-        cfg = Config.fromfile(str(REPO_ROOT / "configs/flair3d_default/multi-ptv3-v1m0-flair3d.py"))
+        cfg = Config.fromfile(str(REPO_ROOT / "configs/malibu3d/multi-ptv3-v1m0-malibu3d.py"))
         defaults = {
             k: v.default for k, v in inspect.signature(eval_network_apls.run).parameters.items()
         }

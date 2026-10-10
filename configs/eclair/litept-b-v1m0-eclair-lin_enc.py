@@ -1,6 +1,6 @@
 """
 LitePT-Base grid-search linear probing on ECLAIR — encoder multiscale variant
-(transfer from Flair3D+ multitask supervised pretrain, job 873542).
+(transfer from MALiBU3D multitask supervised pretrain, job 873542).
 
 `enc_mode=True` → 1386ch concat of the 5 raw encoder stages
 (54+108+216+432+576).
@@ -23,8 +23,8 @@ num_classes = 11
 ignore_index = -1
 grid_size = 0.1
 point_max = 102400
-coord_feat_scale = 0.01  # must match Flair3D multitask pretrain
-strength_feat_scale = 1 / 60000  # raw uint16 intensity → Flair3D [0,1] convention
+coord_feat_scale = 0.01  # must match MALiBU3D multitask pretrain
+strength_feat_scale = 1 / 60000  # raw uint16 intensity → MALiBU3D [0,1] convention
 
 num_gpu = 1
 epoch = 200

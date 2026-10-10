@@ -1,8 +1,8 @@
 """
 PT-v3-malibu grid-search linear probing on H3D — decoder hypercolumn variant
 (same frozen checkpoint as ptv3-v1m0-dales-lin-grid.py / ptv3-v1m0-h3d-lin-grid-enc.py,
-job 1095469, Flair3D+ multitask supervised pretrain at
-w109/2/ptv3_wd/multi-ptv3-v1m0-flair3d_5.py). `traceable=True` -> 1024ch
+job 1095469, MALiBU3D multitask supervised pretrain at
+w109/2/ptv3_wd/multi-ptv3-v1m0-malibu3d_5.py). `traceable=True` -> 1024ch
 concat of decoder stages (64+64+128+256) + encoder bottleneck (512).
 
 AdamW / wd=0 / OneCycleLR with warmup fixed at pct_start=5%, lr swept over
@@ -25,7 +25,7 @@ num_classes = 11
 ignore_index = 11
 grid_size = 0.1
 point_max = 102400  # keep pretrain SphereCrop budget; do not raise for denser H3D
-coord_feat_scale = 0.01  # must match Flair3D multitask pretrain
+coord_feat_scale = 0.01  # must match MALiBU3D multitask pretrain
 
 num_gpu = 1
 epoch = 2000

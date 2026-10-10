@@ -211,7 +211,7 @@ class TestMutualExclusion(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             default_config_parser(
-                "configs/flair3d_default/multi-litept-b-v1m0-flair3d.py",
+                "configs/malibu3d/multi-litept-b-v1m0-malibu3d.py",
                 options={"grad_norm": True, "grad_norm_lite": True},
             )
 

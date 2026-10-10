@@ -3,7 +3,7 @@ Sonata-v1m2 pretraining on ECLAIR (train split only).
 
 Features: coord + color + strength (in_channels=7). ECLAIR stores raw uint16
 intensity; Collect scales global/local strength by 1/60000 to match the
-Flair3D [0,1] convention used by Sonata outdoor probes.
+MALiBU3D [0,1] convention used by Sonata outdoor probes.
 Schedule: iter-limited (total_iters / iter_per_epoch=1000).
 No online evaluation; periodic linear-probe jobs on epoch_*.pth.
 
@@ -17,7 +17,7 @@ _base_ = ["../_base_/default_runtime.py"]
 # Run-level settings
 # -----------------------------------------------------------------------------
 # Hardware template: 6×4 H100 (Jean-Zay); see scripts/sonata/sbatch_pretrain_eclair_h100.sh
-# batch_size_per_gpu=4 confirmed safe with stride=(3,3,3,3) on Sonata Flair3D.
+# batch_size_per_gpu=4 confirmed safe with stride=(3,3,3,3) on Sonata MALiBU3D.
 num_gpu = 24
 batch_size_per_gpu = 4
 batch_size = batch_size_per_gpu * num_gpu  # → 96
@@ -40,7 +40,7 @@ grid_size = 0.1
 stride = (3, 3, 3, 3)
 max_size = 65_536  # points-per-view budget (MultiViewGenerator); calibrate via
                    # scripts/find_max_view_size.py when batch_size_per_gpu changes
-strength_feat_scale = 1 / 60000  # raw uint16 intensity → Flair3D [0,1] convention
+strength_feat_scale = 1 / 60000  # raw uint16 intensity → MALiBU3D [0,1] convention
 
 # match_max_r must scale with the point spacing at the matching resolution
 # (grid_size after up_cast_level=2 pooling stages), not be a fixed absolute
@@ -178,10 +178,10 @@ data_root = "data/eclair"
 # scripts/eclair/analyze_point_counts.py). MultiViewGenerator's
 # local_view_scale=(0.1, 0.4) then produces views as small as ~150 points on
 # these outliers, which destabilizes Sonata's teacher-student matching and
-# caused a NaN crash around iter ~20k (2026-09-19 pretrain run). Flair3D
+# caused a NaN crash around iter ~20k (2026-09-19 pretrain run). MALiBU3D
 # guards against this class of tile via its own min_points; mirror it here
 # with a threshold picked from the actual size distribution, not copied from
-# Flair3D's 1000 (which wouldn't even exclude all of these outliers).
+# MALiBU3D's 1000 (which wouldn't even exclude all of these outliers).
 min_points = {"train": 2000}
 
 transform = [

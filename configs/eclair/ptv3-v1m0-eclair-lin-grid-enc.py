@@ -1,7 +1,7 @@
 """
 PT-v3-malibu grid-search linear probing on ECLAIR — encoder multiscale
 variant (same frozen checkpoint as ptv3-v1m0-eclair-lin-grid-dec.py, job
-1095469, Flair3D+ multitask supervised pretrain). `enc_mode=True` -> 992ch
+1095469, MALiBU3D multitask supervised pretrain). `enc_mode=True` -> 992ch
 concat of the 5 raw encoder stages (32+64+128+256+512).
 
 ECLAIR provides real RGB: ChromaticAutoContrast/Translation/Jitter (train) +
@@ -22,8 +22,8 @@ num_classes = 11
 ignore_index = -1
 grid_size = 0.1
 point_max = 102400
-coord_feat_scale = 0.01  # must match Flair3D multitask pretrain
-strength_feat_scale = 1 / 60000  # raw uint16 intensity → Flair3D [0,1] convention
+coord_feat_scale = 0.01  # must match MALiBU3D multitask pretrain
+strength_feat_scale = 1 / 60000  # raw uint16 intensity → MALiBU3D [0,1] convention
 
 num_gpu = 1
 epoch = 200

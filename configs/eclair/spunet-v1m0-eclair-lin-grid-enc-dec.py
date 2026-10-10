@@ -1,7 +1,7 @@
 """
 SpUNet-v1m1 grid-search linear probing on ECLAIR — combined encoder+decoder
 hypercolumn variant (same frozen checkpoint as
-spunet-v1m0-eclair-lin-grid-{enc,dec}.py, job 1052217, Flair3D+ multitask
+spunet-v1m0-eclair-lin-grid-{enc,dec}.py, job 1052217, MALiBU3D multitask
 supervised pretrain: channels=(32,64,128,256,256,128,96,96),
 layers=(2,3,4,6,2,2,2,2), stride=3).
 
@@ -43,8 +43,8 @@ num_classes = 11
 ignore_index = -1
 grid_size = 0.1
 point_max = 102400
-coord_feat_scale = 0.01  # must match Flair3D multitask pretrain
-strength_feat_scale = 1 / 60000  # raw uint16 intensity → Flair3D [0,1] convention
+coord_feat_scale = 0.01  # must match MALiBU3D multitask pretrain
+strength_feat_scale = 1 / 60000  # raw uint16 intensity → MALiBU3D [0,1] convention
 
 num_gpu = 1
 epoch = 200
