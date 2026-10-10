@@ -11,7 +11,8 @@ each ROI network once into unique 1 m Lambert cells (longitudinal step plus
 optional lateral ``± line_width_m / 2`` offsets), then slices those cells into
 per-patch grids. Empty masks write ``meta.network`` only (no ``network.npy``).
 
-Every ``*_graph.gpkg`` found under ``--network_graphs_root`` is rasterized. Only
+Every ``*_graph.gpkg`` found under ``--network_graphs_root`` (default: each ROI
+directory, the Hugging Face layout of the dataset) is rasterized. Only
 ROADS has a catalog flag (``has_roads_graph``, legacy ``ROADS``): a ``True`` flag
 with a missing ROADS graph is a hard error. RAILROADS / TRANSMISSION_LINES have
 no flag (not released) and are rasterized whenever their graph exists.
@@ -319,7 +320,7 @@ def _process_roi_task(
     roi_dir: str,
     patch_dirs: List[str],
     flags: Dict[str, bool],
-    network_graphs_root: str,
+    network_graphs_root: Optional[str],
     pixel_m: float,
     sample_step_m: float,
     line_width_m: float,
@@ -328,7 +329,7 @@ def _process_roi_task(
     """Worker entry: load ROI graphs once, densify once, process all patches."""
     roi_path = Path(roi_dir)
     segments_by_type = load_roi_exported_networks(
-        Path(network_graphs_root),
+        Path(network_graphs_root) if network_graphs_root else None,
         roi_path,
         flags=flags,
         network_types=NETWORK_TYPES,
@@ -389,7 +390,7 @@ def _update_roi_pbar(pbar: tqdm, result: dict) -> None:
 
 def run(
     data_root: Path,
-    network_graphs_root: Path,
+    network_graphs_root: Optional[Path],
     split_manifest_csv: Path,
     *,
     splits: Optional[List[str]] = None,
@@ -451,7 +452,7 @@ def run(
                     str(roi_dir),
                     [str(p) for p in roi_patches],
                     flags,
-                    str(network_graphs_root),
+                    str(network_graphs_root) if network_graphs_root else None,
                     pixel_m,
                     sample_step_m,
                     line_width_m,
@@ -469,7 +470,7 @@ def run(
                         str(roi_dir),
                         [str(p) for p in roi_patches],
                         flags,
-                        str(network_graphs_root),
+                        str(network_graphs_root) if network_graphs_root else None,
                         float(pixel_m),
                         float(sample_step_m),
                         float(line_width_m),
@@ -510,8 +511,9 @@ def build_argparser() -> argparse.ArgumentParser:
     p.add_argument(
         "--network_graphs_root",
         type=str,
-        required=True,
-        help="Root of exported *_graph.gpkg files (Flair3D-build network_graphs)",
+        default=None,
+        help="Directory of *_graph.gpkg files. Default: read each graph from its ROI directory "
+        "(Hugging Face layout of the dataset).",
     )
     p.add_argument(
         "--split_manifest_csv",
@@ -584,7 +586,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     )
     run(
         Path(args.data_root).resolve(),
-        Path(args.network_graphs_root).resolve(),
+        Path(args.network_graphs_root).resolve() if args.network_graphs_root else None,
         Path(args.split_manifest_csv).resolve(),
         splits=args.splits,
         pixel_m=float(args.pixel_m),

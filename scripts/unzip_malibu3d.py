@@ -2,19 +2,19 @@
 """Extract MALiBU3D Hub ROI zips into the Pointcept on-disk layout.
 
 Each ``data/{split}/{dept}_LIDARHD/{roi}.zip`` is flat (``{tile_id}/coord.npy``,
-optional GPKG at zip root). Extract into
-``{output_root}/data/{split}/{dept}_LIDARHD/{roi}/``.
+optional road graph at the zip root). Extract into
+``{output_root}/{split}/{dept}_LIDARHD/{roi}/`` and copy ``tiles.csv``,
+``labels.json`` and ``palettes.json`` to ``{output_root}``, the layout the configs expect
+with ``data_root = "data/malibu3d"``.
 
 Resume: skip a zip when every member already exists with the same uncompressed
 size. If a path that should be a directory exists as a file (interrupted unzip),
 replace it and continue.
 
-Example (Jean Zay Scratch)::
+Example::
 
-    python scripts/unzip_malibu3d.py \\
-      --zip-root /lustre/fsn1/projects/rech/unv/usi32yh/MALiBU3D_zip \\
-      --output-root /lustre/fsn1/projects/rech/unv/usi32yh/MALiBU3D \\
-      --workers 8
+    hf download LouisGeist/MALiBU3D --repo-type dataset --local-dir data/malibu3d_zip
+    python scripts/unzip_malibu3d.py --zip-root data/malibu3d_zip --output-root data/malibu3d --workers 8
 """
 
 from __future__ import annotations
@@ -47,7 +47,8 @@ def _normalize_member(name: str) -> str:
 
 
 def zip_dest_dir(zip_path: Path, zip_root: Path, output_root: Path) -> Path:
-    rel = zip_path.resolve().relative_to(zip_root.resolve())
+    """``{zip_root}/data/{split}/{dept}_LIDARHD/{roi}.zip`` -> ``{output_root}/{split}/{dept}_LIDARHD/{roi}``."""
+    rel = zip_path.resolve().relative_to((zip_root / "data").resolve())
     return output_root.resolve() / rel.with_suffix("")
 
 
