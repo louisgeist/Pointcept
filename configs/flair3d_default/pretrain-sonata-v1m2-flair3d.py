@@ -282,12 +282,4 @@ hooks = [
     dict(type="IterationTimer", warmup_iter=2),
     dict(type="InformationWriter", log_interval=1),
     dict(type="CheckpointSaver", save_freq=eval_every),
-    # After CheckpointSaver so epoch_N.pth exists; submits non-blocking sbatch probes.
-    dict(
-        type="LinProbeSbatchHook",
-        enable=True,
-        save_freq=eval_every,
-        sbatch_script="scripts/sonata/sbatch_lin_probe.sh",
-        iter_per_epoch=iter_per_epoch,
-    ),
 ]

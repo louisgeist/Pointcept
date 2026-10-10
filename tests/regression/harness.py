@@ -7,6 +7,10 @@ Capture a reference before a cleanup step, capture again after, compare:
   CUDA_VISIBLE_DEVICES=0 PYTHONPATH=. $PY tests/regression/harness.py capture --stage forward --out local/regression/ref
   CUDA_VISIBLE_DEVICES=0 PYTHONPATH=. $PY tests/regression/harness.py capture --stage train   --out local/regression/ref
   $PY tests/regression/harness.py compare local/regression/ref local/regression/new [--map map.json]
+  $PY tests/regression/harness.py accept local/regression/ref local/regression/new <config path or case>...
+
+local/regression/ref_tag is the capture of the submission tag and never changes; local/regression/ref is the
+rolling reference, updated with `accept` only for intended changes that were checked one by one.
 
 Stages (cases in tests/regression/cases.py):
   build    every config: parsed config, model keys/shapes/seeded-init hashes, dataset type/length/sample list
@@ -497,6 +501,29 @@ def compare(ref, new, mapping, rtol, atol):
     return 1 if fails else 0
 
 
+def accept(ref, new, keys):
+    """Copy the given entries (config paths / case names) from `new` into the rolling reference `ref`.
+
+    Only for intended, verified changes. Build entries of configs that no longer exist are dropped.
+    """
+    for stage in ("build", "forward", "train"):
+        rpath, npath = os.path.join(ref, f"{stage}.jsonl"), os.path.join(new, f"{stage}.jsonl")
+        if not os.path.isfile(npath):
+            continue
+        r, n = read_jsonl(rpath), read_jsonl(npath)
+        for k in keys:
+            if k in n:
+                r[k] = n[k]
+                if stage == "forward":
+                    fn = k.replace("/", "__") + ".npz"
+                    shutil.copy(os.path.join(new, "forward", fn), os.path.join(ref, "forward", fn))
+                print(f"accepted {stage} {k}")
+        if stage == "build":
+            r = {k: v for k, v in r.items() if os.path.isfile(k)}
+        with open(rpath, "w") as f:
+            f.writelines(json.dumps(v) + "\n" for v in r.values())
+
+
 def main():
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -510,12 +537,23 @@ def main():
     k.add_argument("--map", default=None)
     k.add_argument("--rtol", type=float, default=1e-3)
     k.add_argument("--atol", type=float, default=1e-4)
+    a = sub.add_parser("accept", help="copy intended, verified changes from a capture into the rolling reference")
+    a.add_argument("ref")
+    a.add_argument("new")
+    a.add_argument("keys", nargs="+")
     args = ap.parse_args()
     if args.cmd == "capture":
         os.makedirs(args.out, exist_ok=True)
-        stages = ["build", "forward", "train"] if args.stage == "all" else [args.stage]
-        for s in stages:
-            dict(build=capture_build, forward=capture_forward, train=capture_train)[s](args.out, args.only)
+        if args.stage == "all":
+            # One process per stage: building every config leaves global CUDA/spconv state behind that shifts
+            # PT-v3m1 forwards by ~1e-3 relative when the forward stage runs in the same process.
+            for stage in ("build", "forward", "train"):
+                cmd = [sys.executable, os.path.abspath(__file__), "capture", "--stage", stage, "--out", args.out]
+                subprocess.run(cmd + (["--only", args.only] if args.only else []), check=True)
+        else:
+            dict(build=capture_build, forward=capture_forward, train=capture_train)[args.stage](args.out, args.only)
+    elif args.cmd == "accept":
+        accept(args.ref, args.new, args.keys)
     else:
         mapping = json.load(open(args.map)) if args.map else {}
         sys.exit(compare(args.ref, args.new, mapping, args.rtol, args.atol))

@@ -63,12 +63,11 @@ mask_jitter = 0.01 * grid_size_factor
 total_iters = 150_000
 iter_per_epoch = 1000
 
-# Regular evaluation is replaced by linear-probe jobs
+# No online evaluation: representations are evaluated afterwards with linear probes.
 evaluate = False
 eval_every = 1
-# Checkpoints every trainer epoch (1000 iters); probes every 10 epochs → 15 jobs.
+# Checkpoints every trainer epoch (1000 iters).
 ckpt_save_freq = 1
-lin_probe_save_freq = 10
 
 wandb_project = "eclair_sonata"
 wandb_run_name = (
@@ -297,12 +296,4 @@ hooks = [
     dict(type="IterationTimer", warmup_iter=2),
     dict(type="InformationWriter", log_interval=1),
     dict(type="CheckpointSaver", save_freq=ckpt_save_freq),
-    # After CheckpointSaver so epoch_N.pth exists; submits non-blocking sbatch probes.
-    dict(
-        type="LinProbeSbatchHook",
-        enable=True,
-        save_freq=lin_probe_save_freq,
-        sbatch_script="scripts/sonata/sbatch_lin_probe_eclair_a100.sh",
-        iter_per_epoch=iter_per_epoch,
-    ),
 ]

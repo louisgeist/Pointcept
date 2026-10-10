@@ -72,15 +72,17 @@ Constats en cours de route :
 - [x] Supprimer `configs/experiment/` (+ `tools/gen_grid_seed_configs.py`, + `tests/test_resolve_config_file.py`, déjà cassé au tag)
 - [x] Supprimer les configs amont (scannet, s3dis, concerto, utonia, sonata indoor, nuscenes, waymo, forinstancev2, `_base_/dataset`), `configs/flair3d/` (ancien dev) et les configs debug/toy/LitePT-S de `flair3d_default`, `dales`, `h3d`, `pureforest`
 - [x] Supprimer les modèles, datasets, preprocessing, `libs/` et tests inutilisés (`PDNorm` déplacé dans `point_transformer_v3/` ; `Flair3DClimaticDomainDataset` supprimé, plus utilisé ; `environment.yml` installe maintenant `libs/pointrope`, qui manquait)
-- [ ] Supprimer les scripts racine (`sbatch_*`, `test_*.sh`, `submit_*`), les `README_*_geist.md`, `stats/`, `docs/bug_review`, `docs/superpowers`, les CSV temporaires
-- [ ] Trier `scripts/` : garder l'outillage utilisateur, supprimer les analyses ponctuelles
-- [ ] Harnais + commit
+- [x] Supprimer les scripts racine (`sbatch_*`, `test_*.sh`, `submit_*`), `stats/`, `docs/superpowers`, `docs/opengf_*`, les CSV temporaires. Reportés : les `README_*_geist.md` et `README_flair3dplus.md` (Phase 7, après migration de leur contenu utile) et `docs/bug_review` (Phase 5)
+- [x] Trier `scripts/` : garder l'outillage utilisateur (unzip, sous-ensemble de val, comptage des voxels, bench d'inférence, probe PureForest sklearn, exemple de forward HF), supprimer le reste (D4). `LinProbeSbatchHook` retiré des configs de pré-entraînement Sonata (D6)
+- [x] Harnais complet + pytest : 0 échec après acceptation des 3 changements voulus (hooks Sonata, `mix_prob=0` OpenGF vérifié en relançant avec `mix_prob=0.8`). Corrigé au passage dans le harnais : en mode `all`, chaque étage tourne dans son propre processus (sinon l'étage build décalait les forwards PT-v3m1 de ~1e-3)
 
 ## Phase 3 — Réorganisation
 
 - [ ] Ranger les configs en `configs/malibu3d/{segment,forest,natural_habitat,network,elevation,multitask,probe,pretrain}` et `configs/{dales,h3d,eclair,opengf,pureforest}`
-- [ ] Remplacer les chemins `weight=` (`/lustre/...`, numéros de job) par les checkpoints HF
-- [ ] Rendre les lanceurs Slurm génériques (`scripts/slurm/`) : plus de compte JZ, plus de chemins en dur
+- [ ] Remplacer les chemins `weight=` (`/lustre/...`, numéros de job, `ckpt/malibu3d/*`) par la convention de `README_checkpoints.md` : `ckpt/<nom>/model.pth` (873542 → `litept-b`, 1095469 → `ptv3`, 1052217 → `spunet`, 1159986 → `kpconvx`, 862680 → `sonata-pretrained`). Backbones d'ablation non publiés (noGNL 1288597, monoLC 1293025, realGN 1468317, preECLAIR) : `weight` vide + renvoi vers la config d'ablation
+- [ ] `network_graphs_root` (APLS) pointe vers `/lustre/...` : les graphes GT sont dans le dataset HF, à la racine de chaque zip de ROI (`data/{split}/{dept}_LIDARHD/{roi}/*_ROADS_graph.gpkg`), alors que `network_label_utils.py` attend un dossier plat `{root}/{dept}_{zone}_{NETWORK}_graph.gpkg` → résolution à adapter au layout HF
+- [ ] Retirer les chemins `/lustre` et `/data/geist` des docstrings/defaults (`preprocess_flair3d_v2.py`, `rasterize_forest.py`, `rasterize_network.py`, `unzip_malibu3d.py`), le lien wandb de `multi-litept-b-v1m0-flair3d.py`
+- [x] Lanceurs Slurm : tous supprimés en Phase 2 (spécifiques à Jean Zay) ; le README expliquera l'usage générique
 - [ ] Harnais (avec une table de correspondance des chemins) + commit
 
 ## Phase 4 — Renommage Flair3D → MALiBU3D
