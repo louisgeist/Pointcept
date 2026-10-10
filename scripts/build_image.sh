@@ -76,9 +76,6 @@ RUN TORCH_CUDA_ARCH_LIST="8.0 8.6 8.9 9.0" pip install git+https://github.com/Da
 RUN git clone https://github.com/Pointcept/Pointcept.git
 RUN TORCH_CUDA_ARCH_LIST="8.0 8.6 8.9 9.0" pip install Pointcept/libs/pointops -v --no-build-isolation
 
-# Build pointgroup_ops
-RUN TORCH_CUDA_ARCH_LIST="8.0 8.6 8.9 9.0" pip install Pointcept/libs/pointgroup_ops -v --no-build-isolation
-
 EOM
 
 docker build . -f ./Dockerfile -t $IMG_TAG

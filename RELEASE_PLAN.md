@@ -71,7 +71,7 @@ Constats en cours de route :
   - pas de configs de seeds à lr fixé (D1) ; les probes des backbones d'ablation et le PTv3 aléatoire = grilles canoniques avec `weight=` surchargé (à documenter)
 - [x] Supprimer `configs/experiment/` (+ `tools/gen_grid_seed_configs.py`, + `tests/test_resolve_config_file.py`, déjà cassé au tag)
 - [x] Supprimer les configs amont (scannet, s3dis, concerto, utonia, sonata indoor, nuscenes, waymo, forinstancev2, `_base_/dataset`), `configs/flair3d/` (ancien dev) et les configs debug/toy/LitePT-S de `flair3d_default`, `dales`, `h3d`, `pureforest`
-- [ ] Supprimer les modèles, datasets, preprocessing, `libs/` et tests inutilisés
+- [x] Supprimer les modèles, datasets, preprocessing, `libs/` et tests inutilisés (`PDNorm` déplacé dans `point_transformer_v3/` ; `Flair3DClimaticDomainDataset` supprimé, plus utilisé ; `environment.yml` installe maintenant `libs/pointrope`, qui manquait)
 - [ ] Supprimer les scripts racine (`sbatch_*`, `test_*.sh`, `submit_*`), les `README_*_geist.md`, `stats/`, `docs/bug_review`, `docs/superpowers`, les CSV temporaires
 - [ ] Trier `scripts/` : garder l'outillage utilisateur, supprimer les analyses ponctuelles
 - [ ] Harnais + commit
