@@ -1,0 +1,103 @@
+# Plan de release MALiBU3D
+
+Suivi du nettoyage de la branche `malibu3d` avant la création du repo public.
+**Fichier de travail : à supprimer avant le squash vers le repo public.**
+
+- Snapshot de la soumission : tag `malibu3d-submission` (commit 430f1da, = `flair3d` au 2026-10-10).
+- Release publique : nouveau repo propre (un seul commit), créé à la fin à partir de `malibu3d`.
+- Après chaque phase : relancer le harnais et le comparer à la référence (voir Phase 0), puis faire un commit.
+
+## Décisions
+
+| Sujet | Décision |
+|---|---|
+| Nom | Flair3D / Flair3D+ → MALiBU3D. Classes `MALiBU3D*` (`MALiBU3DDataset`), fichiers et chemins `malibu3d`. Ne **jamais** toucher à « FLAIR-HUB » (le dataset d'imagerie IGN). |
+| Datasets gardés | MALiBU3D, DALES, H3D, ECLAIR, OpenGF, PureForest |
+| Datasets supprimés | indoor (ScanNet, S3DIS, Structured3D, …), SensatUrban, FOR-instanceV2, SemanticKITTI, nuScenes, Waymo |
+| Modèles gardés | LitePT, PTv3 (m1/m2/malibu), SpUNet, KPConvX, Sonata ; `default.py` et `grid_probe.py` |
+| Modèles supprimés | Concerto, Utonia, OctFormer, Swin3D, PTv1/v2, Stratified Transformer, SPVCNN, OA-CNNs, PointGroup, PPT, MSC, SGIFormer, context-aware classifier, `kpnext/` (doublon de `kpconvx/utils`) |
+| RandLA-Net | Jamais présent sur cette branche ; rien à faire |
+| KPConvX | Source : https://github.com/apple-aiml-research/ml-kpconvx/tree/main/Pointcept-wrapper. Copier leur LICENSE dans `pointcept/models/kpconvx/` et les citer |
+| Pointcept | Licence MIT : garder `LICENSE` + le copyright amont, ajouter « Built on Pointcept » (commit amont) dans le README |
+
+## Phase 0 — Snapshot et harnais de non-régression
+
+- [x] Commiter les fichiers restants sur `flair3d`, poser le tag `malibu3d-submission`, créer la branche `malibu3d`
+- [x] Écrire le harnais `tests/regression/` (`harness.py`, `cases.py`)
+- [x] Capturer la référence dans `local/regression/ref` (build : 1 084 configs ; forward : 49 cas ; train : 15 cas)
+- [x] Mesurer le bruit avec deux captures `train` de référence (`ref`, `ref_noise`) et régler les tolérances : loss totale à 2e-3 près à l'itération 1, à 5 % près aux itérations 2 à 10
+- [ ] Optionnel : prétraiter DALES et ECLAIR en local (seules les données brutes sont présentes), pour que leurs probes soient aussi couvertes
+
+Durée : build ~15 min (~3 min une fois `configs/experiment` supprimé), forward ~4 min, train ~15 min.
+Usage : build + forward après chaque commit de nettoyage, `all` à la fin de chaque phase.
+
+Commande :
+```
+PY=~/.local/share/mamba/envs/pointcept/bin/python
+CUDA_VISIBLE_DEVICES=0 PYTHONPATH=. $PY tests/regression/harness.py capture --stage all --out local/regression/new
+$PY tests/regression/harness.py compare local/regression/ref local/regression/new [--map map.json]
+```
+
+## Phase 1 — Inventaire « à garder » (validé par Louis avant toute suppression)
+
+- [ ] Associer chaque tableau du papier → run wandb → config (point de départ : release HF, commit c064cc7). Ne **pas** utiliser la branche `suppmat` (ancien nettoyage rapide, non fiable)
+- [ ] Lister les configs de `configs/experiment/w*` qui sont derrière des résultats du papier
+- [ ] Calculer la liste des types de registry et des modules réellement utilisés par ces configs
+- [ ] Faire relire et valider l'inventaire par Louis
+
+Constats en cours de route :
+- `configs/flair3d_default/natural_habitat/litept-v1m0-flair3d.py` (mono-tâche `natural_habitat` par point) plante déjà au tag : assertion `nll_loss`, labels hors bornes avec les données D067. Le papier utilise les tâches `nathab_*` → candidate à la suppression.
+- Les anciennes configs `configs/experiment/w109`–`w110` qui utilisent `bn_eval_mode` ne se construisent plus depuis f869214 (attendu) : 184 configs d'expérience sur 972 au total.
+- `configs/pureforest/{kpconvx,spunet}-toy.py` héritent de `cls-{kpconvx,spunet}-v1m0-pureforest.py`, qui n'existent plus → à supprimer.
+- `/data` est plein (16 Go libres) : impossible de prétraiter DALES et ECLAIR en local pour l'instant, donc leurs probes ne sont pas couvertes par l'étage forward. Les checkpoints d'ablation OpenGF (monoLC, noGNL, realGN) ne sont que sur Jean Zay.
+
+## Phase 2 — Suppressions en masse
+
+- [ ] Promouvoir les configs du papier vers leur emplacement canonique, puis supprimer `configs/experiment/`
+- [ ] Supprimer les configs amont (scannet, s3dis, concerto, utonia, sonata indoor, nuscenes, waymo, …)
+- [ ] Supprimer les modèles, datasets, preprocessing, `libs/` et tests inutilisés
+- [ ] Supprimer les scripts racine (`sbatch_*`, `test_*.sh`, `submit_*`), les `README_*_geist.md`, `stats/`, `docs/bug_review`, `docs/superpowers`, les CSV temporaires
+- [ ] Trier `scripts/` : garder l'outillage utilisateur, supprimer les analyses ponctuelles
+- [ ] Harnais + commit
+
+## Phase 3 — Réorganisation
+
+- [ ] Ranger les configs en `configs/malibu3d/{segment,forest,natural_habitat,network,elevation,multitask,probe,pretrain}` et `configs/{dales,h3d,eclair,opengf,pureforest}`
+- [ ] Remplacer les chemins `weight=` (`/lustre/...`, numéros de job) par les checkpoints HF
+- [ ] Rendre les lanceurs Slurm génériques (`scripts/slurm/`) : plus de compte JZ, plus de chemins en dur
+- [ ] Harnais (avec une table de correspondance des chemins) + commit
+
+## Phase 4 — Renommage Flair3D → MALiBU3D
+
+- [ ] Générer la liste exhaustive des identifiants, chemins et chaînes qui contiennent `flair3d` → table de correspondance relue par Louis
+- [ ] Appliquer la table par script et faire les `git mv` (un seul commit dédié)
+- [ ] Régénérer les configs livrées avec les checkpoints HF
+- [ ] Vérifier les clés de `meta.json` lues par le dataset ; symlink `data/malibu3d → flair3d_plus` pour les données existantes
+- [ ] Vérifier que `grep -ri flair3d` ne renvoie plus rien et que FLAIR-HUB est intact
+- [ ] Harnais (table `strings`) + commit
+
+## Phase 5 — Code obsolète dans les fichiers conservés
+
+- [ ] Définitions de labels legacy (v18/v19), compatibilité `scene_split_manifest.csv`, options et branches mortes, trainers inutilisés
+- [ ] Repérer le code mort avec la couverture du harnais (`coverage`) et `vulture`
+- [ ] Décider quels correctifs de `docs/bug_review` (01 à 08) entrent dans la release
+- [ ] Harnais + commit (une suppression logique par commit si c'est risqué)
+
+## Phase 6 — Commentaires et docstrings
+
+- [ ] Passe module par module : anglais, docstrings courtes, plus de références internes (semaines, jobs, dates)
+- [ ] Vérifier que l'AST est inchangé (seuls les commentaires et docstrings ont bougé) ; formatter avec `black`
+- [ ] Harnais + commit
+
+## Phase 7 — Documentation de release
+
+- [ ] Réécrire le README : installation, téléchargement depuis HF, preprocessing, entraînement, évaluation du benchmark, checkpoints, résultats, citation
+- [ ] Ajouter `CITATION.cff`, mettre à jour `LICENSE` (Pointcept + MALiBU3D), les crédits (Pointcept, PTv3, Sonata, LitePT, KPConvX)
+- [ ] Nettoyer `environment.yml`
+
+## Phase 8 — Hygiène et validation finale
+
+- [ ] Rechercher les chemins en dur, `usi32yh`, les comptes JZ, les emails, les tokens wandb/HF, les gros fichiers
+- [ ] Installation propre dans un env neuf, puis lancer le harnais
+- [ ] Reproduire un ou deux chiffres du papier sur Jean Zay à partir des checkpoints HF
+- [ ] Créer le repo public (squash), supprimer ce fichier
