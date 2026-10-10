@@ -34,6 +34,9 @@ Suivi du nettoyage de la branche `malibu3d` avant la création du repo public.
 - [x] Écrire le harnais `tests/regression/` (`harness.py`, `cases.py`)
 - [x] Capturer la référence dans `local/regression/ref` (build : 1 084 configs ; forward : 49 cas ; train : 15 cas)
 - [x] Mesurer le bruit avec deux captures `train` de référence (`ref`, `ref_noise`) et régler les tolérances : loss totale à 2e-3 près à l'itération 1, à 5 % près aux itérations 2 à 10
+- [x] Mesurer le bruit de l'étage forward : spconv forcé en `ConvAlgo.Native` (le choix d'algorithme variait d'un processus à l'autre) → ~1e-6 sauf LitePT (bruit diffus GPU : écart moyen relatif ≤ 2e-4, argmax identique ≥ 99,98 %). Critère : tolérance stricte, ou écart moyen relatif ≤ 1e-3 et accord des logits ≥ 99,9 %
+
+Références : `local/regression/ref_tag` = capture du tag, jamais modifiée ; `local/regression/ref` = référence courante, mise à jour seulement pour les changements voulus et vérifiés (configs promues ou corrigées), cas par cas.
 
 Durée : build ~15 min (~3 min une fois `configs/experiment` supprimé), forward ~4 min, train ~15 min.
 Usage : build + forward après chaque commit de nettoyage, `all` à la fin de chaque phase.
@@ -60,7 +63,13 @@ Constats en cours de route :
 
 ## Phase 2 — Suppressions en masse
 
-- [ ] Promouvoir les configs du papier vers leur emplacement canonique, puis supprimer `configs/experiment/`
+- [x] Promouvoir les configs du papier (vérifiées par comparaison sémantique avec la config qui a produit chaque run) :
+  - ablations MALiBU3D, dérivées de la config canonique (format de données actuel) : `configs/flair3d_default/ablations/` (noGNL, GradNorm, natural habitat par point, land cover seul, test sans RGB)
+  - probes sans RGB : `configs/{h3d,eclair}/litept-b-v1m0-*-lin_enc-norgb.py`
+  - LitePT depuis zéro : `configs/eclair/semseg-litept-b-v1m0-eclair.py` (nouveau) ; `configs/h3d/semseg-litept-b-v1m0-h3d.py` corrigé (4000 époques, lr 5e-4)
+  - OpenGF : `mix_prob = 0` partout (comme dans le papier) ; probe KPConvX avec `point_max = 60000` (comme le run du papier)
+  - pas de configs de seeds à lr fixé (D1) ; les probes des backbones d'ablation et le PTv3 aléatoire = grilles canoniques avec `weight=` surchargé (à documenter)
+- [ ] Supprimer `configs/experiment/`
 - [ ] Supprimer les configs amont (scannet, s3dis, concerto, utonia, sonata indoor, nuscenes, waymo, …)
 - [ ] Supprimer les modèles, datasets, preprocessing, `libs/` et tests inutilisés
 - [ ] Supprimer les scripts racine (`sbatch_*`, `test_*.sh`, `submit_*`), les `README_*_geist.md`, `stats/`, `docs/bug_review`, `docs/superpowers`, les CSV temporaires

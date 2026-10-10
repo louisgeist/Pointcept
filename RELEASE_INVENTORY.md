@@ -5,7 +5,9 @@ Synthèse des trois inventaires détaillés, rangés dans `local/release_invento
 - `code_inventory.md` : code de `pointcept/` et `libs/` utilisé ou non ;
 - `files_inventory.md` : scripts, outils, tests, docs et fichiers racine.
 
-**Fichier de travail, à supprimer avant le squash.** Pour chaque décision, ma recommandation est en gras. Réponds seulement là où tu n'es pas d'accord.
+**Fichier de travail, à supprimer avant le squash.**
+
+**Validé par Louis (2026-10-10)** : D1 modifiée (grilles canoniques seulement : pas de configs de seeds à lr fixé, et on n'en parle pas dans la doc) ; D2 à D6 telles que recommandées.
 
 ---
 

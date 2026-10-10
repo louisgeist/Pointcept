@@ -1,4 +1,10 @@
 """
+no-Mix3D re-run (w116/1): verbatim copy of `configs/experiment/w114/2/opengf_lin2/kpconvx-v1m0-opengf-lin-grid-enc_1.py` (Mix3D run: Jean Zay job 55784+102516)
+with only `mix_prob` 0.8 -> 0 (plus `grp_exp`/`num_exp`, `_base_` path, A100 `num_worker`, wandb name).
+Motivation: on OpenGF from-scratch LitePT-B, turning Mix3D off took test T2 mIoU 60.5 -> 87.1
+(w115/5 run 4.7); checking whether the frozen-backbone probes are hurt the same way.
+Same 12-LR grid, re-searched rather than reusing the Mix3D winner.
+
 KPConvX grid-search linear probing on OpenGF — encoder multiscale variant
 (Flair3D+ multitask supervised pretrain, configs/flair3d_default/multi-kpconvx-v1m0-flair3d.py
 recipe: input_channels=7, kp_radius=3.2, radius_scaling=3.0,
@@ -22,20 +28,23 @@ manual replay (max abs diff 0.0 against both a 0-hop and 1-hop manual
 gather) — see plan file / scratchpad/check_kpconvx_enc_mode.py.
 backbone_out_channels = 96+128+192+256+256 = 928.
 
-`drop_path_rate=0` on the backbone: KPConvX's stochastic depth uses its own
-`DropPathPack` class (pointcept/models/kpconvx/utils/generic_blocks.py), not
-`timm.layers.DropPath`. `GridProbeSegmentorV2` eval()s the whole frozen backbone, so
-DropPathPack is inactive regardless; drop_path_rate=0 additionally makes every
-block use `nn.Identity()` (no learnable params either way, so this is
-checkpoint-compatible with the drop_path_rate=0.3 pretrain).
+`drop_path_rate=0` on the backbone here is required, not optional: KPConvX's
+stochastic depth uses its own `DropPathPack` class
+(pointcept/models/kpconvx/utils/generic_blocks.py), not `timm.layers.DropPath`
+— so `GridProbeSegmentorV2`'s `drop_path_eval_mode` (which only checks
+`isinstance(m, timm.layers.DropPath)`) does NOT pin it to eval. Building with
+drop_path_rate=0 makes every block use `nn.Identity()` instead (no
+learnable params either way, so this is checkpoint-compatible with the
+drop_path_rate=0.3 pretrain).
 
-point_max=100_000 — deliberately larger than the KPConvX pretrain's own
-SphereCrop budget (40000); roughly matches the ~102400 convention used by
-the other backbones' GridProbe configs (LitePT/PT-v3/SpUNet/Sonata). Set by
-user instruction. SphereCrop point_max is a data-pipeline parameter, not
-part of the backbone architecture/checkpoint, so this doesn't break
-checkpoint loading — but the frozen backbone was never trained on scenes
-this large, so its features at this crop scale are unverified.
+point_max=60000 — below the ~102400 convention used by the other
+backbones' GridProbe configs, and still above the KPConvX pretrain's own
+SphereCrop budget (40000). OpenGF stays much sparser than DALES after a
+0.1 m grid, so a 100000 SphereCrop leaves ~1.5x more points than DALES at
+the first pool (0.3 m) and ~2x at the second (0.9 m). 60000 brings those
+two levels within about ±15% of a DALES 102400 crop. SphereCrop point_max
+is a data-pipeline parameter, not part of the backbone architecture, so
+this does not break checkpoint loading.
 
 weight = Jean Zay job 1159986 (KPConvX multitask Flair3D+, same recipe as
 configs/flair3d_default/multi-kpconvx-v1m0-flair3d.py) — not reachable from
@@ -56,12 +65,12 @@ epoch=50 / eval_epoch=10.
 _base_ = ["../_base_/default_runtime.py"]
 
 grp_exp = 1
-num_exp = 1
+num_exp = 5
 
 num_classes = 2
 ignore_index = 2  # unreachable after RemapSegment merges raw label 2 into 1
 grid_size = 0.1
-point_max = 100_000  # deliberately > pretrain's 40000 SphereCrop budget — see docstring
+point_max = 60000  # OpenGF pool-count match to a DALES 102400 crop — see docstring
 coord_feat_scale = 0.01  # must match Flair3D multitask pretrain
 strength_feat_scale = 1 / 60000  # OpenGF raw intensity → Flair3D [0,1] convention (DALES-like range)
 kp_radius = 3.2
@@ -80,9 +89,9 @@ batch_size_per_gpu = 24
 batch_size = batch_size_per_gpu * num_gpu
 batch_size_val = 1
 batch_size_test = 1
-num_worker = 24 * num_gpu
+num_worker = 8 * num_gpu  # A100 Jean-Zay (8 CPU/task)
 num_worker_test = 2
-mix_prob = 0.8
+mix_prob = 0  # Mix3D off (was 0.8) -- see docstring
 empty_cache = False
 enable_amp = True
 
@@ -166,8 +175,8 @@ probes = {
 del _criteria, _lrs
 
 wandb_run_name = (
-    f"KPConvX GridProbe OpenGF {grp_exp}.{num_exp}) encoder multiscale {backbone_out_channels}ch, "
-    f"{len(probes)} probes, epoch={epoch}"
+    f"KPConvX GridProbe OpenGF {grp_exp}.{num_exp}) A100 noMix3D, encoder multiscale "
+    f"{backbone_out_channels}ch, {len(probes)} probes, epoch={epoch}, point_max={point_max}"
 )
 
 # model settings

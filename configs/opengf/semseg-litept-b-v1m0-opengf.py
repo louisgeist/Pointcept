@@ -54,7 +54,7 @@ batch_size_test = 1
 
 grid_size = 0.1
 point_max = 102400
-mix_prob = 0.8
+mix_prob = 0
 
 patch_size = 1024
 

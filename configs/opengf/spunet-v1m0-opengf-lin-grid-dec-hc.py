@@ -48,7 +48,7 @@ batch_size_val = 1
 batch_size_test = 1
 num_worker = 24 * num_gpu  # H100 Jean-Zay
 num_worker_test = 2
-mix_prob = 0.8
+mix_prob = 0
 empty_cache = False
 enable_amp = True
 

@@ -71,6 +71,8 @@ FLAIR3D_TILES = [
 
 # Supervised multitask models: full forward, every output head dumped.
 MULTITASK = {
+    "multi-litept-b-test-norgb": ("configs/flair3d_default/ablations/multi-litept-b-v1m0-flair3d-test-norgb.py",
+                                  "litept-b"),
     "multi-litept-b": ("configs/flair3d_default/multi-litept-b-v1m0-flair3d.py", "litept-b"),
     "multi-ptv3": ("configs/flair3d_default/multi-ptv3-v1m0-flair3d.py", "ptv3"),
     "multi-spunet": ("configs/flair3d_default/multi-spunet-v1m0-flair3d.py", "spunet"),
@@ -132,6 +134,13 @@ TRAIN = {
                                   _PROBE_SMALL + [f"weight={CKPT['spunet']}"]),
     "train-probe-pureforest-litept-b": ("configs/pureforest/cls-litept-b-v1m0-pureforest-lin-grid-enc.py",
                                         _PUREFOREST_SMALL + [f"weight={CKPT['litept-b']}"]),
+    "train-ablation-nognl": ("configs/flair3d_default/ablations/multi-litept-b-v1m0-flair3d-nognl.py", _FLAIR_SMALL),
+    "train-ablation-gradnorm": ("configs/flair3d_default/ablations/multi-litept-b-v1m0-flair3d-gradnorm.py",
+                                _FLAIR_SMALL),
+    "train-ablation-nathab-pointwise": (
+        "configs/flair3d_default/ablations/multi-litept-b-v1m0-flair3d-nathab-pointwise.py", _FLAIR_SMALL),
+    "train-ablation-segment-only": ("configs/flair3d_default/ablations/litept-b-v1m0-flair3d-segment-only.py",
+                                    _FLAIR_SMALL),
     "train-probe-flair3d-sonata": ("configs/flair3d_default/probe/sonata-v1m2-flair3d-lin-grid.py",
                                    _FLAIR_SMALL + [f"weight={CKPT['sonata-pretrained']}"]),
 }

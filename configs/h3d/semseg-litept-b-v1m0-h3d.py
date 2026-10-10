@@ -47,9 +47,9 @@ mix_prob = 0.8
 patch_size = 1024
 
 # Optimization parameters
-lr = 1e-3
-epoch = 200
-eval_epoch = epoch // 10
+lr = 5e-4
+epoch = 4000
+eval_epoch = 100
 
 # Dataset / task
 num_classes = 11
