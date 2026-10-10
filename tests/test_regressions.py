@@ -1,5 +1,5 @@
 """
-Regression tests for the fixes from docs/bug_review/ (2026-09-27 review):
+Regression tests for past bugs:
 
 - CrossEntropyLoss on an all-ignore batch must return an in-graph zero
   (backward() must not raise, head gets zero grads).
@@ -8,9 +8,9 @@ Regression tests for the fixes from docs/bug_review/ (2026-09-27 review):
 - OpenGF / ECLAIR preprocessing must recenter absolute projected coordinates
   in float64 before the float32 cast (no 0.125 m / 0.5 m XY lattice).
 - GridProbe AMP: one GradScaler per probe so a diverged head cannot collapse
-  the healthy probes' scale / schedulers (docs/bug_review/03_*.md).
+  the healthy probes' scale / schedulers.
 
-Run with: PYTHONPATH=./ python -m unittest tests/test_bug_review_2026_09_27.py
+Run with: PYTHONPATH=./ python -m unittest tests/test_regressions.py
 """
 
 import importlib.util

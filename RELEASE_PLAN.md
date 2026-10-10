@@ -99,8 +99,9 @@ Constats en cours de route :
 ## Phase 5 — Code obsolète dans les fichiers conservés
 
 - [ ] Définitions de labels legacy (v18/v19), compatibilité `scene_split_manifest.csv`, options et branches mortes, trainers inutilisés
-- [ ] Repérer le code mort avec la couverture du harnais (`coverage`) et `vulture`
-- [ ] Décider quels correctifs de `docs/bug_review` (01 à 08) entrent dans la release
+- [x] Classes enregistrées jamais utilisées supprimées (20 transforms, 2 datasets image, `ConcatDataset`, 2 trainers, 5 testers, 3 évaluateurs, 4 hooks, segmentors LoRA/DINO, 3 losses, 3 schedulers, `SpUNetNoSkipBase`) + imports devenus inutiles (dont `peft`)
+- [ ] Repérer le code mort restant avec la couverture du harnais (`coverage`) et `vulture` : cibles MALiBU3D inutilisées (classification par tuile, multilabel, `natural_habitat` par point), définitions de labels v1–v19, compatibilité `scene_split_manifest.csv`
+- [x] Revue de bugs : les correctifs 02 à 07 sont déjà dans le code ; `docs/bug_review/` supprimé, test renommé `tests/test_regressions.py`. **Reste ouvert (décision Louis, hors code)** : 01, coordonnées MALiBU3D quantifiées à 0,5 m en Y dans les PLY sources et la release HF
 - [ ] Harnais + commit (une suppression logique par commit si c'est risqué)
 
 ## Phase 6 — Commentaires et docstrings
