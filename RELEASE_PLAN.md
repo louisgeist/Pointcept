@@ -18,6 +18,9 @@ Suivi du nettoyage de la branche `malibu3d` avant la création du repo public.
 | Modèles supprimés | Concerto, Utonia, OctFormer, Swin3D, PTv1/v2, Stratified Transformer, SPVCNN, OA-CNNs, PointGroup, PPT, MSC, SGIFormer, context-aware classifier, `kpnext/` (doublon de `kpconvx/utils`) |
 | RandLA-Net | Jamais présent sur cette branche ; rien à faire |
 | KPConvX | Source : https://github.com/apple-aiml-research/ml-kpconvx/tree/main/Pointcept-wrapper. Copier leur LICENSE dans `pointcept/models/kpconvx/` et les citer |
+| `natural_habitat` mono-tâche par point | Config `configs/flair3d_default/natural_habitat/litept-v1m0-flair3d.py` obsolète → supprimer. Garder le code de la cible `natural_habitat` par point seulement si l'ablation A.3 du papier en dépend (à vérifier en Phase 1) |
+| Configs cassées par `bn_eval_mode` | Ignorées ; elles partent avec `configs/experiment/` |
+| DALES / ECLAIR | Pas de prétraitement local. Couverts en local par l'étage build seulement ; étage forward lancé une fois sur Jean Zay (tag vs version finale) en Phase 8 |
 | Pointcept | Licence MIT : garder `LICENSE` + le copyright amont, ajouter « Built on Pointcept » (commit amont) dans le README |
 
 ## À livrer sur Hugging Face avec le dataset
@@ -31,7 +34,6 @@ Suivi du nettoyage de la branche `malibu3d` avant la création du repo public.
 - [x] Écrire le harnais `tests/regression/` (`harness.py`, `cases.py`)
 - [x] Capturer la référence dans `local/regression/ref` (build : 1 084 configs ; forward : 49 cas ; train : 15 cas)
 - [x] Mesurer le bruit avec deux captures `train` de référence (`ref`, `ref_noise`) et régler les tolérances : loss totale à 2e-3 près à l'itération 1, à 5 % près aux itérations 2 à 10
-- [ ] Optionnel : prétraiter DALES et ECLAIR en local (seules les données brutes sont présentes), pour que leurs probes soient aussi couvertes
 
 Durée : build ~15 min (~3 min une fois `configs/experiment` supprimé), forward ~4 min, train ~15 min.
 Usage : build + forward après chaque commit de nettoyage, `all` à la fin de chaque phase.
@@ -105,4 +107,5 @@ Constats en cours de route :
 - [ ] Rechercher les chemins en dur, `usi32yh`, les comptes JZ, les emails, les tokens wandb/HF, les gros fichiers
 - [ ] Installation propre dans un env neuf, puis lancer le harnais
 - [ ] Reproduire un ou deux chiffres du papier sur Jean Zay à partir des checkpoints HF
+- [ ] Sur Jean Zay, lancer l'étage forward du harnais sur les probes DALES et ECLAIR, au tag puis sur la version finale, et comparer
 - [ ] Créer le repo public (squash), supprimer ce fichier
