@@ -43,7 +43,7 @@ mix_prob = 0.8
 
 patch_size = 1024
 
-weight = "/lustre/fswork/projects/rech/unv/usi32yh/Pointcept/logs/slurm/873542/model/model_best.pth"
+weight = "ckpt/litept-b/model.pth"
 
 # Optimization parameters
 lr = 1e-3

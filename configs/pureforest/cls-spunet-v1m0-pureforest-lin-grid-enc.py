@@ -33,7 +33,7 @@ enable_amp = False
 dataset_type = "PureForestDataset"
 data_root = "data/pureforest"
 
-weight = "ckpt/malibu3d/spunet_multitask/model_best.pth"
+weight = "ckpt/spunet/model.pth"
 
 wandb_project = "pointcept_pureforest"
 

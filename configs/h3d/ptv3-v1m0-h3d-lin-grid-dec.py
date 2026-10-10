@@ -50,7 +50,7 @@ enable_amp = True
 dataset_type = "H3DDataset"
 data_root = "data/h3d"
 
-weight = "/lustre/fswork/projects/rech/unv/usi32yh/Pointcept/logs/slurm/1095469/model/model_best.pth"
+weight = "ckpt/ptv3/model.pth"
 
 wandb_project = f"pointcept_{dataset_type[:-7].lower()}"
 

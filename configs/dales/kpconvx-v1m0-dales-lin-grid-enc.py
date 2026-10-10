@@ -90,7 +90,7 @@ enable_amp = True
 dataset_type = "DALESDataset"
 data_root = "data/dales"
 
-weight = "/lustre/fswork/projects/rech/unv/usi32yh/Pointcept/logs/slurm/1159986/model/model_best.pth"
+weight = "ckpt/kpconvx/model.pth"
 
 wandb_project = f"pointcept_{dataset_type[:-7].lower()}"
 

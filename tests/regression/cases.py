@@ -48,6 +48,12 @@ JOB_TO_CKPT = {
     "spunet_multitask": "spunet",
     "kpconvx_multitask": "kpconvx",
     "sonata_outdoor": "sonata-pretrained",
+    # release convention: ckpt/<name>/model.pth (README_checkpoints.md)
+    "litept-b": "litept-b",
+    "ptv3": "ptv3",
+    "spunet": "spunet",
+    "kpconvx": "kpconvx",
+    "sonata-pretrained": "sonata-pretrained",
 }
 # Probe configs whose `weight` is unset (filled in at launch time).
 PROBE_CKPT_OVERRIDE = {

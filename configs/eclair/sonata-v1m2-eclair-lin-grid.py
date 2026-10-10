@@ -45,7 +45,7 @@ enable_amp = True
 dataset_type = "ECLAIRDataset"
 data_root = "data/eclair"
 
-weight = "/lustre/fsn1/projects/rech/unv/usi32yh/logs/pointcept_logs/slurm/862680/model/epoch_120.pth"
+weight = "ckpt/sonata-pretrained/model.pth"
 
 wandb_project = f"pointcept_{dataset_type[:-7].lower()}"
 
