@@ -123,19 +123,6 @@ MALIBU3D_ELEVATION: Dict[str, Any] = {
 }
 
 
-def get_semantic_num_raw_classes(
-    target_key: str,
-    definition: Optional[str] = None,
-) -> int:
-    """Return the number of distinct label ids in source data (max raw id + 1).
-
-    Falls back to num_classes when num_raw_classes is not defined (no raster remap).
-    When ``definition`` is set, reads from ``malibu3d_label_remap`` for that task.
-    """
-    cfg = get_semantic_config(target_key, definition=definition)
-    return int(cfg.get("num_raw_classes", cfg["num_classes"]))
-
-
 def get_semantic_config(
     target_key: str,
     definition: Optional[str] = None,
@@ -163,18 +150,6 @@ def get_semantic_config(
     return deepcopy(definition_to_task_config(get_definition(target_key, defn_name)))
 
 
-def get_elevation_config() -> Dict[str, Any]:
-    return deepcopy(MALIBU3D_ELEVATION)
-
-
-def get_regression_target_scales(target_keys: Tuple[str, ...]) -> Dict[str, float]:
-    """Return per-target scale factors for regression keys in target_keys."""
-    scales: Dict[str, float] = {}
-    if "elevation" in target_keys:
-        scales["elevation"] = ELEVATION_TARGET_SCALE
-    return scales
-
-
 def get_multitask_regression_task_config_elevation() -> Dict[str, Any]:
     """Task config dict for point-wise elevation regression in MultiTaskSegmentorV2.
 
@@ -184,11 +159,6 @@ def get_multitask_regression_task_config_elevation() -> Dict[str, Any]:
     out = deepcopy(MALIBU3D_ELEVATION)
     out["task_type"] = "regression"
     return out
-
-def get_network_config() -> Dict[str, Any]:
-    """Task config for 1 m Lambert binary network pixel segmentation."""
-    return deepcopy(MALIBU3D_PIXEL_SEMANTIC_TASKS["network"])
-
 
 def get_pixel_semantic_config(target_key: str) -> Dict[str, Any]:
     if target_key not in MALIBU3D_PIXEL_SEMANTIC_TASKS:

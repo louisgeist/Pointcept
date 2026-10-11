@@ -590,13 +590,6 @@ def apls_pair_diagnostics(
     )
 
 
-def reconstruct_gt_shortest_path(
-    diagnostics: AplsDiagnostics, u: int, v: int
-) -> list[int] | None:
-    """GT node-index path for a scored pair, using diagnostics predecessors."""
-    return _reconstruct_path(diagnostics.gt_predecessors, int(u), int(v))
-
-
 def apls_symmetric_score(
     gt: AplsGraph,
     pred: AplsGraph,

@@ -164,50 +164,6 @@ def parse_bool_flag(value: object) -> bool:
     raise ValueError(f"Cannot parse boolean flag from {value!r}")
 
 
-def load_roi_network_flags_from_manifest(
-    split_manifest_csv: Path | str,
-    roi_dir: Path | str,
-    network_types: Sequence[str] = NETWORK_TYPES,
-) -> Dict[str, bool]:
-    """Read per-network availability flags for one ROI from the split manifest.
-
-    Raises if required columns are missing or no row matches the ROI.
-    """
-    import csv
-
-    csv_path = Path(split_manifest_csv)
-    if not csv_path.is_file():
-        raise FileNotFoundError(f"split_manifest_csv not found: {csv_path}")
-
-    roi_path = Path(roi_dir)
-    dept = dept_code_from_lidarhd_dirname(roi_path.parent.name)
-    zone = roi_path.name
-    if dept is None:
-        raise ValueError(f"Cannot derive department code from ROI: {roi_dir}")
-
-    types = tuple(network_types)
-    with csv_path.open("r", encoding="utf-8", newline="") as f:
-        reader = csv.DictReader(f)
-        if reader.fieldnames is None:
-            raise ValueError(f"CSV has no header: {csv_path}")
-        missing = [c for c in types if c not in reader.fieldnames]
-        if missing:
-            raise ValueError(
-                f"split_manifest_csv missing network columns {missing}. "
-                "Enrich it via Flair3D-build export_network_graphs.py "
-                "(split_manifest_csv=...)."
-            )
-        for row in reader:
-            row_dept = dept_code_from_dept_year(row.get("dept_year", ""))
-            row_roi = str(row.get("roi", "")).strip()
-            if row_dept == dept and row_roi == zone:
-                return {t: parse_bool_flag(row.get(t)) for t in types}
-
-    raise ValueError(
-        f"No manifest row for ROI dept={dept!r} zone={zone!r} in {csv_path}"
-    )
-
-
 @dataclass(frozen=True)
 class LoadedNetworkGraph:
     """True graph topology of an exported GPKG (not flattened to raw segments).

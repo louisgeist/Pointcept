@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import os
 import re
-from typing import Optional
 
 NUM_CLASSES = 13
 
@@ -56,20 +55,6 @@ def parse_class_id_from_patch_stem(patch_stem: str) -> int:
             f"Class id {class_id} out of range [0, {NUM_CLASSES - 1}] for {patch_stem!r}."
         )
     return class_id
-
-
-def class_name_for_id(class_id: int) -> str:
-    if class_id < 0 or class_id >= NUM_CLASSES:
-        raise ValueError(f"class_id must be in [0, {NUM_CLASSES - 1}], got {class_id}.")
-    return CLASS_NAMES[class_id]
-
-
-def parse_split_from_patch_stem(patch_stem: str) -> Optional[str]:
-    """Return train/val/test from prefix TRAIN/VAL/TEST if present."""
-    prefix = patch_stem.split("-", 1)[0].lower()
-    if prefix in SPLITS:
-        return prefix
-    return None
 
 
 def laz_prefix_for_split(split: str) -> str:

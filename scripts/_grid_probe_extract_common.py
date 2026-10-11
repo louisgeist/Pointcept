@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import copy
 from collections import OrderedDict
-from pathlib import Path
 
 import numpy as np
 import torch
@@ -218,100 +217,3 @@ class PerClassCollector:
         )
 
 
-def run_extraction(
-    *,
-    model,
-    dataset,
-    pre_transform,
-    post_transform,
-    num_classes,
-    target_key,
-    points_per_class,
-    max_draws,
-    seed,
-    device,
-):
-    """Shared (tile, random-crop) draw loop: voxelize each tile once (cached),
-    draw repeated SphereCrops from it, forward through the frozen backbone,
-    and feed a stratified PerClassCollector until every class is capped or
-    max_draws is exhausted. Returns (collector, tile_names, used_tiles).
-    """
-    from pointcept.datasets import collate_fn
-
-    n_tiles = len(dataset.data_list)
-    rng = np.random.default_rng(seed)
-    tile_names = [dataset.get_data_name(i) for i in range(n_tiles)]
-
-    collector = PerClassCollector(num_classes, points_per_class, rng)
-    voxelized_cache = {}
-    used_tiles = set()
-    tile_cycle = []
-
-    for draw in range(max_draws):
-        if all(collector.count(c) >= points_per_class for c in range(num_classes)):
-            print(f"[extract] all {num_classes} classes at cap -- stopping early "
-                  f"({draw} draws, {len(used_tiles)}/{n_tiles} tiles touched)")
-            break
-
-        if not tile_cycle:
-            tile_cycle = list(rng.permutation(n_tiles))
-        tile_index = int(tile_cycle.pop())
-
-        if tile_index not in voxelized_cache:
-            raw = dataset.get_data(tile_index)
-            voxelized_cache[tile_index] = pre_transform(raw)
-        voxelized = copy.deepcopy(voxelized_cache[tile_index])
-        cropped = post_transform(voxelized)
-
-        input_dict = collate_fn([cropped])
-        for key in input_dict:
-            if isinstance(input_dict[key], torch.Tensor):
-                input_dict[key] = input_dict[key].to(device, non_blocking=True)
-
-        n_points = input_dict["coord"].shape[0]
-        print(f"[extract] draw {draw}: tile {tile_names[tile_index]} ({n_points:,} pts) ...")
-        used_tiles.add(tile_names[tile_index])
-
-        with torch.no_grad(), torch.autocast(device_type="cuda", dtype=torch.float16, enabled=(device == "cuda")):
-            feat_by_norm, point, _active = model.prepare_batch(input_dict)
-        del point
-        feat = next(iter(feat_by_norm.values()))  # input_norm=None -> raw backbone feat
-        target = input_dict[target_key]
-        coord = input_dict["coord"]
-
-        for cls in range(num_classes):
-            if collector.count(cls) >= points_per_class:
-                continue
-            mask = target == cls
-            if not bool(mask.any()):
-                continue
-            coord_np = coord[mask].float().cpu().numpy()
-            feat_np = feat[mask].float().cpu().numpy().astype(np.float16)
-            collector.offer_tile(cls, coord_np, feat_np, tile_index)
-
-        del feat, feat_by_norm, target, coord, input_dict
-        if device == "cuda":
-            torch.cuda.empty_cache()
-    else:
-        print(f"[extract] hit --max-draws={max_draws} with some classes still under cap.")
-
-    return collector, tile_names, used_tiles
-
-
-def save_features_npz(output, collector, class_names, tile_names, used_tiles, **extra_meta):
-    coord, feat, segment, tile_idx = collector.finalize()
-    Path(output).parent.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(
-        output,
-        coord=coord.astype(np.float32),
-        feat=feat.astype(np.float16),
-        segment=segment.astype(np.int64),
-        tile_idx=tile_idx.astype(np.int64),
-        tile_names=np.array(tile_names),
-        used_tiles=np.array(sorted(used_tiles)),
-        class_names=np.array(class_names),
-        backbone_out_channels=feat.shape[1],
-        **extra_meta,
-    )
-    print(f"[extract] wrote {output}  ({feat.shape[0]:,} pts x {feat.shape[1]}ch, "
-          f"{Path(output).stat().st_size / 2**20:.1f} MB)")

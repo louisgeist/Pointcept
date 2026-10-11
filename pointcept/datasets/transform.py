@@ -11,9 +11,6 @@ from contextlib import nullcontext
 import copy
 import random
 import numbers
-import scipy
-import scipy.ndimage
-import scipy.interpolate
 import numpy as np
 import torch
 from collections.abc import Sequence, Mapping
@@ -297,23 +294,6 @@ class CenterShift(object):
                 shift = [(x_min + x_max) / 2, (y_min + y_max) / 2, 0]
             data_dict["coord"] -= shift
         return data_dict
-
-@TRANSFORMS.register_module()
-class ExtractAbsZ(object):
-    """Save absolute altitude before geometric shifts normalize it away.
-
-    If ``coord_translation`` is present (MALiBU3D preprocessing offset), reconstruct
-    absolute Z as ``coord_z + translation_z``. Otherwise fall back to ``coord[:, 2]``.
-    """
-
-    def __call__(self, data_dict):
-        if "coord" in data_dict.keys():
-            abs_z = data_dict["coord"][:, 2].astype(np.float32, copy=True)
-            if "coord_translation" in data_dict:
-                abs_z = abs_z + np.float32(data_dict["coord_translation"][2])
-            data_dict["abs_z"] = abs_z
-        return data_dict
-
 
 @TRANSFORMS.register_module()
 class ExtractAbsXY(object):
@@ -1078,67 +1058,6 @@ class RandomDropColor(object):
                 data_dict["color"][idx] = self.drop_value
             if self.keep_mask:
                 data_dict["color_mask"] = drop_mask
-        return data_dict
-
-
-@TRANSFORMS.register_module()
-class ElasticDistortion(object):
-    def __init__(self, distortion_params=None):
-        self.distortion_params = (
-            [[0.2, 0.4], [0.8, 1.6]] if distortion_params is None else distortion_params
-        )
-
-    @staticmethod
-    def elastic_distortion(coords, granularity, magnitude):
-        """
-        Apply elastic distortion on sparse coordinate space.
-        pointcloud: numpy array of (number of points, at least 3 spatial dims)
-        granularity: size of the noise grid (in same scale[m/cm] as the voxel grid)
-        magnitude: noise multiplier
-        """
-        blurx = np.ones((3, 1, 1, 1)).astype("float32") / 3
-        blury = np.ones((1, 3, 1, 1)).astype("float32") / 3
-        blurz = np.ones((1, 1, 3, 1)).astype("float32") / 3
-        coords_min = coords.min(0)
-
-        # Create Gaussian noise tensor of the size given by granularity.
-        noise_dim = ((coords - coords_min).max(0) // granularity).astype(int) + 3
-        noise = np.random.randn(*noise_dim, 3).astype(np.float32)
-
-        # Smoothing.
-        for _ in range(2):
-            noise = scipy.ndimage.filters.convolve(
-                noise, blurx, mode="constant", cval=0
-            )
-            noise = scipy.ndimage.filters.convolve(
-                noise, blury, mode="constant", cval=0
-            )
-            noise = scipy.ndimage.filters.convolve(
-                noise, blurz, mode="constant", cval=0
-            )
-
-        # Trilinear interpolate noise filters for each spatial dimensions.
-        ax = [
-            np.linspace(d_min, d_max, d)
-            for d_min, d_max, d in zip(
-                coords_min - granularity,
-                coords_min + granularity * (noise_dim - 2),
-                noise_dim,
-            )
-        ]
-        interp = scipy.interpolate.RegularGridInterpolator(
-            ax, noise, bounds_error=False, fill_value=0
-        )
-        coords += interp(coords) * magnitude
-        return coords
-
-    def __call__(self, data_dict):
-        if "coord" in data_dict.keys() and self.distortion_params is not None:
-            if random.random() < 0.95:
-                for granularity, magnitude in self.distortion_params:
-                    data_dict["coord"] = self.elastic_distortion(
-                        data_dict["coord"], granularity, magnitude
-                    )
         return data_dict
 
 

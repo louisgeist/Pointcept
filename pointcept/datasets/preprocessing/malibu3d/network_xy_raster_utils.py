@@ -19,7 +19,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
-from PIL import Image
 
 DEFAULT_PIXEL_M = 1.0
 # Fine densification along centerlines before binning into 1 m Lambert cells.
@@ -614,16 +613,6 @@ def build_pixel_graph(
         edge_weights=edge_weights,
         grid=grid,
     )
-
-
-def build_pixel_graph_4(mask: np.ndarray, grid: GridSpec) -> PixelGraph:
-    """4-connected pixel graph (orthogonal neighbors only)."""
-    return build_pixel_graph(mask, grid, connectivity=4)
-
-
-def build_pixel_graph_8(mask: np.ndarray, grid: GridSpec) -> PixelGraph:
-    """8-connected pixel graph (Moore neighborhood)."""
-    return build_pixel_graph(mask, grid, connectivity=8)
 
 
 def adjacency_list(edges: np.ndarray, n_nodes: int) -> list[list[int]]:
@@ -1463,121 +1452,3 @@ def rasterize_graph_edges(
     return rgba
 
 
-def compose_rgb_with_graph(
-    points_xy: np.ndarray,
-    rgb: np.ndarray,
-    graph: PixelGraph,
-    color_rgb: np.ndarray | None = None,
-    grid: GridSpec | None = None,
-    sample_step_m: float = DEFAULT_EDGE_SAMPLE_STEP_M,
-    node_color_rgb: np.ndarray | None = None,
-    node_radius_px: int = DEFAULT_NODE_MARKER_RADIUS_PX,
-) -> np.ndarray:
-    """Mean-RGB background + yellow graph edges + small orange node markers.
-
-    Does not paint the dense centerline network mask — only RDP/graph edges.
-    """
-    g = grid if grid is not None else graph.grid
-    mean_rgb, count = mean_rgb_raster(points_xy, rgb, g)
-    rgba = np.zeros((g.height, g.width, 4), dtype=np.uint8)
-    has_pts = count > 0
-    if np.any(has_pts):
-        rgba[has_pts, :3] = np.clip(np.rint(mean_rgb[has_pts]), 0, 255).astype(
-            np.uint8
-        )
-        rgba[has_pts, 3] = 255
-    edge_color = (
-        np.asarray(color_rgb, dtype=np.uint8).reshape(3)
-        if color_rgb is not None
-        else DEFAULT_EDGE_RGB.copy()
-    )
-    overlay = rasterize_graph_edges(
-        graph,
-        grid=g,
-        color_rgb=edge_color,
-        node_color_rgb=node_color_rgb,
-        node_radius_px=node_radius_px,
-        sample_step_m=sample_step_m,
-    )
-    hit = overlay[:, :, 3] == 255
-    if np.any(hit):
-        rgba[hit] = overlay[hit]
-    return rgba
-
-
-def project_network_to_rgba(
-    points_xy: np.ndarray,
-    rgb: np.ndarray,
-    segments: np.ndarray,
-    network_color_rgb: np.ndarray,
-    grid: GridSpec,
-    sample_step_m: float = DEFAULT_CENTERLINE_SAMPLE_STEP_M,
-) -> np.ndarray:
-    """Build RGBA raster: centerline color > mean point RGB > transparent.
-
-    Returns ``(H, W, 4)`` uint8.
-    """
-    mean_rgb, count = mean_rgb_raster(points_xy, rgb, grid)
-    line_mask = centerline_pixel_mask(
-        segments, grid, sample_step_m=sample_step_m
-    )
-    rgba = np.zeros((grid.height, grid.width, 4), dtype=np.uint8)
-    has_pts = count > 0
-    if np.any(has_pts):
-        rgba[has_pts, :3] = np.clip(np.rint(mean_rgb[has_pts]), 0, 255).astype(
-            np.uint8
-        )
-        rgba[has_pts, 3] = 255
-    if np.any(line_mask):
-        color = np.asarray(network_color_rgb, dtype=np.uint8).reshape(3)
-        rgba[line_mask, :3] = color
-        rgba[line_mask, 3] = 255
-    return rgba
-
-
-def bounds_from_points_and_segments(
-    points_xy: np.ndarray,
-    segments: np.ndarray,
-) -> tuple[float, float, float, float] | None:
-    """Axis-aligned bounds of finite point XY and segment endpoints, or None."""
-    xs: list[np.ndarray] = []
-    ys: list[np.ndarray] = []
-    pts = np.asarray(points_xy, dtype=np.float64)
-    if pts.size and pts.ndim == 2 and pts.shape[1] >= 2:
-        finite = np.isfinite(pts[:, :2]).all(axis=1)
-        if np.any(finite):
-            xs.append(pts[finite, 0])
-            ys.append(pts[finite, 1])
-    segs = np.asarray(segments, dtype=np.float64)
-    if segs.size and segs.ndim == 3 and segs.shape[1] == 2 and segs.shape[2] >= 2:
-        ends = segs[:, :, :2].reshape(-1, 2)
-        finite = np.isfinite(ends).all(axis=1)
-        if np.any(finite):
-            xs.append(ends[finite, 0])
-            ys.append(ends[finite, 1])
-    if not xs:
-        return None
-    x_all = np.concatenate(xs)
-    y_all = np.concatenate(ys)
-    return (
-        float(np.min(x_all)),
-        float(np.min(y_all)),
-        float(np.max(x_all)),
-        float(np.max(y_all)),
-    )
-
-
-def save_rgba_png(
-    path: Path | str,
-    rgba: np.ndarray,
-    flip_y: bool = True,
-) -> Path:
-    """Write an RGBA uint8 array as PNG. ``flip_y=True`` puts north at the top."""
-    arr = np.asarray(rgba)
-    if arr.ndim != 3 or arr.shape[2] != 4:
-        raise ValueError(f"rgba must have shape (H, W, 4), got {arr.shape}")
-    out = Path(path)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    img_arr = np.flipud(arr) if flip_y else arr
-    Image.fromarray(img_arr, mode="RGBA").save(out)
-    return out

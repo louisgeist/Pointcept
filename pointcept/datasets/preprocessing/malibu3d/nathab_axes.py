@@ -11,7 +11,7 @@ storage definition ``default`` (CarHab 0..43) through
 
 from __future__ import annotations
 
-from typing import Dict, Sequence, Tuple
+from typing import Dict, Tuple
 
 import numpy as np
 
@@ -157,21 +157,3 @@ def unpack_nathab_axes(
     }
 
 
-def nathab_axis_ignore_fills(n: int) -> Dict[str, np.ndarray]:
-    """Per-axis void fill arrays of length ``n`` (missing-tile path)."""
-    return {
-        key: np.full(n, int(ignore), dtype=np.int32)
-        for key, ignore in zip(NATHAB_AXIS_KEYS, NATHAB_AXIS_IGNORE_INDEX)
-    }
-
-
-def axis_key_to_definition(axis_key: str) -> str:
-    try:
-        index = NATHAB_AXIS_KEYS.index(axis_key)
-    except ValueError as exc:
-        raise KeyError(f"unknown nathab axis key: {axis_key!r}") from exc
-    return NATHAB_AXIS_DEFINITIONS[index]
-
-
-def axis_definition_names() -> Sequence[str]:
-    return NATHAB_AXIS_DEFINITIONS
