@@ -156,7 +156,7 @@ del _optimizer, _name
 
 
 wandb_run_name = (
-    f"KPConvX GridProbe ECLAIR {grp_exp}.{num_exp}) enc multiscale {backbone_out_channels}ch, "
+    f"KPConvX GridProbe ECLAIR {grp_exp}.{num_exp} enc multiscale {backbone_out_channels}ch, "
     f"AdamW/wd0/OneCycleLR warmup5%, {len(probes)} probes, epoch={epoch}"
 )
 

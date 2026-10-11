@@ -149,7 +149,7 @@ del _optimizer, _name
 
 
 wandb_run_name = (
-    f"SpUNet GridProbe ECLAIR {grp_exp}.{num_exp}) decoder hypercolumn {backbone_out_channels}ch, "
+    f"SpUNet GridProbe ECLAIR {grp_exp}.{num_exp} decoder hypercolumn {backbone_out_channels}ch, "
     f"AdamW/wd0/OneCycleLR warmup5%, {len(probes)} probes, epoch={epoch}"
 )
 

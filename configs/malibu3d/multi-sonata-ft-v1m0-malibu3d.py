@@ -58,7 +58,7 @@ feat_keys = ["coord", "color", "strength"]
 coord_feat_scale = 0.01
 
 # Wandb parameters
-wandb_run_name = f"Sonata-FT multi {grp_exp}.{num_exp}) iter={total_iters}"
+wandb_run_name = f"Sonata-FT multi {grp_exp}.{num_exp} iter={total_iters}"
 wandb_project = "malibu3d_multi"
 
 # -----------------------------------------------------------------------------
@@ -229,7 +229,7 @@ param_dicts = [dict(keyword="block", lr=lr / 10)]
 # -----------------------------------------------------------------------------
 dataset_type = "MALiBU3DDataset"
 data_root = "data/malibu3d"
-csv_manifest = "data/malibu3d/raw/scene_split_manifest.csv"
+csv_manifest = "data/malibu3d/tiles.csv"
 min_points = {"train": 1000}
 val_stratified_subset_manifest = "data/malibu3d/manifests/val_dev_subset_2000.csv"
 

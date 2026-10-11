@@ -62,7 +62,7 @@ coord_feat_scale = 0.01
 
 # Wandb parameters
 wandb_run_name = (
-    f"6xA100  KPConvX multi {grp_exp}.{num_exp}) iter={total_iters}"
+    f"KPConvX multi {grp_exp}.{num_exp} iter={total_iters}"
 )
 wandb_project = "malibu3d_multi"
 

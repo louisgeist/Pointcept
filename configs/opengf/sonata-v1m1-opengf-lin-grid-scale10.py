@@ -115,7 +115,7 @@ probes = {
 del _criteria, _lrs
 
 wandb_run_name = (
-    f"Sonata-v1m1 indoor GridProbe OpenGF {grp_exp}.{num_exp}) HF pretrain, "
+    f"Sonata-v1m1 indoor GridProbe OpenGF {grp_exp}.{num_exp} HF pretrain, "
     f"enc {backbone_out_channels}ch, coord/10, {len(probes)} probes, epoch={epoch}"
 )
 

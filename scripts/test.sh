@@ -5,7 +5,7 @@ PYTHON=python
 
 TEST_CODE=test.py
 
-DATASET=scannet
+DATASET=malibu3d
 CONFIG="None"
 EXP_NAME=debug
 WEIGHT=model_best

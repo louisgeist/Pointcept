@@ -132,7 +132,7 @@ probes = {
 del _criteria, _lrs
 
 wandb_run_name = (
-    f"PT-v3-malibu GridProbe DALES {grp_exp}.{num_exp}) enc multiscale {backbone_out_channels}ch, "
+    f"PT-v3-malibu GridProbe DALES {grp_exp}.{num_exp} enc multiscale {backbone_out_channels}ch, "
     f"{len(probes)} probes, epoch={epoch}"
 )
 

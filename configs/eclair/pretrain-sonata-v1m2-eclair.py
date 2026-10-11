@@ -64,7 +64,7 @@ ckpt_save_freq = 1
 wandb_project = "eclair_sonata"
 wandb_run_name = (
     f"Sonata-v1m2 pretrain ECLAIR | bs={batch_size} | grid={grid_size} | "
-    f"iters={total_iters} H100"
+    f"iters={total_iters}"
 )
 
 # -----------------------------------------------------------------------------

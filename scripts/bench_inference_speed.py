@@ -135,7 +135,7 @@ def parse_args():
         "--csv-manifest",
         default=None,
         help="Override data.test.csv_manifest for all backbones (default: keep each "
-        "config's own, the national manifest -- only fully mirrored on Jean Zay).",
+        "config's own, i.e. the full tiles.csv).",
     )
     parser.add_argument(
         "--split", default="test", help="Override data.test.split for all backbones."
@@ -158,7 +158,7 @@ def parse_args():
         choices=("random", "first"),
         default="random",
         help="How to pick --num-tiles from data.test: seeded shuffle (default) or "
-        "CSV / data_list order (the old first-N behaviour).",
+        "CSV / data_list order.",
     )
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument(

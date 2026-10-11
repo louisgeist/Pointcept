@@ -47,7 +47,7 @@ coord_feat_scale = 0.01
 strength_feat_scale = 1 / 60000  # raw uint16 intensity -> MALiBU3D [0,1] convention
 
 # Wandb parameters
-wandb_run_name = f"ECLAIR LitePT-B semseg from-scratch ({grp_exp}.{num_exp}) H100 epoch={epoch}"
+wandb_run_name = f"ECLAIR LitePT-B semseg from-scratch ({grp_exp}.{num_exp}) epoch={epoch}"
 wandb_project = "pointcept_eclair"
 
 # -----------------------------------------------------------------------------

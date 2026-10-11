@@ -132,7 +132,7 @@ probes = {
 del _criteria, _lrs
 
 wandb_run_name = (
-    f"LitePT-B GridProbe DALES {grp_exp}.{num_exp}) encoder multiscale 1386ch, "
+    f"LitePT-B GridProbe DALES {grp_exp}.{num_exp} encoder multiscale 1386ch, "
     f"{len(probes)} probes, epoch={epoch}"
 )
 

@@ -133,7 +133,7 @@ probes = {
 del _criteria, _lrs
 
 wandb_run_name = (
-    f"LitePT-B GridProbe DALES {grp_exp}.{num_exp}) decoder hypercolumn 1404ch, "
+    f"LitePT-B GridProbe DALES {grp_exp}.{num_exp} decoder hypercolumn 1404ch, "
     f"{len(probes)} probes, epoch={epoch}"
 )
 

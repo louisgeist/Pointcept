@@ -834,8 +834,8 @@ class CheckpointLoader(HookBase):
                         for sc in self.trainer.scaler.values():
                             sc.load_state_dict(ckpt_scaler)
                         self.trainer.logger.info(
-                            "=> Restored legacy mono GradScaler into "
-                            "per-probe scalers"
+                            "=> Restored a single shared GradScaler state into "
+                            "every per-probe scaler"
                         )
                 else:
                     self.trainer.scaler.load_state_dict(ckpt_scaler)

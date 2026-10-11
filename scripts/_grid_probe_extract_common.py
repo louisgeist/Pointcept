@@ -4,7 +4,7 @@ extraction, outside the trainer (single process, no DDP).
 Used by ``scripts/extract_pureforest_pooled_embeddings.py``. Handles missing
 flash-attn (SDPA fallback), forces spconv's native convolution algorithm (see
 ``force_native_conv_algo``) and loads weights with the config's CheckpointLoader
-key remapping. ``PerClassCollector`` caps sampled point features per class.
+key remapping.
 """
 
 from __future__ import annotations
@@ -12,7 +12,6 @@ from __future__ import annotations
 import copy
 from collections import OrderedDict
 
-import numpy as np
 import torch
 import torch.nn.functional as F
 
@@ -126,13 +125,7 @@ def build_model_for_extraction(cfg, weight_path, device, rand_init=False):
 
         if install_sdpa_flash_shim(ptv3_malibu_mod):
             print("[flash-attn] not installed -- PT-v3-malibu attention routed through SDPA instead.")
-    elif backbone_type in (
-        "SpUNet-v1m1",
-        "SpUNet-v1m2",
-        "SpUNet-v1m3",
-        "kpconvx_base",
-        "KPConvX",
-    ):
+    elif backbone_type in ("SpUNet-v1m1", "kpconvx_base"):
         # No flash-attn path in these backbones.
         pass
     else:
@@ -140,7 +133,7 @@ def build_model_for_extraction(cfg, weight_path, device, rand_init=False):
 
     model = build_model(model_cfg)
     n_native = force_native_conv_algo(model)
-    print(f"[spconv] forced ConvAlgo.Native on {n_native} layer(s) (works around a local autotuner gap).")
+    print(f"[spconv] forced ConvAlgo.Native on {n_native} layer(s) (spconv autotuner workaround).")
     model = model.to(device)
     model.eval()
 
@@ -157,59 +150,3 @@ def build_model_for_extraction(cfg, weight_path, device, rand_init=False):
         exclude_keys=ckpt_cfg.get("exclude_keys", ()),
     )
     return model
-
-
-class PerClassCollector:
-    """Caps each tile's contribution and the final pooled total at
-    `points_per_class`, per class. Not a statistically exact reservoir
-    (later tiles are not down-weighted against earlier ones), but memory
-    stays bounded.
-    """
-
-    def __init__(self, num_classes, points_per_class, rng):
-        self.points_per_class = points_per_class
-        self.rng = rng
-        self.coord = [[] for _ in range(num_classes)]
-        self.feat = [[] for _ in range(num_classes)]
-        self.tile_idx = [[] for _ in range(num_classes)]
-
-    def offer_tile(self, cls, coord_np, feat_np, tile_index):
-        n = coord_np.shape[0]
-        if n == 0:
-            return
-        if n > self.points_per_class:
-            sel = self.rng.choice(n, size=self.points_per_class, replace=False)
-            coord_np, feat_np = coord_np[sel], feat_np[sel]
-            n = self.points_per_class
-        self.coord[cls].append(coord_np)
-        self.feat[cls].append(feat_np)
-        self.tile_idx[cls].append(np.full(n, tile_index, dtype=np.int64))
-
-    def count(self, cls):
-        return sum(a.shape[0] for a in self.coord[cls])
-
-    def finalize(self):
-        all_coord, all_feat, all_segment, all_tile_idx = [], [], [], []
-        for cls in range(len(self.coord)):
-            if not self.coord[cls]:
-                continue
-            coord = np.concatenate(self.coord[cls], axis=0)
-            feat = np.concatenate(self.feat[cls], axis=0)
-            tile_idx = np.concatenate(self.tile_idx[cls], axis=0)
-            n = coord.shape[0]
-            if n > self.points_per_class:
-                sel = self.rng.choice(n, size=self.points_per_class, replace=False)
-                coord, feat, tile_idx = coord[sel], feat[sel], tile_idx[sel]
-                n = self.points_per_class
-            all_coord.append(coord)
-            all_feat.append(feat)
-            all_segment.append(np.full(n, cls, dtype=np.int64))
-            all_tile_idx.append(tile_idx)
-        return (
-            np.concatenate(all_coord, axis=0),
-            np.concatenate(all_feat, axis=0),
-            np.concatenate(all_segment, axis=0),
-            np.concatenate(all_tile_idx, axis=0),
-        )
-
-

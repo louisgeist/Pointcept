@@ -151,7 +151,7 @@ del _optimizer, _name
 
 
 wandb_run_name = (
-    f"LitePT-B GridProbe ECLAIR {grp_exp}.{num_exp}) decoder hypercolumn 1404ch, "
+    f"LitePT-B GridProbe ECLAIR {grp_exp}.{num_exp} decoder hypercolumn 1404ch, "
     f"AdamW/wd0/OneCycleLR warmup5%, {len(probes)} probes, epoch={epoch}"
 )
 

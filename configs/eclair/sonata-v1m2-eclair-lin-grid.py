@@ -148,7 +148,7 @@ del _norm_name, _input_norm, _fn_name, _feat_norm, _opt_name, _opt_type
 del _optimizer, _name
 
 wandb_run_name = (
-    f"Sonata GridProbe ECLAIR {grp_exp}.{num_exp}) epoch_120, enc multiscale 1232ch, "
+    f"Sonata GridProbe ECLAIR {grp_exp}.{num_exp} enc multiscale 1232ch, "
     f"AdamW/wd0/OneCycleLR warmup5%, {len(probes)} probes, epoch={epoch}"
 )
 

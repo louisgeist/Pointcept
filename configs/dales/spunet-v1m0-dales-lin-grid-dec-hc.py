@@ -130,7 +130,7 @@ probes = {
 del _criteria, _lrs
 
 wandb_run_name = (
-    f"SpUNet GridProbe DALES {grp_exp}.{num_exp}) decoder hypercolumn {backbone_out_channels}ch, "
+    f"SpUNet GridProbe DALES {grp_exp}.{num_exp} decoder hypercolumn {backbone_out_channels}ch, "
     f"{len(probes)} probes, epoch={epoch}"
 )
 

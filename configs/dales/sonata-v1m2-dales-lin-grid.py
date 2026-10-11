@@ -1,12 +1,14 @@
 """
 Frozen Sonata (MALiBU3D SSL-pretrained backbone, ckpt/sonata-pretrained/model.pth) linear probing
-on DALES semantic segmentation (8 classes), seed-ensemble form.
+on DALES semantic segmentation (8 classes).
 
 Probe input: encoder multi-scale features (enc_mode=True): the 5 encoder stages, broadcast back to
-the input points and concatenated (1232 channels). Unlike the other configs of this directory, the
-10 probes share one hyperparameter set (CE + Lovasz, AdamW, wd=0, OneCycleLR, lr=0.02) and differ
-only by their random initialization; GridProbeSeedEnsembleTester tests every probe and reports the
-mean and std of the test metrics.
+the input points and concatenated (1232 channels). Default probing protocol (Tab. 3 of the MALiBU3D
+paper).
+
+GridProbe: 12 linear probes (CE + Lovasz, AdamW, wd=0, OneCycleLR, lr from 1e-4 to 5e-1) share one
+frozen-backbone forward; tools/grid_then_seeds.py then re-trains the probe with the best validation
+mIoU with 10 seeds.
 
 DALES has no RGB: color is zero-filled, as in Sonata pretraining (modality dropout with zeros, no
 learned mask value); raw intensity is scaled by 1/60000. DALES has no validation split, so
@@ -27,7 +29,7 @@ strength_feat_scale = 1 / 60000  # DALES raw intensity → MALiBU3D [0,1] conven
 num_gpu = 1
 epoch = 400
 eval_epoch = 10
-lr = 0.02  # best lr of the 12-lr grid on DALES for this backbone
+lr = 5e-2
 patch_size = 1024
 
 test_single_fragment = True
@@ -52,9 +54,9 @@ weight = "ckpt/sonata-pretrained/model.pth"
 wandb_project = f"pointcept_{dataset_type[:-7].lower()}"
 
 # Hooks. Order matters: GridProbeEvaluator before the checkpoint savers, and
-# GridProbeSeedEnsembleTester last (frees the per-probe optimizers, then tests all
-# probes in one shared-backbone pass and aggregates mean/std). There is no winner
-# to select, hence no GridProbeWinnerSelector.
+# GridProbeWinnerSelector last (frees the per-probe optimizers, picks the best probe
+# on validation and tests it unless skip_test=True). PreciseEvaluator is not used:
+# it does not select a probe.
 hooks = [
     dict(
         type="CheckpointLoader",
@@ -67,12 +69,8 @@ hooks = [
     dict(type="GridProbeEvaluator", write_cls_iou=True),
     dict(type="GridProbeCheckpointSaver"),
     dict(type="CheckpointSaver", save_freq=None),
-    dict(type="GridProbeSeedEnsembleTester"),
+    dict(type="GridProbeWinnerSelector", skip_test=True),
 ]
-
-# Override default_runtime.py's test = dict(type="SemSegTester", ...): the
-# seed-ensemble test pass needs the shared-backbone, all-probes-at-once tester.
-test = dict(type="GridProbeSemSegTester", verbose=True)
 
 feat_keys = ["coord", "color", "strength"]
 
@@ -91,17 +89,28 @@ names = [
 # Encoder levels (enc_mode): 48+96+192+384+512 = 1232
 backbone_out_channels = 1232
 
-# Seed-ensemble probes — ce_lovasz, AdamW/wd0/OneCycleLR warmup5%, fixed lr. Only the
-# random init differs: each probe head draws its own init when GridProbeSegmentorV2
-# builds the heads in sequence, so no explicit seed is needed.
+# Grid-search probes — ce_lovasz, AdamW/wd0/OneCycleLR warmup5%, lr sweep only (12 probes).
 _criteria = [
     dict(type="CrossEntropyLoss", loss_weight=1.0, ignore_index=ignore_index),
     dict(type="LovaszLoss", mode="multiclass", loss_weight=1.0, ignore_index=ignore_index),
 ]
-num_seeds = 10
+_lrs = {
+    "1e-4": 1e-4,
+    "2e-4": 2e-4,
+    "5e-4": 5e-4,
+    "1e-3": 1e-3,
+    "2e-3": 2e-3,
+    "5e-3": 5e-3,
+    "1e-2": 1e-2,
+    "2e-2": 2e-2,
+    "5e-2": 5e-2,
+    "1e-1": 1e-1,
+    "2e-1": 2e-1,
+    "5e-1": 5e-1,
+}
 
 probes = {
-    f"ce_lovasz_init{i}": dict(
+    f"ce_lovasz_lr{lr_name}": dict(
         criteria=_criteria,
         input_norm=None,
         feat_norm=None,
@@ -117,14 +126,14 @@ probes = {
         ),
         grad_clip=3.0,
     )
-    for i in range(num_seeds)
+    for lr_name, lr in _lrs.items()
 }
-del _criteria
+del _criteria, _lrs
 
 
 wandb_run_name = (
-    f"Sonata SeedEnsemble DALES {grp_exp}.{num_exp}) epoch_120, enc multiscale 1232ch, "
-    f"{len(probes)} inits, lr={lr}, epoch={epoch}"
+    f"Sonata GridProbe DALES {grp_exp}.{num_exp} encoder multiscale 1232ch, "
+    f"{len(probes)} probes, epoch={epoch}"
 )
 
 # model settings

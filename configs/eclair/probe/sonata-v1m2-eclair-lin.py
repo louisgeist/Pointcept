@@ -36,7 +36,7 @@ feat_keys = ["coord", "color", "strength"]
 wandb_project = "eclair_sonata"
 wandb_run_name = (
     f"Sonata-v1m2 lin probe ECLAIR | bs={batch_size} | "
-    f"epoch={epoch} | lr=1e-2 H100"
+    f"epoch={epoch} | lr=1e-2"
 )
 
 # -----------------------------------------------------------------------------

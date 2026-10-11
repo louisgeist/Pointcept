@@ -130,9 +130,6 @@ class MALiBU3DDataset(DefaultDataset):
                 "primary_target_key must be present in target_keys."
             )
         self.primary_target_key = primary_target_key
-        if primary_target_key in MALIBU3D_PIXEL_SEMANTIC_TARGETS:
-            if any(tk in MALIBU3D_SEMANTIC_TARGETS for tk in self.target_keys):
-                pass
         if "elevation" in self.target_keys and len(self.target_keys) > 1:
             if self.primary_target_key not in MALIBU3D_SEMANTIC_TARGETS:
                 raise ValueError(

@@ -55,11 +55,7 @@ class FrozenBackboneEvalMixin:
 
     def _pin_frozen_backbone_eval(self):
         backbone = getattr(self, "backbone", None)
-        if (
-            getattr(self, "freeze_backbone", False)
-            and not getattr(self, "use_lora", False)
-            and backbone is not None
-        ):
+        if getattr(self, "freeze_backbone", False) and backbone is not None:
             backbone.eval()
 
     def train(self, mode=True):

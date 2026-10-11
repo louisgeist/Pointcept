@@ -133,7 +133,7 @@ probes = {
 del _criteria, _lrs
 
 wandb_run_name = (
-    f"KPConvX GridProbe OpenGF {grp_exp}.{num_exp}) A100 noMix3D, encoder multiscale "
+    f"KPConvX GridProbe OpenGF {grp_exp}.{num_exp} encoder multiscale "
     f"{backbone_out_channels}ch, {len(probes)} probes, epoch={epoch}, point_max={point_max}"
 )
 

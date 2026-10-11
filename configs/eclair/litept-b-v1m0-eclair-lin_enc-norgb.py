@@ -147,7 +147,7 @@ del _optimizer, _name
 
 
 wandb_run_name = (
-    f"LitePT-B GridProbe ECLAIR noRGB {grp_exp}.{num_exp}) enc multiscale {backbone_out_channels}ch, "
+    f"LitePT-B GridProbe ECLAIR noRGB {grp_exp}.{num_exp} enc multiscale {backbone_out_channels}ch, "
     f"AdamW/wd0/OneCycleLR warmup5%, {len(probes)} probes, epoch={epoch}"
 )
 

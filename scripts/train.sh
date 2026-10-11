@@ -13,7 +13,7 @@ PYTHON=python
 
 TRAIN_CODE=train.py
 
-DATASET=scannet
+DATASET=malibu3d
 CONFIG="None"
 EXP_NAME=debug
 WEIGHT="None"
@@ -54,8 +54,6 @@ while getopts "p:d:c:n:w:g:m:r:" opt; do
       ;;
   esac
 done
-
-rm -rf exp/malibu3d/${EXP_NAME}
 
 if [ "${NUM_GPU}" = 'None' ]
 then

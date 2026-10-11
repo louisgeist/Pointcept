@@ -295,7 +295,7 @@ class GridProbeEvaluator(HookBase):
             )
         if persisted is None and self.select_metric != "mIoU":
             raise RuntimeError(
-                f"Resuming a pre-macro-F1 checkpoint with "
+                f"Resuming a checkpoint without macro-F1 tracking state with "
                 f"select_metric={self.select_metric!r}: validation macro-F1 "
                 f"history for epochs before this checkpoint is unavailable, so "
                 f"probe_best_*.pth selection would be wrong. Start a fresh run, "

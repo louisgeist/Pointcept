@@ -39,6 +39,7 @@ Toy subset (2 tiles per class per split, picked from the full manifest)::
 from __future__ import annotations
 
 import argparse
+import ast
 import csv
 import os
 import sys
@@ -168,7 +169,7 @@ def npy_file_complete(path: str) -> bool:
                 header_len = struct.unpack("<I", f.read(4))[0]
             else:
                 return False
-            meta = eval(f.read(header_len).decode("latin1"))
+            meta = ast.literal_eval(f.read(header_len).decode("latin1"))
             dtype = np.dtype(meta["descr"])
             expected = int(np.prod(meta["shape"])) * dtype.itemsize
             actual = os.path.getsize(path) - f.tell()

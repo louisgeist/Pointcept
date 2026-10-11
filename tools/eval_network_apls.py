@@ -678,7 +678,7 @@ def build_argparser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description=(
             "Evaluate predicted network graphs (built from stitched per-ROI "
-            "probability rasters) against Flair3D-build-exported GT graphs via APLS."
+            "probability rasters) against the dataset's GT graphs via APLS."
         )
     )
     p.add_argument("--data_root", type=str, required=True)

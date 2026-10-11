@@ -496,7 +496,7 @@ def run(
 def build_argparser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description=(
-            "Rasterize Flair3D-build exported network graphs into network.npy "
+            "Rasterize the MALiBU3D road-network graphs into network.npy "
             "binary masks on MALiBU3D tiles."
         )
     )
@@ -561,8 +561,7 @@ def build_argparser() -> argparse.ArgumentParser:
         type=str,
         default=None,
         help=(
-            "Exclusion list of known-missing (split, patch_id), same role as "
-            "MALiBU3DDataset missing tiles. Default: "
+            "Tiles known to lack coord.npy, as (split, patch_id) rows. Default: "
             "data/malibu3d/missing_coord_tiles.details.csv"
         ),
     )
@@ -570,7 +569,7 @@ def build_argparser() -> argparse.ArgumentParser:
         "--num_workers",
         type=int,
         default=1,
-        help="ROI-level process workers (1 = sequential; try 12 on hecate, 24 on JZ)",
+        help="ROI-level process workers (1 = sequential)",
     )
     return p
 

@@ -11,7 +11,6 @@ import torch.nn as nn
 from timm.layers import DropPath
 
 from pointcept.models.builder import MODELS, build_model
-from pointcept.models.default import FrozenBackboneEvalMixin
 from pointcept.models.kpconvx.utils.generic_blocks import DropPathPack
 
 
@@ -89,17 +88,6 @@ class TestFrozenBackboneStaysEval(unittest.TestCase):
                 model = build_model(_cfg(t, freeze_backbone=False)).train()
                 self.assertTrue(model.backbone.bn.training)
                 self.assertTrue(model.backbone.blocks[1].training)
-
-    def test_lora_backbone_is_not_pinned(self):
-        class _Stub(FrozenBackboneEvalMixin, nn.Module):
-            def __init__(self, use_lora):
-                super().__init__()
-                self.backbone = nn.Sequential(nn.Dropout(0.1))
-                self.freeze_backbone = True
-                self.use_lora = use_lora
-
-        self.assertTrue(_Stub(use_lora=True).train().backbone.training)
-        self.assertFalse(_Stub(use_lora=False).train().backbone.training)
 
 
 if __name__ == "__main__":

@@ -126,7 +126,7 @@ probes = {
 del _criteria, _lrs
 
 wandb_run_name = (
-    f"Sonata-v1m2 GridProbe OpenGF {grp_exp}.{num_exp}) epoch_120, enc multiscale "
+    f"Sonata-v1m2 GridProbe OpenGF {grp_exp}.{num_exp} enc multiscale "
     f"{backbone_out_channels}ch, {len(probes)} probes, epoch={epoch}"
 )
 

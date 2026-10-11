@@ -94,10 +94,10 @@ class TestFetchLastHistoryStep(unittest.TestCase):
         api = MagicMock()
         api.run.return_value = SimpleNamespace(lastHistoryStep=752)
         self.assertEqual(
-            fetch_last_history_step("malibu3d_multi", "es6alp7s", api=api),
+            fetch_last_history_step("malibu3d_multi", "abc123xy", api=api),
             752,
         )
-        api.run.assert_called_once_with("malibu3d_multi/es6alp7s")
+        api.run.assert_called_once_with("malibu3d_multi/abc123xy")
 
     def test_includes_entity_in_path(self):
         api = MagicMock()
@@ -120,7 +120,7 @@ class TestBumpOnResume(unittest.TestCase):
         out = bump_wandb_step_on_resume(
             run,
             project="malibu3d_multi",
-            run_id="es6alp7s",
+            run_id="abc123xy",
             logger=logger,
             api=api,
         )
@@ -138,7 +138,7 @@ class TestBumpOnResume(unittest.TestCase):
         out = bump_wandb_step_on_resume(
             run,
             project="malibu3d_multi",
-            run_id="es6alp7s",
+            run_id="abc123xy",
             logger=logger,
             api=api,
         )
@@ -156,7 +156,7 @@ class TestBumpOnResume(unittest.TestCase):
         out = bump_wandb_step_on_resume(
             run,
             project="malibu3d_multi",
-            run_id="es6alp7s",
+            run_id="abc123xy",
             logger=logger,
             api=api,
             local_last_step=752,

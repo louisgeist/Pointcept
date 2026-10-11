@@ -50,7 +50,7 @@ coord_feat_scale = 0.01
 
 # Wandb parameters
 wandb_run_name = (
-    f"LPT-S network {grp_exp}.{num_exp}) iter={total_iters}"
+    f"LPT-S network {grp_exp}.{num_exp} iter={total_iters}"
 )
 wandb_project = "malibu3d_network"
 

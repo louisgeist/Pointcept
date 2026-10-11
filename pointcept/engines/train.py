@@ -67,7 +67,7 @@ def _log_iter_limited_training_mode(cfg, logger):
     if getattr(cfg, "total_iters", None) is None:
         return
     message = (
-        "Iter-limited training enabled: total_iters=%d optimizer steps, "
+        "Iter-limited training enabled: total_iters=%d iterations, "
         "iter_per_epoch=%d, num_epochs=%d, eval_every=%d, loop=1. "
         "Validation runs every eval_every epochs. "
         "Classic params epoch/eval_epoch are unused."
@@ -474,7 +474,6 @@ class Trainer(TrainerBase):
                             1024.0 if self.cfg.enable_amp else 1.0,
                         )
                     )
-                    print(f"amp_probe_scale: {amp_probe_scale}")
                     self.comm_info["task_gradient_norms"] = compute_task_gradient_norms(
                         model,
                         loss_by_task,
@@ -675,7 +674,7 @@ class Trainer(TrainerBase):
                     rank=comm.get_rank(),
                     world_size=comm.get_world_size(),
                 )
-                size_source = getattr(val_data, "csv_manifest", None) or "<mmap fallback>"
+                size_source = getattr(val_data, "csv_manifest", None) or "<unknown>"
                 self.logger.info(
                     "Val VoxelBudgetBatchSampler: budget=%d max_bs=%d "
                     "batches_this_rank=%d dataset=%d missing_sizes=%d source=%s",

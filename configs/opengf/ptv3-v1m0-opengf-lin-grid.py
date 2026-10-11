@@ -127,7 +127,7 @@ probes = {
 del _criteria, _lrs
 
 wandb_run_name = (
-    f"PT-v3-malibu GridProbe OpenGF {grp_exp}.{num_exp}) decoder hypercolumn 1024ch, "
+    f"PT-v3-malibu GridProbe OpenGF {grp_exp}.{num_exp} decoder hypercolumn 1024ch, "
     f"{len(probes)} probes, epoch={epoch}"
 )
 

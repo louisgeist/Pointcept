@@ -125,7 +125,7 @@ probes = {
 del _criteria, _lrs
 
 wandb_run_name = (
-    f"SpUNet GridProbe OpenGF {grp_exp}.{num_exp}) decoder {backbone_out_channels}ch, "
+    f"SpUNet GridProbe OpenGF {grp_exp}.{num_exp} decoder {backbone_out_channels}ch, "
     f"{len(probes)} probes, epoch={epoch}"
 )
 

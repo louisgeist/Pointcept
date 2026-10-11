@@ -344,7 +344,7 @@ class Sonata(PointModel):
             logger.warning(
                 f"[Sonata NaN-diagnostic] rank={rank} {name}: batch id(s) {sorted(missing)} "
                 f"have 0 matched points out of {len(all_ids)} (match_max_r={self.match_max_r}) "
-                f"-> this segment will be NaN after segment_coo(reduce='mean')."
+                f"-> these samples get a 0 loss (NaN only if no point matches at all)."
             )
 
     def _record_nan_debug_entry(self, data_dict, global_point, local_point):

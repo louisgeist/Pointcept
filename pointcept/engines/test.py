@@ -152,7 +152,7 @@ class TesterBase:
                 rank=comm.get_rank(),
                 world_size=comm.get_world_size(),
             )
-            size_source = getattr(test_dataset, "csv_manifest", None) or "<mmap fallback>"
+            size_source = getattr(test_dataset, "csv_manifest", None) or "<unknown>"
             self.logger.info(
                 "Test VoxelBudgetBatchSampler: budget=%d max_bs=%d "
                 "batches_this_rank=%d dataset=%d missing_sizes=%d source=%s",
@@ -254,35 +254,6 @@ class SemSegTester(TesterBase):
 
         save_path = os.path.join(self.cfg.save_path, "result")
         make_dirs(save_path)
-        # create submit folder only on main process
-        if (
-            self.cfg.data.test.type == "ScanNetDataset"
-            or self.cfg.data.test.type == "ScanNet200Dataset"
-            or self.cfg.data.test.type == "ScanNetPPDataset"
-        ) and comm.is_main_process():
-            make_dirs(os.path.join(save_path, "submit"))
-        elif (
-            self.cfg.data.test.type == "SemanticKITTIDataset" and comm.is_main_process()
-        ):
-            make_dirs(os.path.join(save_path, "submit"))
-        elif self.cfg.data.test.type == "NuScenesDataset" and comm.is_main_process():
-            import json
-
-            make_dirs(os.path.join(save_path, "submit", "lidarseg", "test"))
-            make_dirs(os.path.join(save_path, "submit", "test"))
-            submission = dict(
-                meta=dict(
-                    use_camera=False,
-                    use_lidar=True,
-                    use_radar=False,
-                    use_map=False,
-                    use_external=False,
-                )
-            )
-            with open(
-                os.path.join(save_path, "submit", "test", "submission.json"), "w"
-            ) as f:
-                json.dump(submission, f, indent=4)
         comm.synchronize()
         record = {}
         packed = self._uses_multi_scene_batches()
@@ -362,66 +333,12 @@ class SemSegTester(TesterBase):
                                 batch_num=len(fragment_list),
                             )
                         )
-                    if self.cfg.data.test.type == "ScanNetPPDataset":
-                        pred = pred.topk(3, dim=1)[1].data.cpu().numpy()
-                    else:
-                        summed = pred.sum(1)
-                        pred = pred.max(1)[1].data.cpu().numpy()
+                    pred = pred.max(1)[1].data.cpu().numpy()
                     if "origin_segment" in data_dict.keys():
                         assert "inverse" in data_dict.keys()
                         pred = pred[data_dict["inverse"]]
                         segment = data_dict["origin_segment"]
                     np.save(pred_save_path, pred)
-                if (
-                    self.cfg.data.test.type == "ScanNetDataset"
-                    or self.cfg.data.test.type == "ScanNet200Dataset"
-                ):
-                    np.savetxt(
-                        os.path.join(save_path, "submit", "{}.txt".format(data_name)),
-                        self.test_loader.dataset.class2id[pred].reshape([-1, 1]),
-                        fmt="%d",
-                    )
-                elif self.cfg.data.test.type == "ScanNetPPDataset":
-                    np.savetxt(
-                        os.path.join(save_path, "submit", "{}.txt".format(data_name)),
-                        pred.astype(np.int32),
-                        delimiter=",",
-                        fmt="%d",
-                    )
-                    pred = pred[:, 0]  # for mIoU, TODO: support top3 mIoU
-                elif self.cfg.data.test.type == "SemanticKITTIDataset":
-                    # 00_000000 -> 00, 000000
-                    sequence_name, frame_name = data_name.split("_")
-                    os.makedirs(
-                        os.path.join(
-                            save_path, "submit", "sequences", sequence_name, "predictions"
-                        ),
-                        exist_ok=True,
-                    )
-                    submit = pred.astype(np.uint32)
-                    submit = np.vectorize(
-                        self.test_loader.dataset.learning_map_inv.__getitem__
-                    )(submit).astype(np.uint32)
-                    submit.tofile(
-                        os.path.join(
-                            save_path,
-                            "submit",
-                            "sequences",
-                            sequence_name,
-                            "predictions",
-                            f"{frame_name}.label",
-                        )
-                    )
-                elif self.cfg.data.test.type == "NuScenesDataset":
-                    np.array(pred + 1).astype(np.uint8).tofile(
-                        os.path.join(
-                            save_path,
-                            "submit",
-                            "lidarseg",
-                            "test",
-                            "{}_lidarseg.bin".format(data_name),
-                        )
-                    )
 
                 intersection, union, target = intersection_and_union(
                     pred, segment, self.cfg.data.num_classes, self.cfg.data.ignore_index
@@ -474,12 +391,6 @@ class SemSegTester(TesterBase):
             )
             union = np.sum([meters["union"] for _, meters in record.items()], axis=0)
             target = np.sum([meters["target"] for _, meters in record.items()], axis=0)
-
-            if self.cfg.data.test.type == "S3DISDataset":
-                torch.save(
-                    dict(intersection=intersection, union=union, target=target),
-                    os.path.join(save_path, f"{self.test_loader.dataset.split}.pth"),
-                )
 
             iou_class = intersection / (union + 1e-10)
             accuracy_class = intersection / (target + 1e-10)
@@ -631,10 +542,7 @@ class SemSegTester(TesterBase):
             batch_pred = []
             for b_idx in range(len(batch)):
                 pred = pred_sum[b_idx]
-                if self.cfg.data.test.type == "ScanNetPPDataset":
-                    pred = pred.topk(3, dim=1)[1].data.cpu().numpy()
-                else:
-                    pred = pred.max(1)[1].data.cpu().numpy()
+                pred = pred.max(1)[1].data.cpu().numpy()
                 scene_extra = batch_scene_extra[b_idx]
                 if "origin_segment" in scene_extra:
                     assert "inverse" in scene_extra
@@ -674,56 +582,6 @@ class SemSegTester(TesterBase):
         update_batch_time=True,
         log_scene=True,
     ):
-        if (
-            self.cfg.data.test.type == "ScanNetDataset"
-            or self.cfg.data.test.type == "ScanNet200Dataset"
-        ):
-            np.savetxt(
-                os.path.join(save_path, "submit", "{}.txt".format(data_name)),
-                self.test_loader.dataset.class2id[pred].reshape([-1, 1]),
-                fmt="%d",
-            )
-        elif self.cfg.data.test.type == "ScanNetPPDataset":
-            np.savetxt(
-                os.path.join(save_path, "submit", "{}.txt".format(data_name)),
-                pred.astype(np.int32),
-                delimiter=",",
-                fmt="%d",
-            )
-            pred = pred[:, 0]  # for mIoU, TODO: support top3 mIoU
-        elif self.cfg.data.test.type == "SemanticKITTIDataset":
-            sequence_name, frame_name = data_name.split("_")
-            os.makedirs(
-                os.path.join(
-                    save_path, "submit", "sequences", sequence_name, "predictions"
-                ),
-                exist_ok=True,
-            )
-            submit = pred.astype(np.uint32)
-            submit = np.vectorize(
-                self.test_loader.dataset.learning_map_inv.__getitem__
-            )(submit).astype(np.uint32)
-            submit.tofile(
-                os.path.join(
-                    save_path,
-                    "submit",
-                    "sequences",
-                    sequence_name,
-                    "predictions",
-                    f"{frame_name}.label",
-                )
-            )
-        elif self.cfg.data.test.type == "NuScenesDataset":
-            np.array(pred + 1).astype(np.uint8).tofile(
-                os.path.join(
-                    save_path,
-                    "submit",
-                    "lidarseg",
-                    "test",
-                    "{}_lidarseg.bin".format(data_name),
-                )
-            )
-
         intersection, union, target = intersection_and_union(
             pred, segment, self.cfg.data.num_classes, self.cfg.data.ignore_index
         )
