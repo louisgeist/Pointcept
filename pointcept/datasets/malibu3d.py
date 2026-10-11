@@ -30,14 +30,13 @@ from pointcept.datasets.preprocessing.malibu3d.nathab_axes import (
 from pointcept.utils.logger import get_root_logger
 
 MALIBU3D_SPECIFIC_ASSETS = (
-    "forest",
     "natural_habitat",
     "elevation",
     "coord_translation",
     "network",
     "forest_2d",
 )
-MALIBU3D_SEMANTIC_TARGETS = ("segment", "forest", "natural_habitat")
+MALIBU3D_SEMANTIC_TARGETS = ("segment",)
 MALIBU3D_PIXEL_SEMANTIC_TARGETS = MALIBU3D_PIXEL_SEMANTIC_TARGET_KEYS
 MALIBU3D_TILE_DISTRIBUTION_TARGETS = MALIBU3D_TILE_DISTRIBUTION_TARGET_KEYS
 MALIBU3D_REGRESSION_TARGETS = ("elevation",)
@@ -69,9 +68,9 @@ class MALiBU3DDataset(DefaultDataset):
         the "n_points" column is missing/empty for a row in a thresholded split, or if
         "test" is given a threshold.
 
-    :param target_keys: Target keys. Supports semantic multitask for "segment", "forest",
-        and "natural_habitat". "elevation" can be combined with semantic keys.
-        Targets are exposed in the batch under their task name.
+    :param target_keys: Target keys: "segment", the pixel targets "forest_2d" and "network",
+        the natural-habitat axes "nathab_*" and "elevation". Targets are exposed in the batch
+        under their task name.
     :param primary_target_key: Primary semantic target. Must be included in target_keys when
         provided.
     :param task_configs: Optional dict of task_name -> task config, mirroring the
@@ -85,7 +84,6 @@ class MALiBU3DDataset(DefaultDataset):
     VALID_ASSETS = [*DefaultDataset.VALID_ASSETS, *MALIBU3D_SPECIFIC_ASSETS]
 
     MALIBU3D_OPTIONAL_TARGETS = (
-        "natural_habitat",
         *NATHAB_AXIS_KEYS,
         "elevation",
         "network",
@@ -235,11 +233,11 @@ class MALiBU3DDataset(DefaultDataset):
         raise KeyError(f"Unsupported target key: {target_key}")
 
     def _unpack_natural_habitat_axes(self, data_dict, n, scene):
-        """Dual-read ``natural_habitat.npy``: bake ``(N, 4)`` or legacy CarHab ``(N,)``.
+        """Unpack ``natural_habitat.npy`` ``(N, 4)`` ecological axes into ``nathab_*`` int32 vectors.
 
-        Baked axes are unpacked into ``nathab_*`` int32 vectors and the packed
-        array is removed so pointwise semantic reshape cannot flatten ``(N, 4)``.
-        Legacy CarHab ``(N,)`` is left for ``MALiBU3DLabelRemap`` fan-out.
+        The packed array is removed so pointwise semantic reshape cannot flatten it. A tile
+        preprocessed before the axes bake stores raw CarHab ids ``(N,)``: its natural-habitat
+        labels are then ignored (warning logged once).
         """
         if "natural_habitat" not in data_dict:
             return data_dict
@@ -250,21 +248,23 @@ class MALiBU3DDataset(DefaultDataset):
                     f"natural_habitat axes rows {nh.shape[0]} != coord rows {n} "
                     f"under scene: {scene}"
                 )
-            if "natural_habitat" in self.target_keys:
-                raise ValueError(
-                    "On-disk natural_habitat.npy is ecological axes (N, 4); "
-                    "target_keys cannot include semantic 'natural_habitat' "
-                    "(CarHab-only). Use nathab_* axis keys instead. "
-                    f"scene={scene}"
-                )
             for key, labels in unpack_nathab_axes(nh).items():
                 data_dict[key] = labels
             data_dict.pop("natural_habitat")
             return data_dict
         if is_nathab_carhab_array(nh):
+            data_dict.pop("natural_habitat")
+            if not getattr(self, "_warned_carhab", False):
+                self._warned_carhab = True
+                get_root_logger().warning(
+                    "natural_habitat.npy under %s holds raw CarHab ids (N,), not the (N, 4) "
+                    "ecological axes: its natural-habitat labels are ignored. Re-run "
+                    "preprocess_malibu3d.py to bake the axes.",
+                    scene,
+                )
             return data_dict
         raise ValueError(
-            f"natural_habitat.npy expected shape (N,) CarHab or (N, 4) axes, "
+            f"natural_habitat.npy expected shape (N, 4) ecological axes, "
             f"got {nh.shape} under scene: {scene}"
         )
 

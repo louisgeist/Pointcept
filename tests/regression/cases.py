@@ -129,7 +129,6 @@ TRAIN = {
                               _FLAIR_SMALL + [f"weight={CKPT['sonata-pretrained']}"]),
     "train-segment-litept-b": ("configs/malibu3d/segment/litept-b-v1m0-malibu3d.py", _FLAIR_SMALL),
     "train-elevation-litept-b": ("configs/malibu3d/elevation/litept-b-v1m0-malibu3d.py", _FLAIR_SMALL),
-    "train-forest-litept": ("configs/malibu3d/forest/litept-v1m0-malibu3d.py", _FLAIR_SMALL),
     "train-network-litept": ("configs/malibu3d/network/litept-v1m0-malibu3d.py", _FLAIR_SMALL),
     "train-pretrain-sonata": ("configs/malibu3d/pretrain-sonata-v1m2-malibu3d.py", [
         "seed=0", "enable_wandb=False", "num_worker=2", "batch_size=2",

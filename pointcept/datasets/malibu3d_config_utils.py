@@ -1,11 +1,8 @@
 """
 MALiBU3D multi-target label configs (semantic class names / counts and elevation regression).
 
-Edit MALIBU3D_SEMANTIC_TASKS if your on-disk label ids differ from these defaults.
-For each semantic task, names[i] is the display name for processed label id i.
-num_classes is the number of classes the model trains on (logit dimension); ignore_index labels
-are excluded from the loss. num_raw_classes (when present) is the number of distinct ids in
-source rasters before preprocessing remap (max raw id + 1).
+Class names, num_classes (the logit dimension) and ignore_index of the label-based tasks
+come from the label definitions of ``malibu3d_label_remap``.
 
 
 This file is used to configure, for each task/target:
@@ -22,90 +19,9 @@ from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 
-# Semantic targets: one entry per target_key used by MALiBU3DDataset / configs.
-MALIBU3D_SEMANTIC_TASKS: Dict[str, Dict[str, Any]] = {
-    "segment": {
-        "num_classes": 15,
-        "ignore_index": 15,
-        # v20 (finer12)
-        "names": [
-            'Building',
-            'Greenhouse',
-            'Impervious surface',
-            'Other soil',
-            'Herbaceous',
-            'Vineyard',
-            'Brushwood',
-            'Infrastructure',
-            'Swimming pool',
-            'Water',
-            'Deciduous',
-            'Coniferous',
-            'Bridge',
-            'Agricultural soil',
-            'Soil under vegetation',
-            'Void',
-        ],
-    },
-    "forest": {
-        "num_classes": 2,
-        "ignore_index": 2,
-        "names": ["Not Forest", "Forest", "Void"],
-    },
-    "natural_habitat": {
-        # CarHab raster uses 42=N/A and 43=Autre (routes). Preprocessing remaps to 43=void, 42=routes.
-        # Missing raster samples use fill_value=42 (raw), then remap to ignore_index 43.
-        "num_classes": 43,
-        "num_raw_classes": 44,
-        "ignore_index": 43,
-        "names": [
-            "Habitat ouvert sur substrat acide et humide du domaine tempéré",
-            "Habitat ouvert sur substrat acide et mésique du domaine tempéré",
-            "Habitat ouvert sur substrat acide et sec du domaine tempéré",
-            "Habitat ouvert sur substrat basique et humide du domaine tempéré",
-            "Habitat ouvert sur substrat basique et mésique du domaine tempéré",
-            "Habitat ouvert sur substrat basique et sec du domaine tempéré",
-            "Habitat forestier sur substrat acide et humide du domaine tempéré",
-            "Habitat forestier sur substrat acide et mésique du domaine tempéré",
-            "Habitat forestier sur substrat acide et sec du domaine tempéré",
-            "Habitat forestier sur substrat basique et humide du domaine tempéré",
-            "Habitat forestier sur substrat basique et mésique du domaine tempéré",
-            "Habitat forestier sur substrat basique et sec du domaine tempéré",
-            "Habitat ouvert sur substrat acide et humide du domaine méditerranéen",
-            "Habitat ouvert sur substrat acide et mésique du domaine méditerranéen",
-            "Habitat ouvert sur substrat acide et sec du domaine méditerranéen",
-            "Habitat ouvert sur substrat basique et humide du domaine méditerranéen",
-            "Habitat ouvert sur substrat basique et mésique du domaine méditerranéen",
-            "Habitat ouvert sur substrat basique et sec du domaine méditerranéen",
-            "Habitat forestier sur substrat acide et humide du domaine méditerranéen",
-            "Habitat forestier sur substrat acide et mésique du domaine méditerranéen",
-            "Habitat forestier sur substrat acide et sec du domaine méditerranéen",
-            "Habitat forestier sur substrat basique et humide du domaine méditerranéen",
-            "Habitat forestier sur substrat basique et mésique du domaine méditerranéen",
-            "Habitat forestier sur substrat basique et sec du domaine méditerranéen",
-            "Habitat ouvert sur substrat acide et humide du domaine alpin",
-            "Habitat ouvert sur substrat acide et mésique du domaine alpin",
-            "Habitat ouvert sur substrat acide et sec du domaine alpin",
-            "Habitat ouvert sur substrat basique et humide du domaine alpin",
-            "Habitat ouvert sur substrat basique et mésique du domaine alpin",
-            "Habitat ouvert sur substrat basique et sec du domaine alpin",
-            "Habitat forestier sur substrat acide et humide du domaine alpin",
-            "Habitat forestier sur substrat acide et mésique du domaine alpin",
-            "Habitat forestier sur substrat acide et sec du domaine alpin",
-            "Habitat forestier sur substrat basique et humide du domaine alpin",
-            "Habitat forestier sur substrat basique et mésique du domaine alpin",
-            "Habitat forestier sur substrat basique et sec du domaine alpin",
-            "Habitat minéral sur substrat acide",
-            "Habitat minéral sur substrat basique",
-            "Habitat aquatique sur substrat acide",
-            "Habitat aquatique sur substrat basique",
-            "Habitat cultivé",
-            "Zone bâtie et autre habitat artificiel",
-            "Routes & voies verrées",
-            "Void",
-        ],
-    },
-}
+# Point-wise semantic targets. Their classes, names and ignore index come from the label
+# definitions of ``malibu3d_label_remap`` (see ``get_semantic_config``).
+MALIBU3D_SEMANTIC_TASKS: Tuple[str, ...] = ("segment",)
 
 # Binary 2D pixel semantic tasks (1 m Lambert masks). Not point-wise.
 # Training / heads use ROADS + RAILROADS only. On-disk ``network.npy`` may still
@@ -155,7 +71,7 @@ MALIBU3D_TILE_DISTRIBUTION_TASKS: Dict[str, str] = {
     "nathab_bioclimatic_zone": "by_climatic_domain",
 }
 
-MALIBU3D_SEMANTIC_TARGET_KEYS: Tuple[str, ...] = tuple(MALIBU3D_SEMANTIC_TASKS.keys())
+MALIBU3D_SEMANTIC_TARGET_KEYS: Tuple[str, ...] = MALIBU3D_SEMANTIC_TASKS
 MALIBU3D_PIXEL_SEMANTIC_TARGET_KEYS: Tuple[str, ...] = tuple(
     MALIBU3D_PIXEL_SEMANTIC_TASKS.keys()
 )
@@ -181,10 +97,6 @@ MALIBU3D_MULTITASK_INDEX_VALID_KEYS: Tuple[str, ...] = (
     "strength_mask",
     "segment",
     "instance",
-    "forest",
-    # Legacy CarHab ``(N,)`` only — baked ``(N, 4)`` is unpacked in
-    # ``MALiBU3DDataset.get_data`` and popped before GridSample.
-    "natural_habitat",
     "elevation",
     "abs_xy",
     "nathab_habitat_type",
@@ -236,7 +148,7 @@ def get_semantic_config(
     Adds task_type set to "semantic" for use with MultiTaskSegmentorV2.
     """
     if target_key not in MALIBU3D_SEMANTIC_TASKS:
-        keys = ", ".join(sorted(MALIBU3D_SEMANTIC_TASKS.keys()))
+        keys = ", ".join(sorted(MALIBU3D_SEMANTIC_TASKS))
         raise KeyError(f"Unknown semantic target_key '{target_key}'. Expected one of: {keys}")
 
     from pointcept.datasets.preprocessing.malibu3d.malibu3d_label_remap import (
@@ -340,7 +252,7 @@ def enable_nathab_pointwise_supervision(
 
 def _validate_target_keys(target_keys: Tuple[str, ...]) -> None:
     known = (
-        set(MALIBU3D_SEMANTIC_TASKS.keys())
+        set(MALIBU3D_SEMANTIC_TASKS)
         | set(MALIBU3D_PIXEL_SEMANTIC_TASKS.keys())
         | set(MALIBU3D_TILE_DISTRIBUTION_TASKS.keys())
         | {"elevation"}
@@ -427,7 +339,7 @@ def init_task_configs(
         else:
             raise KeyError(
                 f"Unknown task_name '{task_name}'. Expected one of: "
-                f"{sorted((*MALIBU3D_SEMANTIC_TASKS.keys(), *MALIBU3D_PIXEL_SEMANTIC_TASKS.keys(), *MALIBU3D_TILE_DISTRIBUTION_TASKS.keys(), 'elevation'))}"
+                f"{sorted((*MALIBU3D_SEMANTIC_TASKS, *MALIBU3D_PIXEL_SEMANTIC_TASKS.keys(), *MALIBU3D_TILE_DISTRIBUTION_TASKS.keys(), 'elevation'))}"
             )
     return out
 
@@ -437,18 +349,8 @@ def get_missing_target_fill_value(
 ) -> Any:
     """Return the fallback value used when a target file is missing.
 
-    - Semantic targets fallback to the on-disk *storage* definition's own ignore_index
-      (not the training-taxonomy one). This matters when a target is remapped on the
-      fly (e.g. via MALiBU3DLabelRemap): a negative sentinel (e.g. -1) is
-      treated as an invalid/out-of-range raw id by the remap, which then correctly
-      substitutes *its own* target-specific void id regardless of which training
-      definition is in play; a non-negative storage ignore_index (e.g.
-      natural_habitat's "default" definition, 43) is a valid raw/stored id that any
-      natural_habitat-derived LUT (by_habitat_x_domain, the 4 nathab axes, ...) was
-      built to resolve to void. Using the *training*-taxonomy ignore_index instead
-      (the previous behavior) broke this for natural_habitat specifically, since its
-      training-default definition's ignore_index (11, for by_habitat_x_domain) is a
-      small non-negative number that collides with a real raw CarHab id.
+    - Semantic targets fall back to the on-disk storage definition's ignore_index.
+    - Natural-habitat axes fall back to each axis' void id.
     - Elevation regression falls back to NaN so masked losses ignore it.
     - Network pixel masks fallback to an empty (r, 1, 1) zero raster (absence).
 
@@ -487,7 +389,7 @@ def get_missing_target_fill_value(
     keys = ", ".join(
         sorted(
             (
-                *MALIBU3D_SEMANTIC_TASKS.keys(),
+                *MALIBU3D_SEMANTIC_TASKS,
                 *MALIBU3D_PIXEL_SEMANTIC_TASKS.keys(),
                 *MALIBU3D_TILE_DISTRIBUTION_TASKS.keys(),
                 "elevation",

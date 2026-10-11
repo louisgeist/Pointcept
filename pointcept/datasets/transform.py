@@ -6,7 +6,6 @@ Please cite our work if the code is helpful to you.
 """
 
 import os
-import sys
 from contextlib import nullcontext
 
 import copy
@@ -202,118 +201,9 @@ class Update(object):
 
 
 @TRANSFORMS.register_module()
-class MALiBU3DLabelRemap(object):
-    """Remap MALiBU3D semantic targets from on-disk storage defs to training defs."""
-
-    @staticmethod
-    def _load_label_remap_module():
-        import importlib.util
-
-        module_name = "malibu3d_label_remap"
-        if module_name in sys.modules:
-            return sys.modules[module_name]
-        path = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)),
-            "preprocessing",
-            "malibu3d",
-            "malibu3d_label_remap.py",
-        )
-        spec = importlib.util.spec_from_file_location(module_name, path)
-        mod = importlib.util.module_from_spec(spec)
-        sys.modules[module_name] = mod
-        spec.loader.exec_module(mod)
-        return mod
-
-    def __init__(self, remaps, storage_definitions=None):
-        """
-        :param remaps: Dict mapping an output key to either:
-            - a bare definition-name string (existing, in-place behavior): the key is
-              both the source (task_key used to look up definitions) and the output
-              key, remapped in place.
-            - a ``(source_key, target_definition_name)`` tuple (fan-out): reads
-              ``data_dict[source_key]`` (task_key = source_key for definition lookup)
-              and writes the remapped result into a NEW key (the dict's own key),
-              leaving ``data_dict[source_key]`` untouched. Lets one on-disk field
-              (e.g. ``natural_habitat``) fan out into several differently-named
-              per-axis targets in a single transform.
-        """
-        if not remaps:
-            raise ValueError("remaps must be a non-empty dict of task_key -> definition name")
-        label_remap = self._load_label_remap_module()
-        build_stored_to_train_lut = label_remap.build_stored_to_train_lut
-        get_default_definition_name = label_remap.get_default_definition_name
-        get_definition = label_remap.get_definition
-
-        storage_definitions = storage_definitions or {}
-        self.remap_keys = tuple(remaps.keys())
-        self.luts = {}
-        self.fallbacks = {}
-        self.fanout_source_keys = {}
-        for output_key, spec in remaps.items():
-            if isinstance(spec, str):
-                task_key = output_key
-                target_name = spec
-            elif isinstance(spec, (tuple, list)) and len(spec) == 2:
-                task_key, target_name = spec
-                self.fanout_source_keys[output_key] = task_key
-            else:
-                raise ValueError(
-                    f"remaps['{output_key}'] must be a definition-name string or a "
-                    f"(source_key, target_definition_name) tuple, got {spec!r}"
-                )
-            target_def = get_definition(task_key, target_name)
-            # Default *on-disk storage* definition -- NOT the same as the default
-            # *training-target* definition (get_default_definition_name), which happen to
-            # coincide for segment/forest but not for natural_habitat: preprocessing
-            # always writes natural_habitat.npy in the raw/finest "default" CarHab taxonomy
-            # (43 raw classes) so several different targets can be fanned out from the same
-            # on-disk file on the fly, but get_default_definition_name("natural_habitat")
-            # returns "by_habitat_x_domain" (the default *target*). Falling back to it here
-            # would silently collapse the LUT (multiple raw ids -> 1 stored id, last-write-
-            # wins) instead of raising whenever a caller omits storage_definitions for
-            # natural_habitat -- every current config already passes it explicitly, so this
-            # is a latent-bug guard, not a behavior change for existing configs.
-            default_storage_name = (
-                "default" if task_key == "natural_habitat" else get_default_definition_name(task_key)
-            )
-            storage_name = storage_definitions.get(task_key, default_storage_name)
-            if storage_name == target_name and output_key not in self.fanout_source_keys:
-                continue
-            storage_def = get_definition(task_key, storage_name)
-            self.luts[output_key] = build_stored_to_train_lut(storage_def, target_def)
-            self.fallbacks[output_key] = int(
-                target_def.lut[target_def.missing_fill_raw_id]
-            )
-
-    def __call__(self, data_dict):
-        # Fan-out entries first, so they always read pristine source values even if
-        # the same source key is also remapped in place elsewhere in this instance.
-        output_keys = sorted(
-            self.luts.keys(), key=lambda k: 0 if k in self.fanout_source_keys else 1
-        )
-        for output_key in output_keys:
-            lut = self.luts[output_key]
-            source_key = self.fanout_source_keys.get(output_key, output_key)
-            if source_key not in data_dict:
-                continue
-            labels = data_dict[source_key]
-            if isinstance(labels, torch.Tensor):
-                labels = labels.numpy()
-            idx = labels.astype(np.int64, copy=False)
-            fallback = self.fallbacks[output_key]
-            remapped = np.full(idx.shape, fallback, dtype=np.int32)
-            valid = (idx >= 0) & (idx < lut.shape[0])
-            if np.any(valid):
-                remapped[valid] = lut[idx[valid]]
-            data_dict[output_key] = remapped
-        return data_dict
-
-
-@TRANSFORMS.register_module()
 class RemapSegment(object):
     """In-place ``segment`` label remap via a small id->id dict (e.g. merge one raw class
-    into another). Unlike ``MALiBU3DLabelRemap``, this has no notion of on-disk storage
-    definitions -- just a literal mapping applied to whatever ``segment`` already holds.
+    into another), applied to whatever ``segment`` already holds.
     IDs not present in ``mapping`` pass through unchanged.
     """
 
