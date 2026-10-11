@@ -2,9 +2,8 @@ r"""
 MALiBU3D v2 — manifest-driven preprocessing from pre-labeled PLY files.
 
 Semantic segment labels are read from upstream-enriched PLY ``semantic`` attributes.
-All semantic targets (segment, forest, natural_habitat) are remapped via
-named definitions in ``malibu3d_label_remap.py`` (CLI: ``--segment_definition``,
-``--forest_definition``, ``--natural_habitat_definition``).
+Segment and natural-habitat labels are remapped via named definitions in
+``malibu3d_label_remap.py`` (CLI: ``--segment_definition``, ``--natural_habitat_definition``).
 This script reads PLY from ``--ply_root`` and writes Pointcept scene folders.
 
 The tile CSV is the single source of truth: either the MALiBU3D ``tiles.csv``
@@ -17,7 +16,6 @@ folder containing:
 - color.npy
 - segment.npy    (from PLY ``semantic``; remapped via ``--segment_definition``)
 - strength.npy   (LiDAR intensity)
-- forest.npy     (FOREST GeoTIFF — always sampled; remapped via ``--forest_definition``)
 - natural_habitat.npy   (only when has_natural_habitat=True; ``uint8 (N, 4)`` ecological axes
                         baked from CarHab via ``nathab_axes.carhab_to_nathab_axes``;
                         ``--natural_habitat_definition default`` still selects the CarHab
@@ -34,7 +32,7 @@ Conventions (must match scripts/build_csv_manifest.py):
     PLY path = {ply_root}/LIDARHD/{dept_year}_LIDARHD/{roi}/
                {dept_year}_LIDARHD_{roi}_{scene_i_j}.ply
 
-Auxiliary rasters (FOREST, NATURAL_HABITAT, DEM_ELEV) are read from
+Auxiliary rasters (NATURAL_HABITAT, DEM_ELEV) are read from
 ``--dataset_root`` using the same layout as v1.
 
 Reports written under ``--output_root``:
@@ -508,9 +506,9 @@ def _build_scene_from_subtile(
 
     Returns:
         scene: dict of numpy arrays to save (keys: coord, color, segment, and
-            optionally strength, forest, natural_habitat, elevation).
+            optionally strength, natural_habitat, elevation).
         missing_modalities: list of {split, patch_id, modality, path} entries
-            for rasters expected (per FOREST/manifest flags) but absent on disk.
+            for rasters expected (per manifest flags) but absent on disk.
 
     Raises:
         FileNotFoundError: if the LiDAR PLY itself is missing.
@@ -553,34 +551,6 @@ def _build_scene_from_subtile(
 
     missing_modalities: List[Dict[str, str]] = []
     lidar_patch_stem = f"{task.dept_year}_LIDARHD_{task.roi}_{task.scene_i_j}"
-
-    # FOREST: always sampled (assumed available everywhere by dataset convention).
-    forest_raster_path = build_modality_patch_path(
-        dataset_root=dataset_root,
-        modality="FOREST",
-        dept_year=task.dept_year,
-        roi=task.roi,
-        lidar_patch_stem=lidar_patch_stem,
-    )
-    if os.path.isfile(forest_raster_path):
-        forest_def = label_definitions.forest
-        forest_values, _ = sample_raster_to_points(
-            raster_path=forest_raster_path,
-            xy=coord[:, :2],
-            fill_value=forest_def.missing_fill_raw_id,
-        )
-        out["forest"] = apply_remap(forest_values, forest_def).astype(
-            np.int16, copy=False
-        )
-    else:
-        missing_modalities.append(
-            {
-                "split": task.split,
-                "patch_id": task.patch_id,
-                "modality": "FOREST",
-                "path": forest_raster_path,
-            }
-        )
 
     if task.has_natural_habitat:
         natural_habitat_raster_path = build_modality_patch_path(
@@ -674,8 +644,6 @@ def _save_scene(
         elif os.path.isfile(path):
             os.remove(path)
 
-    # FOREST is conceptually always enabled; any stale file is overwritten or kept.
-    _save_or_clean("forest.npy", "forest", np.int16, enabled=True)
 
     if task.has_natural_habitat and "natural_habitat" in scene:
         carhab = np.asarray(scene["natural_habitat"])
@@ -826,7 +794,7 @@ def main_process():
         "--dataset_root",
         type=str,
         default=None,
-        help="Root directory containing auxiliary modality GeoTIFFs (FOREST, etc.)",
+        help="Root directory containing the auxiliary GeoTIFFs (NATURAL_HABITAT, DEM_ELEV)",
     )
     parser.add_argument(
         "--output_root",
@@ -891,7 +859,7 @@ def main_process():
             "By default the script resumes by skipping already-processed scenes."
         ),
     )
-    for task_key in ("segment", "forest", "natural_habitat"):
+    for task_key in ("segment", "natural_habitat"):
         parser.add_argument(
             f"--{task_key}_definition",
             type=str,
@@ -936,7 +904,6 @@ def main_process():
 
     label_definitions = build_preprocess_label_definitions(
         segment=args.segment_definition,
-        forest=args.forest_definition,
         natural_habitat=args.natural_habitat_definition,
     )
     logger.info("Label definitions: %s", label_definitions.to_meta_dict())

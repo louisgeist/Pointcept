@@ -1,7 +1,7 @@
 """
 MALiBU3D unified label definitions and LUT remapping. (LUT: look-up table)
 
-Single registry for all semantic tasks (segment, forest, natural_habitat).
+Single registry for the label-based tasks (segment, natural_habitat and its ecological axes).
 Used by preprocess_malibu3d and malibu3d_config_utils (training metadata).
 
 Source-agnostic: remapping applies the same whether labels come from a PLY field
@@ -14,12 +14,6 @@ from dataclasses import dataclass
 from typing import Dict, Mapping, Sequence, Tuple
 
 import numpy as np
-
-SEMANTIC_TASK_KEYS: Tuple[str, ...] = (
-    "segment",
-    "forest",
-    "natural_habitat",
-)
 
 # ---------------------------------------------------------------------------
 # Class names (default / fine-grained taxonomies)
@@ -44,54 +38,8 @@ _SEGMENT_NAMES: Tuple[str, ...] = (
     "Void",
 )
 
-# Flair3D-build label=v17 (finer13): building split by land use, soil under vegetation.
-_SEGMENT_V17_NAMES: Tuple[str, ...] = (
-    "Residential building",
-    "Greenhouse",
-    "Impervious surface",
-    "Other soil",
-    "Herbaceous",
-    "Vineyard",
-    "Brushwood",
-    "Infrastructure",
-    "Swimming pool",
-    "Water",
-    "Deciduous",
-    "Coniferous",
-    "Bridge",
-    "Agricultural soil",
-    "Soil under vegetation",
-    "Industrial building",
-    "Tertiary building",
-    "Building with unknown usage",
-    "Void",
-)
-
-# Flair3D-build label=v18 (finer14): unknown building usage merged into void.
-_SEGMENT_V18_NAMES: Tuple[str, ...] = (
-    "Residential building",
-    "Greenhouse",
-    "Impervious surface",
-    "Other soil",
-    "Herbaceous",
-    "Vineyard",
-    "Brushwood",
-    "Infrastructure",
-    "Swimming pool",
-    "Water",
-    "Deciduous",
-    "Coniferous",
-    "Bridge",
-    "Agricultural soil",
-    "Soil under vegetation",
-    "Industrial building",
-    "Tertiary building",
-    "Void",
-)
-
-# Flair3D-build label=v19/v20 (finer12): single Building class, no land-use split.
-# v20 differs from v19 only upstream (other_infrastructure_filter v3); same train taxonomy.
-_SEGMENT_V19_NAMES: Tuple[str, ...] = (
+# Land-cover taxonomy of the released dataset (15 classes + void).
+_SEGMENT_V20_NAMES: Tuple[str, ...] = (
     "Building",
     "Greenhouse",
     "Impervious surface",
@@ -109,8 +57,6 @@ _SEGMENT_V19_NAMES: Tuple[str, ...] = (
     "Soil under vegetation",
     "Void",
 )
-
-_FOREST_NAMES: Tuple[str, ...] = ("Not Forest", "Forest", "Void")
 
 _NATURAL_HABITAT_NAMES: Tuple[str, ...] = (
     "Habitat ouvert sur substrat acide et humide du domaine tempéré",
@@ -159,75 +105,6 @@ _NATURAL_HABITAT_NAMES: Tuple[str, ...] = (
     "Void",
 )
 
-_NATURAL_HABITAT_BY_DOMAIN_NAMES: Tuple[str, ...] = (
-    "Domaine tempéré",
-    "Domaine méditerranéen",
-    "Domaine alpin",
-    "Habitat minéral",
-    "Habitat aquatique",
-    "Habitat cultivé",
-    "Zone bâtie et autre habitat artificiel",
-    "Routes & voies verrées",
-    "Void",
-)
-
-_NATURAL_HABITAT_BY_HABITAT_TYPE_NAMES: Tuple[str, ...] = (
-    "Habitat ouvert",
-    "Habitat forestier",
-    "Habitat minéral",
-    "Habitat aquatique",
-    "Habitat cultivé",
-    "Zone bâtie et autre habitat artificiel",
-    "Routes & voies verrées",
-    "Void",
-)
-
-_NATURAL_HABITAT_BY_HABITAT_X_DOMAIN_NAMES: Tuple[str, ...] = (
-    "Open habitat in temperate domain",
-    "Forest habitat in temperate domain",
-    "Open habitat in mediterranean domain",
-    "Forest habitat in mediterranean domain",
-    "Open habitat in alpine domain",
-    "Forest habitat in alpine domain",
-    "Mineral habitat",
-    "Aquatic habitat",
-    "Cultivated habitat",
-    "Built and other artificial habitat",
-    "Roads & paved tracks",
-    "Void",
-)
-
-_NATURAL_HABITAT_BY_MOISTURE_NAMES: Tuple[str, ...] = (
-    "Humide",
-    "Mesique",
-    "Sec",
-    "Mineral",
-    "Aquatic",
-    "Cultivated",
-    "Built",
-    "Road",
-    "Void",
-)
-
-_NATURAL_HABITAT_BY_MOISTURE_V2_NAMES: Tuple[str, ...] = (
-    "Humide",
-    "Mesique",
-    "Sec",
-    "Mineral",
-    "Aquatic",
-    "Anthropogenic habitat",
-    "Void",
-)
-
-_NATURAL_HABITAT_BY_MOISTURE_V3_NAMES: Tuple[str, ...] = (
-    "Humide",
-    "Mesique",
-    "Sec",
-    "Mineral",
-    "Aquatic",
-    "Void",
-)
-
 _NATURAL_HABITAT_BY_CLIMATIC_DOMAIN_NAMES: Tuple[str, ...] = (
     "Temperate",
     "Mediterranean",
@@ -256,28 +133,13 @@ _NATURAL_HABITAT_BY_MOISTURE_REGIME_NAMES: Tuple[str, ...] = (
     "Void",
 )
 
-# Shared open/forest CarHab raw-id groups (domain x habitat_type x substrate x moisture space),
-# reused by both `by_habitat_type` and `by_habitat_type_ecological`.
+# Open / forest CarHab raw-id groups (domain x habitat type x substrate x moisture space),
+# used by `by_habitat_type_ecological`.
 _NATURAL_HABITAT_OPEN_IDS: Tuple[int, ...] = tuple(
     list(range(0, 6)) + list(range(12, 18)) + list(range(24, 30))
 )
 _NATURAL_HABITAT_FOREST_IDS: Tuple[int, ...] = tuple(
     list(range(6, 12)) + list(range(18, 24)) + list(range(30, 36))
-)
-
-# CarHab raw id -> train id. Raw 42=N/A -> void (11); raw 43=routes -> 10.
-_NATURAL_HABITAT_BY_HABITAT_X_DOMAIN_LUT = np.array(
-    [
-        0, 0, 0, 0, 0, 0,  # 0-5   open / temperate
-        1, 1, 1, 1, 1, 1,  # 6-11  forest / temperate
-        2, 2, 2, 2, 2, 2,  # 12-17 open / mediterranean
-        3, 3, 3, 3, 3, 3,  # 18-23 forest / mediterranean
-        4, 4, 4, 4, 4, 4,  # 24-29 open / alpine
-        5, 5, 5, 5, 5, 5,  # 30-35 forest / alpine
-        6, 6, 7, 7, 8, 9,  # 36-41 mineral, aquatic, cultivated, built
-        11, 10,  # 42=N/A -> void, 43=routes
-    ],
-    dtype=np.int32,
 )
 
 
@@ -309,13 +171,11 @@ class PreprocessLabelDefinitions:
   """Bundle of label definitions passed to preprocessing workers."""
 
   segment: LabelDefinition
-  forest: LabelDefinition
   natural_habitat: LabelDefinition
 
   def to_meta_dict(self) -> Dict[str, str]:
     return {
       "segment": self.segment.name,
-      "forest": self.forest.name,
       "natural_habitat": self.natural_habitat.name,
     }
 
@@ -345,22 +205,8 @@ def _build_segment_lut(num_raw: int = 256, void_train_id: int = 15) -> np.ndarra
   return lut
 
 
-def _build_segment_v17_lut(num_raw: int = 256, void_train_id: int = 18) -> np.ndarray:
-  """Identity for 0..18 (Flair3D-build finer13); overflow maps to void."""
-  lut = np.full(num_raw, void_train_id, dtype=np.int32)
-  lut[: void_train_id + 1] = np.arange(void_train_id + 1, dtype=np.int32)
-  return lut
-
-
-def _build_segment_v18_lut(num_raw: int = 256, void_train_id: int = 17) -> np.ndarray:
-  """Identity for 0..17 (Flair3D-build finer14); overflow maps to void."""
-  lut = np.full(num_raw, void_train_id, dtype=np.int32)
-  lut[: void_train_id + 1] = np.arange(void_train_id + 1, dtype=np.int32)
-  return lut
-
-
-def _build_segment_v19_lut(num_raw: int = 256, void_train_id: int = 15) -> np.ndarray:
-  """Identity for 0..15 (Flair3D-build finer12); overflow maps to void."""
+def _build_segment_v20_lut(num_raw: int = 256, void_train_id: int = 15) -> np.ndarray:
+  """Identity for 0..15 (the 15 land-cover classes + void); overflow maps to void."""
   lut = np.full(num_raw, void_train_id, dtype=np.int32)
   lut[: void_train_id + 1] = np.arange(void_train_id + 1, dtype=np.int32)
   return lut
@@ -371,54 +217,6 @@ def _build_natural_habitat_default_lut() -> np.ndarray:
   lut = np.arange(44, dtype=np.int32)
   lut[42] = 43
   lut[43] = 42
-  return lut
-
-
-def _build_natural_habitat_by_moisture_lut() -> np.ndarray:
-  """CarHab raw ids 0-35 -> moisture (id % 3); special classes kept separate."""
-  lut = np.full(44, 8, dtype=np.int32)
-  for raw_id in range(36):
-    lut[raw_id] = raw_id % 3
-  lut[36] = 3
-  lut[37] = 3
-  lut[38] = 4
-  lut[39] = 4
-  lut[40] = 5
-  lut[41] = 6
-  lut[42] = 8
-  lut[43] = 7
-  return lut
-
-
-def _build_natural_habitat_by_moisture_v2_lut() -> np.ndarray:
-  """Like by_moisture but Cultivated, Built and Road -> Anthropogenic habitat."""
-  lut = np.full(44, 6, dtype=np.int32)
-  for raw_id in range(36):
-    lut[raw_id] = raw_id % 3
-  lut[36] = 3
-  lut[37] = 3
-  lut[38] = 4
-  lut[39] = 4
-  lut[40] = 5
-  lut[41] = 5
-  lut[42] = 6
-  lut[43] = 5
-  return lut
-
-
-def _build_natural_habitat_by_moisture_v3_lut() -> np.ndarray:
-  """Like by_moisture but Cultivated, Built and Road -> void."""
-  lut = np.full(44, 5, dtype=np.int32)
-  for raw_id in range(36):
-    lut[raw_id] = raw_id % 3
-  lut[36] = 3
-  lut[37] = 3
-  lut[38] = 4
-  lut[39] = 4
-  lut[40] = 5
-  lut[41] = 5
-  lut[42] = 5
-  lut[43] = 5
   return lut
 
 
@@ -445,11 +243,7 @@ def _build_natural_habitat_by_soil_chemistry_lut() -> np.ndarray:
 
 
 def _build_natural_habitat_by_moisture_regime_lut() -> np.ndarray:
-  """CarHab raw ids 0-35 -> moisture (id % 3); everything else -> void.
-
-  Clean 3-class+void variant of `by_moisture_v3` (that definition's names tuple
-  carries two unreachable "Mineral"/"Aquatic" slots its own LUT never emits).
-  """
+  """CarHab raw ids 0-35 -> moisture (id % 3); everything else -> void."""
   lut = np.full(44, 3, dtype=np.int32)
   for raw_id in range(36):
     lut[raw_id] = raw_id % 3
@@ -492,123 +286,28 @@ def _register_segment_definitions() -> Dict[str, LabelDefinition]:
     missing_fill_raw_id=segment_void,
     source_field="semantic",
   )
-  # Upstream PLY may already use inter_finerall10 train ids; same LUT/metadata.
-  inter_finerall10 = _make_definition(
-    "segment",
-    "inter_finerall10",
-    num_raw_classes=segment_lut.shape[0],
-    lut=segment_lut.copy(),
-    names=_SEGMENT_NAMES,
-    ignore_index=segment_void,
-    missing_fill_raw_id=segment_void,
-    source_field="semantic",
-  )
-  segment_v17_lut = _build_segment_v17_lut()
-  segment_v17_void = 18
-  v17 = _make_definition(
-    "segment",
-    "v17",
-    num_raw_classes=segment_v17_lut.shape[0],
-    lut=segment_v17_lut,
-    names=_SEGMENT_V17_NAMES,
-    ignore_index=segment_v17_void,
-    missing_fill_raw_id=segment_v17_void,
-    source_field="semantic",
-  )
-  segment_v18_lut = _build_segment_v18_lut()
-  segment_v18_void = 17
-  v18 = _make_definition(
-    "segment",
-    "v18",
-    num_raw_classes=segment_v18_lut.shape[0],
-    lut=segment_v18_lut,
-    names=_SEGMENT_V18_NAMES,
-    ignore_index=segment_v18_void,
-    missing_fill_raw_id=segment_v18_void,
-    source_field="semantic",
-  )
-  segment_v19_lut = _build_segment_v19_lut()
-  segment_v19_void = 15
-  v19 = _make_definition(
-    "segment",
-    "v19",
-    num_raw_classes=segment_v19_lut.shape[0],
-    lut=segment_v19_lut,
-    names=_SEGMENT_V19_NAMES,
-    ignore_index=segment_v19_void,
-    missing_fill_raw_id=segment_v19_void,
-    source_field="semantic",
-  )
-  # Same LUT/names as v19; name tracks Flair3D-build label=v20 for meta.json cleanliness.
+  segment_v20_lut = _build_segment_v20_lut()
+  segment_v20_void = 15
   v20 = _make_definition(
     "segment",
     "v20",
-    num_raw_classes=segment_v19_lut.shape[0],
-    lut=segment_v19_lut.copy(),
-    names=_SEGMENT_V19_NAMES,
-    ignore_index=segment_v19_void,
-    missing_fill_raw_id=segment_v19_void,
+    num_raw_classes=segment_v20_lut.shape[0],
+    lut=segment_v20_lut,
+    names=_SEGMENT_V20_NAMES,
+    ignore_index=segment_v20_void,
+    missing_fill_raw_id=segment_v20_void,
     source_field="semantic",
   )
   return {
     "default": base,
-    "inter_finerall10": inter_finerall10,
-    "v17": v17,
-    "v18": v18,
-    "v19": v19,
     "v20": v20,
-  }
-
-
-def _register_forest_definitions() -> Dict[str, LabelDefinition]:
-  lut = np.arange(3, dtype=np.int32)
-  return {
-    "default": _make_definition(
-      "forest",
-      "default",
-      num_raw_classes=3,
-      lut=lut,
-      names=_FOREST_NAMES,
-      ignore_index=2,
-      missing_fill_raw_id=2,
-      source_field="FOREST",
-    ),
   }
 
 
 def _register_natural_habitat_definitions() -> Dict[str, LabelDefinition]:
   default_lut = _build_natural_habitat_default_lut()
-  by_domain_lut = build_lut_from_groups(
-    44,
-    {
-      0: list(range(0, 12)),
-      1: list(range(12, 24)),
-      2: list(range(24, 36)),
-      3: [36, 37],
-      4: [38, 39],
-      5: [40],
-      6: [41],
-      7: [43],  # raw Autre / routes
-      8: [42],  # raw N/A -> void
-    },
-    default_train_id=8,
-  )
   open_ids = list(_NATURAL_HABITAT_OPEN_IDS)
   forest_ids = list(_NATURAL_HABITAT_FOREST_IDS)
-  by_habitat_type_lut = build_lut_from_groups(
-    44,
-    {
-      0: open_ids,
-      1: forest_ids,
-      2: [36, 37],
-      3: [38, 39],
-      4: [40],
-      5: [41],
-      6: [43],
-      7: [42],
-    },
-    default_train_id=7,
-  )
   by_habitat_type_ecological_lut = build_lut_from_groups(
     44,
     {
@@ -627,66 +326,6 @@ def _register_natural_habitat_definitions() -> Dict[str, LabelDefinition]:
       lut=default_lut,
       names=_NATURAL_HABITAT_NAMES,
       ignore_index=43,
-      missing_fill_raw_id=42,
-      source_field="NATURAL_HABITAT",
-    ),
-    "by_domain": _make_definition(
-      "natural_habitat",
-      "by_domain",
-      num_raw_classes=44,
-      lut=by_domain_lut,
-      names=_NATURAL_HABITAT_BY_DOMAIN_NAMES,
-      ignore_index=8,
-      missing_fill_raw_id=42,
-      source_field="NATURAL_HABITAT",
-    ),
-    "by_habitat_type": _make_definition(
-      "natural_habitat",
-      "by_habitat_type",
-      num_raw_classes=44,
-      lut=by_habitat_type_lut,
-      names=_NATURAL_HABITAT_BY_HABITAT_TYPE_NAMES,
-      ignore_index=7,
-      missing_fill_raw_id=42,
-      source_field="NATURAL_HABITAT",
-    ),
-    "by_habitat_x_domain": _make_definition(
-      "natural_habitat",
-      "by_habitat_x_domain",
-      num_raw_classes=44,
-      lut=_NATURAL_HABITAT_BY_HABITAT_X_DOMAIN_LUT,
-      names=_NATURAL_HABITAT_BY_HABITAT_X_DOMAIN_NAMES,
-      ignore_index=11,
-      missing_fill_raw_id=42,
-      source_field="NATURAL_HABITAT",
-    ),
-    "by_moisture": _make_definition(
-      "natural_habitat",
-      "by_moisture",
-      num_raw_classes=44,
-      lut=_build_natural_habitat_by_moisture_lut(),
-      names=_NATURAL_HABITAT_BY_MOISTURE_NAMES,
-      ignore_index=8,
-      missing_fill_raw_id=42,
-      source_field="NATURAL_HABITAT",
-    ),
-    "by_moisture_v2": _make_definition(
-      "natural_habitat",
-      "by_moisture_v2",
-      num_raw_classes=44,
-      lut=_build_natural_habitat_by_moisture_v2_lut(),
-      names=_NATURAL_HABITAT_BY_MOISTURE_V2_NAMES,
-      ignore_index=6,
-      missing_fill_raw_id=42,
-      source_field="NATURAL_HABITAT",
-    ),
-    "by_moisture_v3": _make_definition(
-      "natural_habitat",
-      "by_moisture_v3",
-      num_raw_classes=44,
-      lut=_build_natural_habitat_by_moisture_v3_lut(),
-      names=_NATURAL_HABITAT_BY_MOISTURE_V3_NAMES,
-      ignore_index=5,
       missing_fill_raw_id=42,
       source_field="NATURAL_HABITAT",
     ),
@@ -735,15 +374,13 @@ def _register_natural_habitat_definitions() -> Dict[str, LabelDefinition]:
 
 LABEL_DEFINITIONS: Dict[str, Dict[str, LabelDefinition]] = {
   "segment": _register_segment_definitions(),
-  "forest": _register_forest_definitions(),
   "natural_habitat": _register_natural_habitat_definitions(),
 }
 
-# Default definition per task (preprocess v2 CLI + training when not overridden).
+# Default definition per task (preprocessing CLI, and training when not overridden).
 DEFAULT_LABEL_DEFINITION_NAMES: Dict[str, str] = {
   "segment": "v20",
-  "forest": "default",
-  "natural_habitat": "by_habitat_x_domain",
+  "natural_habitat": "default",
 }
 
 
@@ -776,12 +413,10 @@ def get_definition(task_key: str, name: str) -> LabelDefinition:
 
 def build_preprocess_label_definitions(
     segment: str = DEFAULT_LABEL_DEFINITION_NAMES["segment"],
-    forest: str = DEFAULT_LABEL_DEFINITION_NAMES["forest"],
     natural_habitat: str = DEFAULT_LABEL_DEFINITION_NAMES["natural_habitat"],
 ) -> PreprocessLabelDefinitions:
   return PreprocessLabelDefinitions(
     segment=get_definition("segment", segment),
-    forest=get_definition("forest", forest),
     natural_habitat=get_definition("natural_habitat", natural_habitat),
   )
 
@@ -836,8 +471,3 @@ def definition_to_task_config(definition: LabelDefinition) -> Dict[str, object]:
     "definition": definition.name,
     "task_type": "semantic",
   }
-
-
-def default_task_config(task_key: str) -> Dict[str, object]:
-  """Task config for the default definition of a semantic task."""
-  return definition_to_task_config(get_definition(task_key, "default"))
