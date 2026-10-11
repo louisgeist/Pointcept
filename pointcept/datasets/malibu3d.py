@@ -16,8 +16,6 @@ from .defaults import DefaultDataset
 from .builder import DATASETS
 from .transform import record_data_pipeline
 from .malibu3d_config_utils import (
-    MALIBU3D_CLASSIFICATION_TARGET_KEYS,
-    MALIBU3D_MULTILABEL_CLASSIFICATION_TARGET_KEYS,
     MALIBU3D_PIXEL_SEMANTIC_TARGET_KEYS,
     MALIBU3D_TILE_DISTRIBUTION_TARGET_KEYS,
     get_missing_target_fill_value,
@@ -35,15 +33,11 @@ MALIBU3D_SPECIFIC_ASSETS = (
     "forest",
     "natural_habitat",
     "elevation",
-    "climatic_domain",
-    "natural_habitat_multilabel",
     "coord_translation",
     "network",
     "forest_2d",
 )
 MALIBU3D_SEMANTIC_TARGETS = ("segment", "forest", "natural_habitat")
-MALIBU3D_CLASSIFICATION_TARGETS = MALIBU3D_CLASSIFICATION_TARGET_KEYS
-MALIBU3D_MULTILABEL_CLASSIFICATION_TARGETS = MALIBU3D_MULTILABEL_CLASSIFICATION_TARGET_KEYS
 MALIBU3D_PIXEL_SEMANTIC_TARGETS = MALIBU3D_PIXEL_SEMANTIC_TARGET_KEYS
 MALIBU3D_TILE_DISTRIBUTION_TARGETS = MALIBU3D_TILE_DISTRIBUTION_TARGET_KEYS
 MALIBU3D_REGRESSION_TARGETS = ("elevation",)
@@ -52,8 +46,6 @@ RELEASE_RASTER_PIXEL_M = 1.0
 
 MALIBU3D_ALLOWED_TARGETS = (
     MALIBU3D_SEMANTIC_TARGETS
-    + MALIBU3D_CLASSIFICATION_TARGETS
-    + MALIBU3D_MULTILABEL_CLASSIFICATION_TARGETS
     + MALIBU3D_PIXEL_SEMANTIC_TARGETS
     + MALIBU3D_TILE_DISTRIBUTION_TARGETS
     + MALIBU3D_REGRESSION_TARGETS
@@ -96,8 +88,6 @@ class MALiBU3DDataset(DefaultDataset):
         "natural_habitat",
         *NATHAB_AXIS_KEYS,
         "elevation",
-        "climatic_domain",
-        "natural_habitat_multilabel",
         "network",
     )
     #TODO@Geist : elevation should be complete, but I noticed some missing part in D049
@@ -146,12 +136,6 @@ class MALiBU3DDataset(DefaultDataset):
                 "primary_target_key must be present in target_keys."
             )
         self.primary_target_key = primary_target_key
-        if primary_target_key in MALIBU3D_CLASSIFICATION_TARGETS:
-            if any(tk in MALIBU3D_SEMANTIC_TARGETS for tk in self.target_keys):
-                raise ValueError(
-                    "primary_target_key cannot be a classification target when "
-                    "semantic targets are also requested."
-                )
         if primary_target_key in MALIBU3D_PIXEL_SEMANTIC_TARGETS:
             if any(tk in MALIBU3D_SEMANTIC_TARGETS for tk in self.target_keys):
                 # Allowed later for multitask; keep mono-task simple for now.
@@ -240,10 +224,6 @@ class MALiBU3DDataset(DefaultDataset):
             target_key,
             pixel_semantic_config=getattr(self, "task_configs", {}).get(target_key),
         )
-        if target_key in MALIBU3D_CLASSIFICATION_TARGETS:
-            return np.array([int(fill_value)], dtype=np.int64)
-        if target_key in MALIBU3D_MULTILABEL_CLASSIFICATION_TARGETS:
-            return np.asarray(fill_value, dtype=np.float32).reshape(1, -1)
         if target_key in MALIBU3D_PIXEL_SEMANTIC_TARGETS:
             return np.asarray(fill_value, dtype=np.uint8)
         if target_key in MALIBU3D_SEMANTIC_TARGETS:
@@ -420,35 +400,6 @@ class MALiBU3DDataset(DefaultDataset):
         # Historical preprocess order: ROADS, RAILROADS, TRANSMISSION_LINES, ...
         return raster[:r]
 
-    def _load_classification_label(self, data_dict, target_key, scene):
-        if target_key in data_dict:
-            return np.array([int(np.asarray(data_dict[target_key]).reshape(-1)[0])], dtype=np.int64)
-        if self._is_optional_target(target_key):
-            return self._missing_target_array(target_key, 0)
-        raise FileNotFoundError(
-            f"target key '{target_key}' but {target_key}.npy missing under scene: {scene}"
-        )
-
-    def _load_multilabel_classification_label(self, data_dict, target_key, scene):
-        from pointcept.datasets.malibu3d_config_utils import (
-            get_multilabel_classification_config,
-        )
-
-        expected = int(get_multilabel_classification_config(target_key)["num_classes"])
-        if target_key in data_dict:
-            vector = np.asarray(data_dict[target_key], dtype=np.float32).reshape(-1)
-            if vector.shape[0] != expected:
-                raise ValueError(
-                    f"{target_key} length {vector.shape[0]} != expected {expected} "
-                    f"under scene: {scene}"
-                )
-            return vector.astype(np.float32).reshape(1, -1)
-        if self._is_optional_target(target_key):
-            return self._missing_target_array(target_key, 0)
-        raise FileNotFoundError(
-            f"target key '{target_key}' but {target_key}.npy missing under scene: {scene}"
-        )
-
     def get_data(self, idx):
         data_dict = super().get_data(idx)
         n = int(data_dict["coord"].shape[0])
@@ -477,19 +428,9 @@ class MALiBU3DDataset(DefaultDataset):
         pointwise_keys = [
             tk
             for tk in self.target_keys
-            if tk not in MALIBU3D_CLASSIFICATION_TARGETS
-            and tk not in MALIBU3D_MULTILABEL_CLASSIFICATION_TARGETS
-            and tk not in MALIBU3D_PIXEL_SEMANTIC_TARGETS
+            if tk not in MALIBU3D_PIXEL_SEMANTIC_TARGETS
             and tk not in MALIBU3D_TILE_DISTRIBUTION_TARGETS
             and tk != "elevation"
-        ]
-        classification_keys = [
-            tk for tk in self.target_keys if tk in MALIBU3D_CLASSIFICATION_TARGETS
-        ]
-        multilabel_classification_keys = [
-            tk
-            for tk in self.target_keys
-            if tk in MALIBU3D_MULTILABEL_CLASSIFICATION_TARGETS
         ]
         pixel_semantic_keys = [
             tk for tk in self.target_keys if tk in MALIBU3D_PIXEL_SEMANTIC_TARGETS
@@ -536,14 +477,6 @@ class MALiBU3DDataset(DefaultDataset):
                         f"{tk} length {labels.shape[0]} does not match coord rows {n}"
                     )
                 data_dict[tk] = labels.astype(np.int32)
-
-        for tk in classification_keys:
-            data_dict[tk] = self._load_classification_label(data_dict, tk, scene)
-
-        for tk in multilabel_classification_keys:
-            data_dict[tk] = self._load_multilabel_classification_label(
-                data_dict, tk, scene
-            )
 
         for tk in pixel_semantic_keys:
             data_dict = self._load_pixel_semantic_label(data_dict, scene, target_key=tk)

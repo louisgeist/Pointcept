@@ -489,27 +489,8 @@ def _merge_scene_level_labels(labels):
     return torch.cat([labels[0:-1:2], labels[-1:]])
 
 
-def _merge_scene_level_multihot_labels(labels):
-    """OR-aggregate multi-hot scene labels when pair-mixing offset."""
-    if labels.ndim == 1:
-        labels = labels.unsqueeze(0)
-    n = int(labels.shape[0])
-    if n <= 1:
-        return labels
-
-    if n % 2 == 0:
-        paired = labels.view(n // 2, 2, -1)
-        return torch.maximum(paired[:, 0], paired[:, 1])
-
-    paired = labels[:-1].view((n - 1) // 2, 2, -1)
-    merged = torch.maximum(paired[:, 0], paired[:, 1])
-    return torch.cat([merged, labels[-1:]], dim=0)
-
-
 # Scene-level targets (one label per point cloud before mix).
-_SCENE_SCALAR_LABEL_KEYS = ("climatic_domain", "category")
-_SCENE_MULTIHOT_LABEL_KEYS = ("natural_habitat_multilabel",)
-_SCENE_LABEL_KEYS = _SCENE_SCALAR_LABEL_KEYS + _SCENE_MULTIHOT_LABEL_KEYS
+_SCENE_SCALAR_LABEL_KEYS = ("category",)
 
 
 def point_collate_fn(batch, mix_prob=0):
@@ -548,12 +529,6 @@ def point_collate_fn(batch, mix_prob=0):
         for scene_label_key in _SCENE_SCALAR_LABEL_KEYS:
             if scene_label_key in batch:
                 batch[scene_label_key] = _merge_scene_level_labels(
-                    batch[scene_label_key]
-                )
-
-        for scene_label_key in _SCENE_MULTIHOT_LABEL_KEYS:
-            if scene_label_key in batch:
-                batch[scene_label_key] = _merge_scene_level_multihot_labels(
                     batch[scene_label_key]
                 )
 

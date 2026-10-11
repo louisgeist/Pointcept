@@ -186,7 +186,7 @@ class TestMultiTaskSegmentorV2TileDistributionLoss(unittest.TestCase):
         offset = torch.tensor([3, 5])
         input_dict = {"axis_a": target, "offset": offset}
         total_loss, loss_by_task = model._compute_loss(
-            {"axis_a": logits}, {}, {}, input_dict
+            {"axis_a": logits}, {}, input_dict
         )
         self.assertIn("axis_a", loss_by_task)
         self.assertTrue(torch.isfinite(total_loss))
@@ -200,7 +200,7 @@ class TestMultiTaskSegmentorV2TileDistributionLoss(unittest.TestCase):
         target = torch.full((5,), -1, dtype=torch.long)
         offset = torch.tensor([3, 5])
         input_dict = {"axis_a": target, "offset": offset}
-        total_loss, _ = model._compute_loss({"axis_a": logits}, {}, {}, input_dict)
+        total_loss, _ = model._compute_loss({"axis_a": logits}, {}, input_dict)
         self.assertEqual(float(total_loss.item()), 0.0)
         total_loss.backward()  # must not raise (grad graph kept alive for DDP)
         self.assertIsNotNone(logits.grad)
@@ -221,7 +221,7 @@ class TestMultiTaskSegmentorV2TileDistributionLoss(unittest.TestCase):
         offset = torch.tensor([3, 5])
         input_dict = {"axis_a": target, "offset": offset}
         total_loss, loss_by_task = model._compute_loss(
-            {"axis_a": logits}, {}, {}, input_dict
+            {"axis_a": logits}, {}, input_dict
         )
         self.assertIn("axis_a", loss_by_task)
         self.assertTrue(torch.isfinite(total_loss))

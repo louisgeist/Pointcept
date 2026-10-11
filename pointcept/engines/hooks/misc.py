@@ -31,11 +31,6 @@ import pointcept.utils.comm as comm
 from pointcept.utils.misc import intersection_and_union_gpu
 from pointcept.utils.wandb_metrics import class_name_slug, iou_class_tag, metric_tag
 from pointcept.utils.wandb_resume import write_local_last_step
-from pointcept.utils.multilabel_metrics import (
-    MultilabelStats,
-    accumulate_multilabel_stats,
-    compute_multilabel_metrics,
-)
 
 from .default import HookBase
 from .builder import HOOKS
@@ -108,8 +103,6 @@ class InformationWriter(HookBase):
         self.write_cls_iou = write_cls_iou
         # task_name -> running (intersection, union) tensors on CUDA
         self._train_seg_stats = {}
-        # task_name -> MultilabelStats (epoch accumulation, rank 0 only)
-        self._train_multilabel_stats = {}
         # GridProbeTrainer only: full (epoch, probe) train loss/mIoU/cls_iou
         # history (rank 0 only), so GridProbeWinnerSelector can replay just the
         # winning probe's train curve to W&B after training ends instead of
@@ -120,7 +113,6 @@ class InformationWriter(HookBase):
 
     def before_epoch(self):
         self._train_seg_stats = {}
-        self._train_multilabel_stats = {}
         self._epoch_scalar_keys = []
         self._epoch_scalar_key_set = set()
         self._train_epoch_start = begin_epoch_wall_timing()
@@ -145,20 +137,6 @@ class InformationWriter(HookBase):
             if not isinstance(cfg, dict):
                 continue
             if cfg.get("task_type") != "semantic":
-                continue
-            specs.append((str(name), cfg))
-        return specs
-
-    def _multilabel_task_specs(self, data_cfg):
-        """Returns list of (task_name, task_config) for multilabel classification tasks."""
-        tc = self._cfg_get(data_cfg, "task_configs", None)
-        if not isinstance(tc, dict) or len(tc) == 0:
-            return []
-        specs = []
-        for name, cfg in tc.items():
-            if not isinstance(cfg, dict):
-                continue
-            if cfg.get("task_type") != "multilabel_classification":
                 continue
             specs.append((str(name), cfg))
         return specs
@@ -493,32 +471,6 @@ class InformationWriter(HookBase):
                             pred, target, num_classes, ignore_index, main_key
                         )
 
-                    pred_cls_by_task = model_output_dict.get("pred_cls_by_task")
-                    if isinstance(pred_cls_by_task, dict) and pred_cls_by_task:
-                        for task_name, _task_conf in self._multilabel_task_specs(
-                            data_cfg
-                        ):
-                            if (
-                                task_name not in pred_cls_by_task
-                                or task_name not in input_dict
-                            ):
-                                continue
-                            pred = pred_cls_by_task[task_name].detach().cpu().numpy()
-                            target_tensor = input_dict[task_name].float()
-                            if target_tensor.ndim == 1:
-                                target_tensor = target_tensor.unsqueeze(0)
-                            target = target_tensor.detach().cpu().numpy()
-                            stats = self._train_multilabel_stats.get(task_name)
-                            if stats is None:
-                                stats = MultilabelStats()
-                                self._train_multilabel_stats[task_name] = stats
-                            accumulate_multilabel_stats(
-                                pred,
-                                target,
-                                stats,
-                                ignore_index=_task_conf.get("ignore_index"),
-                            )
-
         for key in self.model_output_keys:
             if self._skip_console_scalar(key):
                 continue
@@ -620,18 +572,6 @@ class InformationWriter(HookBase):
             if task_name != main_task and task_miou is not None:
                 epoch_info += f"{task_name}_mIoU: {task_miou:.4f} "
         tc = self._cfg_get(data_cfg, "task_configs", None)
-        train_multilabel_macro_f1 = {}
-        if comm.is_main_process() and self._train_multilabel_stats:
-            for task_name, stats in self._train_multilabel_stats.items():
-                task_conf = tc.get(task_name) if isinstance(tc, dict) else None
-                names = (
-                    list(task_conf["names"])
-                    if isinstance(task_conf, dict)
-                    else []
-                )
-                metrics = compute_multilabel_metrics(stats, names)
-                train_multilabel_macro_f1[task_name] = float(metrics["macro_f1"])
-                epoch_info += f"{task_name}_macro_f1: {metrics['macro_f1']:.4f} "
         self.trainer.logger.info(epoch_info)
 
         use_task_in_tag = isinstance(tc, dict) and len(tc) > 0
@@ -656,12 +596,6 @@ class InformationWriter(HookBase):
                         float(task_miou),
                         self.trainer.epoch + 1,
                     )
-            for task_name, macro_f1 in train_multilabel_macro_f1.items():
-                self.trainer.writer.add_scalar(
-                    metric_tag("train", "macro_f1", task=task_name),
-                    macro_f1,
-                    self.trainer.epoch + 1,
-                )
 
             if self.write_cls_iou:
                 for tag, value in self._train_per_cls_iou_items(
@@ -702,8 +636,6 @@ class InformationWriter(HookBase):
                         wandb_dict[metric_tag("train", "mIoU", task=task_name)] = float(
                             task_miou
                         )
-                for task_name, macro_f1 in train_multilabel_macro_f1.items():
-                    wandb_dict[metric_tag("train", "macro_f1", task=task_name)] = macro_f1
                 if self.write_cls_iou:
                     for tag, value in self._train_per_cls_iou_items(
                         data_cfg, tc, use_task_in_tag

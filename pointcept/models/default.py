@@ -400,21 +400,20 @@ class MultiTaskSegmentorV2(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeat
     "V2" because it is the MultiTask version of the DefaultSegmentorV2.
 
     Each entry in the task_configs mapping must set "task_type" to "semantic",
-    "regression", "classification", or "multilabel_classification".
+    "tile_distribution", "pixel_semantic" or "regression".
 
-    - Semantic tasks read targets from input_dict[task_name] and write logits to
-      seg_logits_by_task.
+    - Semantic and tile_distribution tasks read targets from input_dict[task_name] and
+      write point-wise logits to seg_logits_by_task.
+    - Pixel_semantic tasks pool point features into raster cells and write logits to
+      pixel_seg_logits_by_task.
     - Regression tasks read the float target from input_dict[task_name] and write
       predictions to reg_pred_by_task.
-    - Classification tasks pool per-scene features and write logits to
-      cls_logits_by_task.
 
     The "main_task" name must refer to a semantic task (checkpoint / mIoU convention).
 
     Outputs:
     - seg_logits and seg_logits_by_task: semantic tasks only,
     - reg_pred_by_task: mapping task name -> 1D point-wise predictions for regression tasks,
-    - cls_logits_by_task: scene-level classification logits,
     - loss and loss_by_task when the corresponding targets are present in the batch.
 
     freeze_backbone=True means ALL of the following (there is no separate flag):
@@ -431,8 +430,6 @@ class MultiTaskSegmentorV2(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeat
         (
             "semantic",
             "regression",
-            "classification",
-            "multilabel_classification",
             "pixel_semantic",
             "tile_distribution",
         )
@@ -469,9 +466,6 @@ class MultiTaskSegmentorV2(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeat
         self.seg_heads = nn.ModuleDict()
         self.pixel_seg_heads = nn.ModuleDict()
         self.reg_heads = nn.ModuleDict()
-        self.cls_heads = nn.ModuleDict()
-        self.cls_attn_pools = nn.ModuleDict()
-        self.cls_pooling = {}
         self.criteria_by_task = {}
         self.task_weights = {}
         default_weight = 1.0
@@ -506,22 +500,6 @@ class MultiTaskSegmentorV2(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeat
                 )
             elif task_type == "regression":
                 self.reg_heads[task_name] = nn.Linear(backbone_out_channels, 1)
-            elif task_type in ("classification", "multilabel_classification"):
-                num_classes = int(task_config["num_classes"])
-                if num_classes <= 0:
-                    raise ValueError(
-                        f"num_classes must be > 0 for task '{task_name}'."
-                    )
-                pooling = str(task_config.get("pooling", "mean"))
-                if pooling not in _POOLING_MODES:
-                    raise ValueError(
-                        f"classification pooling for '{task_name}' must be one of "
-                        f"{sorted(_POOLING_MODES)}, got {pooling!r}."
-                    )
-                self.cls_pooling[task_name] = pooling
-                if pooling == "attention":
-                    self.cls_attn_pools[task_name] = AttentiveScenePool(backbone_out_channels)
-                self.cls_heads[task_name] = nn.Linear(backbone_out_channels, num_classes)
 
         self._init_learned_masked_feat(feature_mask_values=feature_mask_values)
         self.freeze_backbone = freeze_backbone
@@ -546,10 +524,6 @@ class MultiTaskSegmentorV2(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeat
             params.extend(self.pixel_seg_heads[task_name].parameters())
         if task_name in self.reg_heads:
             params.extend(self.reg_heads[task_name].parameters())
-        if task_name in self.cls_heads:
-            params.extend(self.cls_heads[task_name].parameters())
-        if task_name in self.cls_attn_pools:
-            params.extend(self.cls_attn_pools[task_name].parameters())
         return [p for p in params if p.requires_grad]
 
     @classmethod
@@ -558,24 +532,10 @@ class MultiTaskSegmentorV2(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeat
         if tt not in cls._TASK_TYPES:
             raise ValueError(
                 "Each task_configs entry must set task_type to 'semantic', "
-                "'pixel_semantic', 'regression', 'classification', "
-                "'multilabel_classification', or 'tile_distribution' "
+                "'pixel_semantic', 'regression' or 'tile_distribution' "
                 f"(got {tt!r})."
             )
         return tt
-
-    def _pool_scene_feat(self, feat, offset, task_name):
-        pooling = self.cls_pooling[task_name]
-        indptr = nn.functional.pad(offset, (1, 0))
-        if pooling == "mean":
-            return _safe_segment_csr_mean(feat, indptr)
-        if pooling == "max":
-            return torch_scatter.segment_csr(feat, indptr, reduce="max")
-        return self.cls_attn_pools[task_name](feat, offset)
-
-    def _multilabel_pred_from_logits(self, logits, task_name):
-        threshold = float(self.task_configs[task_name].get("threshold", 0.5))
-        return (torch.sigmoid(logits) >= threshold).long()
 
     @staticmethod
     def _as_scalar_tensor(value, device, dtype=torch.float32):
@@ -821,12 +781,6 @@ class MultiTaskSegmentorV2(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeat
             for task_name, head in self.reg_heads.items()
         }
 
-    def _compute_cls_logits(self, feat, offset):
-        return {
-            task_name: head(self._pool_scene_feat(feat, offset, task_name))
-            for task_name, head in self.cls_heads.items()
-        }
-
     def _has_any_target(self, input_dict):
         for task_name in self.tasks:
             if task_name in input_dict:
@@ -837,7 +791,6 @@ class MultiTaskSegmentorV2(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeat
         self,
         logits_by_task,
         reg_pred_by_task,
-        cls_logits_by_task,
         input_dict,
         pixel_logits_by_task=None,
         pixel_targets_by_task=None,
@@ -881,7 +834,7 @@ class MultiTaskSegmentorV2(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeat
                     if not keep.any():
                         # Keep logits in the graph so DDP always sees this head's grads
                         # (zero) even when no tile in the batch has a valid point for
-                        # this axis — same idiom as the classification/multilabel branches.
+                        # this axis.
                         task_loss = logits.sum() * 0.0
                     else:
                         task_loss = self.criteria_by_task[task_name](
@@ -899,57 +852,6 @@ class MultiTaskSegmentorV2(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeat
                         self.criteria_by_task[task_name](logits[:, c, :], targets[:, c])
                     )
                 task_loss = sum(channel_losses) / float(num_networks)
-            elif tt == "classification":
-                if task_name not in cls_logits_by_task:
-                    continue
-                if task_name not in input_dict:
-                    continue
-                logits = cls_logits_by_task[task_name]
-                target = input_dict[task_name].reshape(-1).long()
-                ignore_index = int(task_config["ignore_index"])
-                if logits.shape[0] != target.shape[0]:
-                    raise ValueError(
-                        f"Classification logits/target length mismatch for "
-                        f"'{task_name}': {logits.shape[0]} vs {target.shape[0]}"
-                    )
-                valid = target != ignore_index
-                if not valid.any():
-                    # Keep logits in the graph so DDP always sees cls head grads
-                    # (zero) even when every scene in the batch is ignore.
-                    task_loss = logits.sum() * 0.0
-                else:
-                    task_loss = self.criteria_by_task[task_name](
-                        logits[valid].float(), target[valid]
-                    )
-            elif tt == "multilabel_classification":
-                if task_name not in cls_logits_by_task:
-                    continue
-                if task_name not in input_dict:
-                    continue
-                logits = cls_logits_by_task[task_name]
-                target = input_dict[task_name].float()
-                if target.ndim == 1:
-                    target = target.unsqueeze(0)
-                if logits.shape != target.shape:
-                    raise ValueError(
-                        f"Multilabel logits/target shape mismatch for "
-                        f"'{task_name}': {tuple(logits.shape)} vs {tuple(target.shape)}"
-                    )
-                ignore_index = task_config.get("ignore_index")
-                if ignore_index is not None:
-                    ignore_index = int(ignore_index)
-                    valid = (target != ignore_index).any(dim=-1)
-                    if not valid.any():
-                        # Keep logits in the graph so DDP always sees cls head grads
-                        # (zero) even when every scene in the batch is ignore
-                        # (e.g. missing natural_habitat_multilabel.npy).
-                        task_loss = logits.sum() * 0.0
-                    else:
-                        task_loss = self.criteria_by_task[task_name](
-                            logits[valid], target[valid]
-                        )
-                else:
-                    task_loss = self.criteria_by_task[task_name](logits, target)
             else:
                 if task_name not in reg_pred_by_task:
                     continue
@@ -979,8 +881,6 @@ class MultiTaskSegmentorV2(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeat
             pixel_dense_target_by_task,
         ) = self._compute_pixel_logits(feat, input_dict)
         reg_pred_by_task = self._compute_reg_preds(feat)
-        offset = input_dict["offset"]
-        cls_logits_by_task = self._compute_cls_logits(feat, offset)
 
         if self.main_task in logits_by_task:
             main_logits = logits_by_task[self.main_task]
@@ -1003,7 +903,6 @@ class MultiTaskSegmentorV2(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeat
             "pixel_seg_logits_dense_by_task": pixel_dense_by_task,
             "pixel_seg_target_dense_by_task": pixel_dense_target_by_task,
             "reg_pred_by_task": reg_pred_by_task,
-            "cls_logits_by_task": cls_logits_by_task,
         }
         if return_point:
             return_dict["point"] = point
@@ -1012,7 +911,6 @@ class MultiTaskSegmentorV2(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeat
             total_loss, loss_by_task = self._compute_loss(
                 logits_by_task,
                 reg_pred_by_task,
-                cls_logits_by_task,
                 input_dict,
                 pixel_logits_by_task=pixel_logits_by_task,
                 pixel_targets_by_task=pixel_targets_by_task,
@@ -1029,15 +927,6 @@ class MultiTaskSegmentorV2(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeat
                 }
                 for task_name, logits in pixel_logits_by_task.items():
                     return_dict["pred_by_task"][task_name] = logits.argmax(dim=-1)
-                return_dict["pred_cls_by_task"] = {
-                    task_name: (
-                        self._multilabel_pred_from_logits(logits, task_name)
-                        if self._task_type(self.task_configs[task_name])
-                        == "multilabel_classification"
-                        else logits.argmax(dim=1)
-                    )
-                    for task_name, logits in cls_logits_by_task.items()
-                }
 
         return return_dict
 class AttentiveScenePool(nn.Module):

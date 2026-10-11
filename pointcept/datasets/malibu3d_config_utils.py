@@ -22,11 +22,6 @@ from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 
-from pointcept.datasets.preprocessing.malibu3d.natural_habitat_multilabel_tile_labels import (
-    MULTILABEL_CLASS_NAMES,
-    NUM_MULTILABEL_CLASSES,
-)
-
 # Semantic targets: one entry per target_key used by MALiBU3DDataset / configs.
 MALIBU3D_SEMANTIC_TASKS: Dict[str, Dict[str, Any]] = {
     "segment": {
@@ -112,27 +107,6 @@ MALIBU3D_SEMANTIC_TASKS: Dict[str, Dict[str, Any]] = {
     },
 }
 
-MALIBU3D_CLASSIFICATION_TASKS: Dict[str, Dict[str, Any]] = {
-    "climatic_domain": {
-        "task_type": "classification",
-        "num_classes": 3,
-        "ignore_index": -1,
-        "names": ["Temperate", "Mediterranean", "Alpine"],
-        "pooling": "mean",
-    },
-}
-
-MALIBU3D_MULTILABEL_CLASSIFICATION_TASKS: Dict[str, Dict[str, Any]] = {
-    "natural_habitat_multilabel": {
-        "task_type": "multilabel_classification",
-        "num_classes": NUM_MULTILABEL_CLASSES,
-        "ignore_index": -1,
-        "names": list(MULTILABEL_CLASS_NAMES),
-        "pooling": "mean",
-        "threshold": 0.5,
-    },
-}
-
 # Binary 2D pixel semantic tasks (1 m Lambert masks). Not point-wise.
 # Training / heads use ROADS + RAILROADS only. On-disk ``network.npy`` may still
 # be (3, H, W) with TRANSMISSION_LINES as channel 2; MALiBU3DDataset slices to these.
@@ -182,10 +156,6 @@ MALIBU3D_TILE_DISTRIBUTION_TASKS: Dict[str, str] = {
 }
 
 MALIBU3D_SEMANTIC_TARGET_KEYS: Tuple[str, ...] = tuple(MALIBU3D_SEMANTIC_TASKS.keys())
-MALIBU3D_CLASSIFICATION_TARGET_KEYS: Tuple[str, ...] = tuple(MALIBU3D_CLASSIFICATION_TASKS.keys())
-MALIBU3D_MULTILABEL_CLASSIFICATION_TARGET_KEYS: Tuple[str, ...] = tuple(
-    MALIBU3D_MULTILABEL_CLASSIFICATION_TASKS.keys()
-)
 MALIBU3D_PIXEL_SEMANTIC_TARGET_KEYS: Tuple[str, ...] = tuple(
     MALIBU3D_PIXEL_SEMANTIC_TASKS.keys()
 )
@@ -281,25 +251,6 @@ def get_semantic_config(
     return deepcopy(definition_to_task_config(get_definition(target_key, defn_name)))
 
 
-def get_classification_config(target_key: str) -> Dict[str, Any]:
-    if target_key not in MALIBU3D_CLASSIFICATION_TASKS:
-        keys = ", ".join(sorted(MALIBU3D_CLASSIFICATION_TASKS.keys()))
-        raise KeyError(
-            f"Unknown classification target_key '{target_key}'. Expected one of: {keys}"
-        )
-    return deepcopy(MALIBU3D_CLASSIFICATION_TASKS[target_key])
-
-
-def get_multilabel_classification_config(target_key: str) -> Dict[str, Any]:
-    if target_key not in MALIBU3D_MULTILABEL_CLASSIFICATION_TASKS:
-        keys = ", ".join(sorted(MALIBU3D_MULTILABEL_CLASSIFICATION_TASKS.keys()))
-        raise KeyError(
-            f"Unknown multilabel classification target_key '{target_key}'. "
-            f"Expected one of: {keys}"
-        )
-    return deepcopy(MALIBU3D_MULTILABEL_CLASSIFICATION_TASKS[target_key])
-
-
 def get_elevation_config() -> Dict[str, Any]:
     return deepcopy(MALIBU3D_ELEVATION)
 
@@ -390,8 +341,6 @@ def enable_nathab_pointwise_supervision(
 def _validate_target_keys(target_keys: Tuple[str, ...]) -> None:
     known = (
         set(MALIBU3D_SEMANTIC_TASKS.keys())
-        | set(MALIBU3D_CLASSIFICATION_TASKS.keys())
-        | set(MALIBU3D_MULTILABEL_CLASSIFICATION_TASKS.keys())
         | set(MALIBU3D_PIXEL_SEMANTIC_TASKS.keys())
         | set(MALIBU3D_TILE_DISTRIBUTION_TASKS.keys())
         | {"elevation"}
@@ -402,24 +351,8 @@ def _validate_target_keys(target_keys: Tuple[str, ...]) -> None:
             raise KeyError(f"Unknown target_key '{key}'. Expected one of: {keys}")
 
 
-def _is_classification_target(target_key: str) -> bool:
-    return target_key in MALIBU3D_CLASSIFICATION_TASKS
-
-
-def _is_multilabel_classification_target(target_key: str) -> bool:
-    return target_key in MALIBU3D_MULTILABEL_CLASSIFICATION_TASKS
-
-
 def _is_pixel_semantic_target(target_key: str) -> bool:
     return target_key in MALIBU3D_PIXEL_SEMANTIC_TASKS
-
-
-def _is_scene_level_target(target_key: str) -> bool:
-    return (
-        _is_classification_target(target_key)
-        or _is_multilabel_classification_target(target_key)
-        or _is_pixel_semantic_target(target_key)
-    )
 
 
 def init_multitask_collect_keys(
@@ -457,7 +390,7 @@ def init_multitask_collect_keys(
     train_keys = base + extra + target_keys
     val_target_keys: Tuple[str, ...] = ()
     for key in target_keys:
-        if _is_scene_level_target(key):
+        if _is_pixel_semantic_target(key):
             val_target_keys += (key,)
         else:
             val_target_keys += (key, f"origin_{key}")
@@ -484,10 +417,6 @@ def init_task_configs(
             )
         elif task_name == "elevation":
             out[task_name] = get_multitask_regression_task_config_elevation()
-        elif task_name in MALIBU3D_CLASSIFICATION_TASKS:
-            out[task_name] = get_classification_config(task_name)
-        elif task_name in MALIBU3D_MULTILABEL_CLASSIFICATION_TASKS:
-            out[task_name] = get_multilabel_classification_config(task_name)
         elif task_name in MALIBU3D_PIXEL_SEMANTIC_TASKS:
             out[task_name] = get_pixel_semantic_config(task_name)
         elif task_name in MALIBU3D_TILE_DISTRIBUTION_TASKS:
@@ -498,7 +427,7 @@ def init_task_configs(
         else:
             raise KeyError(
                 f"Unknown task_name '{task_name}'. Expected one of: "
-                f"{sorted((*MALIBU3D_SEMANTIC_TASKS.keys(), *MALIBU3D_CLASSIFICATION_TASKS.keys(), *MALIBU3D_MULTILABEL_CLASSIFICATION_TASKS.keys(), *MALIBU3D_PIXEL_SEMANTIC_TASKS.keys(), *MALIBU3D_TILE_DISTRIBUTION_TASKS.keys(), 'elevation'))}"
+                f"{sorted((*MALIBU3D_SEMANTIC_TASKS.keys(), *MALIBU3D_PIXEL_SEMANTIC_TASKS.keys(), *MALIBU3D_TILE_DISTRIBUTION_TASKS.keys(), 'elevation'))}"
             )
     return out
 
@@ -520,7 +449,6 @@ def get_missing_target_fill_value(
       (the previous behavior) broke this for natural_habitat specifically, since its
       training-default definition's ignore_index (11, for by_habitat_x_domain) is a
       small non-negative number that collides with a real raw CarHab id.
-    - Multilabel targets fallback to ignore_index on all labels (missing NH raster).
     - Elevation regression falls back to NaN so masked losses ignore it.
     - Network pixel masks fallback to an empty (r, 1, 1) zero raster (absence).
 
@@ -550,16 +478,6 @@ def get_missing_target_fill_value(
                 f"Unknown tile_distribution target_key '{target_key}'"
             ) from exc
         return int(NATHAB_AXIS_IGNORE_INDEX[column])
-    if target_key in MALIBU3D_CLASSIFICATION_TASKS:
-        return int(get_classification_config(target_key)["ignore_index"])
-    if target_key in MALIBU3D_MULTILABEL_CLASSIFICATION_TASKS:
-        cfg = get_multilabel_classification_config(target_key)
-        ignore_index = int(cfg.get("ignore_index", -1))
-        return np.full(
-            (1, int(cfg["num_classes"])),
-            ignore_index,
-            dtype=np.float32,
-        )
     if target_key in MALIBU3D_PIXEL_SEMANTIC_TASKS:
         cfg = pixel_semantic_config or get_pixel_semantic_config(target_key)
         r = int(cfg["num_networks"])
@@ -570,8 +488,6 @@ def get_missing_target_fill_value(
         sorted(
             (
                 *MALIBU3D_SEMANTIC_TASKS.keys(),
-                *MALIBU3D_CLASSIFICATION_TASKS.keys(),
-                *MALIBU3D_MULTILABEL_CLASSIFICATION_TASKS.keys(),
                 *MALIBU3D_PIXEL_SEMANTIC_TASKS.keys(),
                 *MALIBU3D_TILE_DISTRIBUTION_TASKS.keys(),
                 "elevation",
@@ -598,21 +514,6 @@ def init_task_criteria(task_configs: Dict[str, Any]) -> Dict[str, Any]:
                     mode="multiclass",
                     loss_weight=1.0,
                     ignore_index=task_config["ignore_index"],
-                ),
-            ]
-        elif task_type == "classification":
-            task_criteria[task_name] = [
-                dict(
-                    type="CrossEntropyLoss",
-                    loss_weight=1.0,
-                    ignore_index=task_config["ignore_index"],
-                ),
-            ]
-        elif task_type == "multilabel_classification":
-            task_criteria[task_name] = [
-                dict(
-                    type="BCEWithLogitsLoss",
-                    loss_weight=1.0,
                 ),
             ]
         elif task_type == "regression":

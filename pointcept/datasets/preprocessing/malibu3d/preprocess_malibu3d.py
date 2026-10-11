@@ -23,9 +23,6 @@ folder containing:
                         ``--natural_habitat_definition default`` still selects the CarHab
                         storage LUT used before bake)
 - elevation.npy         (only when has_elevation=True)
-- climatic_domain.npy   (opt-in via ``--write-climatic-domain-category``)
-- natural_habitat_multilabel.npy  (opt-in via ``--write-natural-habitat-multilabel``;
-                        written from CarHab in memory before axes bake)
 - meta.json      (date_gap_days, label_definitions, natural_habitat_layout)
 
 Required columns (tiles.csv names; legacy aliases in parentheses; extra columns ignored):
@@ -66,13 +63,6 @@ data/malibu3d/
             │   └── ...
 
 Examples:
-JZ (multilabel only, on an already-preprocessed output_root):
-python pointcept/datasets/preprocessing/malibu3d/preprocess_malibu3d.py \
-    --output_root data/malibu3d \
-    --split_manifest_csv data/malibu3d/tiles.csv \
-    --num_workers 24 \
-    --multilabel-only
-
 JZ (full preprocess):
 python pointcept/datasets/preprocessing/malibu3d/preprocess_malibu3d.py \
     --ply_root /lustre/fsn1/projects/rech/unv/usi32yh/data_malibu3d_build/malibu3d_label_enhanced \
@@ -109,14 +99,6 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 if _THIS_DIR not in sys.path:
     sys.path.insert(0, _THIS_DIR)
 
-from climatic_domain_tile_labels import (  # noqa: E402
-    run_climatic_domain_label_pass,
-)
-from natural_habitat_multilabel_tile_labels import (  # noqa: E402
-    MULTILABEL_FILENAME,
-    compute_multilabel_vector,
-    run_natural_habitat_multilabel_label_pass,
-)
 from malibu3d_label_remap import (  # noqa: E402
     DEFAULT_LABEL_DEFINITION_NAMES,
     PreprocessLabelDefinitions,
@@ -662,8 +644,6 @@ def _save_scene(
     output_scene_dir: str,
     scene: Dict[str, np.ndarray],
     task: PatchTask,
-    *,
-    write_natural_habitat_multilabel: bool = False,
 ) -> None:
     """Persist scene arrays under the patch output directory.
 
@@ -672,8 +652,7 @@ def _save_scene(
     its raster was missing.
 
     ``natural_habitat`` is expected as CarHab ``(N,)`` in ``scene``; this function
-    optionally writes ``natural_habitat_multilabel.npy`` from those ids, then bakes
-    axes to ``uint8 (N, 4)`` before saving ``natural_habitat.npy``.
+    bakes it to ``uint8 (N, 4)`` ecological axes before saving ``natural_habitat.npy``.
 
     ``coord.npy`` is intentionally written LAST so its presence on disk acts as
     a reliable completion marker for the resume / skip-existing logic in
@@ -698,7 +677,6 @@ def _save_scene(
     # FOREST is conceptually always enabled; any stale file is overwritten or kept.
     _save_or_clean("forest.npy", "forest", np.int16, enabled=True)
 
-    multilabel_path = os.path.join(output_scene_dir, MULTILABEL_FILENAME)
     if task.has_natural_habitat and "natural_habitat" in scene:
         carhab = np.asarray(scene["natural_habitat"])
         if not is_nathab_carhab_array(carhab):
@@ -706,11 +684,6 @@ def _save_scene(
                 "preprocess expected in-memory natural_habitat as CarHab (N,) "
                 f"before bake, got shape {carhab.shape}"
             )
-        if write_natural_habitat_multilabel:
-            vector = compute_multilabel_vector(carhab, int(carhab.shape[0]))
-            np.save(multilabel_path, vector)
-        elif os.path.isfile(multilabel_path):
-            os.remove(multilabel_path)
         scene = dict(scene)
         scene["natural_habitat"] = carhab_to_nathab_axes(carhab)
         _save_or_clean(
@@ -720,8 +693,6 @@ def _save_scene(
             enabled=True,
         )
     else:
-        if os.path.isfile(multilabel_path):
-            os.remove(multilabel_path)
         _save_or_clean(
             "natural_habitat.npy",
             "natural_habitat",
@@ -776,7 +747,6 @@ def _process_subtile_task(
     dataset_root: str,
     output_root: str,
     label_definitions: PreprocessLabelDefinitions,
-    write_natural_habitat_multilabel: bool = False,
 ) -> Tuple[str, List[Dict[str, str]]]:
     """Worker entry point: build and save one scene from a PatchTask.
 
@@ -795,12 +765,7 @@ def _process_subtile_task(
     # both the metadata and every other array have been fully persisted.
     os.makedirs(output_scene_dir, exist_ok=True)
     _save_scene_meta(output_scene_dir, _scene_meta_dict(task, label_definitions))
-    _save_scene(
-        output_scene_dir,
-        scene,
-        task,
-        write_natural_habitat_multilabel=write_natural_habitat_multilabel,
-    )
+    _save_scene(output_scene_dir, scene, task)
     return task.patch_id, missing_modalities
 
 
@@ -854,8 +819,7 @@ def main_process():
         default="",
         help=(
             "Root directory of pre-labeled PLY files "
-            "(layout: LIDARHD/<dept_year>_LIDARHD/<roi>/<stem>.ply). "
-            "Not required with --multilabel-only."
+            "(layout: LIDARHD/<dept_year>_LIDARHD/<roi>/<stem>.ply)."
         ),
     )
     parser.add_argument(
@@ -927,38 +891,6 @@ def main_process():
             "By default the script resumes by skipping already-processed scenes."
         ),
     )
-    parser.add_argument(
-        "--multilabel-only",
-        action="store_true",
-        default=False,
-        help=(
-            "Skip PLY preprocessing and label passes; only assign "
-            "natural_habitat_multilabel.npy on an existing output_root. "
-            "Requires --natural_habitat_definition default. "
-            "--ply_root and --dataset_root are not used."
-        ),
-    )
-    parser.add_argument(
-        "--write_climatic_domain_category",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help=(
-            "After preprocessing, assign per-subtile climatic_domain.npy labels "
-            "by aggregating natural_habitat at 1 km² tile level (pure domain only). "
-            "Requires natural_habitat rasters and --natural_habitat_definition default. "
-            "Off by default."
-        ),
-    )
-    parser.add_argument(
-        "--write-natural-habitat-multilabel",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help=(
-            "After preprocessing, assign per-subtile natural_habitat_multilabel.npy "
-            "(15-d multi-hot from natural_habitat point fractions, default threshold 1%%). "
-            "Requires --natural_habitat_definition default. Off by default."
-        ),
-    )
     for task_key in ("segment", "forest", "natural_habitat"):
         parser.add_argument(
             f"--{task_key}_definition",
@@ -972,10 +904,10 @@ def main_process():
         )
     args = parser.parse_args()
 
-    if not args.multilabel_only and not args.ply_root:
-        parser.error("--ply_root is required unless --multilabel-only is set")
-    if not args.multilabel_only and not args.dataset_root:
-        parser.error("--dataset_root is required unless --multilabel-only is set")
+    if not args.ply_root:
+        parser.error("--ply_root is required")
+    if not args.dataset_root:
+        parser.error("--dataset_root is required")
 
     os.makedirs(args.output_root, exist_ok=True)
     log_file_path = args.log_file or os.path.join(args.output_root, "preprocess_malibu3d.log")
@@ -991,32 +923,6 @@ def main_process():
     for split in splits:
         n = sum(1 for t in tasks if t.split == split)
         logger.info("  split '%s': %d tasks", split, n)
-
-    if args.multilabel_only:
-        if args.natural_habitat_definition != "default":
-            parser.error(
-                "--multilabel-only requires --natural_habitat_definition default "
-                f"(stored ids 0-43), got '{args.natural_habitat_definition}'"
-            )
-        if not any(t.has_natural_habitat for t in tasks):
-            logger.warning(
-                "No manifest rows have has_natural_habitat=True; multilabel vectors "
-                "will not be written for subtiles without natural_habitat.npy."
-            )
-        logger.info(
-            "Multilabel-only mode: running natural habitat multilabel pass on "
-            "%d manifest task(s)...",
-            len(tasks),
-        )
-        run_natural_habitat_multilabel_label_pass(
-            args.output_root,
-            tasks,
-            num_workers=args.num_workers,
-            logger=logger,
-        )
-        log_run_configuration(logger, args)
-        logger.info("Detailed logs saved to: %s", log_file_path)
-        return
 
     missing_scenes_path = args.missing_scenes_file or os.path.join(
         args.output_root, "missing_scenes.txt"
@@ -1100,7 +1006,6 @@ def main_process():
                     args.dataset_root,
                     args.output_root,
                     label_definitions,
-                    args.write_natural_habitat_multilabel,
                 ): task
                 for task in tasks_to_process
             }
@@ -1165,33 +1070,6 @@ def main_process():
         len(missing_modalities),
         len(failed_tasks),
     )
-
-    if args.write_climatic_domain_category:
-        if args.natural_habitat_definition != "default":
-            logger.warning(
-                "Skipping climatic domain label pass: raster sampling requires "
-                "--natural_habitat_definition default (CarHab ids 0-43 before axes bake), "
-                "got '%s'. Use --no-write-climatic-domain-category to silence this warning.",
-                args.natural_habitat_definition,
-            )
-        else:
-            if not any(t.has_natural_habitat for t in tasks):
-                logger.warning(
-                    "No manifest rows have has_natural_habitat=True; climatic domain labels "
-                    "will be -1 for all subtiles with coord.npy."
-                )
-            logger.info(
-                "Running climatic domain label pass on %d manifest task(s)...", len(tasks)
-            )
-            run_climatic_domain_label_pass(args.output_root, tasks, logger=logger)
-
-    if args.write_natural_habitat_multilabel:
-        # Multilabel is written from CarHab in-memory inside ``_save_scene`` before
-        # axes bake. Do not re-run the offline pass on baked ``(N, 4)`` tiles.
-        logger.info(
-            "natural_habitat_multilabel.npy written during scene save "
-            "(CarHab → multilabel → axes bake); skipping offline multilabel pass."
-        )
 
     log_run_configuration(logger, args)
     logger.info("Detailed logs saved to: %s", log_file_path)

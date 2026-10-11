@@ -49,13 +49,6 @@ from pointcept.utils.regression import (
     denorm_regression_prediction,
     get_regression_target_scale,
 )
-from pointcept.utils.multilabel_metrics import (
-    MultilabelStats,
-    accumulate_multilabel_stats,
-    compute_multilabel_metrics,
-    multilabel_stats_from_tensors,
-    multilabel_stats_to_tensors,
-)
 from pointcept.utils.wandb_metrics import class_name_slug, iou_class_tag, metric_tag
 
 TESTERS = Registry("testers")
@@ -1396,22 +1389,6 @@ class MultiTaskTester(TesterBase):
         ]
 
     @staticmethod
-    def _classification_task_names(task_configs):
-        return [
-            k
-            for k, task_config in task_configs.items()
-            if task_config.get("task_type") == "classification"
-        ]
-
-    @staticmethod
-    def _multilabel_classification_task_names(task_configs):
-        return [
-            k
-            for k, task_config in task_configs.items()
-            if task_config.get("task_type") == "multilabel_classification"
-        ]
-
-    @staticmethod
     def _tile_distribution_task_names(task_configs):
         return [
             k
@@ -1546,25 +1523,6 @@ class MultiTaskTester(TesterBase):
         return pred_probs[inv, :]
 
     @staticmethod
-    def _sync_multilabel_stats(stats: MultilabelStats):
-        if comm.get_world_size() <= 1:
-            return stats
-        tp, fp, fn, hamming, subset = multilabel_stats_to_tensors(stats)
-        flat = np.concatenate(
-            [tp.reshape(-1), fp.reshape(-1), fn.reshape(-1), hamming, subset]
-        )
-        buf = torch.tensor(flat, dtype=torch.float64, device="cuda")
-        dist.all_reduce(buf)
-        flat = buf.cpu().numpy()
-        c = tp.size
-        tp = flat[0:c]
-        fp = flat[c : 2 * c]
-        fn = flat[2 * c : 3 * c]
-        hamming = flat[3 * c : 3 * c + 2]
-        subset = flat[3 * c + 2 : 3 * c + 4]
-        return multilabel_stats_from_tensors(tp, fp, fn, hamming, subset)
-
-    @staticmethod
     def _apply_inverse_origin_np(pred_np, target_np, scene_extra, task_name):
         origin_key = MultiTaskTester._task_origin_target_key(task_name)
         if "inverse" not in scene_extra or origin_key not in scene_extra:
@@ -1605,13 +1563,10 @@ class MultiTaskTester(TesterBase):
         semantic_tasks = self._semantic_task_names(task_configs)
         pixel_semantic_tasks = self._pixel_semantic_task_names(task_configs)
         regression_tasks = self._regression_task_names(task_configs)
-        classification_tasks = self._classification_task_names(task_configs)
-        multilabel_tasks = self._multilabel_classification_task_names(task_configs)
         tile_distribution_tasks = self._tile_distribution_task_names(task_configs)
         tile_pw_miou_tasks = self._tile_distribution_pointwise_miou_task_names(
             task_configs
         )
-        scene_level_cls_tasks = classification_tasks + multilabel_tasks
 
         self.model.eval()
 
@@ -1622,7 +1577,6 @@ class MultiTaskTester(TesterBase):
         reg_sums_global = {
             t: {"mae": 0.0, "mse": 0.0, "count": 0.0} for t in regression_tasks
         }
-        multilabel_stats_global = {t: MultilabelStats() for t in multilabel_tasks}
         td_sums_global = {
             t: {
                 "kl_weighted": 0.0,
@@ -1635,7 +1589,6 @@ class MultiTaskTester(TesterBase):
         }
 
         running_iou = {t: AverageMeter() for t in semantic_tasks}
-        running_cls_acc = {t: AverageMeter() for t in classification_tasks}
 
         record = {}
         n_batches = len(self.test_loader)
@@ -1656,12 +1609,9 @@ class MultiTaskTester(TesterBase):
             batch_axis_pred_cnt = []
             batch_sem_cache_paths = []
             batch_reg_cache_paths = []
-            batch_ml_cache_paths = []
             batch_pixel_logits_cache_paths = []
             batch_td_cache_paths = []
             batch_all_cached = []
-            batch_cls_logits_sum = []
-            batch_cls_logits_cnt = []
             batch_pixel_dense_sum = []
             batch_pixel_dense_cnt = []
             
@@ -1712,10 +1662,6 @@ class MultiTaskTester(TesterBase):
                     t: os.path.join(save_path, f"{data_name}_reg_{t}.npy")
                     for t in regression_tasks
                 }
-                ml_cache_paths = {
-                    t: os.path.join(save_path, f"{data_name}_pred_{t}.npy")
-                    for t in multilabel_tasks
-                }
                 pixel_logits_cache_paths = {
                     # Soft foreground probs (r, H, W) in [0, 1]; NaN where no
                     # LiDAR point fell in that 1 m Lambert cell (unobserved).
@@ -1728,13 +1674,11 @@ class MultiTaskTester(TesterBase):
                 }
                 batch_sem_cache_paths.append(sem_cache_paths)
                 batch_reg_cache_paths.append(reg_cache_paths)
-                batch_ml_cache_paths.append(ml_cache_paths)
                 batch_pixel_logits_cache_paths.append(pixel_logits_cache_paths)
                 batch_td_cache_paths.append(td_cache_paths)
                 
                 all_sem_cached = all(os.path.isfile(p) for p in sem_cache_paths.values())
                 all_reg_cached = all(os.path.isfile(p) for p in reg_cache_paths.values())
-                all_ml_cached = all(os.path.isfile(p) for p in ml_cache_paths.values())
                 all_pixel_cached = all(
                     os.path.isfile(p) for p in pixel_logits_cache_paths.values()
                 )
@@ -1747,7 +1691,6 @@ class MultiTaskTester(TesterBase):
                 batch_all_cached.append(
                     all_sem_cached
                     and (len(regression_tasks) == 0 or all_reg_cached)
-                    and (len(multilabel_tasks) == 0 or all_ml_cached)
                     and (len(pixel_semantic_tasks) == 0 or all_pixel_cached)
                     and (len(tile_distribution_tasks) == 0 or all_td_cached)
                 )
@@ -1769,38 +1712,25 @@ class MultiTaskTester(TesterBase):
                 batch_axis_pred_cnt.append({
                     t: torch.zeros((n_ref,), device="cuda") for t in tile_distribution_tasks
                 })
-                batch_cls_logits_sum.append({
-                    t: torch.zeros(
-                        int(task_configs[t]["num_classes"]),
-                        device="cuda",
-                    )
-                    for t in scene_level_cls_tasks
-                })
-                batch_cls_logits_cnt.append({t: 0 for t in scene_level_cls_tasks})
                 batch_pixel_dense_sum.append({t: None for t in pixel_semantic_tasks})
                 batch_pixel_dense_cnt.append({t: None for t in pixel_semantic_tasks})
 
-            # Skip model forward when sem/reg/multilabel/pixel/nathab caches are present.
-            # Mono-label classification is not cached and still forces a forward.
+            # Skip model forward when sem/reg/pixel/nathab caches are present.
             batch_td_dist_np = []
             batch_td_pred_np = []
             batch_td_metrics = []
-            if all(batch_all_cached) and not classification_tasks:
+            if all(batch_all_cached):
                 batch_pred_cls_np = []
                 batch_pred_reg_np = []
-                batch_pred_scene_cls_np = []
                 batch_pixel_logits_np = []
                 for b_idx in range(len(batch)):
                     pred_cls_np = {}
                     pred_reg_np = {}
-                    pred_scene_cls_np = {}
                     pixel_logits_np = {}
                     for t in semantic_tasks:
                         pred_cls_np[t] = np.load(batch_sem_cache_paths[b_idx][t])
                     for t in regression_tasks:
                         pred_reg_np[t] = np.load(batch_reg_cache_paths[b_idx][t])
-                    for t in multilabel_tasks:
-                        pred_scene_cls_np[t] = np.load(batch_ml_cache_paths[b_idx][t])
                     for t in pixel_semantic_tasks:
                         pixel_logits_np[t] = np.load(
                             batch_pixel_logits_cache_paths[b_idx][t]
@@ -1814,7 +1744,6 @@ class MultiTaskTester(TesterBase):
                             td_pred[t] = np.load(paths["pred"])
                     batch_pred_cls_np.append(pred_cls_np)
                     batch_pred_reg_np.append(pred_reg_np)
-                    batch_pred_scene_cls_np.append(pred_scene_cls_np)
                     batch_pixel_logits_np.append(pixel_logits_np)
                     batch_td_dist_np.append(td_dist)
                     batch_td_pred_np.append(td_pred)
@@ -1844,21 +1773,12 @@ class MultiTaskTester(TesterBase):
                     output_dict = self.model(input_dict)
                     logits_by_task = output_dict.get("seg_logits_by_task") or {}
                     reg_pred_by_task = output_dict.get("reg_pred_by_task") or {}
-                    cls_logits_by_task = output_dict.get("cls_logits_by_task") or {}
                     pixel_dense_by_task = (
                         output_dict.get("pixel_seg_logits_dense_by_task") or {}
                     )
 
                     if self.cfg.empty_cache:
                         torch.cuda.empty_cache()
-
-                    for task_name in scene_level_cls_tasks:
-                        if task_name not in cls_logits_by_task:
-                            continue
-                        logits = cls_logits_by_task[task_name]
-                        for b_idx in range(logits.shape[0]):
-                            batch_cls_logits_sum[b_idx][task_name] += logits[b_idx]
-                            batch_cls_logits_cnt[b_idx][task_name] += 1
 
                     for task_name in semantic_tasks:
                         if task_name not in logits_by_task:
@@ -1958,7 +1878,6 @@ class MultiTaskTester(TesterBase):
 
                 batch_pred_cls_np = []
                 batch_pred_reg_np = []
-                batch_pred_scene_cls_np = []
                 batch_pixel_logits_np = []
                 for b_idx in range(len(batch)):
                     pred_cls_np = {}
@@ -2073,39 +1992,6 @@ class MultiTaskTester(TesterBase):
                     batch_pred_cls_np.append(pred_cls_np)
                     batch_pred_reg_np.append(pred_reg_np)
                     batch_pixel_logits_np.append(pixel_logits_np)
-                    scene_cls_np = {}
-                    for task_name in classification_tasks:
-                        if task_name not in batch_targets[b_idx]:
-                            continue
-                        cnt = batch_cls_logits_cnt[b_idx][task_name]
-                        if cnt > 0:
-                            avg_logits = (
-                                batch_cls_logits_sum[b_idx][task_name] / float(cnt)
-                            )
-                            scene_cls_np[task_name] = int(avg_logits.argmax().item())
-                    for task_name in multilabel_tasks:
-                        if task_name not in batch_targets[b_idx]:
-                            continue
-                        cnt = batch_cls_logits_cnt[b_idx][task_name]
-                        if cnt > 0:
-                            avg_logits = (
-                                batch_cls_logits_sum[b_idx][task_name] / float(cnt)
-                            )
-                            threshold = float(
-                                task_configs[task_name].get("threshold", 0.5)
-                            )
-                            scene_cls_np[task_name] = (
-                                (torch.sigmoid(avg_logits) >= threshold)
-                                .cpu()
-                                .numpy()
-                                .astype(np.int64)
-                            )
-                            np.save(
-                                batch_ml_cache_paths[b_idx][task_name],
-                                scene_cls_np[task_name],
-                            )
-                    batch_pred_scene_cls_np.append(scene_cls_np)
-                        
             # Compute metrics for each scene in the batch
             for b_idx in range(len(batch)):
                 data_name = batch_data_names[b_idx]
@@ -2239,51 +2125,6 @@ class MultiTaskTester(TesterBase):
                             target=target_sum,
                         )
 
-                pred_scene_cls_np = batch_pred_scene_cls_np[b_idx]
-                for task_name in classification_tasks:
-                    if task_name not in targets_by_task:
-                        continue
-                    if task_name not in pred_scene_cls_np:
-                        continue
-                    pred_np = np.asarray([pred_scene_cls_np[task_name]], dtype=np.int64)
-                    tgt_np = np.asarray(targets_by_task[task_name]).reshape(-1)
-                    tc = task_configs[task_name]
-                    intersection, union, target_hist = intersection_and_union(
-                        pred_np,
-                        tgt_np,
-                        int(tc["num_classes"]),
-                        int(tc["ignore_index"]),
-                    )
-                    # Rides the semantic aggregation below (one sample per scene), so
-                    # test mIoU/mAcc/allAcc (+ macro-F1) are reported for this task.
-                    sem_metrics_scene[task_name] = dict(
-                        intersection=intersection,
-                        union=union,
-                        target=target_hist,
-                    )
-                    mask = union != 0
-                    iou_class = intersection / (union + 1e-10)
-                    scene_m_iou = np.mean(iou_class[mask]) if mask.any() else 0.0
-                    running_cls_acc[task_name].update(scene_m_iou)
-
-                for task_name in multilabel_tasks:
-                    if task_name not in targets_by_task:
-                        continue
-                    if task_name not in pred_scene_cls_np:
-                        continue
-                    pred_np = np.asarray(
-                        pred_scene_cls_np[task_name], dtype=np.int64
-                    ).reshape(1, -1)
-                    tgt_np = np.asarray(
-                        targets_by_task[task_name], dtype=np.int64
-                    ).reshape(1, -1)
-                    accumulate_multilabel_stats(
-                        pred_np,
-                        tgt_np,
-                        multilabel_stats_global[task_name],
-                        ignore_index=task_configs[task_name].get("ignore_index"),
-                    )
-
                 for task_name in regression_tasks:
                     if task_name not in targets_by_task:
                         logger.warning(
@@ -2416,11 +2257,6 @@ class MultiTaskTester(TesterBase):
                 reg_sums_global[task_name]["mse"] = flat[base + 1]
                 reg_sums_global[task_name]["count"] = flat[base + 2]
 
-        for task_name in multilabel_tasks:
-            multilabel_stats_global[task_name] = self._sync_multilabel_stats(
-                multilabel_stats_global[task_name]
-            )
-
         record_sync = comm.gather(record, dst=0)
 
         if comm.is_main_process():
@@ -2430,12 +2266,7 @@ class MultiTaskTester(TesterBase):
                 merged.update(r)
                 del r
 
-            hist_tasks = (
-                semantic_tasks
-                + pixel_semantic_tasks
-                + tile_pw_miou_tasks
-                + classification_tasks
-            )
+            hist_tasks = semantic_tasks + pixel_semantic_tasks + tile_pw_miou_tasks
             per_task_sem = {t: None for t in hist_tasks}
             per_task_pixel_prf = {t: {} for t in pixel_semantic_tasks}
             for _, payload in merged.items():
@@ -2633,46 +2464,6 @@ class MultiTaskTester(TesterBase):
                 )
                 log_dict[f"test/reg/{task_name}/mae"] = float(mae)
                 log_dict[f"test/reg/{task_name}/rmse"] = float(rmse)
-
-            for task_name in multilabel_tasks:
-                stats = multilabel_stats_global[task_name]
-                if stats.hamming_total <= 0:
-                    logger.warning(
-                        "[task=%s] Test multilabel: no samples accumulated; skipping metrics.",
-                        task_name,
-                    )
-                    continue
-                metrics = compute_multilabel_metrics(
-                    stats,
-                    task_configs[task_name]["names"],
-                )
-                logger.info(
-                    "[task={}] Test multilabel: macro_f1/micro_f1/subset_acc/hamming_acc "
-                    "{:.4f}/{:.4f}/{:.4f}/{:.4f}.".format(
-                        task_name,
-                        metrics["macro_f1"],
-                        metrics["micro_f1"],
-                        metrics["subset_accuracy"],
-                        metrics["hamming_accuracy"],
-                    )
-                )
-                log_dict[metric_tag("test", "macro_f1", task=task_name)] = float(
-                    metrics["macro_f1"]
-                )
-                log_dict[metric_tag("test", "micro_f1", task=task_name)] = float(
-                    metrics["micro_f1"]
-                )
-                log_dict[metric_tag("test", "subset_acc", task=task_name)] = float(
-                    metrics["subset_accuracy"]
-                )
-                log_dict[metric_tag("test", "hamming_acc", task=task_name)] = float(
-                    metrics["hamming_accuracy"]
-                )
-                for label_name, label_metrics in metrics["per_label"].items():
-                    slug = class_name_slug(label_name)
-                    log_dict[f"test/{task_name}/{slug}/f1"] = float(
-                        label_metrics["f1"]
-                    )
 
             final_kl_by_task = {}
             final_tv_by_task = {}
