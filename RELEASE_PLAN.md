@@ -104,6 +104,16 @@ Constats en cours de route :
 - [x] Revue de bugs : les correctifs 02 à 07 sont déjà dans le code ; `docs/bug_review/` supprimé, test renommé `tests/test_regressions.py`. **Reste ouvert (décision Louis, hors code)** : 01, coordonnées MALiBU3D quantifiées à 0,5 m en Y dans les PLY sources et la release HF
 - [ ] Harnais + commit (une suppression logique par commit si c'est risqué)
 
+### Compatibilité avec la release HF (testée sur une ROI téléchargée : D075 UU-S1-4 + `toy/`)
+
+La release HF ne livre **ni** `meta.json`, **ni** `network.npy`, **ni** `forest.npy` par point, **ni** `land_use.npy`, **ni** `climatic_domain.npy`, **ni** `natural_habitat_multilabel.npy` (README du dataset HF).
+- [x] `forest_2d` était entièrement ignoré (géoréférencement lu dans `meta.json`) → lu dans `tiles.csv` (`c88ff4e`)
+- [x] `network.npy` à générer : `rasterize_network.py` lit maintenant les graphes dans les dossiers de ROI ; avertissement si absent (`b7c4288`, `c88ff4e`)
+- [x] `unzip_malibu3d.py` extrait dans `{output_root}/{split}/…` (`b7c4288`)
+- [x] Checkpoint LitePT-B publié sur ces tuiles : 0,97 de précision land cover
+- [ ] Supprimer les cibles inutilisables avec les données publiées : multilabel natural habitat, classification par tuile (domaine climatique), `natural_habitat` par point (+ `MALiBU3DLabelRemap`), `forest` par point (+ config mono-tâche `forest`)
+- [ ] `scripts/build_stratified_subset.py` stratifie sur `natural_habitat_multilabel.npy` (non livré) → le sous-ensemble de val est livré tel quel sur HF ; décider si le script reste
+
 ## Phase 6 — Commentaires et docstrings
 
 - [ ] Passe module par module : anglais, docstrings courtes, plus de références internes (semaines, jobs, dates)
