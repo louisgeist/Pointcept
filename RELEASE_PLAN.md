@@ -25,7 +25,7 @@ Suivi du nettoyage de la branche `malibu3d` avant la création du repo public.
 
 ## À livrer sur Hugging Face avec le dataset
 
-- [ ] `manifests/val_dev_subset_2000.csv` (sous-ensemble stratifié de validation lu par les configs par défaut via `val_stratified_subset_manifest`). Aujourd'hui : `data/flair3d_plus/manifests/val_dev_subset_2000.csv`, ignoré par git. Une fois publié, faire pointer les configs et la doc vers le fichier HF.
+- [ ] `manifests/val_dev_subset_2000.csv` (sous-ensemble stratifié de validation lu par les configs par défaut via `val_stratified_subset_manifest`). Aujourd'hui : `data/flair3d_plus/manifests/val_dev_subset_2000.csv`, ignoré par git. Une fois publié, faire pointer les configs et la doc vers le fichier HF. **Attention : la copie locale (hecate) n'a que 773 lignes** ; publier la version complète (2000 tuiles, sans doute sur Jean Zay). Le script qui le construisait (`build_stratified_subset.py`) est supprimé : il dépendait de `natural_habitat_multilabel.npy`, non livré.
 - [ ] Vérifier que le `tiles.csv` publié contient bien la colonne `n_voxels` (utilisée par les budgets de voxels en val/test). Elle est présente dans la copie locale.
 
 ## Phase 0 — Snapshot et harnais de non-régression
@@ -111,8 +111,8 @@ La release HF ne livre **ni** `meta.json`, **ni** `network.npy`, **ni** `forest.
 - [x] `network.npy` à générer : `rasterize_network.py` lit maintenant les graphes dans les dossiers de ROI ; avertissement si absent (`b7c4288`, `c88ff4e`)
 - [x] `unzip_malibu3d.py` extrait dans `{output_root}/{split}/…` (`b7c4288`)
 - [x] Checkpoint LitePT-B publié sur ces tuiles : 0,97 de précision land cover
-- [ ] Supprimer les cibles inutilisables avec les données publiées : multilabel natural habitat, classification par tuile (domaine climatique), `natural_habitat` par point (+ `MALiBU3DLabelRemap`), `forest` par point (+ config mono-tâche `forest`)
-- [ ] `scripts/build_stratified_subset.py` stratifie sur `natural_habitat_multilabel.npy` (non livré) → le sous-ensemble de val est livré tel quel sur HF ; décider si le script reste
+- [x] Supprimer les cibles inutilisables avec les données publiées : multilabel natural habitat, classification par tuile (domaine climatique), `natural_habitat` par point (+ `MALiBU3DLabelRemap`), `forest` par point (+ config mono-tâche `forest`, + `forest.npy` du preprocessing) ; définitions de labels réduites à segment default/v20 et natural habitat default + 4 axes (`c6b3d96`, `f5ae663`, `3408077`). Preprocessing vérifié octet par octet contre le tag sur 3 tuiles brutes D068
+- [x] `scripts/build_stratified_subset.py` supprimé (dépendait de `natural_habitat_multilabel.npy`, non livré) ; le sous-ensemble est livré tel quel sur HF ; `subset_utils.py` ne garde que son application
 
 ## Phase 6 — Commentaires et docstrings
 
