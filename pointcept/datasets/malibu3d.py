@@ -47,6 +47,9 @@ MALIBU3D_MULTILABEL_CLASSIFICATION_TARGETS = MALIBU3D_MULTILABEL_CLASSIFICATION_
 MALIBU3D_PIXEL_SEMANTIC_TARGETS = MALIBU3D_PIXEL_SEMANTIC_TARGET_KEYS
 MALIBU3D_TILE_DISTRIBUTION_TARGETS = MALIBU3D_TILE_DISTRIBUTION_TARGET_KEYS
 MALIBU3D_REGRESSION_TARGETS = ("elevation",)
+# Pixel size of the released forest_2d / network rasters (labels.json: forest_2d.pixel_m).
+RELEASE_RASTER_PIXEL_M = 1.0
+
 MALIBU3D_ALLOWED_TARGETS = (
     MALIBU3D_SEMANTIC_TARGETS
     + MALIBU3D_CLASSIFICATION_TARGETS
@@ -172,6 +175,10 @@ class MALiBU3DDataset(DefaultDataset):
                     "the full test set. Only 'train'/'val' thresholds are allowed."
                 )
         self.min_points = min_points
+        # tile_id -> (origin_x, origin_y) of its rasters, from tiles.csv; used when meta.json is absent
+        # (the Hugging Face release ships no meta.json).
+        self.raster_origins = {}
+        self._warned_missing_network = False
 
         super().__init__(**kwargs)
         get_root_logger().info(
@@ -210,6 +217,8 @@ class MALiBU3DDataset(DefaultDataset):
                     min_points_excluded += 1
                     continue
             data_list.append(tile.tile_dir(self.data_root))
+            if tile.raster_origin_x is not None and tile.raster_origin_y is not None:
+                self.raster_origins[tile.tile_id] = (tile.raster_origin_x, tile.raster_origin_y)
 
         if self.min_points:
             logger.info(
@@ -326,6 +335,14 @@ class MALiBU3DDataset(DefaultDataset):
                 origin_x = float(raster_meta.get("origin_x", 0.0))
                 origin_y = float(raster_meta.get("origin_y", 0.0))
                 pixel_m = float(raster_meta.get("pixel_m", 1.0))
+        if (
+            not raster_meta
+            and target_key in data_dict
+            and os.path.basename(scene) in getattr(self, "raster_origins", {})
+        ):
+            # Released layout: no meta.json; 1 m rasters georeferenced by tiles.csv.
+            origin_x, origin_y = self.raster_origins[os.path.basename(scene)]
+            pixel_m = RELEASE_RASTER_PIXEL_M
 
         if target_key in data_dict:
             raster = np.asarray(data_dict[target_key])
@@ -349,6 +366,14 @@ class MALiBU3DDataset(DefaultDataset):
             w = int(raster_meta.get("width", 1))
             raster = np.zeros((r, max(h, 1), max(w, 1)), dtype=np.uint8)
         elif self._is_optional_target(target_key):
+            if target_key == "network" and not getattr(self, "_warned_missing_network", False):
+                self._warned_missing_network = True
+                get_root_logger().warning(
+                    "network.npy missing under %s: its road labels are ignored. The released "
+                    "dataset ships road graphs, not masks; rasterize them first with "
+                    "pointcept/datasets/preprocessing/malibu3d/rasterize_network.py.",
+                    scene,
+                )
             raster = self._missing_target_array(target_key, 0)
         else:
             raise FileNotFoundError(

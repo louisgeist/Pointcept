@@ -6,6 +6,7 @@ preprocessing loaders built on it must accept both schemas.
 Run with: PYTHONPATH=./ pytest tests/test_tile_catalog.py
 """
 
+import dataclasses
 import os
 import pathlib
 import tempfile
@@ -72,6 +73,14 @@ EXPECTED = [
 ]
 
 
+# Raster georeferencing exists only in the released tiles.csv.
+RASTER_GEOREF = [
+    dict(raster_origin_x=927440.0, raster_origin_y=6302945.0, raster_width=103, raster_height=103),
+    dict(raster_origin_x=1.0, raster_origin_y=2.0, raster_width=3, raster_height=4),
+]
+EXPECTED_TILES_CSV = [dataclasses.replace(t, **g) for t, g in zip(EXPECTED, RASTER_GEOREF)]
+
+
 class TestTileCatalog(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -86,12 +95,12 @@ class TestTileCatalog(unittest.TestCase):
         self._tmp.cleanup()
 
     def test_both_schemas_normalize_identically(self):
-        self.assertEqual(read_tiles(self.tiles_csv), EXPECTED)
+        self.assertEqual(read_tiles(self.tiles_csv), EXPECTED_TILES_CSV)
         # Legacy LIDARHD=False row is dropped; extra legacy columns are ignored.
         self.assertEqual(read_tiles(self.legacy_csv), EXPECTED)
 
     def test_split_filter(self):
-        self.assertEqual(read_tiles(self.tiles_csv, ["val"]), EXPECTED[1:])
+        self.assertEqual(read_tiles(self.tiles_csv, ["val"]), EXPECTED_TILES_CSV[1:])
         self.assertEqual(read_tiles(self.legacy_csv, ["train"]), EXPECTED[:1])
 
     def test_tile_dir(self):

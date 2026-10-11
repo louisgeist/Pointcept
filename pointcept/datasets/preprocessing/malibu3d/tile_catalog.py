@@ -64,6 +64,12 @@ class Tile:
     date_gap_days: Optional[float] = None
     n_points: Optional[int] = None
     n_voxels: Optional[int] = None
+    # Georeferencing of the tile's 1 m rasters (forest_2d, and network.npy once rasterized),
+    # Lambert-93 lower-left origin and size in pixels. Only in the released tiles.csv.
+    raster_origin_x: Optional[float] = None
+    raster_origin_y: Optional[float] = None
+    raster_width: Optional[int] = None
+    raster_height: Optional[int] = None
 
     def tile_dir(self, data_root: str) -> str:
         """Pointcept on-disk scene dir: ``{root}/{split}/{dept_year}_LIDARHD/{roi}/{tile_id}``."""
@@ -158,6 +164,10 @@ def iter_tiles(
                 date_gap_days=_parse_float(row.get("date_gap_days")),
                 n_points=_parse_int(row.get("n_points")),
                 n_voxels=_parse_int(row.get("n_voxels")),
+                raster_origin_x=_parse_float(row.get("forest_origin_x")),
+                raster_origin_y=_parse_float(row.get("forest_origin_y")),
+                raster_width=_parse_int(row.get("forest_width")),
+                raster_height=_parse_int(row.get("forest_height")),
             )
 
 
