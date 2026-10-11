@@ -1,99 +1,37 @@
 # PureForest preprocessing
 
-Tile-level tree species classification (13 classes) from IGNF [PureForest](https://huggingface.co/datasets/IGNF/PureForest).
+Tile-level tree-species classification (13 classes) on IGN
+[PureForest](https://huggingface.co/datasets/IGNF/PureForest). Commands are run from the repository root.
 
-Preprocessing is **manifest-driven**: every row in `PureForest-patches.csv` defines a tile to convert. Expected LAZ path:
+## 1. Download and extract
 
-```text
-lidar/{split}/{TRAIN|VAL|TEST}-{patch_id}.laz
-```
-
-(e.g. manifest `patch_id=Pinus_halepensis-C8-3_1_244`, split `train` → `lidar/train/TRAIN-Pinus_halepensis-C8-3_1_244.laz`).
-
-## On-disk layout
-
-```text
-data/pureforest/
-├── PureForest/              # HF download (zips + metadata)
-│   └── data/lidar-<species>.zip
-├── extracted/               # unzip target (--dataset_root)
-│   ├── lidar/{train,val,test}/*.laz
-│   └── metadata/            # symlink to ../PureForest/metadata
-└── {train,val,test}/        # preprocess output (--output_root)
-    └── <patch_id>/
-        ├── coord.npy
-        ├── color.npy
-        └── category.npy
-```
-
-LAZ files on disk that are **not** in the manifest are ignored.
-
-## Link Hugging Face download
-
-Run from the Pointcept repository root. Point `data/pureforest/PureForest` at your local Hugging Face clone (must contain `data/lidar-*.zip` and `metadata/`):
-
-```bash
-mkdir -p data/pureforest
-ln -sfn /path/to/PureForest data/pureforest/PureForest
-
-# Example:
-# ln -sfn /data/geist/datasets/PureForest data/pureforest/PureForest
-
-ls data/pureforest/PureForest/metadata/PureForest-patches.csv
-```
-
-## Extract LAZ archives
-
-From the repository root:
-
-**Sequential** (`-n` skips files already extracted):
+Download (or clone) the Hugging Face dataset to `data/pureforest/PureForest` (it contains
+`data/lidar-*.zip` and `metadata/`), then unzip the LiDAR archives (`-n` skips files already extracted)
+and link the metadata next to them:
 
 ```bash
 REPO=data/pureforest
 mkdir -p "${REPO}/extracted"
 for z in "${REPO}/PureForest/data"/lidar-*.zip; do
-  echo ">>> $(basename "$z")"
   unzip -n "$z" -d "${REPO}/extracted"
 done
 ln -sfn ../PureForest/metadata "${REPO}/extracted/metadata"
 ```
 
-**Parallel** (8 jobs at once; use one of the options below):
+To extract in parallel, replace the loop with
+`ls "${REPO}/PureForest/data"/lidar-*.zip | xargs -P 8 -I {} unzip -n {} -d "${REPO}/extracted"`.
 
-With GNU `parallel` (if installed):
+Expected input of the preprocessing script:
 
-```bash
-REPO=data/pureforest
-mkdir -p "${REPO}/extracted"
-
-module load parallel/20210922 # on Jean-Zay
-
-parallel -j 8 'unzip -n {} -d '"${REPO}/extracted"'' ::: "${REPO}/PureForest/data"/lidar-*.zip
-ln -sfn ../PureForest/metadata "${REPO}/extracted/metadata"
+```text
+data/pureforest/extracted/          # --dataset_root
+├── lidar/{train,val,test}/*.laz
+└── metadata/PureForest-patches.csv
 ```
 
-Without `parallel` (POSIX `xargs`, usually available on clusters):
+## 2. Preprocess
 
-```bash
-REPO=data/pureforest
-mkdir -p "${REPO}/extracted"
-ls "${REPO}/PureForest/data"/lidar-*.zip | xargs -P 8 -I {} unzip -n {} -d "${REPO}/extracted"
-ln -sfn ../PureForest/metadata "${REPO}/extracted/metadata"
-```
-
-If neither works, use the **Sequential** loop above (slower but sufficient).
-
-```bash
-find "${REPO}/extracted/lidar" -name '*.laz' | wc -l   # expect ~135569
-```
-
-## Preprocess
-
-Requires `laspy` and `lazrs`:
-
-```bash
-pip install laspy lazrs
-```
+Requires `laspy` and `lazrs` (`pip install laspy lazrs`).
 
 ```bash
 python pointcept/datasets/preprocessing/pureforest/preprocess_pureforest.py \
@@ -102,257 +40,77 @@ python pointcept/datasets/preprocessing/pureforest/preprocess_pureforest.py \
   --num_workers 8
 ```
 
-Before conversion, the script writes `missing_laz_preflight.txt` under `--output_root` listing manifest rows whose LAZ file is absent.
+The script is manifest-driven: each row of `PureForest-patches.csv` (`patch_id`, `split`, `class_index`)
+is one tile, read from `lidar/{split}/{TRAIN|VAL|TEST}-{patch_id}.laz`, e.g.
+`lidar/train/TRAIN-Pinus_halepensis-C8-3_1_244.laz`. LAZ files that are not in the manifest are ignored.
 
-## Toy subset
+Output:
 
-`--toy` selects **2 tiles per class per split** on-the-fly from `PureForest-patches.csv` (~78 scenes). No intermediate manifest file is written. Use a dedicated output root so it does not mix with the full dataset:
+```text
+data/pureforest/{train,val,test}/<patch_id>/
+├── coord.npy      # float32: XY centered on the mean, Z shifted to its minimum, divided by 25 m
+├── color.npy      # float32 RGB in [0, 255]
+└── category.npy   # int32 class id
+```
+
+`PureForestDataset` multiplies `coord` back by 25 m at load time.
+
+Options:
+
+| Option | Default | Effect |
+|---|---|---|
+| `--manifest_csv` | `<dataset_root>/metadata/PureForest-patches.csv` | Tile list |
+| `--splits` | `train,val,test` | Comma-separated splits to convert |
+| `--num_workers` | `1` | Worker processes |
+| `--overwrite` | off | Reconvert tiles that are already complete |
+| `--toy` | off | Convert only the first 2 tiles of each class in each split (about 78 tiles) |
+
+Re-running the command resumes: tiles whose `coord.npy` and `color.npy` are complete are skipped (writes are
+atomic, `coord.npy` last). Reports written under `--output_root`:
+
+- `missing_laz_preflight.txt`: manifest rows whose LAZ file is absent (written before conversion);
+- `preprocess_errors.log`: tiles that failed, with their traceback (only when there are failures).
+
+Use a separate output root for the toy subset:
 
 ```bash
 python pointcept/datasets/preprocessing/pureforest/preprocess_pureforest.py \
   --toy \
   --dataset_root data/pureforest/extracted \
-  --output_root data/pureforest_toy \
-  --num_workers 4
+  --output_root data/pureforest_toy
 ```
 
-`missing_laz_preflight.txt` under `--output_root` lists which selected tiles are still missing on disk.
+## 3. MALiBU3D leakage exclusion
 
-Smoke-test training:
+`malibu3d_leakage_excluded_test_tiles.txt` lists the PureForest test patches whose forest (BD Forêt
+polygon) overlaps a MALiBU3D train/val tile. Configs evaluating MALiBU3D backbones set
+`exclude_malibu3d_leakage_tiles=True` on `PureForestDataset` to drop them.
+
+## 4. Training and probing
+
+- Supervised training from scratch: `configs/pureforest/cls-litept-b-v1m0-pureforest.py`.
+- Frozen-backbone linear probing (grid over learning rates, encoder multi-scale features):
+  `configs/pureforest/cls-*-pureforest-lin-grid-enc*.py`, with the checkpoint path in `weight`.
 
 ```bash
-python tools/train.py --config-file configs/pureforest/cls-spunet-v1m0-pureforest-toy.py
+python tools/train.py --config-file configs/pureforest/cls-litept-b-v1m0-pureforest.py
 ```
 
-## Train
+A cheaper alternative to the online probe extracts pooled embeddings once, then fits the probe offline:
 
 ```bash
-python tools/train.py --config-file configs/pureforest/cls-spunet-v1m0-pureforest.py
-```
-
-## Offline pooled embeddings + sklearn linear probe
-
-Faster alternative to `GridProbeClassifier` lr sweeps for frozen-backbone probes:
-one GPU pass dumps per-tile **mean** and **max** pools; then a CPU sklearn
-`LogisticRegression` grid over `C` (L2 ≈ weight decay) tries mean / max /
-concat / sum.
-
-Requires `scikit-learn` (`conda install scikit-learn` or recreate the env from
-`environment.yml`).
-
-Common setup (repo root):
-
-```bash
-export PYTHONPATH="$PWD"
-BS=24
-SPLITS="train val test"
-OUT=stats/pureforest/embeddings
-```
-
-Optional `--point-max 5000` if VRAM OOMs on full tiles (val has no SphereCrop).
-Writes `{split}.npz` (`names`, `category`, `mean_feat`, `max_feat`) + `meta.json`.
-
-### Extract — encoder multiscale (local)
-
-Malibu3D / Sonata weights under `ckpt/malibu3d/` (see `ckpt/README.md`).
-
-```bash
-# Sonata outdoor SSL (1232ch)
-python scripts/extract_pureforest_pooled_embeddings.py \
-  --config configs/pureforest/cls-sonata-v1m2-pureforest-lin-grid-enc.py \
-  --weight ckpt/malibu3d/sonata_outdoor/epoch_120.pth \
-  --output-dir ${OUT}/sonata_outdoor_ms \
-  --splits ${SPLITS} --batch-size ${BS}
-
-# LitePT-B Malibu3D multitask (1386ch)
+export PYTHONPATH=$PWD
+# One GPU pass: per-tile mean- and max-pooled encoder features -> {split}.npz + meta.json
 python scripts/extract_pureforest_pooled_embeddings.py \
   --config configs/pureforest/cls-litept-b-v1m0-pureforest-lin-grid-enc.py \
-  --weight ckpt/malibu3d/litept_b_multitask/model_best.pth \
-  --output-dir ${OUT}/litept_b_malibu3d_ms \
-  --splits ${SPLITS} --batch-size ${BS}
+  --weight ckpt/litept-b/model.pth \
+  --output-dir stats/pureforest/embeddings/litept-b \
+  --splits train val test --batch-size 24
 
-# PTv3 Malibu3D multitask (992ch)
-python scripts/extract_pureforest_pooled_embeddings.py \
-  --config configs/pureforest/cls-ptv3-v1m0-pureforest-lin-grid-enc.py \
-  --weight ckpt/malibu3d/ptv3_multitask/model_best.pth \
-  --output-dir ${OUT}/ptv3_malibu3d_ms \
-  --splits ${SPLITS} --batch-size ${BS}
-
-# SpUNet Malibu3D multitask (512ch)
-python scripts/extract_pureforest_pooled_embeddings.py \
-  --config configs/pureforest/cls-spunet-v1m0-pureforest-lin-grid-enc.py \
-  --weight ckpt/malibu3d/spunet_multitask/model_best.pth \
-  --output-dir ${OUT}/spunet_malibu3d_ms \
-  --splits ${SPLITS} --batch-size ${BS}
-
-# KPConvX Malibu3D multitask (928ch)
-python scripts/extract_pureforest_pooled_embeddings.py \
-  --config configs/pureforest/cls-kpconvx-v1m0-pureforest-lin-grid-enc.py \
-  --weight ckpt/malibu3d/kpconvx_multitask/model_best.pth \
-  --output-dir ${OUT}/kpconvx_malibu3d_ms \
-  --splits ${SPLITS} --batch-size ${BS}
+# Linear (logistic regression, grid over C) or MLP head (--head mlp); selection on val
+python scripts/probe_pureforest_sklearn.py \
+  --embeddings-dir stats/pureforest/embeddings/litept-b \
+  --output-dir stats/pureforest/sklearn_probe/litept-b
 ```
 
-### LitePT-B préentraîné ECLAIR (job 1330042)
-
-```bash
-python scripts/extract_pureforest_pooled_embeddings.py \
-  --config configs/pureforest/cls-litept-b-v1m0-pureforest-lin-grid-enc.py \
-  --weight ckpt/1330042/model_best.pth \
-  --output-dir ${OUT}/litept_b_preECLAIR_ms \
-  --splits ${SPLITS} --batch-size ${BS}
-```
-
-On Jean-Zay you can point `--weight` directly at the lustre path without copying.
-
-Toy smoke (override data root):
-
-```bash
-python scripts/extract_pureforest_pooled_embeddings.py \
-  --config configs/pureforest/cls-sonata-v1m2-pureforest-lin-grid-enc.py \
-  --weight ckpt/malibu3d/sonata_outdoor/epoch_120.pth \
-  --data-root data/pureforest_toy \
-  --output-dir ${OUT}/sonata_outdoor_toy \
-  --splits ${SPLITS} --batch-size 2
-```
-
-### Probe (linear or MLP)
-
-Default `--head linear`: multinomial logistic with an L2 `C` grid.
-`--head mlp`: PureForest Fig.7-style head
-`Linear(C→hidden) → LeakyReLU(0.2) → Dropout → Linear(hidden→K)` (default
-`hidden=32`), Adam + CE, grid `agg × lr × weight_decay × dropout`, early-stop
-on val.
-
-```bash
-# Sonata outdoor SSL (linear)
-python scripts/probe_pureforest_sklearn.py \
-  --embeddings-dir ${OUT}/sonata_outdoor_ms \
-  --output-dir stats/pureforest/sklearn_probe/sonata_outdoor_ms
-
-# LitePT-B Malibu3D multitask
-python scripts/probe_pureforest_sklearn.py \
-  --embeddings-dir ${OUT}/litept_b_malibu3d_ms \
-  --output-dir stats/pureforest/sklearn_probe/litept_b_malibu3d_ms
-
-# PTv3 Malibu3D multitask
-python scripts/probe_pureforest_sklearn.py \
-  --embeddings-dir ${OUT}/ptv3_malibu3d_ms \
-  --output-dir stats/pureforest/sklearn_probe/ptv3_malibu3d_ms
-
-# SpUNet Malibu3D multitask
-python scripts/probe_pureforest_sklearn.py \
-  --embeddings-dir ${OUT}/spunet_malibu3d_ms \
-  --output-dir stats/pureforest/sklearn_probe/spunet_malibu3d_ms
-
-# KPConvX Malibu3D multitask
-python scripts/probe_pureforest_sklearn.py \
-  --embeddings-dir ${OUT}/kpconvx_malibu3d_ms \
-  --output-dir stats/pureforest/sklearn_probe/kpconvx_malibu3d_ms
-
-# LitePT-B préentraîné ECLAIR (job 1330042)
-python scripts/probe_pureforest_sklearn.py \
-  --embeddings-dir ${OUT}/litept_b_preECLAIR_ms \
-  --output-dir stats/pureforest/sklearn_probe/litept_b_preECLAIR_ms
-```
-
-GPU chain (same 6 tags, `--device cuda`, resume-friendly) — prefer tmux:
-
-```bash
-bash scripts/pureforest/run_sklearn_probes_gpu.sh
-# SKIP_EXISTING=1 DEVICE=cuda:1 bash scripts/pureforest/run_sklearn_probes_gpu.sh
-# MLP head: EXTRA_ARGS='--head mlp' PROBE_ROOT=stats/pureforest/sklearn_probe_mlp \
-#   bash scripts/pureforest/run_sklearn_probes_gpu.sh
-```
-
-### Scale-slice linear probes (encoder levels)
-
-Pooled MS embeddings are a finest-first concat of `enc_channels` /
-`channel_blocks` (Sonata: `48+96+192+384+512`). Slice levels **at probe
-time** (no re-extract) with `--scale-slice`:
-
-```bash
-# Finest two levels only (48+96 = 144ch for Sonata)
-python scripts/probe_pureforest_sklearn.py \
-  --embeddings-dir ${OUT}/sonata_outdoor_ms \
-  --output-dir stats/pureforest/sklearn_probe_scales/sonata_outdoor_ms/scale_p0-2 \
-  --scale-slice '[:2]' --device cuda -v
-
-# Coarser levels only
-python scripts/probe_pureforest_sklearn.py \
-  --embeddings-dir ${OUT}/sonata_outdoor_ms \
-  --output-dir stats/pureforest/sklearn_probe_scales/sonata_outdoor_ms/scale_s2-end \
-  --scale-slice '[2:]' --device cuda -v
-```
-
-Blocks default from each tag’s `meta.json` → extract config
-(`model.channel_blocks` / `enc_channels`); override with
-`--channel-blocks 48 96 192 384 512` if needed. Syntax: `full`, `[:k]`,
-`[k:]`, `[i:j]`, `[i]`. Use a distinct `--output-dir` per slice so resume
-files do not mix.
-
-**Grid B launcher** (full + prefixes `[:1]…[:L-1]` + suffixes `[1:]…[L-1:]`,
-9 runs × 6 tags) — prefer tmux:
-
-```bash
-bash scripts/pureforest/run_sklearn_scale_slice_probes_gpu.sh
-# SKIP_EXISTING=1 DEVICE=cuda:1 \
-#   bash scripts/pureforest/run_sklearn_scale_slice_probes_gpu.sh
-# TAGS='sonata_outdoor_ms litept_b_malibu3d_ms' \
-#   bash scripts/pureforest/run_sklearn_scale_slice_probes_gpu.sh
-```
-
-Outputs: `stats/pureforest/sklearn_probe_scales/<tag>/scale_<slug>/metrics.json`
-(slugs: `full`, `p0-2`, `s2-end`, …).
-
-Selects best config on val (`--select-metric mIoU` by default), then reports
-train + test for that winner only (`best.train.*` / `best.test.*` in
-`metrics.json`, plus `best_test_predictions.npz`). After each
-grid fit it also updates `grid_progress.json` (+ `best_so_far.pkl` on new best)
-so a crash can be resumed by re-running the same command (skips finished
-cells). Use `--fresh` to ignore prior progress. Options: `-v`,
-`--class-weight balanced` / `sqrt`, `--Cs 0.01 0.1 1 10 100`, `--aggs mean concat`,
-`--solver newton-cholesky` (sklearn linear).
-
-- ``none``: uniform weights
-- ``balanced``: ``w_k ∝ 1/n_k``
-- ``sqrt``: ``w_k ∝ 1/√n_k`` (between none and balanced)
-
-**GPU linear (torch LBFGS)** — pass `--device cuda` (train/val stay on device
-for the whole `C` grid of each `agg`). Prefer a separate `--output-dir` vs a
-prior sklearn run:
-
-```bash
-python scripts/probe_pureforest_sklearn.py \
-  --embeddings-dir ${OUT}/litept_b_malibu3d_ms \
-  --output-dir stats/pureforest/sklearn_probe/litept_b_malibu3d_ms_torch \
-  --device cuda -v
-```
-
-**MLP head (torch Adam)** — always torch; omit `--device` to auto-pick cuda/cpu.
-Use a distinct `--output-dir` so progress does not mix with linear runs:
-
-```bash
-python scripts/probe_pureforest_sklearn.py \
-  --embeddings-dir ${OUT}/kpconvx_malibu3d_ms \
-  --output-dir stats/pureforest/sklearn_probe/kpconvx_malibu3d_ms_mlp \
-  --head mlp --device cuda -v
-# optional: --hidden 32 --lrs 1e-3 2e-3 5e-3 1e-2 2e-2 \
-#           --wds 0 1e-4 1e-3 1e-2 --dropouts 0.5 --epochs 100 --patience 20
-```
-
-### Slurm (Jean-Zay H100)
-
-Extract all MS-encoder backbones (Malibu3D + LitePT preECLAIR) with
-`batch_size=24` by default:
-
-```bash
-sbatch scripts/pureforest/sbatch_extract_pooled_embeddings_h100.sh
-
-# Optional overrides:
-BATCH_SIZE=32 POINT_MAX=5000 SKIP_EXISTING=1 \
-  sbatch scripts/pureforest/sbatch_extract_pooled_embeddings_h100.sh
-```
-
-Outputs: `stats/pureforest/embeddings/<tag>/{train,val,test}.npz`.
-Logs: `logs/slurm/$SLURM_JOB_ID/`.
+See the `--help` of both scripts for the other options (`--point-max`, `--device cuda`, `--scale-slice`, ...).

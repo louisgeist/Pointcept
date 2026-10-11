@@ -1,6 +1,7 @@
-"""Tests for MultiTaskTester nathab point/tile prediction dumps.
+"""MultiTaskTester._finalize_and_save_tile_distribution: per-point argmax, tile-level prediction broadcast and
+the saved .npy dumps for natural-habitat axes.
 
-Run with: PYTHONPATH=./ pytest tests/test_nathab_pred_dump.py
+Run with: PYTHONPATH=. pytest tests/test_nathab_pred_dump.py
 """
 
 import os

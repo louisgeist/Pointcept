@@ -1,8 +1,15 @@
+"""
+Samplers of the iter-limited training mode (``total_iters`` set in the config).
+
+Each trainer epoch then runs a fixed ``iter_per_epoch`` optimizer steps on a random
+subset of the dataset instead of a full pass. The unseen-index pool is not saved in
+checkpoints: after a resume, sampling restarts from a fresh shuffle.
+"""
+
 import torch
 import torch.utils.data
 import torch.distributed as dist
 from torch.utils.data import Sampler
-
 
 
 def _sample_iter_limited_indices(
@@ -41,13 +48,7 @@ def _draw_cross_epoch_indices(num_requested, dataset_size, unseen_pool, generato
 
 
 def _compute_needs_replacement(shuffle, num_requested, dataset_size):
-    """
-    Compute whether replacement is needed for the given parameters.
-    
-    - If shuffle is False, no replacement is needed.
-    - If shuffle is True, replacement is needed if the number of 
-        requested indices is greater than the dataset size.
-    """
+    """Random sampling needs replacement only when shuffling more indices than the dataset holds."""
     if not shuffle:
         return False
     return num_requested > dataset_size

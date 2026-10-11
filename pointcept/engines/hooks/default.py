@@ -36,15 +36,12 @@ class HookBase:
         pass
 
     def state_dict(self):
-        """Optional hook-local state to persist across resume.
+        """Hook-local state saved in checkpoints and restored on resume.
 
-        Overridden by hooks that track running state across the whole training run
-        in instance attributes (e.g. a per-task "best metric so far" used only for
-        W&B/TensorBoard display) rather than in trainer-level state that
-        CheckpointSaver/CheckpointLoader already checkpoint (``trainer.best_metric_value``).
-        Without this, such trackers silently reset to their initial sentinel on every
-        resume, making a "best so far" curve dip after a resume even though it should be
-        a monotonic running max. Return {} (default) for hooks with nothing to persist.
+        Override in hooks that keep run-long state in instance attributes (e.g. a
+        per-task "best so far" metric used only for logging); trainer-level state such
+        as ``trainer.best_metric_value`` is already checkpointed. Without it, such state
+        resets on every resume. Returns {} by default.
         """
         return {}
 
@@ -53,17 +50,17 @@ class HookBase:
         pass
 
     def should_evaluate(self):
+        """Whether validation runs at the end of the current trainer epoch."""
         cfg = self.trainer.cfg
         if not cfg.evaluate:
             return False
 
-        # Classic mode 
-        # For backward compatibility, eval_every to 1,
-        # so that it is eval_epoch that determines the validation frequency.
+        # Classic mode (eval_every is None): validate after every trainer epoch,
+        # so the validation cadence is set by eval_epoch.
         if getattr(cfg, "eval_every", None) is None:
             return True
         
-        # Iter-limited mode: evaluate every N epochs
+        # Iter-limited mode: every eval_every epochs, and after the last epoch.
         eval_every = getattr(cfg, "eval_every", 1)
         epoch = self.trainer.epoch + 1
         max_epoch = self.trainer.max_epoch

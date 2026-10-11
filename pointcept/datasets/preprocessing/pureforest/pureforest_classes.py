@@ -1,5 +1,5 @@
 """
-PureForest semantic class definitions (13 classes).
+PureForest class definitions (13 tree-species classes) and LAZ file naming.
 
 See: https://arxiv.org/abs/2404.12064
 """

@@ -1,11 +1,17 @@
 """
-Slurm timeout requeue for Jean Zay and similar clusters.
+Requeue a Slurm job shortly before it reaches its walltime limit.
 
-Activated when POINTCEPT_SLURM_REQUEUE=1 and SLURM_JOB_ID are set.
+Installed by ``tools/train.py``; active only when ``POINTCEPT_SLURM_REQUEUE=1`` and
+``SLURM_JOB_ID`` are set. Two triggers, either is enough:
+1. SIGUSR1, sent by Slurm when the job is submitted with ``--signal=USR1@<seconds>``
+   (or ``B:USR1@<seconds>``);
+2. a background thread polling ``squeue`` for the time left, for launchers where the
+   signal does not reach the Python process (e.g. nested ``srun``). Margin and period:
+   ``POINTCEPT_SLURM_REQUEUE_MARGIN_SEC`` (120) and ``POINTCEPT_SLURM_REQUEUE_POLL_SEC`` (30).
 
-Uses two mechanisms (either is enough):
-1. SIGUSR1 from `#SBATCH --signal=USR1@XX` or `B:USR1@XX` (fast path)
-2. Background poll of `squeue` time left (works with jz_utils + srun nesting)
+On trigger, the main process flushes the cumulative runtime, finishes the W&B run,
+touches ``$JOB_DIR/.requeue_triggered`` and runs ``scontrol requeue``; every process then
+exits. The requeued job resumes from ``model_last.pth`` (see ``scripts/train.sh``).
 """
 
 import logging

@@ -2,15 +2,20 @@
 """
 Audit per-subtile point and voxel counts for MALiBU3D (test/val/train).
 
-Uses all LIDARHD=True rows from the CSV manifest for the requested splits.
+Reads a manifest with ``split``, ``patch_id`` and ``LIDARHD`` columns (the
+``scene_split_manifest.csv`` layout used to build the dataset) and keeps the
+LIDARHD=True rows of the requested splits. The released ``tiles.csv`` (``tile_id``
+column, no ``LIDARHD``) already carries ``n_points`` / ``n_voxels``, so this script
+is only needed when rebuilding the dataset.
 Dataset exclusions (missing / too_small / hardcoded) are NOT applied by default:
 those tiles stay in the manifest and should still get n_points / n_voxels.
 Pass --apply_dataset_exclusions only if you want MALiBU3DDataset-matched audit stats.
 
 Voxel count matches GridSample (grid floor + FNV unique keys) at the given grid_size.
 
-Optionally enrich the scene_split_manifest CSV in place with n_points / n_voxels
-columns (--write_manifest). Preferred source for VoxelBudgetBatchSampler.
+Writes per-tile counts (CSV) and summary statistics (JSON) to --output_dir, and
+optionally adds n_points / n_voxels columns to the manifest in place
+(--write_manifest); VoxelBudgetBatchSampler reads n_voxels from that column.
 
 Example (audit only):
 python scripts/analyze_malibu3d_test_point_voxel_counts.py \
@@ -21,7 +26,7 @@ python scripts/analyze_malibu3d_test_point_voxel_counts.py \
   --num_workers 16 \
   --output_dir stats/malibu3d/test_point_voxel_counts
 
-Example (enrich scene_split_manifest after preprocess):
+Example (add the counts to the manifest after preprocessing):
 python scripts/analyze_malibu3d_test_point_voxel_counts.py \
   --data_root data/malibu3d \
   --csv_manifest data/malibu3d/raw/scene_split_manifest.csv \

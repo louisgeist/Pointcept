@@ -1,24 +1,13 @@
 """
-NO-RGB ABLATION (LitePT-B): probes are trained AND evaluated with colour removed on every forward -- RandomDropColor(1.0, 1.0, keep_mask=True) after NormalizeColor in train/val/test, so GridProbeSegmentorV2's frozen feature_mask_values replaces the 3 colour channels with the checkpoint's learned color_mask_value. Strength/geometry untouched. Chromatic* train augs dropped (they'd only jitter a channel that is then fully masked). Otherwise identical to the RGB reference below.
+No-RGB ablation (Tab. 4 of the MALiBU3D paper) of litept-b-v1m0-h3d-lin_enc.py: frozen LitePT-B
+(MALiBU3D multitask checkpoint, ckpt/litept-b/model.pth) linear probing on H3D semantic segmentation
+(11 classes) without color.
 
-LitePT-Base grid-search linear probing on H3D — encoder multiscale variant
-(same frozen checkpoint as w109/5/11h_grid_h3d/litept-b-v1m0-h3d-lin_2.py /
-job 873542). `enc_mode=True` -> 1386ch concat of the 5 raw encoder stages
-(54+108+216+432+576).
-
-AdamW / wd=0 / OneCycleLR with warmup fixed at pct_start=5%, lr swept over
-{1e-4 .. 5e-1} (12 values), input_norm=none. Counterpart to the SGD/cosine
-DINOv2 sweep in 11h_grid_h3d; scheduler/optimizer family matches the DALES
-AdamW GridProbe configs (e.g. w109/4/grid_20h). Cosine anneal + warmup are
-owned by OneCycleLR (pct_start); GridProbeTrainer.build_scheduler injects
-total_steps per eval_epoch window.
-
-Dataset-driven axes (num_worker/AMP/batch) match 11h_grid_h3d. epoch=2000
-/ eval_epoch=10. H3D fill/aug/feature_mask_values unchanged from that ref.
-
-Grid (12 probes): ce_lovasz x lr{1e-4,2e-4,5e-4,1e-3,2e-3,5e-3,1e-2,2e-2,5e-2,
-1e-1,2e-1,5e-1} x wd=0 x dropout=0 x input_norm=none x feat_norm=none x
-optimizer=AdamW x warmup=5%. skip_test=False, log_test_f1=True.
+Color is dropped on every train/val/test forward (RandomDropColor with drop_ratio=1,
+keep_mask=True), so the backbone sees the checkpoint's learned color mask value instead of RGB; the
+color augmentations are removed. Everything else (encoder multi-scale features, 1386 channels; 12-lr
+GridProbe; selection on validation macro-F1; strength replaced by the learned mask value) is
+identical to the RGB config.
 """
 
 _base_ = ["../_base_/default_runtime.py"]
@@ -59,11 +48,10 @@ weight = "ckpt/litept-b/model.pth"
 
 wandb_project = f"pointcept_{dataset_type[:-7].lower()}"
 
-# Hooks
-# Order matters: GridProbeEvaluator before GridProbeCheckpointSaver/CheckpointSaver;
-# GridProbeWinnerSelector last (frees the per-probe optimizers/schedulers, then runs
-# its own SemSegTester pass on the winning probe — replaces PreciseEvaluator, which
-# never sets raw_model.active_probe and would break under GridProbeSegmentorV2).
+# Hooks. Order matters: GridProbeEvaluator before the checkpoint savers, and
+# GridProbeWinnerSelector last (frees the per-probe optimizers, picks the best probe
+# on validation and tests it unless skip_test=True). PreciseEvaluator is not used:
+# it does not select a probe.
 hooks = [
     dict(
         type="CheckpointLoader",
@@ -99,11 +87,7 @@ names = [
 enc_channels = (54, 108, 216, 432, 576)
 backbone_out_channels = sum(enc_channels)
 
-# -----------------------------------------------------------------------------
-# Grid-search probes — AdamW / OneCycleLR: ce_lovasz x lr x wd=0 x dropout=0 x
-# input_norm=none x feat_norm=none x optimizer=AdamW, warmup=5%
-# (1 x 12 x 1 x 1 x 1 x 1 x 1 = 12 probes).
-# -----------------------------------------------------------------------------
+# Grid-search probes — ce_lovasz, AdamW/wd0/OneCycleLR warmup5%, lr sweep only (12 probes).
 _losses = {
     "ce_lovasz": [
         dict(type="CrossEntropyLoss", loss_weight=1.0, ignore_index=ignore_index),
@@ -184,7 +168,7 @@ model = dict(
     backbone_out_channels=backbone_out_channels,
     backbone=dict(
         type="LitePT-v1",
-        in_channels=7,  # coord(3) + color(3) + strength(1, fake/zero)
+        in_channels=7,  # coord(3) + color(3) + strength(1, absent: learned fill value)
         order=("z", "z-trans", "hilbert", "hilbert-trans"),
         stride=(3, 3, 3, 3),
         enc_depths=(3, 3, 3, 12, 3),
@@ -242,7 +226,7 @@ data = dict(
             dict(type="RandomScale", scale=[0.9, 1.1]),
             dict(type="RandomFlip", p=0.5),
             dict(type="RandomJitter", sigma=0.005, clip=0.02),
-            # Chromatic* augs removed: colour is fully masked below (noRGB ablation).
+            # Chromatic* augs removed: color is fully masked below (no-RGB ablation).
             dict(
                 type="GridSample",
                 grid_size=grid_size,

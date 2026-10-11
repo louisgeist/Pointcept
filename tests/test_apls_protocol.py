@@ -1,7 +1,7 @@
-"""The APLS metric is a fixed protocol: parameters are constants, not knobs.
+"""APLS is a fixed protocol: its constants, the absence of tuning knobs (API, CLI, configs), the rejection of
+removed config keys, and behavioural invariants that follow from the protocol values.
 
-Guards the public API (no tuning parameters), the recorded constants, stale-config rejection,
-and a few behavioural invariants that follow from the protocol values.
+Run with: PYTHONPATH=. pytest tests/test_apls_protocol.py
 """
 
 from __future__ import annotations

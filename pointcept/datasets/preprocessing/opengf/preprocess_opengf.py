@@ -2,79 +2,53 @@
 Preprocessing script for the OpenGF ground-filtering dataset
 (https://github.com/Nathan-UW/OpenGF, Qin et al. CVPRW 2021 / ISPRS P&RS 2023).
 
-Raw layout (as distributed via Google Drive / Baidu -- no manifest file, just
-directories; confirmed against a local download 2026-09):
+Raw layout (unzip the distributed archives until it appears)::
+
   <dataset_root>/
     Training/<Terrain>/<Scene>/<Scene>_<idx>.laz   (151 files, ~500x500 m tiles)
     Validation/<Scene>_v.laz                        (9 files, one per training scene)
     Test/T{1,2,3}.laz                               (3 files, large irregular regions)
 
-Usage — assemble raw from Google Drive zips (names vary; unzip until the
-layout above appears), then symlink + preprocess. CPU only (no GPU).
+Usage (CPU only)::
 
-  # Jean-Zay: keep *.zip on $STORE, extract working tree on $SCRATCH
-  # ($STORE=fsstor, $SCRATCH=fsn1/projects — not the same path)
-  mkdir -p "$STORE/OpenGF/Training" "$SCRATCH/OpenGF"
-  # copy Drive zips to $STORE/OpenGF/ (+ Training/*.zip), then:
-  unzip -q "$STORE/OpenGF"/Validation-*.zip -d "$SCRATCH/OpenGF"
-  unzip -q "$STORE/OpenGF"/Test-*.zip -d "$SCRATCH/OpenGF"
-  mkdir -p "$SCRATCH/OpenGF/Training" && cd "$SCRATCH/OpenGF/Training"
-  for z in "$STORE/OpenGF/Training"/*.zip; do unzip -q "$z"; done
-  # expect 151/9/3 LAZ under Training/ Validation/ Test/
-
-  # local or JZ — point Pointcept at the raw root, then preprocess
-  ln -sfn /data/geist/datasets/OpenGF data/opengf/raw
-  # JZ: ln -sfn "$SCRATCH/OpenGF" data/opengf/raw
+  ln -sfn /path/to/OpenGF data/opengf/raw
   python pointcept/datasets/preprocessing/opengf/preprocess_opengf.py \
       --dataset_root data/opengf/raw \
       --output_root data/opengf \
       --num_workers 8
 
 Writes per-scene folders under output_root/{train,val,test}/<scene_id>/:
-  coord.npy, strength.npy, segment.npy, meta.json
+  coord.npy, strength.npy, segment.npy, meta.json (with the float64 ``coord_translation``
+  such that absolute xyz = coord + coord_translation)
 
-Label semantics (LAS `classification` field, confirmed {0, 1, 2} only across
-all 163 files of a local download -- no other values seen):
+Label semantics (LAS ``classification`` field, values {0, 1, 2} only):
   raw 2 = GR (bare earth, clean water)   -> stored segment 0 ("Ground")
   raw 1 = NG (buildings, vegetation, cars, other unclassified objects)
                                           -> stored segment 1 ("Non-ground")
   raw 0 = "Unclassified" (low/high outliers, Qin et al. CVPRW 2021 Sec 3.3)
                                           -> stored segment 2 ("Outlier")
 
-Outliers are kept as their own on-disk label (NOT merged into NG and NOT
-dropped here) so training configs can decide how to treat them on the fly:
-  - `RemapSegment(mapping={2: 1})` merges outliers into Non-ground, matching
-    the paper's official training/"Test II (w outliers)" convention (Sec 4.4:
-    "we merged class 0 into class 1, so that outliers are treated as NG
-    points").
-  - `DropSegmentClass(labels=[2])` physically removes outlier points before
-    GridSample, matching "Test II (w/o outliers)" (Sec 4.5: outliers are
-    "deleted", not just excluded from the loss/metric -- this changes the
-    geometric neighborhood of the surviving points, unlike `ignore_index`).
-  - `ignore_index=2` (no transform) keeps outlier points in the cloud as
-    context but excludes them from loss/metrics -- a third, cheaper option
-    not used by the paper's baselines but available here.
-Only Test/T2.laz carries outlier points in the local download (consistent
-with Qin et al.: "Unlike Test I, there are a large number of outliers in Test
-II" -- T1 and T3 have none); Training/Validation tiles carry a handful too.
+Outliers are kept as their own on-disk label (not merged, not dropped) so configs
+choose how to treat them:
+  - ``RemapSegment(mapping={2: 1})`` merges outliers into Non-ground, the paper's
+    training / "Test II (w outliers)" convention (Sec 4.4: "we merged class 0 into
+    class 1, so that outliers are treated as NG points").
+  - ``DropSegmentClass(labels=[2])`` physically removes outlier points before
+    GridSample, as in "Test II (w/o outliers)" (Sec 4.5: outliers are "deleted",
+    which changes the neighborhood of the remaining points, unlike ``ignore_index``).
+  - ``ignore_index=2`` keeps outliers as context but excludes them from loss/metrics.
+Only Test/T2.laz has many outlier points (Qin et al.: "Unlike Test I, there are a large
+number of outliers in Test II"; T1 and T3 have none); Training/Validation tiles have a few.
 
-`intensity` is present and populated on every file -> written as `strength`.
-RGB fields exist on some files (LAS point_format 3) but hold a constant dummy
-value (checked: `red == 65280` everywhere) -- treated as absent, like DALES.
+``intensity`` is written as ``strength``. RGB fields, when present, hold a constant
+dummy value and are not written (as for DALES).
 
-Test tiles vary wildly in raw footprint (T1 ~2635x2504 m vs T2 ~939x1226 m),
-unlike Training/Validation's uniform 500x500 m tiles, so this script uses
-`split_scene_xy_by_chunk_size` (a physical target tile size, not a fixed N x N
-factor like DALES' `split_scene_xy_regular(chunking=3)`) -- default 166.67 m
-(= 500/3) reproduces an exact 3x3 split on Training/Validation's uniform 500 m
-tiles (matching DALES' own chunking=3 convention, ~500k pts/subtile at OpenGF's
-density -- comfortably under DALES' own ~1.58M pts/subtile at 57 pts/m2), while
-also scaling Test's much larger, unevenly-sized regions (T1 ~2635 m, T3 ~1679 m)
-down to the *same* ~167 m footprint instead of just dividing them by a fixed
-factor, which would leave T1/T3 subtiles still ~5x denser than Training's
-(GridProbe val eval OOM'd on the unsplit ~500 m val tiles at grid_size=0.1 on
-a 47 GB local GPU before this fix -- a fixed chunking=3 factor alone would not
-have fixed Test/T1, only Training/Validation).
+Tiles are split with ``split_scene_xy_by_chunk_size`` (a physical tile size) rather
+than a fixed N x N factor because Test regions are much larger and uneven (T1 ~2635 x
+2504 m, T2 ~939 x 1226 m) than the uniform 500 x 500 m Training/Validation tiles. The
+default 166.67 m (= 500 / 3) gives an exact 3 x 3 split of Training/Validation (like
+DALES' chunking=3, ~500k points per subtile) and the same footprint on Test, which
+keeps subtiles small enough for validation/test memory at grid_size 0.1.
 """
 
 from __future__ import annotations

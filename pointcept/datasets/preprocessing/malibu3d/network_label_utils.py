@@ -1,13 +1,13 @@
-"""Load and write Flair3D-build network graphs for Pointcept preprocessing.
+"""Read the MALiBU3D network graphs and write predicted graphs (GeoPackage I/O).
 
-Expects / produces GeoPackages with layers ``nodes`` / ``edges`` / ``metadata``
-(EPSG:2154)::
+Graphs are GeoPackages with layers ``nodes`` / ``edges`` / ``metadata`` (EPSG:2154)::
 
-    {network_graphs_root}/{dept}_{zone}_{NETWORK}_graph.gpkg
-    {out_dir}/{dept}_{zone}_{NETWORK}_pred_graph.gpkg
+    {network_graphs_root}/{dept}_{roi}_{NETWORK}_graph.gpkg      ground truth
+    {out_dir}/{dept}_{roi}_{NETWORK}_pred_graph.gpkg             predictions
 
-With ``network_graphs_root=None`` the graphs are read from each ROI directory, which is
-where the Hugging Face release of the dataset stores them.
+With ``network_graphs_root=None`` the ground-truth graphs are read from each ROI
+directory, which is where the Hugging Face release of the dataset stores them.
+Requires geopandas / shapely, and GDAL (osgeo) for writing.
 """
 
 from __future__ import annotations
@@ -166,12 +166,10 @@ def parse_bool_flag(value: object) -> bool:
 
 @dataclass(frozen=True)
 class LoadedNetworkGraph:
-    """True graph topology of an exported GPKG (not flattened to raw segments).
+    """Ground-truth graph topology of a ``*_graph.gpkg``, as used by APLS.
 
-    Unlike ``load_graph_edge_segments`` (which discards node identity and just
-    returns raw LineString endpoints), this preserves the actual node-shared
-    topology written by Flair3D-build's ``write_pixel_graph_gpkg`` -- this IS the
-    ground-truth graph for APLS, no re-derivation/re-rasterization needed.
+    Unlike ``load_graph_edge_segments`` (raw LineString segments, node identity
+    lost), this keeps the shared nodes of the ``nodes`` / ``edges`` layers.
     """
 
     node_xy: np.ndarray        # (N, 2) float64, row order of the `nodes` layer
@@ -264,13 +262,11 @@ def load_roi_exported_networks(
     flags: Dict[str, bool],
     network_types: Sequence[str] = NETWORK_TYPES,
 ) -> Dict[str, np.ndarray]:
-    """Load edge segments for a ROI, hard-failing when a flagged graph is missing.
+    """Load the edge segments ``(N, 2, 3)`` of each network type of a ROI.
 
-    Parameters
-    ----------
-    flags :
-        Per-network availability from the split manifest. ``True`` requires the
-        corresponding ``*_graph.gpkg`` to exist.
+    ``flags`` gives per-network availability from the tile CSV: a ``True`` flag whose
+    ``*_graph.gpkg`` is missing raises ``FileNotFoundError``; an unflagged missing graph
+    gives an empty array.
     """
     out: Dict[str, np.ndarray] = {}
     root = network_graphs_root
@@ -556,9 +552,9 @@ def write_pixel_graph_gpkg(
 ) -> Path:
     """Write ``nodes``, ``edges``, and ``metadata`` layers to a GeoPackage.
 
-    Uses GDAL/OGR in a single CreateDataSource session (avoids Fiona ``mode='a'``
-    NULL pointer failures on GDAL 3.6 / Fiona 1.9). Empty graphs write empty
-    layers rather than raising.
+    Uses GDAL/OGR in a single CreateDataSource session (appending layers with Fiona
+    ``mode='a'`` fails on some GDAL / Fiona versions). Empty graphs write empty
+    layers rather than raising. Same layer schema as the ground-truth graphs.
     """
     from osgeo import ogr
 

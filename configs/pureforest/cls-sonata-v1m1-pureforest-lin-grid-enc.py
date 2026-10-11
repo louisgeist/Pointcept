@@ -1,21 +1,15 @@
 """
-Sonata-v1m1 (PT-v3m2) GridProbeClassifier on PureForest — official Meta/HuggingFace
-indoor SSL release (pretrain-sonata-v1m1-0-base.pth), not the MALiBU3D-fork outdoor
-checkpoint used by cls-sonata-v1m2-pureforest-lin-grid-enc.py.
+Frozen official indoor Sonata release (ckpt/sonata/pretrain-sonata-v1m1-0-base.pth) linear probing
+on PureForest tile classification (Tab. A.1 of the MALiBU3D paper).
 
-Indoor backbone: in_channels=9 (coord+color+normal), stride=(2,2,2,2),
-grid_size=0.02 (native indoor pretrain). PureForest has real color (unlike DALES) so
-only "normal" is zero-filled via FillMissingFeat; color keeps NormalizeColor as in
-the outdoor config. Scene coords are rescaled by coord_scale=1/10 before GridSample
-(indoor Sonata was pretrained on room-scale scenes; see README_grid_then_seed.md's
-"Sonata-v1m1 indoor" section — coord_scale is a real ablation axis there, N ∈
-{1,5,10,25,50}; 1/10 picked here, do not reuse a probe lr winner from another scale).
-Z_MinShift/Z_RandomOffset dropped (not used by the DALES/H3D/ECLAIR indoor configs
-either).
+Probe input: encoder multi-scale features (enc_mode=True, 1232 channels) of the indoor PT-v3m2
+backbone (in_channels=9: coord, color, normal; stride 2), mean-pooled per tile. Coordinates are
+divided by 10 to approach indoor scene scale and the grid keeps the indoor pretraining size (0.02).
+PureForest RGB is used; normals are zero-filled; intensity is not used.
 
-Encoder multiscale (enc_mode=True -> 48+96+192+384+512 = 1232ch), scene mean-pool,
-N linear heads. AdamW / wd=0 / OneCycleLR warmup 5%, lr sweep {1e-4 .. 5e-1}
-(12 probes), CE only. select_metric=mIoU.
+GridProbeClassifier: 12 linear probes (CE, AdamW, wd=0, OneCycleLR, lr from 1e-4 to 5e-1) share one
+backbone forward; the best probe on validation mIoU is tested. Test tiles overlapping MALiBU3D
+train/val forests are excluded (exclude_malibu3d_leakage_tiles=True).
 """
 
 _base_ = ["../_base_/default_runtime.py"]
@@ -26,7 +20,7 @@ num_exp = 1
 num_classes = 13
 ignore_index = -1
 grid_size = 0.02  # native indoor Sonata pretrain
-coord_scale = 1 / 10  # aerial coord rescale to indoor-pretrain scale
+coord_scale = 1 / 10  # aerial coords scaled toward indoor scene size
 point_max = 5000
 patch_size = 1024
 

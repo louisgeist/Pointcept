@@ -1,28 +1,26 @@
-"""Read the MALiBU3D / MALiBU3D tile list from either CSV schema.
+"""Read the MALiBU3D tile list from either of its two CSV schemas.
 
-Two schemas describe the same tiles:
-
-- ``tiles.csv`` -- the MALiBU3D Hugging Face release catalog: one row per
-  shipped tile (every row has LiDAR HD). This is the canonical file.
-- ``scene_split_manifest.csv`` -- the legacy Pointcept split table: one row per
-  FLAIR-HUB patch, including ``LIDARHD=False`` rows, with upper-case flags.
+- ``tiles.csv`` -- the tile catalog of the MALiBU3D Hugging Face release: one row
+  per shipped tile (every row has LiDAR HD). This is the canonical file.
+- ``scene_split_manifest.csv`` -- an older split table: one row per FLAIR-HUB
+  patch, including ``LIDARHD=False`` rows, with upper-case flag columns.
 
 :func:`iter_tiles` normalizes both to the catalog column names, so callers can
 point ``csv_manifest`` / ``--split_manifest_csv`` at either file:
 
-==================  ===================  ===========================
-catalog column      legacy column        notes
-==================  ===================  ===========================
-``tile_id``         ``patch_id``         ``{dept_year}_{roi}_{scene_i_j}``
+=======================  ===================  ====================================
+catalog column           older column         notes
+=======================  ===================  ====================================
+``tile_id``              ``patch_id``         ``{dept_year}_{roi}_{scene_i_j}``
 ``has_natural_habitat``  ``NATURAL_HABITAT``
-``has_elevation``   ``DEM_ELEV``
-``has_roads_graph`` ``ROADS``
-(implicit True)     ``LIDARHD``          legacy rows with False are skipped
-==================  ===================  ===========================
+``has_elevation``        ``DEM_ELEV``
+``has_roads_graph``      ``ROADS``
+(implicit True)          ``LIDARHD``          rows with False are skipped
+=======================  ===================  ====================================
 
-Other legacy columns are ignored (modalities that are not part of the release).
+Other columns of the older schema are ignored (modalities not in the release).
 
-Pure stdlib so preprocessing scripts can import it without torch.
+Pure stdlib, so preprocessing scripts can import it without torch.
 """
 
 from __future__ import annotations
@@ -64,8 +62,8 @@ class Tile:
     date_gap_days: Optional[float] = None
     n_points: Optional[int] = None
     n_voxels: Optional[int] = None
-    # Georeferencing of the tile's 1 m rasters (forest_2d, and network.npy once rasterized),
-    # Lambert-93 lower-left origin and size in pixels. Only in the released tiles.csv.
+    # Georeferencing of the tile's 1 m rasters (forest_2d, and network.npy once rasterized):
+    # Lambert-93 lower-left origin and size in pixels, from the forest_* columns of tiles.csv.
     raster_origin_x: Optional[float] = None
     raster_origin_y: Optional[float] = None
     raster_width: Optional[int] = None
@@ -105,11 +103,11 @@ def iter_tiles(
     csv_path: str,
     splits: Optional[Sequence[str]] = None,
 ) -> Iterator[Tile]:
-    """Yield LiDAR tiles from ``tiles.csv`` or a legacy split manifest.
+    """Yield LiDAR tiles from ``tiles.csv`` or an older split manifest.
 
-    ``splits`` filters on the (lower-cased) ``split`` column. Legacy rows with
-    ``LIDARHD`` other than True are skipped; rows with an empty id field are
-    skipped silently.
+    ``splits`` filters on the (lower-cased) ``split`` column. Rows whose
+    ``LIDARHD`` column (older schema only) is not True are skipped; rows with an
+    empty id field are skipped silently. Invalid booleans raise ``ValueError``.
     """
     csv_path = str(csv_path)
     if not os.path.isfile(csv_path):

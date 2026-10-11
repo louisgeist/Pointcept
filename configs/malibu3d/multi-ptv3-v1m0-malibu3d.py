@@ -1,16 +1,12 @@
 """
-PT-v3-malibu on MALiBU3D multitask: segment (v20) + forest_2d + elevation + 4 nathab
-tile_distribution axes (WeightedKL; Habitat Type / Moisture Regime / Soil
-Chemistry / Bioclimatic Zone, remapped on the fly from natural_habitat) +
-network (roads only, CE + foreground weight=5; railroads/transmission lines
-dropped; scored via APLS at test time). Aligned with w107/w108 toward_bm +
-network roads-only recipe.
+MALiBU3D multitask benchmark, PTv3 trained from scratch (Tab. 2 of the MALiBU3D paper).
 
-PT-v3-malibu is the in-house PTv3: PT-v3m2 GridPooling (any integer stride)
-plus the PT-v3m1 SubMConv3d stem. Same enc/dec widths as the former v3m1
-recipe; decoder on (enc_mode=False). Collects grid_size like LitePT/Sonata.
-
-This config is intentionally self-contained: it inherits only from default_runtime.
+Same five tasks, losses, GradNormLite balancing and data pipeline as
+multi-litept-b-v1m0-malibu3d.py. Backbone `PT-v3-malibu`: PTv3 (default PT-v3m1 widths, with
+decoder) using PT-v3m2 grid pooling, which allows stride 3, and the PT-v3m1 sparse-conv stem.
+200k iterations, batch 12 over 4 GPUs with SyncBN, lr 2e-3, AMP.
+Released checkpoint: ckpt/ptv3/model.pth (see README_checkpoints.md).
+Self-contained: inherits only from _base_/default_runtime.py.
 """
 
 # -----------------------------------------------------------------------------
@@ -32,7 +28,7 @@ grad_norm_lite_interval = 100
 grad_norm_lite_ema_alpha = 0.1
 grad_norm_lite_eps = 1e-3
 
-# Hardware parameters (released checkpoint: 4 x H100, 3 tiles/GPU, SyncBN)
+# Hardware parameters (released checkpoint: 4 GPUs, 3 tiles per GPU, SyncBN)
 num_gpu = 4
 num_worker = 16
 sync_bn = True
@@ -41,7 +37,7 @@ enable_amp = True
 # Data parameters
 batch_size = 12  # total batch size across all gpus
 batch_size_val = 8 * num_gpu
-# Cap scenes/batch; actual packing uses voxel budgets (w105/6/19h: 2M worked).
+# Max scenes per val/test batch; batches are packed up to the voxel budgets.
 batch_size_test = 8 * num_gpu
 val_voxel_budget = 2_000_000
 test_voxel_budget = 2_000_000
@@ -68,7 +64,7 @@ wandb_run_name = (
 wandb_project = "malibu3d_multi"
 
 # -----------------------------------------------------------------------------
-# Multitask configuration : targets configuraiton
+# Multitask configuration: targets, losses, task weights
 # -----------------------------------------------------------------------------
 from pointcept.datasets.malibu3d_config_utils import (
     MALIBU3D_TILE_DISTRIBUTION_TASKS,
@@ -86,8 +82,8 @@ target_keys = (main_task, "forest_2d", "elevation") + nathab_keys + ("network",)
 grad_norm_lite_task_groups = {task_name: "nathab" for task_name in nathab_keys}
 
 
-# Elevation in meters: no Collect key_scales, no denorm via target_scales
-# (matches configs/experiment/w107/7/toward_bm/multi-litept-v1m0-malibu3d_1.py).
+# Elevation is regressed in meters: no target rescaling, hence no denormalization
+# in the metrics.
 target_scales = {}
 
 label_definitions = dict(
@@ -95,15 +91,13 @@ label_definitions = dict(
 )
 
 task_configs = init_task_configs(target_keys, definitions=label_definitions)
-# Network head: ROADS only (RAILROADS channel dropped), supervised with CE only
-# and weight=5 on the foreground pixel class. Mirrors
-# configs/experiment/w107/5/18h/mono_network_ce_road_w5.py.
+# Network task: ROADS channel only (the default also has RAILROADS), trained with
+# cross-entropy alone (no Lovasz) and a 5x weight on road pixels (see below).
 task_configs["network"]["num_networks"] = 1
 task_configs["network"]["channel_names"] = ["ROADS"]
 task_criteria = init_task_criteria(task_configs)
-# Elevation in meters (no Collect key_scales / target_scales denorm above).
-# beta=1.0 in meters ≡ former ELEVATION_SMOOTH_L1_BETA=1e-2 in the old ×0.01
-# space (~1 m Huber threshold). See multi-litept-v1m0-malibu3d_1.py (w107/7/toward_bm).
+# The default beta (1e-2) assumes targets scaled by 0.01; with targets in meters,
+# beta=1.0 keeps the L1/L2 transition at 1 m.
 task_criteria["elevation"] = [
     dict(type="SmoothL1Loss", beta=1.0, loss_weight=1.0),
 ]
@@ -119,19 +113,16 @@ task_criteria["network"] = [
 del _network_ignore
 task_weights = {task_name: 1.0 for task_name in task_configs.keys()}
 
-# Remove the imported helpers from this module's namespace so they do not leak
-# into the Pointcept config dict. The config loader (pointcept/utils/config.py)
-# treats every non-dunder module attribute as a config entry, and Config.dump
-# pipes the resulting Python text through yapf. Yapf cannot reformat function
-# objects rendered as "<function ... at 0x...>" and raises a SyntaxError.
+# Delete the imported helpers: the config loader turns every non-dunder module
+# attribute into a config entry, and Config.dump (yapf) fails on function objects.
 del (
     init_task_configs,
     init_task_criteria,
     MALIBU3D_TILE_DISTRIBUTION_TASKS,
 )
 
-# main_task drives checkpoint selection / mIoU logging, so its num_classes,
-# ignore_index and names are exposed at the data root for backward-compat hooks.
+# main_task drives checkpoint selection; its num_classes / ignore_index / names are
+# also exposed at the top level and in `data` for the hooks that read them there.
 num_classes = task_configs[main_task]["num_classes"]
 ignore_index = task_configs[main_task]["ignore_index"]
 names = task_configs[main_task]["names"]
@@ -147,7 +138,7 @@ hooks = [
     dict(type="MultiTaskEvaluator", write_cls_iou=True),
     dict(type="CheckpointSaver", save_freq=None),
     dict(type="PreciseEvaluator", test_last=False),
-    # After PreciseEvaluator only (end of training / tools/test.py) -- not on val.
+    # Must follow PreciseEvaluator: scores its saved test logits with APLS (never on val).
     dict(type="NetworkAPLSEvaluator"),
 ]
 
@@ -157,9 +148,7 @@ test = dict(type="MultiTaskTester", verbose=True, write_cls_iou=True)
 # -----------------------------------------------------------------------------
 # Model
 # -----------------------------------------------------------------------------
-# MultiTaskSegmentorV2 attaches per-task heads on top of backbone features
-# (semantic: nn.Linear(backbone_out_channels, num_classes_task); elevation: 1).
-# PT-v3-malibu: GridPooling (any integer stride) + v3m1 SubMConv3d stem; decoder on.
+# MultiTaskSegmentorV2: one linear head per task on the backbone's per-point features.
 model = dict(
     type="MultiTaskSegmentorV2",
     backbone_out_channels=64,
@@ -216,7 +205,7 @@ scheduler = dict(
 param_dicts = [dict(keyword="block", lr=lr / 10)]
 
 # -----------------------------------------------------------------------------
-# Dataset (grid_coord + voxel pipeline aligned with multi-spunet multitask)
+# Dataset
 # -----------------------------------------------------------------------------
 dataset_type = "MALiBU3DDataset"
 data_root = "data/malibu3d"
@@ -281,7 +270,8 @@ data = dict(
                 type="Update",
                 keys_dict={"index_valid_keys": list(multitask_index_valid_keys)},
             ),
-            # Freeze Lambert XY before geometric augs / recentering.
+            # Keep absolute Lambert XY (before recentering and augmentation) for the
+            # raster-target lookup in NetworkRasterToPointLabels.
             dict(type="ExtractAbsXY"),
             dict(type="CenterShift", apply_z=True),
             dict(type="Z_MinShift"),
@@ -310,7 +300,6 @@ data = dict(
             dict(type="RandomDropStrength", drop_ratio=0.1, drop_application_ratio=0.5, keep_mask=True),
             dict(type="NetworkRasterToPointLabels"),
             dict(type="NetworkRasterToPointLabels", target_key="forest_2d"),
-            # dict(type="ShufflePoint"),
             dict(type="ToTensor"),
             dict(type="Update", keys_dict={"grid_size": grid_size}),
             dict(

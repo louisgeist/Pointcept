@@ -1,20 +1,16 @@
 """
-Sonata-v1m1 grid-search linear probing on OpenGF (coord scale 1/10) -- official
-indoor release baseline for suppmat (cross-domain aerial).
+Frozen official indoor Sonata release (ckpt/sonata/pretrain-sonata-v1m1-0-base.pth) linear probing
+on OpenGF ground filtering (Tab. A.1 of the MALiBU3D paper).
 
-Frozen PT-v3m2 encoder (enc_mode=True -> multi-scale concat 1232ch) from the
-Meta/HuggingFace Sonata pretrain (pretrain-sonata-v1m1-0-base.pth). Indoor
-backbone: in_channels=9 (coord+color+normal), stride=(2,2,2,2). OpenGF has no
-usable RGB or normals -- FillMissingFeat zero-fills both; intensity is not
-used (no strength channel). Scene coords are rescaled by 1/10 before
-GridSample; grid_size=0.02 (native indoor Sonata pretrain).
+Probe input: encoder multi-scale features (enc_mode=True, 1232 channels) of the indoor PT-v3m2
+backbone (in_channels=9: coord, color, normal; stride 2). Coordinates are divided by 10 to approach
+indoor scene scale and the grid keeps the indoor pretraining size (0.02). OpenGF has no usable RGB
+nor normals: both are zero-filled; intensity is not used.
 
-OpenGF dataset wiring matches sonata-v1m2-opengf-lin-grid.py: epoch=50,
-RemapSegment on train/val, DropSegmentClass + include_names="T2" on test
-(Test II w/o outliers), held-out val split, Z_MinShift / Z_RandomOffset.
-
-AdamW / wd=0 / OneCycleLR warmup 5%, lr swept over 12 values.
-Chain into seed ensemble via tools/grid_then_seeds.py.
+GridProbe: 12 linear probes (CE + Lovasz, AdamW, wd=0, OneCycleLR, lr from 1e-4 to 5e-1) share one
+frozen-backbone forward; tools/grid_then_seeds.py then re-trains the probe with the best validation
+mIoU with 10 seeds. Splits and outlier handling as in the other OpenGF configs (outliers merged into
+Non-ground for train/val, test on T2 without outliers); Mix3D is off.
 """
 
 _base_ = ["../_base_/default_runtime.py"]
@@ -25,11 +21,11 @@ num_exp = 1
 num_classes = 2
 ignore_index = 2  # unreachable after RemapSegment merges raw label 2 into 1
 grid_size = 0.02
-coord_scale = 1 / 10  # aerial coord rescale; grid_size stays at native indoor 0.02
+coord_scale = 1 / 10  # aerial coords scaled toward indoor scene size; grid_size stays the indoor 0.02
 point_max = 102400
 
 num_gpu = 1
-epoch = 50  # ~3900 iters (1359 train tiles // 24) -- roughly DALES's ballpark
+epoch = 50  # OpenGF has ~5x more train tiles than DALES (400 epochs): similar iteration count
 eval_epoch = 10
 lr = 5e-2
 patch_size = 1024
@@ -40,7 +36,7 @@ batch_size_per_gpu = 24
 batch_size = batch_size_per_gpu * num_gpu
 batch_size_val = 1
 batch_size_test = 1
-num_worker = 24 * num_gpu  # H100 Jean-Zay
+num_worker = 24 * num_gpu
 num_worker_test = 2
 mix_prob = 0
 empty_cache = False

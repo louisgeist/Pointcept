@@ -1,40 +1,15 @@
-"""
-pytest bootstrap: make the handful of pointcept modules these tests need
-importable without a full CUDA/spconv/pointops/custom-C++-extension build.
+"""pytest bootstrap: lets the CPU-only tests import pointcept without compiled CUDA extensions.
 
-Why this exists: `pointcept/datasets/__init__.py` and `pointcept/models/__init__.py`
-eagerly import *every* dataset and *every* backbone (nuScenes, Waymo, KPConvX,
-SparseUNet, ...). Several of those transitively require a compiled CUDA
-extension (spconv, pointops, KPConvX's cpp_subsampling) that this environment
-does not have installed (see docs/superpowers/plans/2026-08-09-forest-2d-task.md
-for context: no local machine currently has the project's real
-`pointcept-torch2.5.0-cu12.4` conda env). None of that machinery is needed to
-test the forest_2d task's pure-Python/CPU-tensor logic.
+`pointcept/datasets/__init__.py` and `pointcept/models/__init__.py` import every dataset and backbone, and some
+of those need compiled extensions (spconv, pointops, KPConvX's cpp_subsampling). If that plain import fails,
+this file registers empty package stand-ins for `pointcept`, `pointcept.datasets` and `pointcept.models` and
+loads the real leaf modules the suite needs straight from their source files. Only the two package
+`__init__.py` bodies are skipped; the code under test is never faked.
 
-This module pre-registers lightweight stand-ins for `pointcept`,
-`pointcept.datasets`, and `pointcept.models` in `sys.modules` *before* pytest
-imports any test file, then loads the small set of real, needed leaf modules
-directly from their source files (bypassing the heavy package `__init__.py`
-files) and re-attaches the names other real modules expect to find on the
-stubbed packages (e.g. `pointcept.datasets.build_dataset`). Everything loaded
-this way is the *real* implementation — only the two package `__init__.py`
-bodies are skipped, not any of the logic under test.
+In a full environment the plain import succeeds and this file does nothing. Keep the `try/except ImportError`:
+installing the stubs unconditionally would leave most backbones unregistered in `MODELS`/`DATASETS`.
 
-**Safety property — this is a fallback, not a replacement:** on a machine with
-the real environment (spconv/pointops/etc. all installed, e.g. the project's
-actual `pointcept-torch2.5.0-cu12.4` conda env), `import pointcept.datasets`
-and `import pointcept.models` below succeed normally on the *first* try, so
-this module does nothing at all — the real `__init__.py` files run exactly as
-they always have, and every backbone/dataset still registers itself in the
-`MODELS`/`DATASETS` registries. The stubbing path only activates when the
-plain import fails (e.g. `ModuleNotFoundError: spconv`), and even then it
-loads the *real* leaf modules this test suite actually needs — it never fakes
-behavior for code under test, only skips two package `__init__.py` bodies
-whose only job here would be registering backbones nothing in this suite
-uses. Do not remove the `try/except ImportError` below — without it, this
-file would silently break `MODELS.build(...)`/`DATASETS.build(...)` for every
-other backbone on a real GPU machine where the plain import would have
-worked fine.
+Run the suite with: PYTHONPATH=. pytest tests/
 """
 
 import importlib.util
@@ -43,10 +18,7 @@ import sys
 import types
 from pathlib import Path
 
-# tests/conftest.py is one level below the repo root; resolve paths from here
-# so the fallback stubs work regardless of pytest's invocation cwd (e.g.
-# `cd /tmp && pytest /path/to/repo/tests/`), not just when run from the repo
-# root.
+# Resolve paths from this file so the fallback works whatever pytest's working directory is.
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
 

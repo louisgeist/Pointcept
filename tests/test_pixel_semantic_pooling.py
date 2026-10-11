@@ -1,13 +1,7 @@
-"""
-Tests for MultiTaskSegmentorV2._pixel_pool_and_gather's configurable pooling mode
-(max, the historical/default behavior used by "network"; mean, used by "forest_2d").
+"""MultiTaskSegmentorV2._pixel_pool_and_gather pooling mode: "max" (default, used by network) or "mean" (used
+by forest_2d). The model is built with object.__new__ since the method reads no instance state.
 
-Constructs a bare MultiTaskSegmentorV2 via object.__new__ since
-_pixel_pool_and_gather does not read any instance state (pure function of its
-arguments) -- same lightweight-construction pattern as
-tests/test_pixel_semantic_dataset_loading.py.
-
-Run with: PYTHONPATH=./ pytest tests/test_pixel_semantic_pooling.py
+Run with: PYTHONPATH=. pytest tests/test_pixel_semantic_pooling.py
 """
 
 import unittest

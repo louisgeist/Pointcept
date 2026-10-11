@@ -1,16 +1,17 @@
 """
-Sonata-v1m2 grid-search linear probing on ECLAIR — Sonata counterpart of
-litept-b-v1m0-eclair-lin_enc.py in this directory (same probe grid).
+Frozen Sonata (MALiBU3D SSL-pretrained backbone, ckpt/sonata-pretrained/model.pth) linear probing on
+ECLAIR semantic segmentation (11 classes).
 
-Frozen PT-v3m2 encoder (enc_mode=True → multi-scale concat 1232ch) from the
-MALiBU3D Sonata pretrain job 862680, epoch_120. ECLAIR provides real RGB
-(normalized via NormalizeColor); strength uses the same 1/60000 scale as DALES.
-No coord_feat_scale (Sonata pretrain does not use it). Reference copy of
-w109/6/3_grid_eclair/sonata-v1m2-eclair-lin-grid_200ep.py.
+Probe input: encoder multi-scale features (enc_mode=True): the 5 encoder stages, broadcast back to
+the input points and concatenated (1232 channels). Default probing protocol (Tab. 3 of the MALiBU3D
+paper).
 
-Grid (12 probes): ce_lovasz x 12 LRs x wd=0 x dropout=0 x
-input_norm=None x AdamW x warmup=5%. epoch=200 / eval_epoch=10.
-skip_test=False (matches LitePT sibling).
+GridProbe: 12 linear probes (CE + Lovasz, AdamW, wd=0, OneCycleLR, lr from 1e-4 to 5e-1) share one
+frozen-backbone forward; tools/grid_then_seeds.py then re-trains the probe with the best validation
+mIoU with 10 seeds.
+
+ECLAIR has RGB and intensity: color is normalized (color augmentations at train time) and raw
+intensity is scaled by 1/60000 to the MALiBU3D [0, 1] range.
 """
 
 _base_ = ["../_base_/default_runtime.py"]
@@ -36,7 +37,7 @@ batch_size_per_gpu = 24
 batch_size = batch_size_per_gpu * num_gpu
 batch_size_val = 1
 batch_size_test = 1
-num_worker = 24  # H100 Jean-Zay
+num_worker = 24
 num_worker_test = 2
 mix_prob = 0.8
 empty_cache = False
@@ -82,11 +83,7 @@ names = [
 
 backbone_out_channels = 1232  # enc_mode: 48+96+192+384+512
 
-# -----------------------------------------------------------------------------
-# Grid-search probes — AdamW / OneCycleLR: ce_lovasz x lr x wd=0 x dropout=0 x
-# input_norm=none x feat_norm=none x optimizer=AdamW, warmup=5%
-# (1 x 12 x 1 x 1 x 1 x 1 x 1 = 12 probes). Same grid as LitePT sibling.
-# -----------------------------------------------------------------------------
+# Grid-search probes — ce_lovasz, AdamW/wd0/OneCycleLR warmup5%, lr sweep only (12 probes).
 _losses = {
     "ce_lovasz": [
         dict(type="CrossEntropyLoss", loss_weight=1.0, ignore_index=ignore_index),

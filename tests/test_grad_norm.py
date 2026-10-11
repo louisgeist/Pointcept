@@ -1,12 +1,7 @@
-"""
-Tests for real GradNorm (Chen et al. 2018) — pointcept/utils/gradient_norm.py.
+"""GradNorm (Chen et al. 2018) and GradNormLiteEMA in pointcept/utils/gradient_norm.py: weight update math,
+checkpoint round-trips, task grouping, and the grad_norm / grad_norm_lite mutual exclusion.
 
-Covers the GradNormState update math (sum-to-T renorm, restoring force toward a
-common training rate), the checkpoint round-trip (weights + Adam state + L_g(0)
-anchors), the group-name derivation in build_grad_norm_state, and the mutual
-exclusion with grad_norm_lite in default_config_parser.
-
-Run with: PYTHONPATH=./ pytest tests/test_grad_norm.py
+Run with: PYTHONPATH=. pytest tests/test_grad_norm.py
 """
 
 import math

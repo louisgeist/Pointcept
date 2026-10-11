@@ -1,19 +1,13 @@
 """
-Sonata-v1m2 grid-search linear probing on MALiBU3D semantic segmentation (v20).
+Linear-probe grid search on a frozen Sonata encoder (PT-v3m2, enc_mode, 1232-d multi-scale
+encoder features) for MALiBU3D land-cover segmentation (`segment`, v20).
 
-Trains N independently-configured linear probe heads (see `probes` below) on
-top of ONE shared frozen-PT-v3m2-encoder forward pass per batch, instead of
-launching N separate jobs each redoing that forward pass — see
-pointcept/models/grid_probe.py and pointcept/engines/train.py::GridProbeTrainer
-for the mechanism. At the end of training, the probe with the best val mIoU is
-selected automatically, reloaded from its own best checkpoint, tested via
-SemSegTester, and the winning config + metrics are written to
-save_path/grid_search_results.json (GridProbeWinnerSelector hook).
-
-Adapted from sonata-v1m2-malibu3d-lin.py (single-probe version): same frozen
-backbone / label definitions / train+val pipeline, plus a `data.test` split
-(needed for the automatic final test pass, which the single-probe config
-doesn't have) and `probes` in place of the single top-level `criteria`.
+8 independent linear heads (2 losses x 3 learning rates, plus 2 hand-written probes) are
+trained on one shared backbone forward pass per batch (GridProbeTrainer,
+pointcept/models/grid_probe.py). After training, GridProbeWinnerSelector reloads the probe
+with the best val mIoU, runs it on the test split and writes save_path/grid_search_results.json.
+Same backbone and train/val pipeline as sonata-v1m2-malibu3d-lin.py.
+Released backbone: --options weight=ckpt/sonata-pretrained/model.pth.
 """
 
 _base_ = ["../../_base_/default_runtime.py"]
@@ -27,7 +21,7 @@ batch_size = batch_size_per_gpu * num_gpu
 batch_size_val = 1
 batch_size_test = max(1, batch_size // 2)
 num_worker = 8 * num_gpu
-num_worker_test = 2  # packed grid-probe test loader OOMs above this locally/on JZ
+num_worker_test = 2  # more test workers run out of host RAM (dense test clouds)
 mix_prob = 0.8
 empty_cache = False
 enable_amp = True
@@ -36,7 +30,7 @@ evaluate = True
 grid_size = 0.1
 point_max = 102400
 
-# Short probe: 1000 steps / 100 per epoch -> 10 trainer epochs
+# 1000 steps / 100 per epoch -> 10 trainer epochs
 total_iters = 1000
 iter_per_epoch = 100
 eval_every = 2
@@ -50,9 +44,8 @@ wandb_run_name = (
 )
 
 # -----------------------------------------------------------------------------
-# Labels (segment v20) — hardcoded to avoid importing pointcept.datasets at
-# config-parse time (that package pulls torch_cluster via models).
-# Must match malibu3d_label_remap segment/v20 (finer12; void = ignore_index).
+# Labels (segment v20: 15 classes + void), written out here: must match the v20
+# definition of pointcept/datasets/preprocessing/malibu3d/malibu3d_label_remap.py.
 # -----------------------------------------------------------------------------
 label_definitions = dict(segment="v20")
 num_classes = 15
@@ -79,17 +72,11 @@ names = [
 # -----------------------------------------------------------------------------
 # Grid-search probes
 # -----------------------------------------------------------------------------
-# Each probe is one grid point: its own loss(es), input/feature normalization,
-# dropout, optimizer, scheduler, grad_clip — fully independent from the other
-# probes (see pointcept/engines/train.py::GridProbeTrainer for how optimizer/
-# scheduler heterogeneity is handled).
-#
-# cartesian_probes crosses N axes of partial probe-config dicts (deep-merged
-# onto a shared `base`) — here: loss type x learning rate, since lr is
-# probably the single most important axis to sweep for every lin-probe
-# experiment. No built-in auto-cartesian-expansion beyond what you ask for —
-# a full cross-product over many axes explodes combinatorially, so cross only
-# what you actually want swept and fix the rest in `base`.
+# Each probe is fully independent: its own loss(es), input/feature normalization,
+# dropout, optimizer, scheduler and grad clipping (GridProbeTrainer steps each one
+# separately). cartesian_probes deep-merges every combination of the given axes onto
+# the shared base dict (here loss x lr); the grid grows multiplicatively, so cross
+# only the axes worth sweeping.
 from pointcept.utils.grid_probe_utils import cartesian_probes
 
 _loss_axis = [
@@ -110,13 +97,9 @@ probes = cartesian_probes(
     _loss_axis,
     _lr_axis,
 )
-del cartesian_probes, _loss_axis, _lr_axis  # avoid leaking a function object into
-# the config namespace — Config.dump() pipes every non-dunder module attribute
-# through yapf, which can't format a "<function ... at 0x...>" repr (same
-# reason ptv3-v1m0-malibu3d.py deletes its imported task-config helpers).
+del cartesian_probes, _loss_axis, _lr_axis  # Config.dump (yapf) fails on function objects
 
-# Composes freely with hand-curated one-off probes, e.g. combined losses or a
-# different optimizer/scheduler type entirely:
+# Hand-written probes can be added next to the cross product:
 probes["ce_lovasz_adamw_lr1e-3_ln"] = dict(
     criteria=[
         dict(type="CrossEntropyLoss", loss_weight=1.0, ignore_index=ignore_index),
@@ -198,9 +181,8 @@ data = dict(
     num_classes=num_classes,
     ignore_index=ignore_index,
     names=names,
-    # Lets InformationWriter's existing per-task train-mIoU accumulation
-    # (reads cfg.data.task_configs) pick up every probe for free — see
-    # GridProbeSegmentorV2.forward()'s input_dict[probe_name] aliasing.
+    # One task entry per probe, so InformationWriter logs a train mIoU per probe
+    # (GridProbeSegmentorV2.forward exposes each probe's target under its name).
     task_configs={
         name: dict(
             task_type="semantic",

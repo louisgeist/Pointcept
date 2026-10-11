@@ -1,3 +1,10 @@
+"""
+Runtime defaults shared by every config of this repository (MALiBU3D, DALES, H3D, ECLAIR,
+OpenGF, PureForest) through `_base_`: checkpointing, batch sizes and workers, training
+schedule, gradient logging, multitask loss balancing, AMP, W&B, default hooks, trainer and
+tester. Each config overrides what it needs.
+"""
+
 weight = None  # path to model weight
 resume = False  # whether to resume training process
 evaluate = True  # evaluate after each epoch training process
@@ -10,25 +17,24 @@ batch_size = 16  # total batch size in all gpu
 gradient_accumulation_steps = 1  # total steps to accumulate gradients for
 batch_size_val = None  # auto adapt to bs 1 for each gpu
 batch_size_test = None  # auto adapt to bs 1 for each gpu
-# Adaptive packing by voxel budget (None = fixed batch_size_*).
-# When set, loaders use VoxelBudgetBatchSampler; batch_size_val / batch_size_test
-# are the max number of scenes per batch. Scene sizes come from
-# data.*.csv_manifest column n_voxels (required when budget is set;
-# enrich after preprocess with analyze_malibu3d_test_point_voxel_counts.py
-# --write_manifest). Missing column raises a clear error at loader build.
-# Budgets are independent of train point_max; calibrate ~8× median n_voxels.
+# Val/test batching by voxel budget (None = fixed batch_size_*). When set, the loader
+# (VoxelBudgetBatchSampler) packs scenes up to this many voxels per batch, and
+# batch_size_val / batch_size_test become the max number of scenes per batch.
+# Scene sizes come from the n_voxels column of data.*.csv_manifest (present in
+# tiles.csv; scripts/analyze_malibu3d_test_point_voxel_counts.py --write_manifest
+# adds it to another manifest). Independent of the train point_max; about 8x the
+# median n_voxels is a reasonable start.
 test_voxel_budget = None  # e.g. 1_200_000
 val_voxel_budget = None  # e.g. 1_200_000
-# Worker count override for the test DataLoader specifically (None = use
-# num_worker uncapped). test_mode keeps the dense cloud + fragment_list per
-# sample, so a packed test loader (test_voxel_budget set, or batch_size_test>1)
-# can need far less RAM headroom per worker than train/val at the same
-# num_worker -- set this explicitly (e.g. 2) for configs that hit that ceiling
-# (observed on Sonata grid-probe configs) instead of relying on a blanket cap.
+# Worker count of the test DataLoader (None = num_worker). Test samples keep the
+# dense cloud and its fragment list, so a packed test loader (test_voxel_budget
+# set, or batch_size_test > 1) needs much more host RAM per worker than train/val:
+# lower this (e.g. 2) when the test loader runs out of memory.
 num_worker_test = None
 
 # -----------------------------------------------------------------------------
-# Training schedule — two mutually exclusive modes (see README_geist.md)
+# Training schedule: two mutually exclusive modes (resolved in
+# pointcept/engines/defaults.py)
 # -----------------------------------------------------------------------------
 
 # Classic mode (leave total_iters = None): each trainer epoch loops over the dataset.
@@ -41,43 +47,37 @@ iter_per_epoch = None  # iteration steps per epoch (default 1000 when total_iter
 eval_every = None  # validate every N epochs (default 5 when total_iters is set)
 
 clip_grad = None  # disable with None, enable with a float
-# If True, skip optimizer + scheduler when global grad L2 is non-finite
-# (NaN/Inf). Decision is all-reduced across ranks so DDP stays in sync.
+# If True, skip the optimizer and scheduler step when the global grad L2 norm is
+# non-finite (NaN/Inf). The decision is all-reduced so DDP ranks stay in sync.
 skip_nan_grad = False
-# Global L2 grad norm (train/gradient/global) and weight update norm
-# (train/gradient/weight_update) are always put_scalar'd each optimizer step
-# for epoch averages (train/...). Per-step train_batch/... logging (TB + W&B)
-# is enabled only when log_task_gradient_norms=True.
-# log_task_gradient_norms enables additional per-task decomposition (costly):
-# per-task L2 grad norm on shared backbone and task head, plus pairwise
-# backbone cosine similarities between tasks (upper triangle, e.g. 6 metrics for
-# 4 tasks: train/gradient/backbone_cos/{task_a}__{task_b}); logged to TB/W&B
-# (per epoch 'train/gradient/...' and per-step 'train_batch/gradient/...'),
-# including per-step train_batch for gradient/global and weight_update.
+# The global L2 grad norm (train/gradient/global) and the weight-update norm
+# (train/gradient/weight_update) are always logged as epoch averages.
+# log_task_gradient_norms=True also logs them every step (train_batch/...) and
+# adds a costly per-task breakdown: per-task L2 grad norms on the shared backbone
+# and on each task head, and pairwise backbone cosine similarities between tasks
+# (train/gradient/backbone_cos/{task_a}__{task_b}).
 log_task_gradient_norms = False
 
-# GradNormLite (multitask): every N steps (first measure at N, not 0), measure
-# per-task L2 grad norms on the backbone last layer only, update an EMA, and
-# divide each task loss by that EMA before the main backward. Logged keys
-# gradient/last_layer/* and loss_scale/* are written to TB/W&B only on those
-# interval update steps (not every iter). Independent of
-# log_task_gradient_norms. EMA sync follows sync_bn: all_reduce mean across
-# ranks only when sync_bn=True (otherwise local per rank, like non-synced
-# BatchNorm stats).
+# GradNormLite (multitask loss balancing): every grad_norm_lite_interval steps
+# (the first time at that step, not at 0), measure each task's L2 grad norm on the
+# last backbone layer, update an EMA of it, and divide each task loss by its EMA
+# before the main backward. gradient/last_layer/* and loss_scale/* are logged on
+# those steps only.
+# Under DDP the EMA is averaged across ranks only when sync_bn=True (otherwise it
+# stays per rank, like non-synced BatchNorm statistics).
 grad_norm_lite = False
 grad_norm_lite_interval = 100
 grad_norm_lite_ema_alpha = 0.1
 grad_norm_lite_eps = 1e-3
 
-# Real GradNorm (Chen et al. 2018, "GradNorm: Gradient Normalization for
-# Adaptive Loss Balancing in Deep Multitask Networks"). Mutually exclusive with
-# grad_norm_lite. Learns one loss weight per task (or per group, via
-# grad_norm_task_groups) by gradient descent on the GradNorm L1 objective,
-# renormalized to sum to the number of groups. The weights + their Adam state +
-# the per-group initial-loss anchors L_g(0) are checkpointed. Logged keys
-# grad_norm/weight/*, grad_norm/gw/*, grad_norm/target/*, grad_norm/loss_ratio/*
-# and grad_norm/loss reach TB/W&B per step when grad_norm=True. Cross-rank the
-# scalar inputs are always averaged so the weights stay identical on every rank.
+# GradNorm (Chen et al. 2018, "GradNorm: Gradient Normalization for Adaptive Loss
+# Balancing in Deep Multitask Networks"). Mutually exclusive with grad_norm_lite.
+# Learns one loss weight per task (or per group, via grad_norm_task_groups) by
+# gradient descent on the GradNorm L1 objective, renormalized to sum to the number
+# of groups. The weights, their Adam state and the initial-loss anchors L_g(0) are
+# checkpointed. grad_norm/{weight,gw,target,loss_ratio}/* and grad_norm/loss are
+# logged every step. Inputs are averaged across ranks so the weights stay
+# identical on every rank.
 grad_norm = False
 grad_norm_alpha = 1.5  # restoring-force / asymmetry exponent
 grad_norm_weight_lr = 1e-2  # Adam lr for the learnable weights

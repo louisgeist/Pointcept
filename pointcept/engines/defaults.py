@@ -110,8 +110,8 @@ def default_argument_parser(epilog=None):
 def _apply_sphere_crop_point_max(obj, point_max: int) -> int:
     """Recursively set ``point_max`` on every ``type=="SphereCrop"`` dict.
 
-    Used when ``override_point_max`` is set (VRAM probes). Real training
-    configs do not set that key, so this is a no-op outside probes.
+    Applied when the config sets ``override_point_max`` (e.g. to measure peak
+    memory at a given crop size). Returns the number of transforms patched.
     """
     n = 0
     if isinstance(obj, dict):
@@ -127,23 +127,27 @@ def _apply_sphere_crop_point_max(obj, point_max: int) -> int:
 
 
 def default_config_parser(file_path, options):
-    """Load a config file and resolve training-schedule parameters.
+    """Load a config file, apply ``--options`` overrides and resolve the training schedule.
 
-    Classic mode :
-        - Definition: 1 epoch means 1 full pass over the dataset
-        - Activated by setting ``total_iters`` to ``None``
-        - ``loop = epoch // eval_epoch`` on ``data.train``
-        - ``eval_every`` defaults to 1 (validate every trainer epoch)
+    Two mutually exclusive schedule modes:
 
-    Iter-limited mode:
-        - Definition: 1 epoch means ``iter_per_epoch`` random batch steps
-        - ``total_iters`` is the total optimizer-step budget
-        - ``num_epochs = total_iters // iter_per_epoch`` (requires exact division)
-        - ``loop`` is forced to 1; ``epoch`` / ``eval_epoch`` are unused (classic-only)
-        - ``eval_every`` defaults to 5 (validate every N epochs, plus the last epoch)
-        - Scheduler ``total_steps = total_iters``
+    Classic mode (``total_iters is None``):
+        - 1 dataset epoch = 1 full pass over the dataset.
+        - ``data.train.loop = epoch // eval_epoch``; one trainer epoch = ``loop`` passes,
+          followed by a validation.
+        - ``eval_every`` / ``iter_per_epoch`` / ``num_epochs`` are set to ``None``.
 
-    See README_geist.md § Training schedule for examples.
+    Iter-limited mode (``total_iters`` set):
+        - 1 trainer epoch = ``iter_per_epoch`` (default 1000) random batch steps.
+        - ``total_iters`` is the total number of batch steps and must be divisible by
+          ``iter_per_epoch``; ``num_epochs = total_iters // iter_per_epoch``.
+        - ``data.train.loop`` is 1 unless explicitly > 1; ``epoch`` / ``eval_epoch`` are unused.
+        - Validation runs every ``eval_every`` (default 5) epochs and after the last one.
+        - The LR scheduler spans ``total_iters // gradient_accumulation_steps`` steps.
+
+    Also rejects configs enabling both ``grad_norm`` and ``grad_norm_lite``, validates the
+    network APLS settings, and dumps the resolved config to ``save_path/config.py``
+    (except on resume).
     """
     # config name protocol: dataset_name/model_name-exp_name
     if os.path.isfile(file_path):
@@ -201,7 +205,6 @@ def default_config_parser(file_path, options):
         if cfg.eval_every <= 0:
             raise ValueError("eval_every must be > 0 when total_iters is set")
         
-        # iter_per_epoch
         if getattr(cfg, "iter_per_epoch", None) is None:
             cfg.iter_per_epoch = 1000
         if cfg.iter_per_epoch <= 0:
@@ -213,12 +216,11 @@ def default_config_parser(file_path, options):
             )
         cfg.num_epochs = total_iters // cfg.iter_per_epoch
 
-        # Default loop=1 (epoch length is iter_per_epoch). Preserve an explicit
-        # train loop > 1 for single-scene overfit (repeat one tile in the dataset).
+        # The epoch length is iter_per_epoch, so loop defaults to 1. An explicit
+        # loop > 1 is kept (e.g. to overfit a single tile repeated in the dataset).
         if getattr(cfg.data.train, "loop", 1) <= 1:
             cfg.data.train.loop = 1
     else: # classic mode
-        # Deactivate iter-limited mode parameters
         cfg.iter_per_epoch = None
         cfg.eval_every = None
         cfg.num_epochs = None
@@ -245,7 +247,7 @@ def default_setup(cfg):
     cfg.batch_size_test_per_gpu = (
         cfg.batch_size_test // world_size if cfg.batch_size_test is not None else 1
     )
-    # classic mode only: epoch must divide eval_epoch for loop resolution
+    # classic mode only: eval_epoch must divide epoch (loop = epoch // eval_epoch)
     if getattr(cfg, "total_iters", None) is None:
         assert cfg.epoch % cfg.eval_epoch == 0
     # settle random seed

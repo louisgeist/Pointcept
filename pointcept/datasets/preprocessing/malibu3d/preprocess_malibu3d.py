@@ -1,83 +1,54 @@
 r"""
-MALiBU3D v2 — manifest-driven preprocessing from pre-labeled PLY files.
+MALiBU3D preprocessing: labeled LiDAR HD PLY tiles -> Pointcept scene folders.
 
-Semantic segment labels are read from upstream-enriched PLY ``semantic`` attributes.
-Segment and natural-habitat labels are remapped via named definitions in
-``malibu3d_label_remap.py`` (CLI: ``--segment_definition``, ``--natural_habitat_definition``).
-This script reads PLY from ``--ply_root`` and writes Pointcept scene folders.
+The tile CSV is the single source of truth: the MALiBU3D ``tiles.csv`` or an older
+``scene_split_manifest.csv`` (only ``LIDARHD=True`` rows), read via ``tile_catalog.py``.
+The input trees are never globbed; each tile produces the folder
+``<output_root>/<split>/<dept_year>_LIDARHD/<roi>/<tile_id>/`` containing:
 
-The tile CSV is the single source of truth: either the MALiBU3D ``tiles.csv``
-(canonical) or a legacy ``scene_split_manifest.csv`` (only ``LIDARHD=True`` rows
-are used), read via ``tile_catalog.py``. Each tile produces a Pointcept scene
-folder containing:
+- meta.json             (date_gap_days, label_definitions, natural_habitat_layout)
+- color.npy             (uint8 RGB; zeros when the PLY has no color)
+- segment.npy           (uint8, PLY ``semantic`` remapped via ``--segment_definition``)
+- strength.npy          (intensity clipped to [0, 60000] and divided by 60000)
+- natural_habitat.npy   (only when has_natural_habitat=True: CarHab ids sampled from the
+                         NATURAL_HABITAT GeoTIFF, stored as ``uint8 (N, 4)`` ecological axes,
+                         see ``nathab_axes.py``)
+- elevation.npy         (only when has_elevation=True: z minus the DTM band of DEM_ELEV)
+- coord_translation.npy (float64 XYZ of the first point)
+- coord.npy             (float32 xyz - coord_translation; written LAST, it marks the
+                         scene as complete for resume)
 
-- coord_translation.npy  (float64 XYZ offset subtracted from raw PLY coords; written before coord.npy)
-- coord.npy      (written LAST; acts as the completion marker for resume)
-- color.npy
-- segment.npy    (from PLY ``semantic``; remapped via ``--segment_definition``)
-- strength.npy   (LiDAR intensity)
-- natural_habitat.npy   (only when has_natural_habitat=True; ``uint8 (N, 4)`` ecological axes
-                        baked from CarHab via ``nathab_axes.carhab_to_nathab_axes``;
-                        ``--natural_habitat_definition default`` still selects the CarHab
-                        storage LUT used before bake)
-- elevation.npy         (only when has_elevation=True)
-- meta.json      (date_gap_days, label_definitions, natural_habitat_layout)
+forest_2d.npy and network.npy are added afterwards by rasterize_forest.py and
+rasterize_network.py.
 
-Required columns (tiles.csv names; legacy aliases in parentheses; extra columns ignored):
+Required columns (tiles.csv names; older aliases in parentheses; extra columns ignored):
     split, dept_year, roi, scene_i_j, tile_id (patch_id),
     has_natural_habitat (NATURAL_HABITAT), has_elevation (DEM_ELEV), date_gap_days
 
-Conventions (must match scripts/build_csv_manifest.py):
-    tile_id = f"{dept_year}_{roi}_{scene_i_j}"
+Path conventions:
+    tile_id  = f"{dept_year}_{roi}_{scene_i_j}"
     PLY path = {ply_root}/LIDARHD/{dept_year}_LIDARHD/{roi}/
                {dept_year}_LIDARHD_{roi}_{scene_i_j}.ply
-
-Auxiliary rasters (NATURAL_HABITAT, DEM_ELEV) are read from
-``--dataset_root`` using the same layout as v1.
+    rasters  = {dataset_root}/{MODALITY}/{dept_year}_{MODALITY}/{roi}/
+               {dept_year}_{MODALITY}_{roi}_{scene_i_j}.tif   (see unzip_raw_archives.py)
 
 Reports written under ``--output_root``:
-- ``missing_ply_preflight.txt``: written immediately after the PLY existence
-  check (before any scene is processed). Lists every manifest row with
-  ``LIDARHD=True`` whose ``.ply`` file is missing under ``--ply_root``.
-- ``missing_scenes.txt``: written at the end of the run. Consolidates missing
-  PLY, missing modality rasters, and failed preprocessing tasks.
+- ``missing_ply_preflight.txt``: written right after the PLY existence check, before
+  any scene is processed; lists the tiles whose ``.ply`` is missing under ``--ply_root``.
+- ``missing_scenes.txt``: written at the end; missing PLY, missing rasters and failed tiles.
+- ``preprocess_malibu3d.log``: full log.
 
-Resume behaviour:
-By default, scenes whose ``coord.npy`` already exists in the output directory
-are skipped (idempotent re-runs). Use ``--force`` to reprocess everything,
-which is required when modality flags (has_natural_habitat/has_elevation)
-changed since the previous run, when label definitions changed, or when upstream
-PLY labels were refreshed.
+Resume: tiles whose ``coord.npy`` exists are skipped. Use ``--force`` to reprocess
+everything after changing the modality flags, the label definitions or the PLY labels.
 
-Generated directory structure (example):
-data/malibu3d/
-└── train/
-    └── D004-2021_LIDARHD/           <-- Department/Year Level
-        └── AA-S1-32/                <-- Zone/ROI Level
-            ├── D004-2021_AA-S1-32_1-1/   <-- Patch Level
-            │   ├── coord_translation.npy
-            │   ├── coord.npy
-            │   ├── color.npy
-            │   └── ...
+Example::
 
-Examples:
-JZ (full preprocess):
-python pointcept/datasets/preprocessing/malibu3d/preprocess_malibu3d.py \
-    --ply_root /lustre/fsn1/projects/rech/unv/usi32yh/data_malibu3d_build/malibu3d_label_enhanced \
-    --dataset_root /lustre/fswork/projects/rech/unv/usi32yh/Pointcept/data/malibu3d/raw \
-    --output_root data/malibu3d \
-    --split_manifest_csv data/malibu3d/tiles.csv \
-    --num_workers 24 \
-    --force
-
-hecate:
-python pointcept/datasets/preprocessing/malibu3d/preprocess_malibu3d.py \
-    --ply_root /data/geist/Flair3D-build/data/malibu3d_label_enhanced \
-    --dataset_root data/malibu3d/raw \
-    --output_root data/malibu3d \
-    --split_manifest_csv data/malibu3d/tiles_D067.csv \
-    --num_workers 12
-    --force
+    python pointcept/datasets/preprocessing/malibu3d/preprocess_malibu3d.py \
+        --ply_root data/malibu3d/ply \
+        --dataset_root data/malibu3d/raw \
+        --output_root data/malibu3d \
+        --split_manifest_csv data/malibu3d/tiles.csv \
+        --num_workers 16
 """
 
 import argparse
@@ -112,14 +83,14 @@ from nathab_axes import (  # noqa: E402
     is_nathab_carhab_array,
 )
 
-# Raster sampling still uses CarHab storage definition ``default`` (ids 0-43);
-# ``_save_scene`` then bakes ``natural_habitat.npy`` to ecological axes ``(N, 4)``.
+# Natural-habitat rasters are sampled with the CarHab definition ``default`` (ids 0-43);
+# ``_save_scene`` then converts them to the ecological axes ``(N, 4)``.
 PREPROCESS_LABEL_DEFINITION_DEFAULTS = {
     **DEFAULT_LABEL_DEFINITION_NAMES,
     "natural_habitat": "default",
 }
 
-# Columns (tiles.csv names, legacy aliases accepted) that must be present in
+# Columns (tiles.csv names, older aliases accepted) that must be present in
 # --split_manifest_csv; others may be present and are ignored.
 REQUIRED_MANIFEST_COLUMNS = frozenset(
     {
@@ -154,7 +125,7 @@ def _segment_from_ply(
     ply_path: str,
     definition,
 ) -> np.ndarray:
-    """Read upstream PLY semantic labels and apply the segment label definition."""
+    """Read the PLY ``semantic`` labels and apply the segment label definition."""
     if "semantic" not in attributes:
         raise KeyError(f"Missing 'semantic' in {ply_path}")
     raw = attributes["semantic"]
@@ -202,10 +173,9 @@ def sample_raster_to_points(
         raster_nodata = src.nodata
 
 
-        # Fast vectorized XY -> pixel conversion using inverse affine transform
-        # (rasterio.transform.rowcol is too slow.)
-        # Use float64 for numerical stability on large projected coordinates.
-        # (Outputs are the same as rasterio.transform.rowcol.)
+        # Vectorized XY -> pixel conversion with the inverse affine transform (same
+        # result as rasterio.transform.rowcol, much faster), in float64 because
+        # projected coordinates are large.
         inv = ~src.transform
         x = xy[:, 0].astype(np.float64, copy=False)
         y = xy[:, 1].astype(np.float64, copy=False)
@@ -311,7 +281,7 @@ def sample_raster_to_points_float(
 def build_lidar_ply_path(
     ply_root: str, dept_year: str, roi: str, scene_i_j: str
 ) -> str:
-    """Expected pre-labeled LiDAR PLY path for one patch (mirrors build_csv_manifest.py)."""
+    """Expected labeled LiDAR PLY path for one tile."""
     stem = f"{dept_year}_LIDARHD_{roi}_{scene_i_j}"
     return os.path.join(
         ply_root, "LIDARHD", f"{dept_year}_LIDARHD", roi, f"{stem}.ply"
@@ -325,9 +295,9 @@ def build_modality_patch_path(
     roi: str,
     lidar_patch_stem: str,
 ) -> str:
-    """Build one modality patch path from split metadata and LiDAR patch stem."""
+    """GeoTIFF path of one modality (NATURAL_HABITAT, DEM_ELEV, FOREST) for a tile."""
     modality_stem = lidar_patch_stem.replace("_LIDARHD_", f"_{modality}_")
-    # DEM_ELEV archives may be extracted with or without the <dept>_<modality> level.
+    # DEM_ELEV archives may be extracted with or without the <dept_year>_<modality> level.
     if modality == "DEM_ELEV":
         default_path = os.path.join(
             dataset_root,
@@ -449,11 +419,11 @@ def write_missing_scenes_report(
 
 def load_manifest_tasks(csv_path: str, splits: List[str]) -> List[PatchTask]:
     """
-    Load ``tiles.csv`` (or a legacy ``scene_split_manifest.csv``) and return one
+    Load ``tiles.csv`` (or an older ``scene_split_manifest.csv``) and return one
     PatchTask per LiDAR tile belonging to one of ``splits``.
 
-    Other rows are filtered out silently. Duplicates with inconsistent flags
-    raise a ``ValueError``.
+    Other rows are filtered out silently. A tile_id that does not match its
+    components, or duplicates with inconsistent flags, raise a ``ValueError``.
     """
     if not os.path.isfile(csv_path):
         raise FileNotFoundError(f"Split manifest CSV not found: {csv_path}")
@@ -593,7 +563,7 @@ def _build_scene_from_subtile(
                 raster_path=dem_elev_raster_path,
                 xy=coord[:, :2],
                 fill_value=np.nan,
-                band_index=2,  # 1: DSM, 2: DTM
+                band_index=2,  # DEM_ELEV bands: 1 = DSM, 2 = DTM
             )
             elevation = coord[:, 2].astype(np.float32, copy=False) - dtm_values
             out["elevation"] = elevation.astype(np.float32, copy=False)
@@ -621,8 +591,8 @@ def _save_scene(
     stale file from a previous run is removed when the modality is disabled or
     its raster was missing.
 
-    ``natural_habitat`` is expected as CarHab ``(N,)`` in ``scene``; this function
-    bakes it to ``uint8 (N, 4)`` ecological axes before saving ``natural_habitat.npy``.
+    ``natural_habitat`` is expected as CarHab ids ``(N,)`` in ``scene``; it is
+    converted to ``uint8 (N, 4)`` ecological axes before saving ``natural_habitat.npy``.
 
     ``coord.npy`` is intentionally written LAST so its presence on disk acts as
     a reliable completion marker for the resume / skip-existing logic in
@@ -670,9 +640,8 @@ def _save_scene(
 
     _save_or_clean("elevation.npy", "elevation", np.float32, enabled=task.has_dem_elev)
 
-    # Write coord_translation.npy then coord.npy LAST (coord.npy is the completion
-    # marker used to skip already processed scenes on a re-run).
-    # Reconstruct raw PLY coords: coord.astype(np.float64) + coord_translation
+    # Write coord_translation.npy, then coord.npy LAST (completion marker for resume).
+    # PLY coords = coord.astype(np.float64) + coord_translation.
     coord_f64 = scene["coord"].astype(np.float64, copy=False)
     if coord_f64.shape[0] > 0:
         translation = coord_f64[0].copy()
@@ -691,9 +660,9 @@ def _scene_meta_dict(
     task: PatchTask,
     label_definitions: PreprocessLabelDefinitions,
 ) -> Dict[str, Any]:
-    """Build meta.json payload with on-disk nathab axes contract."""
+    """Build the meta.json payload (date gap, label definitions, nathab axes layout)."""
     label_meta = label_definitions.to_meta_dict()
-    # Raster sampling still uses CarHab ``default``; on-disk asset is axes.
+    # The CarHab definition is only used for sampling; the stored array is the axes.
     label_meta = dict(label_meta)
     label_meta["natural_habitat"] = NATHAB_ONDISK_DEFINITION
     return {
@@ -728,9 +697,8 @@ def _process_subtile_task(
         label_definitions=label_definitions,
     )
     output_scene_dir = os.path.join(output_root, task.split, f"{task.dept_year}_LIDARHD", task.roi, task.patch_id)
-    # Order matters: write meta.json first, then the scene arrays. ``_save_scene``
-    # writes ``coord.npy`` last, so its on-disk presence reliably indicates that
-    # both the metadata and every other array have been fully persisted.
+    # meta.json first, then the arrays: ``_save_scene`` writes coord.npy last, so its
+    # presence means the metadata and every other array were fully written.
     os.makedirs(output_scene_dir, exist_ok=True)
     _save_scene_meta(output_scene_dir, _scene_meta_dict(task, label_definitions))
     _save_scene(output_scene_dir, scene, task)
@@ -752,7 +720,7 @@ def _filter_tasks_for_processing(
     missing_ply: List[Dict[str, str]] = []
 
     for task in tasks:
-        # 1. Check PLY existence
+        # 1. PLY existence
         ply_path = build_lidar_ply_path(
             ply_root, task.dept_year, task.roi, task.scene_i_j
         )
@@ -766,7 +734,7 @@ def _filter_tasks_for_processing(
             )
             continue
 
-        # 2. Check completion (resume)
+        # 2. Completion (resume)
         if not force:
             coord_path = os.path.join(output_root, task.split, f"{task.dept_year}_LIDARHD", task.roi, task.patch_id, "coord.npy")
             if os.path.isfile(coord_path):
@@ -995,9 +963,8 @@ def main_process():
                             entry["path"],
                         )
                 except FileNotFoundError as exc:
-                    # Should be rare here (we pre-checked PLY existence) but keep
-                    # the safety net for any per-modality file missing in a way
-                    # that escalates to an exception.
+                    # Rare (PLY existence was pre-checked): any file that disappeared
+                    # or failed to open in the worker is reported as missing.
                     missing_ply.append(
                         {
                             "split": task.split,

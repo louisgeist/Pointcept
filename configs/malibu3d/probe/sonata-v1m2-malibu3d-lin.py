@@ -1,9 +1,9 @@
 """
-Sonata-v1m2 linear probing on MALiBU3D semantic segmentation (v20).
-
-Frozen PT-v3m2 encoder (enc_mode); short iter-limited schedule for periodic probes.
-Val uses stratified subset (val_dev_subset_2000.csv) capped to max_sample=20;
-eval_every=2. No test split.
+Linear probe of a frozen Sonata encoder (PT-v3m2, enc_mode, 1232-d multi-scale encoder features)
+on MALiBU3D land-cover segmentation (`segment`, v20), with one CE + Lovasz linear head. Short
+schedule (1000 iterations) to monitor checkpoints during Sonata pretraining: validation on 20
+tiles of the stratified validation subset, no test pass; the best val mIoU is written to
+save_path/metrics.json. Pass the checkpoint with --options weight=<path>.
 """
 
 _base_ = ["../../_base_/default_runtime.py"]
@@ -25,7 +25,7 @@ evaluate = True
 grid_size = 0.1
 point_max = 102400
 
-# Short probe: 1000 steps / 100 per epoch → 10 trainer epochs
+# 1000 steps / 100 per epoch -> 10 trainer epochs
 total_iters = 1000
 iter_per_epoch = 100
 eval_every = 2
@@ -39,9 +39,8 @@ wandb_run_name = (
 )
 
 # -----------------------------------------------------------------------------
-# Labels (segment v20) — hardcoded to avoid importing pointcept.datasets at
-# config-parse time (that package pulls torch_cluster via models).
-# Must match malibu3d_label_remap segment/v20 (finer12; void = ignore_index).
+# Labels (segment v20: 15 classes + void), written out here: must match the v20
+# definition of pointcept/datasets/preprocessing/malibu3d/malibu3d_label_remap.py.
 # -----------------------------------------------------------------------------
 label_definitions = dict(segment="v20")
 num_classes = 15
@@ -215,8 +214,8 @@ data = dict(
 # -----------------------------------------------------------------------------
 # Hooks
 # -----------------------------------------------------------------------------
-# No PreciseEvaluator / test split: periodic probes only need best val mIoU
-# (written by MetricsJsonWriter → metrics.json → pretrain CSV).
+# No test pass: the probe only reports its best val mIoU (MetricsJsonWriter writes
+# save_path/metrics.json).
 hooks = [
     dict(
         type="CheckpointLoader",

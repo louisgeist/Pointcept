@@ -116,9 +116,9 @@ def finalize_val_epoch_timing(trainer, start_time, current_epoch, wandb_dict=Non
 def sync_confusion_hist_totals(intersection, union, target):
     """All-reduce local confusion-histogram totals once after the val loop.
 
-    Per-batch all_reduce deadlocks when ranks have unequal loader lengths
-    (e.g. VoxelBudgetBatchSampler stride sharding). Summing locally then
-    reducing once is mathematically equivalent.
+    A per-batch all_reduce deadlocks when ranks have different numbers of val
+    batches (e.g. with VoxelBudgetBatchSampler); summing locally and reducing once
+    gives the same result.
     """
     intersection = np.asarray(intersection, dtype=np.float64).reshape(-1)
     union = np.asarray(union, dtype=np.float64).reshape(-1)
@@ -216,8 +216,8 @@ class ClsEvaluator(HookBase):
         self._best_m_iou = -np.inf
 
     def before_train(self):
-        # On resume, CheckpointLoader.before_train (registered first in cfg.hooks)
-        # already restored self._best_m_iou via load_state_dict — don't clobber it.
+        # On resume, CheckpointLoader (listed earlier in cfg.hooks) has already
+        # restored _best_m_iou through load_state_dict; do not reset it.
         if not self.trainer.cfg.resume:
             self._best_m_iou = -np.inf
 
@@ -656,18 +656,21 @@ class RegressionEvaluator(HookBase):
 
 @HOOKS.register_module()
 class MultiTaskEvaluator(HookBase):
-    """Multi-task validation: semantic IoU from seg_logits_by_task; regression from reg_pred_by_task.
+    """Multi-task validation driven by ``cfg.data.task_configs`` (one entry per task).
 
-    Reads cfg.data.task_configs and cfg.data.main_task. Every task_configs entry must set "task_type"
-    to "semantic" or "regression". Task targets are read from input_dict[task_name] for both
-    semantic and regression tasks, together with reg_pred_by_task[task_name] for regression.
+    Metrics per ``task_type``:
+      - ``semantic``: point-wise mIoU/mAcc/allAcc (``seg_logits_by_task``).
+      - ``pixel_semantic`` (2D rasters such as ``network``, ``forest_2d``): mIoU over all
+        channels, plus per-channel exact and buffered ("relaxed") precision/recall/F1.
+      - ``tile_distribution`` (natural-habitat axes): per-tile class-frequency error
+        (weighted KL, TV, per-class MAE); optionally point-wise mIoU.
+      - ``regression`` (e.g. elevation): MAE / RMSE (``reg_pred_by_task``).
+    Targets are read from ``input_dict[task_name]`` (``origin_<task>`` when predictions
+    are mapped back to full resolution).
 
-    Checkpoint selection (comm_info) follows mIoU of main_task, which must be a semantic task.
-    Regression metrics (MAE, RMSE) are logged per regression task name.
-
-    The "main task" (checkpoint / mIoU selection) is cfg.data.main_task when multiple tasks are
-    configured; with a single task in task_configs, main_task may be omitted. TensorBoard / W&B
-    semantic metrics use val/<task_name>/... for every semantic task, including mIoU_best.
+    Checkpoint selection uses ``cfg.data.main_task`` (optional with a single task): its
+    mIoU, or its negated weighted KL for a tile_distribution task. Per-task metrics are
+    logged under ``val/<task_name>/...``.
     """
 
     def __init__(self, write_cls_iou=False):
@@ -914,7 +917,7 @@ class MultiTaskEvaluator(HookBase):
                     self.trainer.storage.put_scalar(f"val_union/{task_name}", union)
                     self.trainer.storage.put_scalar(f"val_target/{task_name}", target)
 
-                # --------- Evaluate Pixel-Semantic Tasks (network 2D) ---------
+                # --------- Evaluate Pixel-Semantic Tasks (2D rasters) ---------
                 pixel_logits_by_task = output_dict.get("pixel_seg_logits_by_task") or {}
                 pixel_targets_by_task = output_dict.get("pixel_seg_target_by_task") or {}
                 pixel_dense_by_task = (
@@ -938,7 +941,8 @@ class MultiTaskEvaluator(HookBase):
                     channel_names = task_config.get("channel_names") or [
                         f"ch{c}" for c in range(num_networks)
                     ]
-                    # Aggregate confusion over all network channels (binary like forest).
+                    # Task-level confusion is summed over channels (each channel is a
+                    # binary mask).
                     inter_sum = None
                     union_sum = None
                     target_sum = None
@@ -987,12 +991,11 @@ class MultiTaskEvaluator(HookBase):
                         )
 
                     # ---- Buffer ("relaxed") precision/recall hit accumulation ----
-                    # Uses the dense per-scene grids (reconstructed on the GT Lambert
-                    # grid) so the tolerance dilation has real 2D neighborhoods to work
-                    # with; the (P, r) pooled arrays above have no spatial layout.
-                    # Skipped entirely for tasks that opt out (e.g. forest_2d): the
-                    # buffer tolerance is a diagnostic for thin curvilinear masks
-                    # (road/rail), not meaningful for a blobby area-coverage mask.
+                    # Uses the dense per-scene grids (on the GT raster grid) so the
+                    # tolerance dilation has real 2D neighborhoods; the (P, r) arrays
+                    # above have no spatial layout. Tasks can opt out (e.g. forest_2d):
+                    # the buffer tolerance is meant for thin curvilinear masks
+                    # (roads, railways), not for area-coverage masks.
                     if dilated_prf_enabled(task_config):
                         dense_pred_list = pixel_dense_by_task.get(task_name) or []
                         dense_gt_list = pixel_dense_target_by_task.get(task_name) or []
@@ -1026,7 +1029,7 @@ class MultiTaskEvaluator(HookBase):
                                 self.trainer.storage.put_scalar(f"{base}/r_num", r_num)
                                 self.trainer.storage.put_scalar(f"{base}/r_denom", r_denom)
 
-                # --------- Evaluate Tile-Distribution Tasks (nathab axes) ---------
+                # ------ Evaluate Tile-Distribution Tasks (natural-habitat axes) ------
                 for task_name in tile_distribution_tasks:
                     task_config = task_configs[task_name]
                     if task_name not in input_dict or task_name not in logits_by_task:
@@ -1056,7 +1059,7 @@ class MultiTaskEvaluator(HookBase):
                             .astype(np.float64)
                         )
 
-                    # Optional point-wise mIoU (CE / Lovasz supervision mode).
+                    # Optional point-wise mIoU (tasks with pointwise_supervision).
                     if task_name in tile_pw_miou_tasks:
                         pred = logits_by_task[task_name].max(1)[1]
                         miou_target = input_dict[task_name]
@@ -1234,13 +1237,11 @@ class MultiTaskEvaluator(HookBase):
                     )
 
         # Per-channel precision/recall/F1 for pixel-semantic tasks (e.g. network
-        # ROADS / RAILROADS): plain IoU is not a good diagnostic for thin curvilinear
-        # masks (a 1 px lateral offset destroys IoU on a 1 px line while still being a
-        # good prediction), so we report exact P/R/F1 (derived from the confusion
-        # histograms, no new accumulation needed) alongside buffer ("relaxed") P/R/F1
-        # with a configurable pixel tolerance (accumulated during the val loop).
-        # Everything here was already stored per channel during the val loop; sync on
-        # all ranks (all_reduce) then log. Must not be gated on is_main_process.
+        # ROADS / RAILROADS). IoU is a poor diagnostic for thin curvilinear masks
+        # (a 1 px lateral offset destroys IoU on a 1 px line), so exact P/R/F1 (from
+        # the confusion histograms) are reported with buffered P/R/F1 (pixel
+        # tolerance buffer_radius_px). The totals are all_reduced here, so this
+        # block must run on every rank, not only the main process.
         per_task_channel_metrics = {}
         for task_name in pixel_semantic_tasks:
             task_config = task_configs[task_name]

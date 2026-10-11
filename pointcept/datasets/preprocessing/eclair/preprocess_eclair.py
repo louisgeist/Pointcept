@@ -6,20 +6,23 @@ Raw layout (official release):
     labels.json
     pointclouds/pointcloud_*.laz
 
-Usage:
-ln -sfn /data/geist/datasets/ECLAIR data/eclair/raw OU ln -sfn $SCRATCH/data/eclair-dataset data/eclair/raw
-python pointcept/datasets/preprocessing/eclair/preprocess_eclair.py \
-    --dataset_root data/eclair/raw \
-    --output_root data/eclair \
-    --num_workers 8
+Usage::
+
+    ln -sfn /path/to/ECLAIR data/eclair/raw
+    python pointcept/datasets/preprocessing/eclair/preprocess_eclair.py \
+        --dataset_root data/eclair/raw \
+        --output_root data/eclair \
+        --num_workers 8
 
 Writes per-scene folders under output_root/{train,val,test}/<tile_id>/:
-  coord.npy, color.npy, strength.npy, return_number.npy,
-  number_of_returns.npy, segment.npy, meta.json
+  coord.npy, color.npy (RGB in [0, 255]), strength.npy, return_number.npy,
+  number_of_returns.npy, segment.npy (LAS classes 1-11 -> 0-10), meta.json
+  (split, review_category, float64 coord_translation: absolute xyz = coord + translation)
 
-Tiles listed in labels.json only (118 LAZ files outside the manifest are skipped).
-By default train includes both ground-truth (approved) and pseudo (rejected) tiles;
-pass --no-include_pseudo to write approved train tiles only.
+Only tiles listed in labels.json are converted (other LAZ files are ignored), with the
+split given there. By default train includes both ground-truth (approved) and
+pseudo-labeled (rejected) tiles; pass --no-include_pseudo to write approved train tiles
+only (ECLAIRDataset can also filter them at load time).
 """
 
 from __future__ import annotations
@@ -80,8 +83,8 @@ def build_scene(laz_path: str) -> Tuple[Dict[str, np.ndarray], np.ndarray]:
         raise KeyError(f"Missing 'intensity' field in {laz_path}")
     strength = np.asarray(las.intensity).astype(np.float32)
 
-    # Store RGB in MALiBU3D-compatible [0, 255] float range (16-bit LAZ → 8-bit scale).
-    # Config pipelines then apply NormalizeColor (/255 → [0, 1]).
+    # Store RGB as float in [0, 255] like the other datasets (16-bit LAZ -> 8-bit scale);
+    # configs then apply NormalizeColor (/255 -> [0, 1]).
     if not {"red", "green", "blue"}.issubset(dim_names):
         raise KeyError(f"Missing RGB fields in {laz_path}")
     color = (

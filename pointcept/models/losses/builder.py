@@ -18,6 +18,7 @@ class Criteria(object):
             self.criteria.append(LOSSES.build(cfg=loss_cfg))
 
     def __call__(self, pred, target, **kwargs):
+        # kwargs (e.g. weight= for WeightedKLDivLoss) go to every criterion.
         if len(self.criteria) == 0:
             # loss computation occur in model
             return pred

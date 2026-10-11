@@ -1,34 +1,20 @@
 """
-SpUNet-v1m1 grid-search linear probing on OpenGF — encoder multiscale variant
-(same frozen checkpoint as spunet-v1m0-opengf-lin-grid-dec.py, job 1052217,
-MALiBU3D multitask supervised pretrain: channels=(32,64,128,256,256,128,96,96),
-layers=(2,3,4,6,2,2,2,2), stride=3).
+Frozen SpUNet (MALiBU3D multitask checkpoint, ckpt/spunet/model.pth) linear probing on OpenGF ground
+filtering (Ground / Non-ground).
 
-SpUNetBase never returned a `Point` with `pooling_parent`/`unpooling_parent`
-links, and its pre-existing `enc_mode=True` is a *classification* mode
-(scatter-mean-pools every voxel to one feature per whole scene, dropping all
-per-point resolution — see modelnet40/cls-spunet-v1m1-0-base.py) — unusable
-for a per-point segmentation probe (shape mismatch against `segment`).
+Probe input: encoder multi-scale features (point_mode=True): stem + 4 encoder stages, broadcast back
+to the input voxels and concatenated (512 channels). Default probing protocol (Tab. 3 of the
+MALiBU3D paper).
 
-Added a new `point_mode=True` backbone flag (spconv_unet_v1m1_base.py) that
-instead builds a `Point` chain (stem -> stage0 -> ... -> bottleneck) with
-`pooling_parent`/`pooling_inverse` populated the same way PT-v3's GridPooling
-does, so GridProbeSegmentorV2's existing generic encoder-multiscale walk
-(grid_probe.py) concatenates every stage's per-point feature broadcast up to
-the finest (stem) resolution — no scatter, no new trainable parameters, pure
-post-hoc reshaping of the frozen forward pass (see
-tests/test_spunet_point_mode.py for correctness checks against an
-independent coordinate-based reference and an end-to-end GridProbeSegmentorV2
-smoke test). Levels concatenated (finest first): stem(32) + stage0(32) +
-stage1(64) + stage2(128) + stage3/bottleneck(256) = 512ch. Counterpart to the
-sibling decoder config (96ch, standard full-resolution U-Net output) — same
-probe grid, same checkpoint, only the tapped feature changes.
+GridProbe: 12 linear probes (CE + Lovasz, AdamW, wd=0, OneCycleLR, lr from 1e-4 to 5e-1) share one
+frozen-backbone forward; tools/grid_then_seeds.py then re-trains the probe with the best validation
+mIoU with 10 seeds.
 
-Same probe grid as litept-b-v1m0 (ce_lovasz x 12 LRs,
-AdamW/wd0/OneCycleLR warmup5%, epoch=50/eval_epoch=10) for cross-backbone
-comparability. The frozen backbone is always in eval() mode, which freezes SpUNet's BatchNorm running stats (real BatchNorm1d); SpUNet has no DropPath modules. Z_MinShift/Z_RandomOffset included in train/val/test per
-the H3D/ECLAIR lin-grid convention. Same OpenGF-has-no-RGB handling as the
-other OpenGF lin configs.
+OpenGF has no usable RGB: color is replaced by the checkpoint's learned mask value; raw intensity is
+scaled by 1/60000. Mix3D is off (mix_prob=0) for all OpenGF configs. Outlier points (raw label 2)
+are merged into Non-ground for training and validation (Qin et al., CVPRW 2021, Sec. 4.4); the test
+split is restricted to region T2 with outliers removed ("Test II w/o outliers", Sec. 4.5).
+skip_test=True leaves testing to the seed phase.
 """
 
 _base_ = ["../_base_/default_runtime.py"]
@@ -44,7 +30,7 @@ coord_feat_scale = 0.01  # must match MALiBU3D multitask pretrain
 strength_feat_scale = 1 / 60000  # OpenGF raw intensity → MALiBU3D [0,1] convention (DALES-like range)
 
 num_gpu = 1
-epoch = 50  # ~3900 iters (1359 train tiles // 24) -- roughly DALES's ballpark, see decision context
+epoch = 50  # OpenGF has ~5x more train tiles than DALES (400 epochs): similar iteration count
 eval_epoch = 10
 lr = 5e-2
 
@@ -55,7 +41,7 @@ batch_size_per_gpu = 24
 batch_size = batch_size_per_gpu * num_gpu
 batch_size_val = 1
 batch_size_test = 1
-num_worker = 24 * num_gpu  # H100 Jean-Zay
+num_worker = 24 * num_gpu
 num_worker_test = 2
 mix_prob = 0
 empty_cache = False
@@ -69,11 +55,10 @@ weight = "ckpt/spunet/model.pth"
 
 wandb_project = f"pointcept_{dataset_type[:-7].lower()}"
 
-# Hooks
-# Order matters: GridProbeEvaluator before GridProbeCheckpointSaver/CheckpointSaver;
-# GridProbeWinnerSelector last (frees the per-probe optimizers/schedulers, then runs
-# its own SemSegTester pass on the winning probe — replaces PreciseEvaluator, which
-# never sets raw_model.active_probe and would break under GridProbeSegmentorV2).
+# Hooks. Order matters: GridProbeEvaluator before the checkpoint savers, and
+# GridProbeWinnerSelector last (frees the per-probe optimizers, picks the best probe
+# on validation and tests it unless skip_test=True). PreciseEvaluator is not used:
+# it does not select a probe.
 hooks = [
     dict(
         type="CheckpointLoader",
@@ -155,8 +140,8 @@ model = dict(
     backbone_out_channels=backbone_out_channels,
     backbone=dict(
         type="SpUNet-v1m1",
-        in_channels=7,  # coord(3) + color(3, fake) + strength(1)
-        num_classes=0,  # unused in point_mode (no final conv applied) — kept for checkpoint key compat
+        in_channels=7,  # coord(3) + color(3, absent: learned fill value) + strength(1)
+        num_classes=0,  # unused in point_mode (no final conv applied)
         channels=backbone_channels,
         layers=(2, 3, 4, 6, 2, 2, 2, 2),
         stride=3,

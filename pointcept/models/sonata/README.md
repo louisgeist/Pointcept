@@ -1,4 +1,11 @@
 # Sonata
+
+> **Note (MALiBU3D release).** This is the upstream Pointcept Sonata README, kept for reference and
+> citation. This repository only keeps the Sonata-v1m2 model (`sonata_v1m2_uni_teacher_head.py`); the
+> indoor configs (`configs/sonata/...`), the Sonata-v1m1 model and `tools/test_s3dis_6fold.py` referenced
+> below are not included (see [upstream Pointcept](https://github.com/Pointcept/Pointcept)). Sonata
+> pretraining on MALiBU3D uses `configs/malibu3d/pretrain-sonata-v1m2-malibu3d.py`.
+
 This repo is the official training codebase of the paper **_Sonata: Self-Supervised Learning of Reliable Point Representations_**. Sonata is a powerful self-supervised learning framework (as well as our pre-trained model) that shows extraordinary parameter efficiency, data efficiency, and fine-tuning accuracy.
 
 *We recommend beginning with our inference [demo](https://github.com/facebookresearch/sonata) and it is also a tiny library for people who want to integrate pre-trained Sonata into their project. This section is designed for users interested in reproduce our pre-training.*

@@ -1,7 +1,9 @@
 """
-Fixed validation subsets: restrict a dataset's scene list to the tiles listed in a CSV
-sidecar (``split``, ``patch_id`` columns), e.g. the stratified validation subset shipped
-with the dataset, then optionally to ``include_names`` and the first ``max_sample`` scenes.
+Scene-list restriction applied by DefaultDataset after ``get_data_list``.
+
+In order: keep the tiles listed in a CSV sidecar (``split`` + ``tile_id`` or ``patch_id``
+columns), e.g. the fixed stratified validation subset used by the MALiBU3D configs; then
+the scenes matching ``include_names``; then the first ``max_sample`` scenes.
 """
 
 from __future__ import annotations
@@ -42,11 +44,13 @@ def _normalize_include_names(include_names) -> Optional[List[str]]:
 
 
 def scene_matches_include_name(path: str, name: str) -> bool:
-    """Loose match of a user-supplied tile id against a scene path / patch_id.
+    """Loose match of a user-supplied name against a scene path.
 
-    Accepts both official patch ids (``D075-2021_AA-S2-2``) and informal forms
-    such as ``D075-2021_LIDARHD_AA-S2-2`` (LIDARHD token stripped) or
-    ``D075_UF-S1-2`` (department prefix + ROI suffix).
+    True if the name (or the name with its ``_LIDARHD`` token removed, e.g.
+    ``D075-2021_LIDARHD_AA-S2-2``) is a substring of the path, or if a
+    ``<prefix>_<rest>`` name has a scene folder that starts with ``<prefix>`` and ends
+    with ``<rest>`` (e.g. ``D075_UF-S1-2``). Also used for other datasets' scene names
+    (e.g. OpenGF ``T2``).
     """
     n = str(name).strip()
     if not n:
@@ -78,6 +82,7 @@ def matching_include_name(path: str, names: Sequence[str]) -> Optional[str]:
 
 
 def load_sidecar_keys(manifest_path: str) -> Set[Tuple[str, str]]:
+    """Read ``{(split, tile_id)}`` from a sidecar CSV (id column ``tile_id`` or ``patch_id``)."""
     if not os.path.isfile(manifest_path):
         raise FileNotFoundError(f"Stratified subset sidecar not found: {manifest_path}")
 
@@ -105,6 +110,7 @@ def filter_paths_by_sidecar(
     split: str,
     sidecar_keys: Set[Tuple[str, str]],
 ) -> List[str]:
+    """Keep the scenes whose ``(split, folder name)`` is in the sidecar, sorted by name."""
     split = _normalize_split(split)
     filtered = [
         path
@@ -123,6 +129,10 @@ def apply_subset_selection(
     stratified_subset_manifest: Optional[str] = None,
     include_names: Optional[Sequence[str]] = None,
 ) -> List[str]:
+    """Apply the sidecar filter, then ``include_names``, then the ``max_sample`` head slice.
+
+    The sidecar filter needs a single split name.
+    """
     logger = get_root_logger()
     original_len = len(data_list)
 

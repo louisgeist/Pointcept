@@ -3,9 +3,8 @@ Grid-Search Config Authoring Helpers
 
 Pure-stdlib helper for building a GridProbeSegmentorV2 `probes` dict as a
 cartesian product of axes (e.g. every loss variant x every learning rate).
-No torch / pointcept.datasets import — safe to import directly inside a
-config file (unlike pointcept.datasets.malibu3d_config_utils, which configs
-avoid importing at parse time because it pulls torch_cluster).
+It imports neither torch nor pointcept.datasets, so a config file can import
+it cheaply at parse time.
 """
 
 import copy

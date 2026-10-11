@@ -1,9 +1,10 @@
 """
-OpenGF (ground-filtering) benchmark -- preprocessed ALS tiles.
+OpenGF ground-filtering benchmark, as written by
+preprocessing/opengf/preprocess_opengf.py (``<data_root>/{train,val,test}/<scene>/``).
 
-Binary segmentation: 0 = Ground, 1 = Non-ground, 2 = Outlier (kept as its own
-label on disk -- see preprocessing/opengf/preprocess_opengf.py for how a
-config should merge/drop/ignore it).
+Binary segmentation: 0 = Ground, 1 = Non-ground. Outlier points are stored as their
+own label 2; a config merges them (``RemapSegment``), drops them (``DropSegmentClass``)
+or ignores them (``ignore_index=2``), see the preprocessing script docstring.
 """
 
 import os

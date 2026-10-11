@@ -1,48 +1,39 @@
 """
 Preprocess PureForest LAZ tiles into Pointcept scene folders (manifest-driven).
 
-Reads ``PureForest-patches.csv`` to determine which tiles to process, resolves
-expected LAZ paths as ``lidar/{split}/{TRAIN|VAL|TEST}-{patch_id}.laz``, and
-logs missing files before conversion.
+Every row of ``PureForest-patches.csv`` (columns ``patch_id``, ``split``,
+``class_index``) is one tile, read from ``lidar/{split}/{TRAIN|VAL|TEST}-{patch_id}.laz``.
+Rows without a LAZ file are listed in ``<output_root>/missing_laz_preflight.txt``.
 
-Extract dataset:
-
-
-
-Input layout (`--dataset_root`):
+Input layout (``--dataset_root``, the extracted dataset)::
 
     dataset_root/
-    ├── lidar/train|val|test/*.laz
+    ├── lidar/{train,val,test}/*.laz
     └── metadata/PureForest-patches.csv
 
-So `dataset_root` is the root of the extracted dataset.
+Output layout (``--output_root``)::
 
-Output layout (`--output_root`):
+    output_root/{train,val,test}/<patch_id>/
+        coord.npy     float32, XY mean-centered, Z min-shifted, divided by COORD_SCALE_M
+        color.npy     float32 RGB in [0, 255]
+        category.npy  int32 class id
 
-    output_root/
-    ├── train/<patch_id>/coord.npy, color.npy, category.npy
-    └── ...
+Tiles with complete coord.npy and color.npy are skipped unless ``--overwrite``.
+Requires ``pip install laspy lazrs``.
 
-The layout can be built with the following command:
-```bash
-ln -s data/pureforest/extracted/metadata data/pureforest/metadata
-```
+Usage::
 
-Requires: ``pip install laspy lazrs``
+    python pointcept/datasets/preprocessing/pureforest/preprocess_pureforest.py \
+      --dataset_root data/pureforest/extracted \
+      --output_root data/pureforest \
+      --num_workers 8
 
-Usage:
+Toy subset (2 tiles per class per split, picked from the full manifest)::
 
-python pointcept/datasets/preprocessing/pureforest/preprocess_pureforest.py \
-  --dataset_root data/pureforest/extracted \
-  --output_root data/pureforest \
-  --num_workers 8
-
-Toy subset (2 tiles per class per split, on-the-fly from the full manifest)::
-
-python pointcept/datasets/preprocessing/pureforest/preprocess_pureforest.py \
-  --toy \
-  --dataset_root data/pureforest/extracted \
-  --output_root data/pureforest_toy
+    python pointcept/datasets/preprocessing/pureforest/preprocess_pureforest.py \
+      --toy \
+      --dataset_root data/pureforest/extracted \
+      --output_root data/pureforest_toy
 """
 
 from __future__ import annotations
@@ -93,9 +84,8 @@ def read_pureforest_laz(filepath: str) -> Dict[str, np.ndarray]:
         ) from err
 
     las = laspy.read(filepath)
-    # Keep float64 here: las.x/y/z are absolute Lambert-93 (Y ~= 6-7e6), and float32's
-    # ULP at that magnitude is ~0.5-1 m (see README_geist.md's MALiBU3D note on the same
-    # trap) — cast down only after normalize_tile_coord has recentered to local coords.
+    # Keep float64 here: las.x/y/z are absolute Lambert-93 (Y ~= 6-7e6), where float32's
+    # spacing is ~0.5-1 m. Cast down only after normalize_tile_coord has recentered.
     coord = np.column_stack(
         (
             np.asarray(las.x, dtype=np.float64),
@@ -115,10 +105,9 @@ def read_pureforest_laz(filepath: str) -> Dict[str, np.ndarray]:
         ],
         axis=1,
     )
-    # LAS RGB fields store 16-bit values with the true 8-bit source shifted left by 8
-    # bits (standard IGN/LAStools/PDAL convention), not a continuous 16-bit sensor
-    # range — descale with a fixed //256, never a per-tile max stretch (that invents a
-    # tile-dependent brightness instead of recovering the deterministic original byte).
+    # LAS RGB fields store the 8-bit source shifted left by 8 bits (IGN/LAStools/PDAL
+    # convention), not a continuous 16-bit range: descale with a fixed //256, never a
+    # per-tile max stretch (that would invent a tile-dependent brightness).
     if float(np.max(rgb)) > 255.5:
         rgb = rgb // 256
     color = np.clip(rgb, 0.0, 255.0).astype(np.float32)
@@ -127,11 +116,10 @@ def read_pureforest_laz(filepath: str) -> Dict[str, np.ndarray]:
 
 
 def normalize_tile_coord(coord: np.ndarray) -> np.ndarray:
-    """Center XY on mean, Z on minimum; scale to ~[-1, 1] (paper baseline).
+    """Center XY on the mean, Z on the minimum, divide by COORD_SCALE_M (paper baseline).
 
-    ``coord`` must still be float64 absolute Lambert-93 here — recentering (mean/min)
-    has to happen before any float32 cast, or the ~0.5-1 m ULP at Y ~= 6-7e6 corrupts
-    point spacing before it's ever removed.
+    ``coord`` must still be float64 absolute Lambert-93: recentering has to happen
+    before the float32 cast, whose spacing is ~0.5-1 m at Y ~= 6-7e6.
     """
     if coord.shape[0] == 0:
         return coord.astype(np.float32, copy=False)
@@ -196,9 +184,8 @@ def save_tile_scene(
     category: int,
 ) -> None:
     os.makedirs(output_scene_dir, exist_ok=True)
-    # Write coord last historically caused truncated coord.npy on kill; all writes
-    # are atomic now. Keep coord last so resume only treats the scene as done when
-    # the final artifact is present and complete.
+    # Writes are atomic, and coord.npy is written last: the resume check treats a scene
+    # as done only when coord.npy (and color.npy) are present and complete.
     _atomic_np_save(
         os.path.join(output_scene_dir, "color.npy"), color.astype(np.float32)
     )
@@ -213,6 +200,8 @@ def save_tile_scene(
 
 @dataclass(frozen=True)
 class TileTask:
+    """One manifest row to convert."""
+
     patch_id: str
     split: str
     laz_path: str
@@ -316,7 +305,11 @@ def load_manifest_tasks(
     dataset_root: str,
     splits: Tuple[str, ...],
 ) -> List[TileTask]:
-    """Load one TileTask per manifest row for the requested splits."""
+    """Load one TileTask per manifest row of the requested splits.
+
+    Warns when ``class_index`` disagrees with the ``-C<id>-`` part of the patch id;
+    raises on duplicate patch ids with conflicting rows.
+    """
     splits_set = set(splits)
     tasks_by_patch: Dict[str, TileTask] = {}
     class_mismatches: List[str] = []
@@ -350,7 +343,7 @@ def select_toy_tasks(
     splits: Tuple[str, ...],
     tiles_per_class: int = TOY_TILES_PER_CLASS,
 ) -> List[TileTask]:
-    """Select a small balanced subset: ``tiles_per_class`` tiles per class per split."""
+    """Select a small balanced subset: the first ``tiles_per_class`` patch ids (sorted) per class per split."""
     splits_set = set(splits)
     grouped: Dict[Tuple[str, int], List[str]] = {}
     class_mismatches: List[str] = []
@@ -401,7 +394,7 @@ def partition_tasks_for_processing(
     output_root: str,
     overwrite: bool,
 ) -> Tuple[List[TileTask], List[TileTask], List[Dict[str, str]]]:
-    """Split manifest tasks into process, already-done, and missing LAZ."""
+    """Split tasks into ``(to_process, already_done, missing_laz)``."""
     tasks_to_process: List[TileTask] = []
     already_done: List[TileTask] = []
     missing_laz: List[Dict[str, str]] = []
@@ -455,7 +448,7 @@ def process_tile_task(
     task: TileTask,
     output_root: str,
 ) -> Tuple[str, str]:
-    """Returns (status, message) where status is ok|error."""
+    """Convert one tile; returns ``(status, message)`` with status ``ok`` or ``error``."""
     output_scene_dir = os.path.join(output_root, task.split, task.patch_id)
     try:
         scene = read_pureforest_laz(task.laz_path)

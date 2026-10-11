@@ -1,10 +1,7 @@
-"""
-freeze_backbone=True must keep the whole backbone in eval() mode permanently
-(BatchNorm running stats frozen, DropPath/Dropout inactive), even after the
-trainer's model.train() calls — for every segmentor/regressor/classifier in
-pointcept/models/default.py.
+"""freeze_backbone=True keeps the whole backbone in eval() (BatchNorm stats frozen, DropPath/Dropout off) even
+after model.train(), for every segmentor/regressor/classifier in pointcept/models/default.py.
 
-Run with: PYTHONPATH=./ pytest tests/test_frozen_backbone_eval.py
+Run with: PYTHONPATH=. pytest tests/test_frozen_backbone_eval.py
 """
 
 import unittest

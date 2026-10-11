@@ -1,10 +1,9 @@
 """
-LitePT-Base on MALiBU3D (coord + RGB + strength in feat_keys).
-
-Mono-task MALiBU3D config for point-wise elevation regression (meters). Derived
-from multi-litept-b-v1m0-malibu3d.py (Base backbone + schedule) with mono-task
-wiring aligned to elevation/litept-v1m0-malibu3d.py. Inherits only from
-default_runtime.
+LitePT-B trained from scratch on MALiBU3D point-wise elevation regression alone (height above
+the ground, in meters, SmoothL1 loss) with a DefaultRegressorV2 head. Same backbone, inputs
+(coord, RGB, intensity), schedule (200k iterations, batch 12 on 1 GPU, AMP) and augmentations as
+../multi-litept-b-v1m0-malibu3d.py.
+Self-contained: inherits only from _base_/default_runtime.py.
 """
 
 # -----------------------------------------------------------------------------
@@ -54,7 +53,7 @@ wandb_run_name = (
 wandb_project = "malibu3d_elevation"
 
 # -----------------------------------------------------------------------------
-# Mono-task regression configuration
+# Single-task regression configuration
 # -----------------------------------------------------------------------------
 from pointcept.datasets.malibu3d_config_utils import (
     MALIBU3D_COLLECT_PREFIX_LITEPT,
@@ -65,8 +64,8 @@ target_key = "elevation"
 target_keys = (target_key,)
 origin_target_key = f"origin_{target_key}"
 
-# Elevation in meters: no Collect key_scales, no denorm via target_scales
-# (matches configs/experiment/w107/7/toward_bm/multi-litept-v1m0-malibu3d_1.py).
+# Elevation is regressed in meters: no target rescaling, hence no denormalization
+# in the metrics.
 target_scales = {}
 
 # -----------------------------------------------------------------------------
@@ -88,13 +87,12 @@ test = dict(type="RegressionTester", verbose=True)
 # -----------------------------------------------------------------------------
 # Model
 # -----------------------------------------------------------------------------
-# LitePT-Base official dims (deeper/wider than Small).
+# Backbone: official LitePT-B dimensions.
 model = dict(
     type="DefaultRegressorV2",
     target_key=target_key,
     backbone_out_channels=72,
-    # beta=1.0 (meters) -- elevation trained in raw meters, no Collect key_scales /
-    # target_scales denorm. See multi-litept-v1m0-malibu3d_1.py (w107/7/toward_bm).
+    # Targets in meters: beta=1.0 puts the L1/L2 transition at 1 m.
     criteria=[dict(type="SmoothL1Loss", beta=1.0, loss_weight=1.0)],
     backbone=dict(
         type="LitePT-v1",

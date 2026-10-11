@@ -1,9 +1,7 @@
-"""
-Test for dilated_prf_enabled, the per-task opt-out used by MultiTaskEvaluator to
-skip buffer ("relaxed") precision/recall/F1 for area-coverage pixel_semantic tasks
-(e.g. forest_2d) while keeping it for thin curvilinear ones (e.g. network).
+"""dilated_prf_enabled: per-task switch for buffer ("relaxed") precision/recall/F1, on for thin curvilinear
+pixel_semantic tasks (network) and off for area-coverage ones (forest_2d).
 
-Run with: PYTHONPATH=./ pytest tests/test_dilated_prf_opt_out.py
+Run with: PYTHONPATH=. pytest tests/test_dilated_prf_opt_out.py
 """
 
 import unittest

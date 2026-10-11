@@ -1,11 +1,8 @@
-"""
-Tests for the tile_distribution task's shared pooling/KL/MAE/TV utilities
-(pointcept.utils.misc.pool_axis_distribution_from_probs / kl_divergence_rows /
-abs_freq_error_rows / tv_from_abs_errors), the WeightedKLDivLoss criterion,
-MultiTaskSegmentorV2's tile_distribution loss branch (KL and optional
-pointwise CE), and init_task_criteria for pointwise_supervision.
+"""tile_distribution tasks (natural-habitat axes): pooling/KL/MAE/TV helpers in pointcept.utils.misc,
+WeightedKLDivLoss, init_task_criteria with and without pointwise_supervision, and the
+MultiTaskSegmentorV2 loss branch.
 
-Run with: PYTHONPATH=./ pytest tests/test_tile_distribution_pooling.py
+Run with: PYTHONPATH=. pytest tests/test_tile_distribution_pooling.py
 """
 
 import unittest

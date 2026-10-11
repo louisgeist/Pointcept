@@ -99,12 +99,10 @@ class InformationWriter(HookBase):
         self.write_cls_iou = write_cls_iou
         # task_name -> running (intersection, union) tensors on CUDA
         self._train_seg_stats = {}
-        # GridProbeTrainer only: full (epoch, probe) train loss/mIoU/cls_iou
-        # history (rank 0 only), so GridProbeWinnerSelector can replay just the
-        # winning probe's train curve to W&B after training ends instead of
-        # every probe streaming its own live curve during training (see
-        # after_epoch below and grid_probe.py::GridProbeWinnerSelector).
-        # Persisted across resume (see state_dict/load_state_dict).
+        # GridProbeTrainer only (rank 0): per-(epoch, probe) train loss, mIoU and
+        # class IoU. Probes are not logged to W&B during training;
+        # GridProbeWinnerSelector replays the winner's curve from this history
+        # afterwards. Checkpointed via state_dict.
         self._grid_probe_train_history = []
 
     def before_epoch(self):
@@ -297,7 +295,7 @@ class InformationWriter(HookBase):
                 
             loss_by_task = model_output_dict.get("loss_by_task")
             # Skip when only one task: scalar "loss" already summarizes training.
-            if isinstance(loss_by_task, dict) and len(loss_by_task) > 1: # For logging
+            if isinstance(loss_by_task, dict) and len(loss_by_task) > 1:
                 for task_name, v in loss_by_task.items():
                     if isinstance(v, torch.Tensor):
                         if v.numel() != 1:
@@ -609,14 +607,10 @@ class InformationWriter(HookBase):
                 "Iter": self.curr_iter,
             }
             if self._is_grid_probe():
-                # GridProbeTrainer: N probes would otherwise fan out into
-                # N x (loss + mIoU + lr + num_classes*cls_iou) W&B metrics every
-                # epoch. Only the eventual winner's train curve is worth a
-                # dashboard line; GridProbeWinnerSelector replays it from
-                # _grid_probe_train_history once training ends (mirrors how
-                # GridProbeEvaluator already handles val/* below). Console
-                # (per-probe logger.info above) and TensorBoard (per-probe
-                # add_scalar above) keep the full per-probe detail.
+                # GridProbeTrainer: logging every probe would create
+                # N x (loss + mIoU + lr + class IoUs) W&B metrics per epoch.
+                # GridProbeWinnerSelector replays only the winner's train curve
+                # after training; console and TensorBoard keep all probes.
                 pass
             else:
                 lrs = self._optimizer_lrs(self.trainer)
@@ -646,14 +640,11 @@ class InformationWriter(HookBase):
             wandb_dict=wandb_dict,
         )
         if wandb_dict is not None:
-            # Do not pass an explicit `step=epoch`: charts use the "Epoch"
-            # field as x-axis via define_metric. Two resume cases:
-            # - Slurm requeue / already-synced resume: the run's internal
-            #   _step is already past the epoch number, so step=epoch would
-            #   be silently dropped.
-            # - New process + resume (manual relaunch): local _step may
-            #   restart near zero and collide with server history; that is
-            #   handled by bump_wandb_step_on_resume in Trainer.build_writer.
+            # No explicit `step=epoch`: charts use the "Epoch" field as x-axis
+            # (define_metric). After a resume the run's internal step can already
+            # be past the epoch number, and W&B would silently drop the entry.
+            # A new process resuming a run has its step bumped past the server
+            # history by init_or_resume_wandb (called in Trainer.build_writer).
             wandb.log(wandb_dict)
 
 
@@ -687,8 +678,8 @@ class CheckpointSaver(HookBase):
             )
             self.trainer.logger.info("Saving checkpoint to: " + filename)
             # Per-hook running state (e.g. MultiTaskEvaluator's per-task best-so-far
-            # trackers) that isn't captured by trainer.best_metric_value alone — see
-            # HookBase.state_dict / CheckpointLoader.before_train.
+            # trackers) not covered by trainer.best_metric_value; see
+            # HookBase.state_dict.
             hook_states = {}
             for h in self.trainer.hooks:
                 s = h.state_dict()
@@ -803,7 +794,7 @@ class CheckpointLoader(HookBase):
                 key = "module." + key  # xxx.xxx -> module.xxx.xxx
             # Now all keys contain "module." no matter DDP or not.
             if self.exclude_keys and any(k in key for k in self.exclude_keys):
-                continue # the key is not stored in `weight`
+                continue
             if self.keywords in key:
                 key = key.replace(self.keywords, self.replacement, 1)
             if comm.get_world_size() == 1:
@@ -831,8 +822,8 @@ class CheckpointLoader(HookBase):
             if self.trainer.cfg.enable_amp:
                 ckpt_scaler = checkpoint["scaler"]
                 if isinstance(self.trainer.scaler, dict):
-                    # Per-probe GradScalers. Older checkpoints stored a single
-                    # shared scaler state_dict — broadcast it to every probe.
+                    # Per-probe GradScalers. A checkpoint holding a single
+                    # shared scaler state is broadcast to every probe.
                     if isinstance(ckpt_scaler, dict) and all(
                         isinstance(v, dict) and "scale" in v
                         for v in ckpt_scaler.values()
@@ -849,15 +840,14 @@ class CheckpointLoader(HookBase):
                 else:
                     self.trainer.scaler.load_state_dict(ckpt_scaler)
 
-            # Restore per-hook running state (older checkpoints predate this key,
-            # hence .get) — see HookBase.state_dict / CheckpointSaver.after_epoch.
+            # Restore per-hook running state (see HookBase.state_dict). This key
+            # and the GradNorm ones below are optional in checkpoints.
             hook_states = checkpoint.get("hook_states", {})
             for h in self.trainer.hooks:
                 state = hook_states.get(h.__class__.__name__)
                 if state:
                     h.load_state_dict(state)
-            # Real GradNorm learnable weights + Adam state + L_g(0) anchors
-            # (older checkpoints predate this key, hence .get).
+            # GradNorm learnable weights, optimizer state and initial losses L_g(0).
             grad_norm_state = checkpoint.get("grad_norm_state")
             if (
                 grad_norm_state
@@ -865,8 +855,7 @@ class CheckpointLoader(HookBase):
             ):
                 self.trainer._grad_norm_state.load_state_dict(grad_norm_state)
                 self.trainer.logger.info("=> Restored GradNorm state from checkpoint")
-            # GradNormLite EMA of last-layer norms (older checkpoints predate
-            # this key, hence .get).
+            # GradNormLite EMA of last-layer gradient norms.
             grad_norm_lite_state = checkpoint.get("grad_norm_lite_state")
             if (
                 grad_norm_lite_state
@@ -1012,10 +1001,10 @@ class WeightDecaySchedular(HookBase):
 
 @HOOKS.register_module()
 class MetricsJsonWriter(HookBase):
-    """Write best validation metrics to ``save_path/metrics.json`` after training.
+    """Write the best validation metric to ``save_path/metrics.json`` after training.
 
-    Intended for evaluate=True runs (e.g. linear probes). The periodic Sonata
-    probe watcher reads this file as the primary mIoU source.
+    Only acts when ``evaluate=True`` (e.g. linear probes); lets external scripts read
+    the result without parsing logs. Adds ``best_val_mIoU`` when the metric is mIoU.
     """
 
     def __init__(self, filename="metrics.json"):

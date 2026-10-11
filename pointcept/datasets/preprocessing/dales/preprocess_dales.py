@@ -1,28 +1,24 @@
 """
-Preprocessing script for DALES dataset.
+Preprocessing script for the DALES dataset (DALESObjects PLY release).
 
 Usage:
-1) unzip the DALESObjects.zip file
+1) Extract the archive so that ``<dataset_root>/{train,test}/*.ply`` exists::
 
-mkdir -p data/dales/raw 
-tar -xzf "$SCRATCH/DALESObjects.tar.gz" -C data/dales/raw
+    mkdir -p data/dales/raw
+    tar -xzf /path/to/DALESObjects.tar.gz -C data/dales/raw
 
-2) 
-python pointcept/datasets/preprocessing/dales/preprocess_dales.py \
-    --dataset_root data/dales/raw/DALESObjects \
-    --output_root data/dales/ \
-    --num_workers 8
+2) Convert::
 
-or 
-python pointcept/datasets/preprocessing/dales/preprocess_dales.py \
-    --dataset_root data/dales/raw \
-    --output_root data/dales/ \
-    --num_workers 8
+    python pointcept/datasets/preprocessing/dales/preprocess_dales.py \
+        --dataset_root data/dales/raw/DALESObjects \
+        --output_root data/dales/ \
+        --num_workers 8
 
-This script converts raw DALES PLY files into Pointcept scene folders containing:
-- coord.npy
-- segment.npy
-- strength.npy
+Each PLY is split into ``--chunking`` x ``--chunking`` XY subtiles (default 3), written to
+``<output_root>/{train,test}/<scene>_<row>-<col>/`` with:
+- coord.npy     float32 xyz (original coordinates)
+- segment.npy   int32: DALES classes 1-8 -> 0-7, unknown (0) -> 8 (ignore_index)
+- strength.npy  float32 raw PLY intensity (configs rescale it with ``strength_feat_scale``)
 """
 
 import argparse
@@ -40,6 +36,7 @@ try:
 except ImportError as error:
     raise ImportError("Please install 'plyfile' to preprocess DALES PLY files.") from error
 
+# Raw sem_class -> train id, indexed by raw id: 0 (unknown) -> 8, k -> k - 1.
 ID2TRAINID = np.asarray([8, 0, 1, 2, 3, 4, 5, 6, 7], dtype=np.int32)
 
 

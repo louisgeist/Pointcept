@@ -1,16 +1,12 @@
-"""
-Regression tests for past bugs:
+"""Regression guards:
+- CrossEntropyLoss on an all-ignore batch returns an in-graph zero (backward() works, zero grads).
+- RemapSegment maps from the original labels (no cascading through chained or swapped mappings).
+- OpenGF / ECLAIR preprocessing recenters projected coordinates in float64 before the float32 cast
+  (otherwise XY snaps to a 0.125 m / 0.5 m lattice).
+- GridProbe AMP: one GradScaler per probe, so a diverged head cannot collapse the scale and schedulers of
+  the healthy probes (CUDA only).
 
-- CrossEntropyLoss on an all-ignore batch must return an in-graph zero
-  (backward() must not raise, head gets zero grads).
-- RemapSegment must map from the ORIGINAL labels (no cascading through
-  chained / swapped mappings).
-- OpenGF / ECLAIR preprocessing must recenter absolute projected coordinates
-  in float64 before the float32 cast (no 0.125 m / 0.5 m XY lattice).
-- GridProbe AMP: one GradScaler per probe so a diverged head cannot collapse
-  the healthy probes' scale / schedulers.
-
-Run with: PYTHONPATH=./ python -m unittest tests/test_regressions.py
+Run with: PYTHONPATH=. pytest tests/test_regressions.py
 """
 
 import importlib.util
@@ -44,7 +40,7 @@ class TestCrossEntropyAllIgnore(unittest.TestCase):
         loss = CrossEntropyLoss(ignore_index=2)(logits, target)
         self.assertEqual(float(loss), 0.0)
         self.assertTrue(loss.requires_grad)
-        loss.backward()  # used to raise: element 0 of tensors does not require grad
+        loss.backward()  # must not raise "element 0 of tensors does not require grad"
         self.assertTrue(torch.all(head.weight.grad == 0))
 
     def test_regular_batch_unchanged(self):
@@ -149,7 +145,8 @@ class TestProjectedCoordPrecision(unittest.TestCase):
 
 @unittest.skipUnless(torch.cuda.is_available(), "CUDA required for GradScaler fp16")
 class TestGridProbePerProbeGradScaler(unittest.TestCase):
-    """Isolation of AMP GradScaler across disjoint probe heads (bug 03)."""
+    """AMP GradScaler isolation across disjoint probe heads, on a standalone training loop that compares a
+    shared scaler with one scaler per probe."""
 
     def _make_probe(self, C, K, device, big=False):
         head = nn.Linear(C, K).to(device)

@@ -1,9 +1,10 @@
 """
-PureForest tile classification dataset (preprocessed Pointcept scenes).
+PureForest tree-species tile classification (13 classes).
 
-Each sample is a 50 m x 50 m LAZ tile with a single semantic class label (13 classes).
-
-Author: Pointcept integration
+Each sample is a 50 m x 50 m tile written by
+preprocessing/pureforest/preprocess_pureforest.py
+(``<data_root>/<split>/<patch_id>/{coord,color,category}.npy``) with one class label,
+returned under ``category``.
 """
 
 import os
@@ -25,8 +26,9 @@ from pointcept.datasets.preprocessing.pureforest.preprocess_pureforest import (
     COORD_SCALE_M,
 )
 
-# Forest-level (bdforetv2_id) exclusion list: PureForest test patches that geographically
-# overlap the MALiBU3D (MALiBU3D) train/val split. See file header for how this was derived.
+# PureForest test patches excluded with ``exclude_malibu3d_leakage_tiles=True``: every
+# patch of a forest (BD Foret polygon) that overlaps a MALiBU3D train/val tile, so that
+# backbones trained on MALiBU3D are not tested on areas they saw. See the file header.
 MALIBU3D_LEAKAGE_EXCLUDE_FILE = os.path.join(
     os.path.dirname(__file__),
     "preprocessing",
@@ -45,9 +47,14 @@ def _load_malibu3d_leakage_excluded_tiles():
         )
 
 
-# Alignment with ModelNetDataset, as it is also a classification dataset
 @DATASETS.register_module()
 class PureForestDataset(Dataset):
+    """Tile classification dataset; the interface follows Pointcept's classification datasets.
+
+    In test mode, each item is ``dict(voting_list=[...], category, name)`` with one
+    entry per ``test_cfg.aug_transform``.
+    """
+
     def __init__(
         self,
         split="train",
@@ -117,10 +124,10 @@ class PureForestDataset(Dataset):
         patch_stem = self.data_list[data_idx]
         scene_dir = os.path.join(self.data_root, self.split, patch_stem)
         try:
-            # On-disk coord.npy is stored ~[-1, 1]-normalized (mean-centered XY, min-shifted Z,
-            # divided by COORD_SCALE_M) per the PureForest paper's own baseline preprocessing.
-            # Denormalize back to real meters here so every transform downstream (GridSample,
-            # SphereCrop, feat_scales=coord) behaves like every other metric dataset in this repo.
+            # coord.npy is stored ~[-1, 1]-normalized (mean-centered XY, min-shifted Z,
+            # divided by COORD_SCALE_M), as in the PureForest paper's baseline. Scale it
+            # back to meters so GridSample, SphereCrop and feat_scales behave as on the
+            # other datasets.
             coord = (
                 np.load(os.path.join(scene_dir, "coord.npy")).astype(np.float32)
                 * COORD_SCALE_M

@@ -3,32 +3,36 @@
 
 One GPU pass over train/val/test (or a subset). For each tile, runs the same
 encoder-multiscale path as ``GridProbeClassifier``, then saves both scene-level
-pools so a later sklearn probe can try mean / max / concat / sum without
-re-forwarding.
+pools so ``scripts/probe_pureforest_sklearn.py`` can try mean / max / concat /
+sum without re-forwarding. This produces the PureForest column of the linear
+probing table of the MALiBU3D paper (Tab. 3).
 
 Uses the *val* transform pipeline from a PureForest GridProbe config, but forces
 ``GridSample(mode="test", test_single_fragment=True)`` so voxel picks are
-deterministic (configs still use ``mode="train"`` on val, which is stochastic).
+deterministic (the configs use ``mode="train"`` on val, which is stochastic).
 
 Does **not** apply train-time SphereCrop / augs. Optional ``--point-max`` adds a
 deterministic center SphereCrop after voxelization when you need a VRAM cap.
+
+Writes ``{split}.npz`` (``names``, ``category``, ``mean_feat``, ``max_feat``) and
+``meta.json`` to ``--output-dir``.
 
 Usage::
 
     export PYTHONPATH="$PWD"
     python scripts/extract_pureforest_pooled_embeddings.py \\
       --config configs/pureforest/cls-sonata-v1m2-pureforest-lin-grid-enc.py \\
-      --weight ckpt/malibu3d/sonata_outdoor/epoch_120.pth \\
-      --output-dir stats/pureforest/embeddings/sonata_outdoor \\
+      --weight ckpt/sonata-pretrained/model.pth \\
+      --output-dir stats/pureforest/embeddings/sonata_pretrained_ms \\
       --splits train val test \\
-      --batch-size 4
+      --batch-size 4 --point-budget <max points per batch>
 
-    # Toy smoke:
+    # Small smoke test on a reduced copy of the dataset:
     python scripts/extract_pureforest_pooled_embeddings.py \\
       --config configs/pureforest/cls-sonata-v1m2-pureforest-lin-grid-enc.py \\
-      --weight ckpt/malibu3d/sonata_outdoor/epoch_120.pth \\
+      --weight ckpt/sonata-pretrained/model.pth \\
       --data-root data/pureforest_toy \\
-      --output-dir stats/pureforest/embeddings/sonata_outdoor_toy \\
+      --output-dir stats/pureforest/embeddings/sonata_pretrained_toy \\
       --splits train val test --batch-size 2
 """
 
@@ -146,11 +150,11 @@ def _move_batch_to_device(batch, device):
 def _compute_raw_sizes(dataset):
     """Per-tile raw point count, read from coord.npy's file size (no load).
 
-    Used only for point-budget batch packing -- a fast upper-bound proxy for
-    the post-GridSample point count (real PureForest tiles are dense enough,
-    see project_pureforest_reprocess_dense_tiles memory, that GridSample(0.1)
-    only removes ~13-20% of points, so budgeting on the slightly larger raw
-    count is a safe, not overly loose, approximation).
+    Used only for point-budget batch packing, as a fast upper bound on the
+    post-GridSample point count: PureForest tiles are dense enough that
+    GridSample(0.1) removes only ~13-20% of the points, so the bound is safe
+    and not overly loose. Assumes a float32 (N, 3) array behind a 128-byte
+    .npy header.
     """
     import os
 
@@ -168,9 +172,9 @@ def _compute_raw_sizes(dataset):
 class _TileDataset(torch.utils.data.Dataset):
     """Wraps get_data + pre/post transform so a DataLoader can prefetch them.
 
-    Each item does the CPU-bound work (disk read, GridSample voxelization) that
-    used to run serially in the main process between GPU forwards; workers run
-    this ahead of time so it overlaps with the previous batch's forward pass.
+    Each item does the CPU-bound work (disk read, GridSample voxelization), so
+    DataLoader workers run it ahead of time, overlapping the previous batch's
+    GPU forward pass.
     """
 
     def __init__(self, dataset, pre_transform, post_transform):
@@ -230,17 +234,13 @@ def run_split(
         loader_kwargs["prefetch_factor"] = prefetch_factor
 
     if point_budget is not None:
-        # Fixed tile-count batches are unsafe here: real PureForest tiles
-        # vary ~10x in point count and PureForestDataset.get_data_list()
-        # sorts alphabetically, which clusters same-forest tiles together --
-        # a fixed batch_size can silently pack several of the densest tiles
-        # in the whole split into one batch and OOM (see
-        # feedback_pureforest_no_point_max_extraction /
-        # project_pureforest_reprocess_dense_tiles memories: batch_size=8 was
-        # "safe" on one sampled worst-case cluster but still OOM'd 38GB on
-        # the true top-8-largest-tiles group). First-Fit-Decreasing packing
-        # by raw point count bounds total points/batch directly, regardless
-        # of tile count or ordering.
+        # Fixed tile-count batches are unsafe here: PureForest tiles vary
+        # ~10x in point count and PureForestDataset.get_data_list() sorts
+        # alphabetically, which clusters same-forest tiles together, so a
+        # fixed batch_size can pack several of the densest tiles of the split
+        # into one batch and run out of memory. First-Fit-Decreasing packing
+        # by raw point count bounds the points per batch directly,
+        # regardless of tile count or ordering.
         sizes = _compute_raw_sizes(dataset)
         batches = pack_indices_by_voxel_budget(
             sizes, voxel_budget=point_budget, max_batch_size=batch_size

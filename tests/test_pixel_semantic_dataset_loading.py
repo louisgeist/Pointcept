@@ -1,15 +1,8 @@
-"""
-Tests for MALiBU3DDataset's pixel-semantic asset loading, generalized from a
-network-only _load_network_label to a target_key-parametrized
-_load_pixel_semantic_label so both "network" and "forest_2d" (or any other
-MALIBU3D_PIXEL_SEMANTIC_TASKS entry) load through the same code path.
+"""MALiBU3DDataset._load_pixel_semantic_label for "network" and "forest_2d": raster + georeferencing from
+meta.json, empty-tile and missing-raster handling, channel slicing. The dataset is built with object.__new__
+(its __init__ needs on-disk manifests) and only optional_target_keys is set.
 
-Constructs a bare MALiBU3DDataset instance via object.__new__ (bypassing __init__,
-which needs real on-disk manifests) and sets only the attributes the method under
-test actually reads (self.optional_target_keys), following the same lightweight
-pattern as tests/test_tile_distribution_pooling.py's direct model construction.
-
-Run with: PYTHONPATH=./ pytest tests/test_pixel_semantic_dataset_loading.py
+Run with: PYTHONPATH=. pytest tests/test_pixel_semantic_dataset_loading.py
 """
 
 import json
@@ -112,7 +105,7 @@ class TestNetworkStillWorksUnchanged(unittest.TestCase):
 
             out = ds._load_pixel_semantic_label(data_dict, scene)
 
-            self.assertEqual(out["network"].shape, (2, 2, 2))  # sliced to r=2
+            self.assertEqual(out["network"].shape, (2, 2, 2))  # sliced to num_networks=2 channels
             np.testing.assert_array_equal(out["network"][0], np.ones((2, 2)))
 
 

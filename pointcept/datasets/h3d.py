@@ -1,15 +1,15 @@
 """
-H3D (Hessigheim 3D) benchmark — preprocessed LiDAR scenes.
+H3D (Hessigheim 3D) benchmark, as written by preprocessing/h3d/preprocess_h3d.py.
 
-Semantic labels use 11 classes with IDs 0–10 (see H3D paper, Table 1).
-After preprocessing, expect the following layout::
+Semantic labels use 11 classes with IDs 0-10 (H3D paper, Table 1); configs use 11
+(Void) as ignore_index. Layout::
 
     <data_root>/
         train/<scene_name>/*.npy
         val/<scene_name>/*.npy
         test/<scene_name>/*.npy
 
-Each scene folder should contain coord.npy, segment.npy, and color.npy (RGB).
+Each scene folder contains coord.npy, segment.npy and color.npy (RGB in [0, 255]).
 """
 
 import os

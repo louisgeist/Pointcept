@@ -13,8 +13,8 @@ from pathlib import Path
 
 from pointcept.utils.comm import is_main_process
 
-# Former ``network_apls_eval`` keys, now frozen as module constants in ``apls_metric.py``
-# (``APLS_PROTOCOL``). Kept here only to reject stale configs with an explicit message.
+# APLS metric parameters fixed by ``APLS_PROTOCOL`` in ``apls_metric.py``. A config must
+# not set them; they are listed only to reject such configs with an explicit message.
 _REMOVED_APLS_KEYS = (
     "apls_densify",
     "apls_snap_to_edge",
@@ -40,12 +40,14 @@ def validate_network_apls_eval_cfg(cfg):
 
 
 def run_network_apls_eval_if_configured(cfg, logger):
-    """Opt-in via `cfg.network_apls_eval` (a dict); no-op if absent.
+    """Score network APLS after a test pass if ``cfg.network_apls_eval`` is set.
 
-    Reads `{patch_id}_logits_network.npy` from `cfg.save_path/result` (already written by
-    `MultiTaskTester`), stitches per-ROI and scores APLS. Never raises -- failures are logged
-    and swallowed, since this is a convenience post-processing step, not part of the caller's
-    pass/fail criteria.
+    ``cfg.network_apls_eval`` is a dict of keyword arguments for ``eval_network_apls.run``
+    (plus optional ``network_graphs_root`` and ``out_dir``); no-op when absent, and on
+    non-main ranks. Reads the ``{patch_id}_logits_network.npy`` files that
+    ``MultiTaskTester`` wrote to ``cfg.save_path/result``, stitches them per ROI and scores
+    APLS. Returns the metrics dict, or None. Never raises: failures are logged, so this
+    post-processing step cannot fail the caller's test run.
     """
     opts = cfg.get("network_apls_eval", None)
     if not opts:

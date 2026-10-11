@@ -1,20 +1,20 @@
 """
-LitePT-Base grid-search linear probing on OpenGF — decoder hypercolumn /
-multi-scale variant (transfer from MALiBU3D multitask supervised
-pretrain, job 873542).
+Frozen LitePT-B (MALiBU3D multitask checkpoint, ckpt/litept-b/model.pth) linear probing on OpenGF
+ground filtering (Ground / Non-ground).
 
-Same multi-scale mechanism as the DALES sibling's own reference,
-w109/3/dales_lin/litept-b-v1m0-dales-lin_5.py
-(`dec_traceable=True` → 1404ch concat of decoder stages + bottleneck).
-The frozen backbone is always in eval() mode (BatchNorm running stats frozen, DropPath inactive).
+Probe input: decoder multi-scale features (dec_traceable=True): the 4 decoder stages plus the
+encoder bottleneck, concatenated (1404 channels). Probing-strategy study (Tab. A.11 of the MALiBU3D
+paper).
 
-Grid (16 probes): ce_lovasz x {5e-2, 1e-1, 2e-1, 5e-1} x {5e-3, 5e-2} wd x
-dropout {0, 0.3} x input_norm=None. epoch=50 / eval_epoch=10. AMP enabled
-(fp16) and dropout=0.5 dropped — job 1200400 OOM'd in fp32 on the 1404ch
-hypercolumn feat shared across probes (see GridProbeTrainer docstring in
-pointcept/engines/train.py for why the single shared backward keeps every
-active probe's Dropout+Linear activations alive at once).
-Same OpenGF-has-no-RGB handling as the other LitePT-B OpenGF lin configs.
+GridProbe: 12 linear probes (CE + Lovasz, AdamW, wd=0, OneCycleLR, lr from 1e-4 to 5e-1) share one
+frozen-backbone forward; tools/grid_then_seeds.py then re-trains the probe with the best validation
+mIoU with 10 seeds.
+
+OpenGF has no usable RGB: color is replaced by the checkpoint's learned mask value; raw intensity is
+scaled by 1/60000. Mix3D is off (mix_prob=0) for all OpenGF configs. Outlier points (raw label 2)
+are merged into Non-ground for training and validation (Qin et al., CVPRW 2021, Sec. 4.4); the test
+split is restricted to region T2 with outliers removed ("Test II w/o outliers", Sec. 4.5).
+skip_test=True leaves testing to the seed phase.
 """
 
 _base_ = ["../_base_/default_runtime.py"]
@@ -30,7 +30,7 @@ coord_feat_scale = 0.01  # must match MALiBU3D multitask pretrain
 strength_feat_scale = 1 / 60000  # OpenGF raw intensity → MALiBU3D [0,1] convention (DALES-like range)
 
 num_gpu = 1
-epoch = 50  # ~3900 iters (1359 train tiles // 24) -- roughly DALES's ballpark, see decision context
+epoch = 50  # OpenGF has ~5x more train tiles than DALES (400 epochs): similar iteration count
 eval_epoch = 10
 lr = 5e-2
 patch_size = 1024
@@ -42,7 +42,7 @@ batch_size_per_gpu = 24
 batch_size = batch_size_per_gpu * num_gpu
 batch_size_val = 1
 batch_size_test = 1
-num_worker = 24 * num_gpu # H100 Jean-Zay
+num_worker = 24 * num_gpu
 num_worker_test = 2
 mix_prob = 0
 empty_cache = False
@@ -56,11 +56,10 @@ weight = "ckpt/litept-b/model.pth"
 
 wandb_project = f"pointcept_{dataset_type[:-7].lower()}"
 
-# Hooks
-# Order matters: GridProbeEvaluator before GridProbeCheckpointSaver/CheckpointSaver;
-# GridProbeWinnerSelector last (frees the per-probe optimizers/schedulers, then runs
-# its own SemSegTester pass on the winning probe — replaces PreciseEvaluator, which
-# never sets raw_model.active_probe and would break under GridProbeSegmentorV2).
+# Hooks. Order matters: GridProbeEvaluator before the checkpoint savers, and
+# GridProbeWinnerSelector last (frees the per-probe optimizers, picks the best probe
+# on validation and tests it unless skip_test=True). PreciseEvaluator is not used:
+# it does not select a probe.
 hooks = [
     dict(
         type="CheckpointLoader",
@@ -143,7 +142,7 @@ model = dict(
     backbone_out_channels=backbone_out_channels,
     backbone=dict(
         type="LitePT-v1",
-        in_channels=7,  # coord(3) + color(3, fake) + strength(1)
+        in_channels=7,  # coord(3) + color(3, absent: learned fill value) + strength(1)
         order=("z", "z-trans", "hilbert", "hilbert-trans"),
         stride=(3, 3, 3, 3),
         enc_depths=(3, 3, 3, 12, 3),

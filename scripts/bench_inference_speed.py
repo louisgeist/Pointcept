@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Inference-speed benchmark: LitePT-B / PTv3 / KPConvX / SpUNet / Sonata on MALiBU3D.
 
-Measures batch_size=1 test-time throughput (points/sec) for the 5 models
-currently used on MALiBU3D, on an identical seeded tile sample. Two passes per
-backbone:
+Measures batch_size=1 test-time throughput (points/sec) of the five MALiBU3D
+baselines on an identical seeded tile sample (the throughput row of Tab. 2 of
+the MALiBU3D paper). Two passes per backbone:
 
 - sequential: exclusive CPU (dataset load + transform) / H2D / GPU via
   ``torch.cuda.Event`` -- diagnosis of where time goes in isolation.
@@ -15,20 +15,20 @@ Reproduces the tester fragment forward (pointcept/engines/test.py) without
 mIoU/APLS bookkeeping.
 
 A CPU-only page-cache warmup on the sampled tiles runs before the first
-backbone so LitePT is not the only one paying cold Lustre I/O. GPU warmup
+backbone so the first backbone is not the only one paying cold-storage I/O. GPU warmup
 (``--num-warmup`` leading tiles, cudnn/kernel selection) is independent and
 applies to both passes.
 
-Reference configs (already harmonized on data_root="data/malibu3d",
-segment="v20", feat_keys=["coord","color","strength"], grid_size=0.1,
-test_single_fragment=True, crop=None) -- see
+Reference configs (all with data_root="data/malibu3d",
+feat_keys=["coord","color","strength"], grid_size=0.1,
+test_single_fragment=True, no crop):
 configs/malibu3d/multi-{litept-b,ptv3,kpconvx,spunet}-v1m0-malibu3d.py
 (MultiTaskSegmentorV2) and configs/malibu3d/probe/sonata-v1m2-malibu3d-lin.py
 (DefaultSegmentorV2, PT-v3m2 encoder + linear head). The single-probe Sonata
-config has no data.test (val-only periodic probes); its test pipeline is
-borrowed from sonata-v1m2-malibu3d-lin-grid.py (same tiles / voxelize, no
-config file is edited). No config is copied or modified; they are loaded via
-Config.fromfile exactly like tools/train.py / tools/test.py.
+config has no data.test; its test pipeline is taken from
+sonata-v1m2-malibu3d-lin-grid.py (same tiles and voxelization). Configs are
+loaded with Config.fromfile exactly like tools/train.py / tools/test.py and
+are not modified.
 
 Weights are randomly initialized (no --weight / CheckpointLoader): none of
 the architectures branch on weight *values*, only on point-cloud geometry,
@@ -49,13 +49,13 @@ config's ``data.test`` (``--tile-sample random`` shuffles with ``--seed``,
 
 Examples::
 
-  # Local dry run on Hecate (D067 has no local test split -- use val).
+  # Quick dry run.
   export PYTHONPATH=$PWD
   python scripts/bench_inference_speed.py \\
-    --csv-manifest data/malibu3d/tiles_D067.csv --split val \\
+    --csv-manifest data/malibu3d/tiles.csv --split val \\
     --num-tiles 15 --num-warmup 5 --device cuda:0
 
-  # Real run on A100 (Jean Zay, full national manifest, test split).
+  # Full benchmark (test split; the paper numbers were measured on one A100).
   python scripts/bench_inference_speed.py \\
     --csv-manifest data/malibu3d/tiles.csv --split test \\
     --num-tiles 200 --num-warmup 10 --device cuda:0
@@ -84,13 +84,14 @@ DEFAULT_CONFIGS = {
     "ptv3": "configs/malibu3d/multi-ptv3-v1m0-malibu3d.py",
     "kpconvx": "configs/malibu3d/multi-kpconvx-v1m0-malibu3d.py",
     "spunet": "configs/malibu3d/multi-spunet-v1m0-malibu3d.py",
-    # PT-v3m2 encoder (enc_mode=True, 1232-ch concat) + linear head. Not the
-    # SSL MultiView graph, and not PT-v3-malibu (`ptv3` above, decoder + multitask).
+    # PT-v3m2 encoder (enc_mode=True, 1232-ch concat) + linear head: the Sonata
+    # backbone at inference, without the SSL MultiView model. Not PT-v3-malibu
+    # (`ptv3` above, decoder + multitask heads).
     "sonata": "configs/malibu3d/probe/sonata-v1m2-malibu3d-lin.py",
 }
 
-# sonata-v1m2-malibu3d-lin.py has train/val only; reuse the grid-probe test split
-# (same MALiBU3D tiles, test_single_fragment=True, no max_sample).
+# sonata-v1m2-malibu3d-lin.py has train/val only; reuse the grid-probe test
+# pipeline (same MALiBU3D tiles, test_single_fragment=True, no max_sample).
 TEST_PIPELINE_FALLBACK = {
     "sonata": "configs/malibu3d/probe/sonata-v1m2-malibu3d-lin-grid.py",
 }

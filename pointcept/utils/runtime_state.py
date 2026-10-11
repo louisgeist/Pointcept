@@ -17,6 +17,8 @@ def runtime_state_path(save_path):
 
 
 def resolve_save_path_for_runtime():
+    """Experiment directory from ``$JOB_DIR`` or ``$POINTCEPT_SAVE_PATH`` (set by
+    ``scripts/train.sh``), or None if neither points to an existing directory."""
     for key in ("JOB_DIR", "POINTCEPT_SAVE_PATH"):
         value = os.environ.get(key)
         if value and os.path.isdir(value):

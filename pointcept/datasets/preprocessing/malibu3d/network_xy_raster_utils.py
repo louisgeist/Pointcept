@@ -1,15 +1,17 @@
-"""Project linear networks onto a 1 m XY raster aligned to Lambert 93 meters.
+"""1 m XY rasters aligned to Lambert-93 meters, and pixel graphs of linear networks.
 
-Assumes point and segment coordinates are already in EPSG:2154 (metric).
-Pixel (i, j) covers world cell::
+Used to rasterize the ground-truth network graphs (rasterize_network.py) and to turn
+predicted masks back into graphs (network_graph_pipeline.py). Coordinates are
+EPSG:2154 meters. Pixel (i, j) covers the world cell::
 
     [origin_x + i * pixel_m, origin_x + (i + 1) * pixel_m)
     × [origin_y + j * pixel_m, origin_y + (j + 1) * pixel_m)
 
 With ``pixel_m=1``, that is the absolute meter square
-``[floor(E), floor(E)+1) × [floor(N), floor(N)+1)``.
+``[floor(E), floor(E)+1) × [floor(N), floor(N)+1)``. Arrays are ``(height, width)``
+with row ``j`` = northing index (south-up).
 
-Standalone module (numpy + Pillow) intended to be copied into other repos.
+Depends on numpy only.
 """
 
 from __future__ import annotations
@@ -149,11 +151,11 @@ def abs_xy_bounds_from_coord(patch_dir: Path) -> tuple[float, float, float, floa
 
 
 def load_known_missing_tiles(path: Path | None) -> set[tuple[str, str]]:
-    """Load ``(split, patch_id)`` pairs expected to lack coord.npy.
+    """Load the ``(split, patch_id)`` pairs of tiles known to lack coord.npy.
 
-    Accepts either ``missing_coord_tiles.details.csv`` (DictReader, reason=
-    missing_coord_file) or a plain ``split,patch_id,...`` text file. Shared by
-    rasterize_network.py and rasterize_forest.py.
+    Accepts either a CSV with a ``reason`` column (rows whose reason is not
+    ``missing_coord_file`` are ignored) or a plain ``split,patch_id,...`` text file.
+    Shared by rasterize_network.py and rasterize_forest.py.
     """
     if path is None:
         return set()
@@ -189,7 +191,7 @@ def load_known_missing_tiles(path: Path | None) -> set[tuple[str, str]]:
 
 
 def default_missing_coord_details_csv() -> Path:
-    """Repo ``data/malibu3d/missing_coord_tiles.details.csv`` (same as MALiBU3DDataset)."""
+    """Default known-missing tiles file: ``<repo>/data/malibu3d/missing_coord_tiles.details.csv``."""
     # network_xy_raster_utils.py -> .../preprocessing/malibu3d -> repo root = parents[4]
     return (
         Path(__file__).resolve().parents[4]
@@ -516,10 +518,11 @@ def morph_erode_mask(
 
 @dataclass(frozen=True)
 class PixelGraph:
-    """Undirected 8-neighborhood graph over centerline pixels.
+    """Undirected graph over mask pixels (4- or 8-neighborhood, see ``build_pixel_graph``).
 
-    ``node_rc`` rows are ``(row=iy, col=ix)`` in local grid indices.
-    ``edges`` stores each undirected edge once with ``u < v``.
+    ``node_rc`` rows are ``(row=iy, col=ix)`` in local grid indices and ``node_xy``
+    the pixel centers. ``edges`` stores each undirected edge once with ``u < v``;
+    ``edge_weights`` are path lengths in pixel hops (1 for adjacent pixels).
     """
 
     node_rc: np.ndarray
@@ -837,11 +840,12 @@ def repair_degree1_endpoints_diagonal_opposed(
     added_edge_weight: float = 1.0,
     include_isolated_nodes: bool = False,
 ) -> tuple[PixelGraph, dict[str, int | float | list[int]]]:
-    """Reconnect suspicious degree-1 endpoints using opposite diagonals only.
+    """Reconnect degree-1 endpoints across a one-pixel diagonal gap.
 
-    For each endpoint (degree=1), the direct neighbor direction must be axial:
-    N, S, E, or W in ``node_rc`` coordinates. We then test only the two
-    diagonals opposite to that direction:
+    A 4-connected pixel graph breaks where a skeleton steps diagonally. For each
+    endpoint (degree 1) whose single neighbor is axial (N, S, E or W), test only
+    the two diagonals opposite to that neighbor (compass names follow image
+    convention, row index increasing "south"):
 
     - neighbor at S -> test NW, NE
     - neighbor at N -> test SW, SE
@@ -998,15 +1002,13 @@ def repair_degree1_endpoints_within_radius(
     added_edge_weight: float = 1.0,
     include_isolated_nodes: bool = True,
 ) -> tuple[PixelGraph, dict[str, int | float | list[int]]]:
-    """Reconnect endpoints (and, optionally, isolated nodes) to every other endpoint/
-    isolated node within ``radius_m`` straight-line XY distance.
+    """Link every pair of endpoints (and, optionally, isolated nodes) closer than ``radius_m``.
 
-    Radius-based sibling of ``repair_degree1_endpoints_diagonal_opposed`` (which only
-    tests the two diagonal-opposed pixel neighbors, i.e. a single-pixel gap): this one
-    works in real XY meters, so it can bridge larger prediction gaps -- meant to run
-    later in the pipeline (after RDP/merge) than the diagonal fix. Every unordered pair
-    of candidate nodes within ``radius_m`` of each other gets a new edge (deduplicated
-    against edges already present), not just each node's single nearest candidate.
+    Radius-based counterpart of ``repair_degree1_endpoints_diagonal_opposed`` (which
+    only bridges a one-pixel diagonal gap): it works in XY meters, so it can bridge
+    larger prediction gaps, and runs later in the pipeline (after RDP / merge). Every
+    candidate pair within ``radius_m`` gets a new edge (unless already present), not
+    only each node's nearest candidate. Returns the updated graph plus repair stats.
     """
     empty_stats: dict[str, int | float | list[int]] = {
         "n_endpoints_before": 0,
@@ -1057,9 +1059,8 @@ def repair_degree1_endpoints_within_radius(
             "n_isolated_after": n_isolated_before,
         }
 
-    # Standalone module (numpy + Pillow only, no scipy) -- candidate counts are small
-    # (a subset of endpoints/isolated nodes after RDP+merge), so a plain vectorized
-    # all-pairs distance matrix is simpler than a KDTree and plenty fast here.
+    # Candidates are few (endpoints / isolated nodes after RDP + merge), so a dense
+    # all-pairs distance matrix is simple and fast enough (no KD-tree needed).
     xy = graph.node_xy[candidate_ids]  # (C, 2)
     diff = xy[:, None, :] - xy[None, :, :]
     dist = np.sqrt(np.einsum("ijk,ijk->ij", diff, diff))

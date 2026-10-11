@@ -1,26 +1,24 @@
 """
-Unzip MALiBU3D archives into a standardized raw directory tree.
+Unzip the MALiBU3D per-modality archives into the ``raw/`` tree read by
+preprocess_malibu3d.py and rasterize_forest.py.
+
+Input: ``<source_root>/<MODALITY>/*.zip`` for MODALITY in ``EXPECTED_MODALITIES``, plus
+the side-car files of ``SOURCE_ROOT_SIDE_CAR_FILES`` at the source root (copied as is).
+Output: ``<target_root>/<MODALITY>/<DEPT_YEAR>_<MODALITY>/<ROI>/<tile>.(ply|tif)``.
 
 Parallel extraction (--workers > 1) uses one thread per archive. It helps most on
-fast local SSD/NVMe; on HDD or network storage, raising workers can increase
-seek contention and slow things down—start with 2–4 and measure.
+fast local SSD/NVMe; on HDD or network storage, more workers can slow things down
+(start with 2-4 and measure).
 
-Overwrite behavior:
-- default (without --overwrite): resume-like extraction, only missing paths are
-  extracted (existing files/directories are skipped based on path existence).
-- with --overwrite: force full re-extraction of each archive content.
+Without --overwrite, paths that already exist are skipped (resumable); with
+--overwrite, every archive is fully re-extracted.
 
-Example:
-python pointcept/datasets/preprocessing/malibu3d/unzip_raw_archives.py \
-    --source_root data/malibu3d/malibu3d_067 \ #Clean@Geist
-    --target_root data/malibu3d/raw \
-    --workers 8
-    
-JZ: #Clean@Geist
-python pointcept/datasets/preprocessing/malibu3d/unzip_raw_archives.py \
-    --source_root $SCRATCH/FLAIR_HUB \
-    --target_root data/malibu3d/raw \
-    --workers 24
+Example::
+
+    python pointcept/datasets/preprocessing/malibu3d/unzip_raw_archives.py \
+        --source_root /path/to/archives \
+        --target_root data/malibu3d/raw \
+        --workers 8
 """
 
 from __future__ import annotations
@@ -79,7 +77,7 @@ def resolve_extract_dir(dst_dir: Path, modality: str, zip_path: Path, archive: Z
     - some contain files rooted at <zip_stem>/...
     - some contain files rooted directly at <roi>/...
 
-    We choose a destination that always yields:
+    The destination is chosen so that both yield
     <raw>/DEM_ELEV/<zip_stem>/<roi>/<tile>.tif
     """
     if modality != "DEM_ELEV":
@@ -102,7 +100,7 @@ def run_extract_one_zip(
     modality: str,
     overwrite: bool,
 ) -> None:
-    """Open one zip and extract into dst_dir (no DEM post-normalize)."""
+    """Extract one archive into ``dst_dir`` (DEM_ELEV layout fixes are done by the caller)."""
     with ZipFile(zip_path, "r") as archive:
         extract_dir = resolve_extract_dir(
             dst_dir=dst_dir, modality=modality, zip_path=zip_path, archive=archive
@@ -128,8 +126,8 @@ def extract_modality_archives(
     """
     Extract all .zip files from one modality folder.
 
-    DEM_ELEV is always processed sequentially: parallel extraction plus
-    normalize_dem_elev_layout on a shared directory would race.
+    DEM_ELEV is always processed sequentially: normalize_dem_elev_layout moves
+    folders in the shared directory and would race with parallel extraction.
 
     Non-DEM modalities may use workers > 1 (thread pool, one task per archive).
 
@@ -185,7 +183,7 @@ def extract_modality_archives(
 def normalize_dem_elev_layout(dst_dir: Path, zip_path: Path) -> None:
     """
     Normalize DEM_ELEV extraction to match other modalities:
-    <raw>/DEM_ELEV/<dept>_DEM_ELEV/<roi>/<tile>.tif
+    <raw>/DEM_ELEV/<zip_stem>/<roi>/<tile>.tif (zip_stem = <dept_year>_DEM_ELEV)
 
     Some archives extract directly as:
     <raw>/DEM_ELEV/<roi>/<tile>.tif

@@ -1,3 +1,9 @@
+"""build_optimizer with no_decay_bias_norm=True: biases and 1-D parameters move to appended weight_decay=0
+copies of each param group (same lr, same order); without the flag the layout is unchanged.
+
+Run with: PYTHONPATH=. pytest tests/test_optimizer_no_decay.py
+"""
+
 import unittest
 
 import torch

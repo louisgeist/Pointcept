@@ -1,4 +1,7 @@
-"""Hugging Face release layout: no meta.json, raster georeferencing read from tiles.csv."""
+"""Hugging Face release layout: tiles have no meta.json, so raster georeferencing is read from tiles.csv.
+
+Run with: PYTHONPATH=. pytest tests/test_release_layout.py
+"""
 
 import csv
 import os

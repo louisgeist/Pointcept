@@ -1,28 +1,20 @@
 """
-Sonata-v1m2 grid-search linear probing on OpenGF — our own MALiBU3D outdoor
-Sonata SSL pretrain (job 862680, epoch_120). Official indoor Sonata-v1m1 is
-`sonata-v1m1-opengf-lin-grid-scale10.py` (coord /10).
+Frozen Sonata (MALiBU3D SSL-pretrained backbone, ckpt/sonata-pretrained/model.pth) linear probing on
+OpenGF ground filtering (Ground / Non-ground).
 
-Frozen PT-v3m2 encoder (enc_mode=True -> multi-scale concat 1232ch), trained
-natively on MALiBU3D outdoor aerial LiDAR (see README_sonata_geist.md) rather
-than an indoor domain, so no FixedScaleCoord rescale is needed here (unlike
-v1m1's coord_scale ablations) -- native grid_size=0.1 at real coordinates,
-same convention as the LitePT/PT-v3-malibu/SpUNet/KPConvX OpenGF configs.
-OpenGF has no usable RGB (see preprocess_opengf.py) -- Sonata was pretrained
-with scene-level RandomDropColor/RandomDropStrength (drop_value=0.0), so
-`FillMissingFeat` synthesizes a zero "color" channel (in_channels=7), same as
-the DALES/H3D/ECLAIR sonata-v1m2 siblings.
+Probe input: encoder multi-scale features (enc_mode=True): the 5 encoder stages, broadcast back to
+the input points and concatenated (1232 channels). Default probing protocol (Tab. 3 of the MALiBU3D
+paper).
 
-Unlike configs/dales/sonata-v1m2-dales-lin-grid.py (a *seed-ensemble* config
-hardcoding lr=0.02, the best value from DALES' own prior grid search), this
-is a genuine 12-LR grid search -- OpenGF has no completed grid search yet to
-pick a "best lr" from, so copying DALES' tuned value would not be a faithful
-adaptation. Run this first via tools/grid_then_seeds.py (or standalone) to
-get an OpenGF-specific winner, then build a seed-ensemble config the same
-way DALES did once a winner is known.
+GridProbe: 12 linear probes (CE + Lovasz, AdamW, wd=0, OneCycleLR, lr from 1e-4 to 5e-1) share one
+frozen-backbone forward; tools/grid_then_seeds.py then re-trains the probe with the best validation
+mIoU with 10 seeds.
 
-Grid (12 probes): ce_lovasz, AdamW/wd0/OneCycleLR warmup5%, lr sweep
-{1e-4 ... 5e-1}. epoch=50 / eval_epoch=10.
+OpenGF has no usable RGB: color is zero-filled, as in Sonata pretraining (modality dropout with
+zeros); raw intensity is scaled by 1/60000. Mix3D is off (mix_prob=0). Outlier points (raw label 2)
+are merged into Non-ground for training and validation (Qin et al., CVPRW 2021, Sec. 4.4); the test
+split is restricted to region T2 with outliers removed ("Test II w/o outliers", Sec. 4.5).
+skip_test=True leaves testing to the seed phase.
 """
 
 _base_ = ["../_base_/default_runtime.py"]
@@ -37,7 +29,7 @@ point_max = 102400
 strength_feat_scale = 1 / 60000  # OpenGF raw intensity → MALiBU3D [0,1] convention (DALES-like range)
 
 num_gpu = 1
-epoch = 50  # ~3900 iters (1359 train tiles // 24) -- roughly DALES's ballpark, see decision context
+epoch = 50  # OpenGF has ~5x more train tiles than DALES (400 epochs): similar iteration count
 eval_epoch = 10
 lr = 5e-2
 patch_size = 1024
@@ -49,7 +41,7 @@ batch_size_per_gpu = 24
 batch_size = batch_size_per_gpu * num_gpu
 batch_size_val = 1
 batch_size_test = 1
-num_worker = 24 * num_gpu  # H100 Jean-Zay
+num_worker = 24 * num_gpu
 num_worker_test = 2
 mix_prob = 0
 empty_cache = False
@@ -63,11 +55,10 @@ weight = "ckpt/sonata-pretrained/model.pth"
 
 wandb_project = f"pointcept_{dataset_type[:-7].lower()}"
 
-# Hooks
-# Order matters: GridProbeEvaluator before GridProbeCheckpointSaver/CheckpointSaver;
-# GridProbeWinnerSelector last (frees the per-probe optimizers/schedulers, then runs
-# its own SemSegTester pass on the winning probe — replaces PreciseEvaluator, which
-# never sets raw_model.active_probe and would break under GridProbeSegmentorV2).
+# Hooks. Order matters: GridProbeEvaluator before the checkpoint savers, and
+# GridProbeWinnerSelector last (frees the per-probe optimizers, picks the best probe
+# on validation and tests it unless skip_test=True). PreciseEvaluator is not used:
+# it does not select a probe.
 hooks = [
     dict(
         type="CheckpointLoader",
@@ -149,7 +140,7 @@ model = dict(
     backbone_out_channels=backbone_out_channels,
     backbone=dict(
         type="PT-v3m2",
-        in_channels=7,  # coord(3) + color(3, fake/zero) + strength(1)
+        in_channels=7,  # coord(3) + color(3, absent: zero-filled) + strength(1)
         order=("z", "z-trans", "hilbert", "hilbert-trans"),
         stride=(3, 3, 3, 3),
         enc_depths=(3, 3, 3, 12, 3),

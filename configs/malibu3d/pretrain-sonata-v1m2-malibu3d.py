@@ -1,9 +1,10 @@
 """
-Sonata-v1m2 pretraining on MALiBU3D (train split only).
-
-Features: coord + color + strength (in_channels=7).
-Schedule: iter-limited (total_iters / iter_per_epoch=1000).
-No online evaluation; use periodic linear-probe jobs on epoch_*.pth.
+Sonata (Sonata-v1m2) self-supervised pretraining of a PT-v3m2 encoder on the MALiBU3D train
+split, with coord + color + intensity inputs. 150k iterations (150 epochs of 1000 steps), global
+batch 96 (4 per GPU on 24 GPUs), bf16 AMP. The matching radius and mask sizes are rescaled from
+the upstream Sonata defaults to the coarser 0.1 m grid (see below). No online validation: saved
+checkpoints are evaluated with the linear probes in probe/.
+Released checkpoint (epoch 120): ckpt/sonata-pretrained/model.pth (see README_checkpoints.md).
 """
 
 _base_ = ["../_base_/default_runtime.py"]
@@ -11,21 +12,18 @@ _base_ = ["../_base_/default_runtime.py"]
 # -----------------------------------------------------------------------------
 # Run-level settings
 # -----------------------------------------------------------------------------
-# Hardware template: 3×8 A100 (Jean-Zay); see scripts/sonata/sbatch_pretrain.sh
-# batch_size_per_gpu=4 confirmed safe with stride=(3,3,3,3) over ~300 VRAM-soak iterations.
+# 24 GPUs (3 nodes x 8 A100), 4 samples per GPU.
 num_gpu = 24
 batch_size_per_gpu = 4
-batch_size = batch_size_per_gpu * num_gpu  # → 96 (unchanged effective batch size)
+batch_size = batch_size_per_gpu * num_gpu  # 96
 num_worker = 8 * num_gpu
 mix_prob = 0
 clip_grad = 3.0
-# Skip optimizer/scheduler when global grad L2 is NaN/Inf (all-reduced across ranks).
+# Skip the optimizer/scheduler step when the global grad L2 norm is NaN/Inf.
 skip_nan_grad = True
-# Diagnostic for NaN investigation: surfaces gradient/global and
-# gradient/weight_update per-iteration in W&B/TensorBoard instead of only as a
-# per-epoch average. No-op for the heavier per-task breakdown this flag also
-# gates (train.py's compute_task_gradient_norms), since that path requires
-# model.backbone_parameters, which Sonata doesn't have.
+# Logs the global grad norm and weight-update norm every step (to spot divergence).
+# The per-task breakdown this flag also enables is skipped: Sonata has no
+# model.backbone_parameters.
 log_task_gradient_norms = True
 empty_cache = False
 enable_amp = True
@@ -33,29 +31,22 @@ amp_dtype = "bfloat16"
 find_unused_parameters = False
 grid_size = 0.1
 stride = (3, 3, 3, 3)
-max_size = 65_536  # points-per-view budget (MultiViewGenerator); calibrate via
-                   # scripts/find_max_view_size.py when batch_size_per_gpu changes
+max_size = 65_536  # max points per view (MultiViewGenerator); bounds the GPU memory
 
-# match_max_r must scale with the point spacing at the matching resolution
-# (grid_size after up_cast_level=2 pooling stages), not be a fixed absolute
-# distance: upstream Sonata (configs/sonata/pretrain-sonata-v1m2-0-uni-teacher-head.py)
-# uses match_max_r=0.32 with grid_size=0.02/stride=(2,2,...) -> voxel=0.08m, a 4x
-# margin. MALiBU3D copied 0.32 verbatim with grid_size=0.1 -> voxel=0.6m here, i.e.
-# a margin *smaller* than the voxel itself, which silently produces "0 matched
-# points" (-> NaN via segment_coo(reduce="mean") of an empty group) on sparse
-# tiles. Keep the same ~4x margin upstream used.
+# match_max_r must scale with the point spacing at the matching level (grid_size
+# after up_cast_level=2 pooling stages), not be an absolute distance. Upstream Sonata
+# uses 0.32 m with a 0.02 m grid and stride 2 (0.08 m voxels, a 4x margin). With a
+# 0.1 m grid and stride 3 (0.9 m voxels), 0.32 m is smaller than a voxel: no point
+# gets matched on sparse tiles and the loss becomes NaN. Keep upstream's 4x margin.
 match_max_r_factor = 4
 match_max_r = match_max_r_factor * grid_size * stride[0] * stride[1]
 
-# generate_mask (pointcept/models/sonata/sonata_v1m1_base.py) buckets points via
-# (coord - min_coord) // mask_size on metric coordinates, so mask_size/mask_jitter
-# are absolute distances (meters), not voxel counts -- copying the upstream 0.1/0.4/0.01
-# verbatim would keep the same physical patch size (in meters) but make it span 5x fewer
-# voxels here (grid_size=0.1 vs upstream 0.02, a mask_size/grid_size ratio of 1-4 instead
-# of 5-20), degenerating toward near-single-point masking instead of meaningful patches.
-# Scale linearly by grid_size so patches keep the same voxel footprint as upstream, same
-# rationale as match_max_r above.
-grid_size_factor = grid_size / 0.02 # 0.02 is the grid_size used in the defaut Sonata config
+# Sonata's generate_mask (pointcept/models/sonata/sonata_v1m2_uni_teacher_head.py)
+# buckets points by (coord - min_coord) // mask_size, so mask_size and mask_jitter
+# are in meters. The upstream values (0.1 / 0.4 / 0.01, for a 0.02 m grid) would span
+# 5x fewer voxels on a 0.1 m grid and degenerate toward single-point masks: scale
+# them by grid_size / 0.02 so mask patches cover as many voxels as upstream.
+grid_size_factor = grid_size / 0.02 # 0.02 is the upstream Sonata grid_size
 mask_size_start = 0.1 * grid_size_factor
 mask_size_base = 0.4 * grid_size_factor
 mask_jitter = 0.01 * grid_size_factor
@@ -64,7 +55,8 @@ mask_jitter = 0.01 * grid_size_factor
 total_iters = 150_000 
 iter_per_epoch = 1000
 
-# Regular evaluation is replaced by linear-probe jobs
+# No online validation (evaluate checkpoints with the probe/ configs); eval_every is
+# also the checkpoint save frequency in epochs (CheckpointSaver below).
 evaluate = False 
 eval_every = 1
 
@@ -139,7 +131,7 @@ model = dict(
 # -----------------------------------------------------------------------------
 # Optimizer / scheduler
 # -----------------------------------------------------------------------------
-base_lr = 0.004  # Sonata default : 0.004
+base_lr = 0.004  # upstream Sonata default
 lr_decay = 0.9  # layer-wise lr decay
 
 base_wd = 0.04

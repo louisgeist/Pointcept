@@ -51,7 +51,7 @@ wandb_run_name = (
 wandb_project = "malibu3d_segment"
 
 # -----------------------------------------------------------------------------
-# Mono-task configuration : targets configuraiton
+# Single-task configuration
 # -----------------------------------------------------------------------------
 from pointcept.datasets.malibu3d_config_utils import (
     init_task_configs,
@@ -72,15 +72,12 @@ task_configs = init_task_configs(target_keys, definitions=label_definitions)
 task_criteria = init_task_criteria(task_configs)
 task_weights = {main_task: 1.0}
 
-# Remove the imported helpers from this module's namespace so they do not leak
-# into the Pointcept config dict. The config loader (pointcept/utils/config.py)
-# treats every non-dunder module attribute as a config entry, and Config.dump
-# pipes the resulting Python text through yapf. Yapf cannot reformat function
-# objects rendered as "<function ... at 0x...>" and raises a SyntaxError.
+# Delete the imported helpers: the config loader turns every non-dunder module
+# attribute into a config entry, and Config.dump (yapf) fails on function objects.
 del init_task_configs, init_task_criteria
 
-# main_task drives checkpoint selection / mIoU logging, so its num_classes,
-# ignore_index and names are exposed at the data root for backward-compat hooks.
+# main_task drives checkpoint selection; its num_classes / ignore_index / names are
+# also exposed at the top level and in `data` for the hooks that read them there.
 num_classes = task_configs[main_task]["num_classes"]
 ignore_index = task_configs[main_task]["ignore_index"]
 names = task_configs[main_task]["names"]
@@ -104,8 +101,7 @@ test = dict(type="MultiTaskTester", verbose=True, write_cls_iou=True)
 # -----------------------------------------------------------------------------
 # Model
 # -----------------------------------------------------------------------------
-# MultiTaskSegmentorV2 attaches per-task heads on top of backbone features.
-# LitePT-Base official dims (deeper/wider than Small).
+# MultiTaskSegmentorV2 with a single head. Backbone: official LitePT-B dimensions.
 model = dict(
     type="MultiTaskSegmentorV2",
     backbone_out_channels=72,
@@ -224,7 +220,6 @@ data = dict(
             dict(type="RandomDropColor", drop_ratio=0.1, drop_application_ratio=0.5, keep_mask=True),
             dict(type="RandomDropStrength", drop_ratio=1.0, drop_application_ratio=0.2, keep_mask=True),
             dict(type="RandomDropStrength", drop_ratio=0.1, drop_application_ratio=0.5, keep_mask=True),
-            # dict(type="ShufflePoint"),
             dict(type="ToTensor"),
             dict(type="Update", keys_dict={"grid_size": grid_size}),
             dict(

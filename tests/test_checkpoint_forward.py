@@ -1,28 +1,13 @@
-"""Regression test: local checkpoints still load and give sensible predictions after code changes.
+"""Trained checkpoints load without key mismatches and give sensible predictions on two val tiles
+(multitask LitePT-B / PTv3 / SpUNet / KPConvX: segment acc and mIoU, elevation MAE; Sonata SSL backbone:
+kNN probe on frozen features, which must beat a random-init control).
 
-Run after touching models / datasets / configs / transforms (needs the real pointcept env, a GPU
-and the local D067 val tiles + ckpt/malibu3d/*; skipped otherwise):
+Run with: PYTHONPATH=. pytest tests/test_checkpoint_forward.py -v
+Needs spconv, a GPU, the checkpoints in MODELS and the tiles in DEFAULT_TILES; skipped otherwise.
 
-  CUDA_VISIBLE_DEVICES=0 PYTHONPATH=. pytest tests/test_checkpoint_forward.py -v
-
-For each model (multitask LitePT-B / PTv3 / SpUNet / KPConvX from ckpt/malibu3d/*, and the
-Sonata SSL outdoor backbone) it:
-  1. builds the model from its config and loads the checkpoint with a STRICT report of
-     missing / unexpected / shape-mismatched keys (CheckpointLoader only logs "Missing keys"
-     with strict=False and silently ignores unexpected ones);
-  2. runs one eval-mode forward on a centre crop (30k voxels) of two small val tiles;
-  3. asserts predictions against the on-disk labels (thresholds well below the observed values,
-     so only real breakage trips them).
-
-Supervised multitask models: segment acc / mIoU, elevation MAE vs a constant prediction.
-Sonata (SSL, no head): spatially-split kNN probe on the frozen features (checkerboard of 6 m
-cells: fit on even cells, predict odd cells); must beat a random-init control.
-
-CLI (dump predictions .npz + figures + summary.json, to eyeball the zone):
-  CUDA_VISIBLE_DEVICES=0 PYTHONPATH=. python tests/test_checkpoint_forward.py \
-      --models litept_b kpconvx --tile D067-2021_AU-S1-21_3-6:val --out-dir stats/ckpt_sanity
-
-cuda:1 is broken for spconv on hecate -> always cuda:0.
+As a script, it also dumps predictions (.npz), figures and summary.json for inspection:
+  PYTHONPATH=. python tests/test_checkpoint_forward.py --models litept_b kpconvx \
+      --tile D067-2021_AU-S1-21_3-6:val --out-dir stats/ckpt_sanity
 """
 
 import argparse
@@ -63,7 +48,8 @@ MANIFESTS = {
 
 
 def load_weights(model, path, ssl):
-    """Strict-report load. Returns (info dict, checkpoint dict)."""
+    """Load with strict=False but report missing, unexpected and shape-mismatched keys (CheckpointLoader
+    only logs missing keys). Returns an info dict."""
     ckpt = torch.load(path, map_location="cpu", weights_only=False)
     weight = OrderedDict()
     for k, v in ckpt["state_dict"].items():
@@ -183,8 +169,8 @@ def run_ssl(cfg, model, inp, k=20):
     gt = inp["segment"]
     ign = int(cfg.data.ignore_index)
     f = torch.nn.functional.normalize(feat - feat.mean(0, keepdim=True), dim=1)
-    # checkerboard of CELL-m blocks: fit on even cells, predict odd cells (no left/right split --
-    # half-tiles can be single-class). Only cell borders leak spatially, and the random-init
+    # Checkerboard of CELL-m blocks: fit on even cells, predict odd cells (a left/right split fails
+    # because half-tiles can be single-class). Only cell borders leak spatially, and the random-init
     # control absorbs any residual coordinate-driven signal.
     cell = torch.floor((coord[:, :2] - coord[:, :2].min(0).values) / CELL).long()
     even = (cell.sum(1) % 2) == 0
@@ -204,7 +190,6 @@ def run_ssl(cfg, model, inp, k=20):
     # i.e. +-0.1 on the mean of ~5 classes, which makes the plain balanced_acc a coin flip.
     n_per_class = np.array([int((g == c).sum()) for c in np.unique(g)])
     m["balanced_acc_robust"] = float(np.mean(np.array(bal)[n_per_class >= MIN_CLASS_TEST_PTS]))
-    # PCA-RGB of features for the figure
     centered = feat - feat.mean(0, keepdim=True)
     _, _, V = torch.pca_lowrank(centered, q=3, center=False)
     pca = (centered @ V[:, :3]).cpu().numpy()
@@ -327,14 +312,14 @@ def main():
 
 
 # ----------------------------------------------------------------------------- pytest
-# Thresholds sit well below the values observed on 2026-10-09 (acc >= 0.83, mIoU(present) >= 0.55,
-# Sonata balanced acc >= 0.89) so only real breakage trips them, not retraining noise.
+# Thresholds sit well below the observed values (acc >= 0.83, mIoU(present) >= 0.55, Sonata balanced
+# acc >= 0.89) so only real breakage trips them, not retraining noise.
 SEG_ACC_MIN = 0.75
 SEG_MIOU_MIN = 0.40
 # Sonata thresholds, on balanced_acc_robust (classes with >= MIN_CLASS_TEST_PTS test points).
-# Measured over 24 seeds of the data draw (2026-10-09): trained 0.903-0.933, random-init control
-# 0.835-0.901, trained - random >= 0.027 (mean 0.04-0.05). The test is also seeded (SEED), so it is
-# deterministic; the thresholds still leave room for the seed-to-seed spread above.
+# Over 24 seeds of the data draw: trained 0.903-0.933, random-init control 0.835-0.901,
+# trained - random >= 0.027 (mean 0.04-0.05). The test is seeded (SEED), hence deterministic; the
+# thresholds still leave room for that seed-to-seed spread.
 SONATA_BALACC_MIN = 0.85
 SONATA_MARGIN_OVER_RANDOM = 0.01
 SSL_EXPECTED_UNEXPECTED = ("student.mask_head", "student.unmask_head", "backbone.embedding.mask_token")

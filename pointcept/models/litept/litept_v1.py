@@ -620,6 +620,10 @@ class LitePT(PointModule):
         pre_norm=True,
         shuffle_orders=True,
         enc_mode=False,
+        # MALiBU3D addition: make every decoder GridUnpooling traceable, i.e.
+        # keep a link to the coarser level (`unpooling_parent`), so that
+        # DefaultSegmentorV2 / GridProbeSegmentorV2 can concatenate all decoder
+        # levels into a hypercolumn. No new parameters; checkpoint-compatible.
         dec_traceable=False,
     ):
         super().__init__()

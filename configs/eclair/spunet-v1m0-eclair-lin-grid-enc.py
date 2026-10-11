@@ -1,34 +1,17 @@
 """
-SpUNet-v1m1 grid-search linear probing on ECLAIR — encoder multiscale
-variant (same frozen checkpoint as spunet-v1m0-eclair-lin-grid-dec.py, job
-1052217, MALiBU3D multitask supervised pretrain: channels=(32,64,128,256,256,
-128,96,96), layers=(2,3,4,6,2,2,2,2), stride=3).
+Frozen SpUNet (MALiBU3D multitask checkpoint, ckpt/spunet/model.pth) linear probing on ECLAIR
+semantic segmentation (11 classes).
 
-SpUNetBase never returned a `Point` with `pooling_parent`/`unpooling_parent`
-links, and its pre-existing `enc_mode=True` is a *classification* mode
-(scatter-mean-pools every voxel to one feature per whole scene — see
-modelnet40/cls-spunet-v1m1-0-base.py) — unusable for a per-point segmentation
-probe (shape mismatch against `segment`).
+Probe input: encoder multi-scale features (point_mode=True): stem + 4 encoder stages, broadcast back
+to the input voxels and concatenated (512 channels). Default probing protocol (Tab. 3 of the
+MALiBU3D paper).
 
-Uses the new `point_mode=True` backbone flag (spconv_unet_v1m1_base.py) that
-instead builds a `Point` chain (stem -> stage0 -> ... -> bottleneck) with
-`pooling_parent`/`pooling_inverse` populated the same way PT-v3's GridPooling
-does, so GridProbeSegmentorV2's existing generic encoder-multiscale walk
-concatenates every stage's per-point feature broadcast up to the finest
-(stem) resolution — no scatter, no new trainable parameters (see
-tests/test_spunet_point_mode.py). Levels concatenated (finest first):
-stem(32) + stage0(32) + stage1(64) + stage2(128) + stage3/bottleneck(256) =
-512ch. Counterpart to the sibling decoder config (96ch, standard
-full-resolution U-Net output).
+GridProbe: 12 linear probes (CE + Lovasz, AdamW, wd=0, OneCycleLR, lr from 1e-4 to 5e-1) share one
+frozen-backbone forward; tools/grid_then_seeds.py then re-trains the probe with the best validation
+mIoU with 10 seeds.
 
-ECLAIR provides real RGB: ChromaticAutoContrast/Translation/Jitter (train) +
-NormalizeColor (like H3D / semseg-litept ECLAIR); strength uses 1/60000 like
-DALES. Same probe grid as litept-b-v1m0-eclair-lin_enc.py (ce_lovasz x 12 LRs
-x wd=0 x dropout=0 x input_norm=None x AdamW x warmup=5%) for cross-backbone
-comparability. epoch=200 / eval_epoch=10.
-
-The frozen backbone is always in eval() mode, which freezes SpUNet's BatchNorm running stats (real
-BatchNorm1d); SpUNet has no DropPath modules.
+ECLAIR has RGB and intensity: color is normalized (color augmentations at train time) and raw
+intensity is scaled by 1/60000 to the MALiBU3D [0, 1] range.
 """
 
 _base_ = ["../_base_/default_runtime.py"]
@@ -54,7 +37,7 @@ batch_size_per_gpu = 24
 batch_size = batch_size_per_gpu * num_gpu
 batch_size_val = 1
 batch_size_test = 1
-num_worker = 24  # H100 Jean-Zay
+num_worker = 24
 num_worker_test = 2
 mix_prob = 0.8
 empty_cache = False
@@ -101,11 +84,7 @@ names = [
 backbone_channels = (32, 64, 128, 256, 256, 128, 96, 96)
 backbone_out_channels = 32 + sum(backbone_channels[:4])  # 512
 
-# -----------------------------------------------------------------------------
-# Grid-search probes — AdamW / OneCycleLR: ce_lovasz x lr x wd=0 x dropout=0 x
-# input_norm=none x feat_norm=none x optimizer=AdamW, warmup=5%
-# (1 x 12 x 1 x 1 x 1 x 1 x 1 = 12 probes).
-# -----------------------------------------------------------------------------
+# Grid-search probes — ce_lovasz, AdamW/wd0/OneCycleLR warmup5%, lr sweep only (12 probes).
 _losses = {
     "ce_lovasz": [
         dict(type="CrossEntropyLoss", loss_weight=1.0, ignore_index=ignore_index),
@@ -185,7 +164,7 @@ model = dict(
     backbone=dict(
         type="SpUNet-v1m1",
         in_channels=7,  # coord(3) + color(3) + strength(1)
-        num_classes=0,  # unused in point_mode (no final conv applied) — kept for checkpoint key compat
+        num_classes=0,  # unused in point_mode (no final conv applied)
         channels=backbone_channels,
         layers=(2, 3, 4, 6, 2, 2, 2, 2),
         stride=3,

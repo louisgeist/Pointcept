@@ -1,4 +1,11 @@
 #!/bin/sh
+# Train a config. Usage (from any directory):
+#   sh scripts/train.sh -g <num_gpus> -d <dataset> -c <config> -n <exp_name> [-w <weight>] [-r true]
+# -c is a path under configs/ without ".py" (e.g. malibu3d/multi-litept-b-v1m0-malibu3d) or a
+# config name under configs/<dataset>/. The run goes to exp/<dataset>/<exp_name> (or to $JOB_DIR
+# when set, e.g. by a Slurm batch script), with a snapshot of the code under <exp_dir>/code.
+# -r true resumes from <exp_dir>/model/model_last.pth; under Slurm with $JOB_DIR, an existing
+# model_last.pth is resumed automatically (requeued jobs). $EXTRA_OPTIONS is appended to --options.
 
 cd $(dirname $(dirname "$0")) || exit
 ROOT_DIR=$(pwd)
@@ -81,7 +88,7 @@ fi
 
 echo "Dist URL: $DIST_URL"
 
-# Use JOB_DIR if set (e.g. by sbatch to put exp inside logs/slurm/%j/), else default
+# Use JOB_DIR if set (e.g. by a Slurm batch script), else exp/<dataset>/<exp_name>
 EXP_DIR=exp/${DATASET}/${EXP_NAME}
 [ -n "${JOB_DIR}" ] && EXP_DIR=${JOB_DIR}  # override when running under Slurm with JOB_DIR exported
 [ -n "${EXP_DIR}" ] && export POINTCEPT_SAVE_PATH="${EXP_DIR}"
@@ -130,10 +137,9 @@ else
 fi
 
 echo "Loading config in:" $CONFIG_DIR
-# Use absolute path so Python finds pointcept when CODE_DIR is under logs/slurm/%j/
-# 20/03/26: if PYTHONPATH is already set, reuse it instead of overriding it
-# This is needed when `pointops` was compiled for a specific GPU architecture (A100 vs H100).
-# In that case, we rely on PYTHONPATH being exported beforehand (e.g. by the jz_utils scripts).
+# Absolute path, so Python finds the code snapshot wherever CODE_DIR lives.
+# An existing PYTHONPATH is kept after it, not overridden: compiled extensions such as
+# `pointops` may be built per GPU architecture and exported by the launcher beforehand.
 export PYTHONPATH="$(cd "$CODE_DIR" && pwd)${PYTHONPATH:+:$PYTHONPATH}"
 
 echo "Running code in: $CODE_DIR"

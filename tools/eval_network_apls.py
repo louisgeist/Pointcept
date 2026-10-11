@@ -1,12 +1,15 @@
 """Evaluate predicted road/rail/transmission-line network graphs against GT with APLS.
 
-Standalone script (runs in the same `pointcept` conda env as training -- geopandas/shapely/
-scipy are already dependencies, see environment.yml). Consumes the per-subtile dense
-probability rasters (``{patch_id}_logits_network.npy``) already written to ``save_path`` by
-``MultiTaskTester``/``PreciseEvaluator`` (see pointcept/engines/test.py), stitches them into
-per-ROI rasters, builds a predicted graph per network channel by reusing the same
-mask -> graph post-processing pipeline used to export the ground-truth graphs, and computes
-APLS (Average Path Length Similarity) against the GT graphs exported by Flair3D-build.
+Runs in the training environment (geopandas/shapely/scipy are listed in environment.yml).
+Consumes the per-subtile dense probability rasters (``{patch_id}_logits_network.npy``)
+written to ``save_path`` by ``MultiTaskTester``/``PreciseEvaluator`` (see
+pointcept/engines/test.py), stitches them into per-ROI rasters, builds a predicted graph per
+network channel with the same mask -> graph post-processing pipeline used to build the
+ground-truth graphs, and computes APLS (Average Path Length Similarity) against the GT graphs
+shipped with the dataset. This is the network metric reported in the MALiBU3D paper (Tab. 2).
+
+Can also be run automatically after testing via ``cfg.network_apls_eval`` (see
+pointcept/utils/network_apls.py).
 
 The APLS metric itself has a fixed protocol (``apls_metric.APLS_PROTOCOL``: densify 50 m,
 snap 4 m, min path 5 m, bidirectional harmonic mean) and no CLI/config knobs; only the
@@ -21,9 +24,8 @@ Example::
     python tools/eval_network_apls.py \\
         --data_root data/malibu3d \\
         --save_path exp/malibu3d/network_run/result \\
-        --network_graphs_root /data/geist/Flair3D-build/data/network_graphs \\
-        --split_manifest_csv data/malibu3d/tiles_D067.csv \\
-        --split val --threshold 0.5 \\
+        --split_manifest_csv data/malibu3d/tiles.csv \\
+        --split test \\
         --out_dir exp/malibu3d/network_run/result
 """
 
@@ -244,8 +246,8 @@ def _build_predicted_graph(
     collect_timings: bool = False,
 ) -> "ngp.ProcessedNetworkGraph":
     prob = roi_probs[channel_idx]
-    # Unobserved (NaN) cells are treated as background -- see plan's design-decision note:
-    # avoids inventing positive network pixels in unscanned area.
+    # Unobserved (NaN) cells are treated as background, so no network pixel is invented
+    # in unscanned areas.
     mask = np.isfinite(prob) & (prob >= threshold)
     extra: dict = {}
     if radius_fix_radius_m is not None:
@@ -305,6 +307,13 @@ def run(
     profile: bool = False,
     save_pred_gpkg: bool = True,
 ) -> dict:
+    """Score APLS for every ROI of ``split`` and write the results to ``out_dir``.
+
+    ``network_graphs_root=None`` reads each GT graph from its ROI directory (dataset
+    layout). Writes ``network_apls_metrics.json`` (config, per-channel and macro APLS,
+    per-ROI scores, excluded/partial ROIs) and ``network_apls_per_roi.csv``, plus the
+    per-ROI predicted graphs when ``save_pred_gpkg``. Returns the JSON payload.
+    """
     types = tuple(network_types) if network_types else NETWORK_TYPES
     profiler = _ProfileAggregator() if profile else None
 

@@ -1,9 +1,7 @@
-"""
-Tests for tile_catalog.iter_tiles: the MALiBU3D tiles.csv and the legacy
-scene_split_manifest.csv must normalize to the same Tile records, and the
-preprocessing loaders built on it must accept both schemas.
+"""tile_catalog: the released tiles.csv and the older scene_split_manifest.csv schema normalize to the same
+Tile records, and the loaders built on it (voxel sizes, rasterization, preprocessing) accept both.
 
-Run with: PYTHONPATH=./ pytest tests/test_tile_catalog.py
+Run with: PYTHONPATH=. pytest tests/test_tile_catalog.py
 """
 
 import dataclasses

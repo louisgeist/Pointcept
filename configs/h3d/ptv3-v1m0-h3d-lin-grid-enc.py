@@ -1,18 +1,17 @@
 """
-PT-v3-malibu grid-search linear probing on H3D — encoder multiscale variant
-(same frozen checkpoint as ptv3-v1m0-h3d-lin-grid-dec.py, job 1095469,
-MALiBU3D multitask supervised pretrain). `enc_mode=True` -> 992ch concat of
-the 5 raw encoder stages (32+64+128+256+512).
+Frozen PTv3 (MALiBU3D multitask checkpoint, ckpt/ptv3/model.pth) linear probing on H3D semantic
+segmentation (11 classes).
 
-AdamW / wd=0 / OneCycleLR with warmup fixed at pct_start=5%, lr swept over
-{1e-4 .. 5e-1} (12 values), input_norm=none — same probe grid as
-litept-b-v1m0-h3d-lin_enc.py for cross-backbone comparability.
-Dataset-driven axes (num_worker/AMP/batch) match the LitePT-B H3D lin-grid
-configs. epoch=2000 / eval_epoch=10. H3D fill/aug/feature_mask_values
-unchanged from that ref (no real intensity -> FillMissingFeat "strength").
+Probe input: encoder multi-scale features (enc_mode=True): the 5 encoder stages, broadcast back to
+the input points and concatenated (992 channels). Default probing protocol (Tab. 3 of the MALiBU3D
+paper).
 
-The frozen backbone is always in eval() mode (DropPath(0.3) inactive; PT-v3-malibu has no BatchNorm). skip_test=False, log_test_f1=True (required for H3D
-lin-grid configs — see project convention).
+GridProbe: 12 linear probes (CE + Lovasz, AdamW, wd=0, OneCycleLR, lr from 1e-4 to 5e-1) share one
+frozen-backbone forward; tools/grid_then_seeds.py then re-trains the probe with the best validation
+macro-F1 with 10 seeds.
+
+H3D has RGB but no intensity: strength is replaced by the checkpoint's learned mask value. The
+winning probe is tested on the test split with F1 logged (log_test_f1=True).
 """
 
 _base_ = ["../_base_/default_runtime.py"]
@@ -53,11 +52,10 @@ weight = "ckpt/ptv3/model.pth"
 
 wandb_project = f"pointcept_{dataset_type[:-7].lower()}"
 
-# Hooks
-# Order matters: GridProbeEvaluator before GridProbeCheckpointSaver/CheckpointSaver;
-# GridProbeWinnerSelector last (frees the per-probe optimizers/schedulers, then runs
-# its own SemSegTester pass on the winning probe — replaces PreciseEvaluator, which
-# never sets raw_model.active_probe and would break under GridProbeSegmentorV2).
+# Hooks. Order matters: GridProbeEvaluator before the checkpoint savers, and
+# GridProbeWinnerSelector last (frees the per-probe optimizers, picks the best probe
+# on validation and tests it unless skip_test=True). PreciseEvaluator is not used:
+# it does not select a probe.
 hooks = [
     dict(
         type="CheckpointLoader",
@@ -93,11 +91,7 @@ names = [
 enc_channels = (32, 64, 128, 256, 512)
 backbone_out_channels = sum(enc_channels)
 
-# -----------------------------------------------------------------------------
-# Grid-search probes — AdamW / OneCycleLR: ce_lovasz x lr x wd=0 x dropout=0 x
-# input_norm=none x feat_norm=none x optimizer=AdamW, warmup=5%
-# (1 x 12 x 1 x 1 x 1 x 1 x 1 = 12 probes).
-# -----------------------------------------------------------------------------
+# Grid-search probes — ce_lovasz, AdamW/wd0/OneCycleLR warmup5%, lr sweep only (12 probes).
 _losses = {
     "ce_lovasz": [
         dict(type="CrossEntropyLoss", loss_weight=1.0, ignore_index=ignore_index),
@@ -178,7 +172,7 @@ model = dict(
     backbone_out_channels=backbone_out_channels,
     backbone=dict(
         type="PT-v3-malibu",
-        in_channels=7,  # coord(3) + color(3) + strength(1, fake/zero)
+        in_channels=7,  # coord(3) + color(3) + strength(1, absent: learned fill value)
         order=("z", "z-trans", "hilbert", "hilbert-trans"),
         stride=(3, 3, 3, 3),
         enc_depths=(2, 2, 2, 6, 2),

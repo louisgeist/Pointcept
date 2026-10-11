@@ -1,20 +1,20 @@
 """
 Grid-Search Linear Probing
 
-Trains N independently-configured linear "probe" heads on top of a single
+Trains N independently configured linear "probe" heads on top of a single
 shared frozen-backbone forward pass, so a hyperparameter grid search over
-loss/optimizer/scheduler/dropout/normalization only pays the backbone cost
-once per batch instead of once per grid point.
+loss/optimizer/scheduler/dropout/normalization pays the backbone cost once
+per batch instead of once per grid point.
 
-Scope:
   - GridProbeSegmentorV2: semantic segmentation probes (per-point logits,
     target e.g. "segment").
-  - GridProbeClassifier: tile/scene classification probes (encoder multiscale
-    concat -> scene pool -> linear heads, target e.g. "category").
+  - GridProbeClassifier: tile/scene classification probes (multi-scale
+    features -> scene pooling -> linear heads, target e.g. "category").
 
-Optimizer/scheduler heterogeneity across probes is handled by
-GridProbeTrainer (pointcept/engines/train.py), not here — this module only
-owns probe architecture + per-probe loss.
+This module only defines the probe heads and their losses. Per-probe
+optimizers/schedulers are handled by GridProbeTrainer (pointcept/engines/train.py),
+validation and winner selection by the GridProbe hooks
+(pointcept/engines/hooks/grid_probe.py).
 """
 
 from collections.abc import Mapping
@@ -41,29 +41,24 @@ _FEAT_NORM_TYPES = frozenset((None, "batchnorm", "layernorm"))
 
 
 def _pnorm_scale(x, p, eps):
-    """x / ||x||_p along the last dim (clamped at `eps`).
+    """x / ||x||_p along the last dim (norm clamped at `eps`).
 
-    Under autocast, .norm() runs (and returns) in fp32 for numerical
-    stability; dividing fp16 x by an fp32 norm silently promotes the whole
-    result to fp32 instead of matching x's own dtype, hence the explicit
-    cast back.
+    Under autocast, .norm() returns fp32; the norm is cast back to x's dtype so
+    that the result keeps x's dtype instead of being promoted to fp32.
     """
     norm = x.norm(p=p, dim=-1, keepdim=True).clamp_min(eps)
     return x / norm.to(x.dtype)
 
 
 def _unitsphere(feat, kind, eps=1e-6, channel_blocks=None):
-    """Row-wise unitsphere rescale.
+    """Row-wise rescaling onto the unit sphere.
 
     None returns `feat` unchanged. "l1"/"l2"/"linf" divide the whole feature
-    vector by its p-norm. "l1_block"/"l2_block"/"linf_block" instead split
-    `feat` into `channel_blocks` contiguous chunks along the last dim (sizes
-    in the same finest-stage-first order as _forward_backbone's concat, e.g.
-    dec_channels + (bottleneck_channels,)) and unit-sphere-rescale each chunk
-    independently before re-concatenating — normalizes each backbone
-    stage/level's own sub-vector instead of the pooled hypercolumn as a
-    whole. Shared by ProbeHead and GridProbeSegmentorV2's per-kind cache so N
-    heads with the same input_norm do not each materialize a [P, C] copy.
+    vector by its p-norm. "l1_block"/"l2_block"/"linf_block" split `feat` into
+    `channel_blocks` contiguous chunks along the last dim (in the finest-first
+    concat order of _forward_backbone, e.g. dec_channels + (bottleneck_channels,))
+    and rescale each chunk independently, so that every backbone level of a
+    multi-scale feature gets the same weight.
     """
     if kind is None:
         return feat
@@ -77,11 +72,8 @@ def _unitsphere(feat, kind, eps=1e-6, channel_blocks=None):
             raise ValueError(
                 f"input_norm={kind!r} requires channel_blocks to be set on the model."
             )
-        # Write each block's rescaled slice directly into a preallocated
-        # output instead of torch.cat-ing a list of per-block tensors: cat
-        # would need every per-block result alive at once *plus* its own
-        # freshly-allocated [P, C] output (~2x feat's memory, transient) —
-        # this keeps the extra cost at ~1x, matching the non-block path.
+        # Fill a preallocated output instead of torch.cat-ing per-block
+        # results: peak extra memory stays ~1x feat instead of ~2x.
         out = torch.empty_like(feat)
         offset = 0
         for size in channel_blocks:
@@ -102,7 +94,8 @@ def _prepare_shared_feat(feat):
 
 
 def _input_norm_cache(feat, heads, names, channel_blocks=None):
-    """At most one unitsphere tensor per (input_norm, eps) among `names`."""
+    """Normalized features keyed by (input_norm, eps), computed once per key
+    among the heads in `names` (heads sharing an input_norm share one copy)."""
     cache = {}
     for name in names:
         head = heads[name]
@@ -148,6 +141,8 @@ class ProbeHead(nn.Module):
         self.linear = nn.Linear(in_channels, num_classes)
 
     def forward(self, feat, apply_input_norm=True):
+        """apply_input_norm=False when `feat` comes from the shared
+        _input_norm_cache (already normalized)."""
         if apply_input_norm:
             feat = _unitsphere(feat, self.input_norm, self.eps, self.channel_blocks)
         feat = self.norm(feat)
@@ -161,42 +156,34 @@ class GridProbeSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
 
     probes: Mapping[str, dict], each entry:
       - input_norm: None | "l1" | "l2" | "linf" | "l1_block" | "l2_block" |
-        "linf_block" (applied to backbone feat). The non-"_block" kinds
-        unit-sphere-rescale the whole concatenated feature vector; the
-        "_block" kinds instead rescale each channel_blocks chunk (e.g. each
-        decoder stage / encoder level of a hypercolumn) independently —
-        requires channel_blocks to be set (see below).
+        "linf_block" (see _unitsphere); the "_block" kinds need channel_blocks.
       - feat_norm: None | "batchnorm" | "layernorm"
       - dropout: float
-      - criteria: list of loss cfgs (same shape as DefaultSegmentorV2.criteria)
+      - criteria: list of loss cfgs (same format as DefaultSegmentorV2.criteria)
+      - num_classes: optional per-probe override of ``num_classes``
     Optimizer/scheduler/grad_clip may also live in each probe dict; they are
     consumed by GridProbeTrainer, not this class.
 
-    drop_leading_channels: model-level (not per-probe) — drops the first N
-    channels of the shared backbone feat before every probe head sees it.
-    For dec_traceable/enc_mode multiscale concat, the finest stage is always
-    concatenated first (see _forward_backbone), so this ablates that stage
-    out of every probe's input, e.g. drop_leading_channels=dec_channels[0].
+    drop_leading_channels: model-level (not per-probe); drops the first N
+    channels of the shared backbone feat before every probe head. Multi-scale
+    features are concatenated finest level first (see _forward_backbone), so
+    e.g. drop_leading_channels=dec_channels[0] removes the finest decoder level.
 
-    channel_blocks: model-level (not per-probe) — sizes of each concatenated
-    stage/level in the shared backbone feat, in the same finest-first concat
-    order as _forward_backbone (e.g. dec_channels + (bottleneck_channels,)
-    for a decoder hypercolumn, or enc_channels for an encoder-multiscale
-    concat), AFTER accounting for drop_leading_channels — i.e.
-    sum(channel_blocks) must equal backbone_out_channels -
-    drop_leading_channels. Only required when at least one probe uses an
-    input_norm ending in "_block"; ignored otherwise.
+    channel_blocks: model-level (not per-probe); channel count of each
+    concatenated level in the shared backbone feat, finest first (e.g.
+    dec_channels + (bottleneck_channels,) for a decoder hypercolumn, or
+    enc_channels for encoder multi-scale features), after
+    drop_leading_channels: sum(channel_blocks) must equal
+    backbone_out_channels - drop_leading_channels. Required only when a probe
+    uses a "*_block" input_norm.
 
-    Unlike DefaultSegmentorV2/MultiTaskSegmentorV2 (whose freeze_backbone
-    only sets requires_grad=False and otherwise lets the backbone follow the
-    trainer's normal train()/eval() propagation), freeze_backbone=True here
-    also wraps the backbone forward in torch.no_grad() (the VRAM/compute
-    saving) and keeps the *whole* backbone in eval() mode, even while
-    mode=True (i.e. during training) — re-applied on every .train() call.
-    A frozen feature extractor is thus deterministic: BatchNorm running
-    statistics do not drift toward the downstream dataset, and DropPath /
-    Dropout (including backbone-specific variants such as KPConvX's
-    DropPathPack) stay inactive. There is deliberately no per-module opt-out.
+    freeze_backbone=True (default) runs the backbone forward under
+    torch.no_grad() and keeps the whole backbone in eval() mode, re-applied on
+    every .train() call (same contract as FrozenBackboneEvalMixin in
+    default.py): BatchNorm running statistics do not drift toward the
+    downstream dataset, and DropPath / Dropout (including KPConvX's
+    DropPathPack) stay inactive. Learned masked-feat fill values are frozen
+    too. There is deliberately no opt-out.
     """
 
     def __init__(
@@ -220,14 +207,10 @@ class GridProbeSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
         self.target_key = target_key
         self.num_classes = int(num_classes)
         self.ignore_index = int(ignore_index)
-        self.active_probe = None  # None => all probes computed; set by winner-selection.
+        # None: all probes are computed. GridProbeWinnerSelector sets it to the
+        # winning probe, which then runs alone (see forward()).
+        self.active_probe = None
 
-        # For decoder-hypercolumn/encoder-multiscale backbones, the concat
-        # order in _forward_backbone always puts the finest stage first
-        # (see that method's docstring), so dropping the first N channels
-        # drops that stage from every probe's input — e.g. set this to the
-        # finest decoder stage's channel count to ablate it out of the
-        # hypercolumn without touching the backbone.
         self.drop_leading_channels = int(drop_leading_channels)
         if not 0 <= self.drop_leading_channels < backbone_out_channels:
             raise ValueError(
@@ -274,8 +257,8 @@ class GridProbeSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
             for p in self.backbone.parameters():
                 p.requires_grad = False
             self.backbone.eval()
-            # Learned masked-feat fill values (e.g. color_mask_value) are part of
-            # how raw features are prepared for the backbone.
+            # Learned masked-feat fill values (e.g. color_mask_value) belong to
+            # the backbone input: frozen with it.
             if self.enable_learned_masked_feat:
                 for feat_key in self.learned_masked_feat_keys:
                     mask_value = getattr(self, f"{feat_key}_mask_value", None)
@@ -285,9 +268,9 @@ class GridProbeSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
     def train(self, mode=True):
         super().train(mode)
         if self.freeze_backbone:
-            # nn.Module.train() just recursively flipped every backbone
-            # submodule to `mode`; a frozen backbone must stay in eval()
-            # (BatchNorm running stats, DropPath/DropPathPack, Dropout).
+            # nn.Module.train() just switched every backbone submodule to
+            # `mode`; a frozen backbone must stay in eval() (BatchNorm running
+            # stats, DropPath/DropPathPack, Dropout).
             self.backbone.eval()
         return self
 
@@ -295,6 +278,8 @@ class GridProbeSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
         return [p for p in self.backbone.parameters() if p.requires_grad]
 
     def probe_head_parameters(self, name):
+        """Trainable parameters of one probe (GridProbeTrainer builds one
+        optimizer per probe from them)."""
         return [p for p in self.heads[name].parameters() if p.requires_grad]
 
     def _active_probe_names(self):
@@ -303,14 +288,13 @@ class GridProbeSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
         return self.probe_names
 
     def _forward_backbone(self, input_dict):
+        """Per-point backbone features, with the decoder hypercolumn and the
+        encoder multi-scale features concatenated finest level first, exactly
+        as in DefaultSegmentorV2.forward (see the comments there)."""
         point = Point(input_dict)
         point = self.backbone(point)
         if isinstance(point, Point):
-            # Decoder-side multiscale concat: only populated when the backbone's
-            # decoder was built with dec_traceable=True (e.g. LitePT's
-            # `dec_traceable`). See DefaultSegmentorV2.forward for the same
-            # pattern/rationale. No-op for any backbone that never sets
-            # dec_traceable=True.
+            # Decoder hypercolumn (traceable decoders only; no-op otherwise).
             point_list = [point]
             while "unpooling_parent" in point_list[-1].keys():
                 point_list.append(point_list[-1].pop("unpooling_parent"))
@@ -319,7 +303,7 @@ class GridProbeSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
                 assert "pooling_inverse" in child.keys()
                 parent.feat = torch.cat([parent.feat, child.feat[child.pooling_inverse]], dim=-1)
             point = point_list[0]
-            # Encoder-side multiscale concat (enc_mode=True backbones).
+            # Encoder multi-scale features (enc_mode / SpUNet point_mode).
             while "pooling_parent" in point.keys():
                 assert "pooling_inverse" in point.keys()
                 parent = point.pop("pooling_parent")
@@ -332,7 +316,7 @@ class GridProbeSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
         return feat, point
 
     def prepare_batch(self, input_dict):
-        """Shared backbone feat + per-kind unitsphere cache for the active heads."""
+        """Run the backbone once; return (features by input_norm, Point, active probe names)."""
         self._fill_masked_feat_with_learned_value(input_dict)
         if self.freeze_backbone:
             with torch.no_grad():
@@ -359,12 +343,9 @@ class GridProbeSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
         if return_point:
             return_dict["point"] = point
         else:
-            # Backbone-internal-only state (serialized order/inverse, per-stage
-            # pad/unpad/cu_seqlens, sparse_conv_feat, ...) -- same reasoning as
-            # GridProbeTrainer.run_step: nothing below reads `point`, but the
-            # reference would otherwise sit in this frame's locals (kept alive
-            # by Python until forward() returns) for every active probe below,
-            # e.g. GridProbeEvaluator's per-batch self.trainer.model(input_dict).
+            # Release the backbone's internal state (serialization orders,
+            # padding indices, sparse tensors, ...) before running the heads;
+            # nothing below reads `point`.
             del point
         seg_logits_by_task = {
             name: self.probe_logits(name, feat_by_norm) for name in active
@@ -384,12 +365,9 @@ class GridProbeSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
             return_dict["loss_by_task"] = loss_by_task
 
         if self.training and has_target:
-            # Alias the shared target under each active probe's own name so
-            # InformationWriter's existing per-task train-mIoU accumulation
-            # (which reads input_dict[task_name]) picks these probes up for
-            # free via cfg.data.task_configs — all probes share one target,
-            # this just gives each one a name-matching view of it. Eval/test
-            # paths don't need this (GridProbeEvaluator reads target_key directly).
+            # Expose the shared target under each probe's name: InformationWriter
+            # accumulates per-task train mIoU from input_dict[task_name].
+            # (GridProbeEvaluator reads target_key directly.)
             for name in active:
                 input_dict.setdefault(name, target)
             with torch.no_grad():
@@ -398,8 +376,8 @@ class GridProbeSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
                 }
 
         if self.active_probe is not None:
-            # Single-probe compatibility surface: lets SemSegTester / SemSegEvaluator
-            # (which only know about "seg_logits"/"pred"/"loss") run unmodified.
+            # Single-probe outputs, so that the standard testers/evaluators
+            # (which read "seg_logits"/"pred"/"loss") work unchanged.
             return_dict["seg_logits"] = seg_logits_by_task[self.active_probe]
             if "loss" in return_dict:
                 return_dict["loss"] = loss_by_task[self.active_probe]
@@ -415,19 +393,19 @@ class GridProbeSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
 class GridProbeClassifier(GridProbeSegmentorV2):
     """N linear probe heads for tile/scene classification.
 
-    Same probe grid + frozen-backbone sharing as GridProbeSegmentorV2, but
-    after the encoder multiscale (or decoder hypercolumn) concat the per-point
-    features are scene-pooled (mean/max) to shape [B, C] before the heads.
-    Target key defaults to ``category`` (PureForest / ModelNet-style).
+    Same probe grid and shared frozen backbone as GridProbeSegmentorV2, but the
+    per-point (multi-scale) features are pooled per scene (``pooling``: mean or
+    max) to [B, C] before the heads. Target key defaults to ``category``
+    (e.g. PureForest).
 
     Use with GridProbeTrainer + GridProbeEvaluator (reads ``target_key``) and
-    ``test=dict(type="ClsTester")`` via GridProbeWinnerSelector (exposes
-    ``cls_logits`` when ``active_probe`` is set).
+    ``test=dict(type="ClsTester")`` through GridProbeWinnerSelector
+    (``cls_logits`` is exposed once ``active_probe`` is set).
 
-    Encoder multiscale recipes match the H3D/DALES seg probes:
+    Encoder multi-scale features, as for the segmentation probes:
       - LitePT / PT-v3 / KPConvX: ``enc_mode=True``
-      - SpUNet: ``point_mode=True`` (not ``enc_mode``, which scene-pools inside
-        the backbone and cannot build a multiscale hypercolumn)
+      - SpUNet: ``point_mode=True`` (its ``enc_mode`` scene-pools inside the
+        backbone and gives only the last-stage features)
     """
 
     def __init__(
@@ -470,7 +448,7 @@ class GridProbeClassifier(GridProbeSegmentorV2):
         return torch_scatter.segment_csr(feat, indptr, reduce="max")
 
     def prepare_batch(self, input_dict):
-        """Backbone multiscale feat -> scene pool -> unitsphere cache."""
+        """As GridProbeSegmentorV2.prepare_batch, with scene pooling before the input norms."""
         self._fill_masked_feat_with_learned_value(input_dict)
         if self.freeze_backbone:
             with torch.no_grad():
@@ -504,9 +482,7 @@ class GridProbeClassifier(GridProbeSegmentorV2):
 
     def forward(self, input_dict, return_point=False):
         return_dict = super().forward(input_dict, return_point=return_point)
-        # Alias classification keys for ClsTester / train logging that expect
-        # cls_logits(_by_task) rather than the seg_* names shared with the
-        # segmentor parent.
+        # ClsTester and the classification logging read cls_logits(_by_task).
         if "seg_logits_by_task" in return_dict:
             return_dict["cls_logits_by_task"] = return_dict["seg_logits_by_task"]
         if "seg_logits" in return_dict:

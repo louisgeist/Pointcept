@@ -1,16 +1,16 @@
 """
-PT-v3-malibu grid-search linear probing on ECLAIR — decoder hypercolumn
-variant (transfer from MALiBU3D multitask supervised pretrain, job 1095469,
-w109/2/ptv3_wd/multi-ptv3-v1m0-malibu3d_5.py). `traceable=True` -> 1024ch
-concat of decoder stages (64+64+128+256) + encoder bottleneck (512).
+Frozen PTv3 (MALiBU3D multitask checkpoint, ckpt/ptv3/model.pth) linear probing on ECLAIR semantic
+segmentation (11 classes).
 
-ECLAIR provides real RGB: ChromaticAutoContrast/Translation/Jitter (train) +
-NormalizeColor (like H3D / semseg-litept ECLAIR); strength uses 1/60000 like
-DALES. Same probe grid as litept-b-v1m0-eclair-lin_dec.py (ce_lovasz x 12 LRs
-x wd=0 x dropout=0 x input_norm=None x AdamW x warmup=5%) for cross-backbone
-comparability. epoch=200 / eval_epoch=10.
+Probe input: decoder multi-scale features (traceable=True): the 4 decoder stages plus the encoder
+bottleneck, concatenated (1024 channels). Probing-strategy study (Tab. A.11 of the MALiBU3D paper).
 
-The frozen backbone is always in eval() mode (DropPath(0.3) inactive; PT-v3-malibu has no BatchNorm).
+GridProbe: 12 linear probes (CE + Lovasz, AdamW, wd=0, OneCycleLR, lr from 1e-4 to 5e-1) share one
+frozen-backbone forward; tools/grid_then_seeds.py then re-trains the probe with the best validation
+mIoU with 10 seeds.
+
+ECLAIR has RGB and intensity: color is normalized (color augmentations at train time) and raw
+intensity is scaled by 1/60000 to the MALiBU3D [0, 1] range.
 """
 
 _base_ = ["../_base_/default_runtime.py"]
@@ -37,7 +37,7 @@ batch_size_per_gpu = 24
 batch_size = batch_size_per_gpu * num_gpu
 batch_size_val = 1
 batch_size_test = 1
-num_worker = 24  # H100 Jean-Zay
+num_worker = 24
 num_worker_test = 2
 mix_prob = 0.8
 empty_cache = False
@@ -84,11 +84,7 @@ dec_channels = (64, 64, 128, 256)
 bottleneck_channels = 512
 backbone_out_channels = sum(dec_channels) + bottleneck_channels  # 1024
 
-# -----------------------------------------------------------------------------
-# Grid-search probes — AdamW / OneCycleLR: ce_lovasz x lr x wd=0 x dropout=0 x
-# input_norm=none x feat_norm=none x optimizer=AdamW, warmup=5%
-# (1 x 12 x 1 x 1 x 1 x 1 x 1 = 12 probes).
-# -----------------------------------------------------------------------------
+# Grid-search probes — ce_lovasz, AdamW/wd0/OneCycleLR warmup5%, lr sweep only (12 probes).
 _losses = {
     "ce_lovasz": [
         dict(type="CrossEntropyLoss", loss_weight=1.0, ignore_index=ignore_index),

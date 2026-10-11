@@ -1,14 +1,7 @@
-"""
-Tests for pointcept.utils.misc.f1_scores_from_hist — the per-class F1 / macro-F1
-estimator shared by the test-time `test/f1_macro` logging and (since the H3D
-GridProbe macro-F1 selection change) validation-time per-probe macro-F1.
+"""f1_scores_from_hist (per-class F1 and macro-F1, shared by validation and test): the macro average is an
+unmasked mean over all classes, so a class absent from targets and predictions counts as 0.
 
-Key property under test: the macro average is an UNMASKED mean over all class
-bins (a class that is absent from the targets or never predicted contributes 0),
-so validation macro-F1 and test macro-F1 are the exact same number for the same
-confusion histogram.
-
-Run with: PYTHONPATH=./ pytest tests/test_f1_scores_from_hist.py
+Run with: PYTHONPATH=. pytest tests/test_f1_scores_from_hist.py
 """
 
 import unittest
@@ -19,7 +12,7 @@ from pointcept.utils.misc import f1_scores_from_hist
 
 
 def _hist(conf):
-    """intersection/union/target counts from a KxK confusion matrix
+    """(intersection, union, target) counts from a KxK confusion matrix,
     conf[t, p] = #points with true label t predicted as p."""
     conf = np.asarray(conf, dtype=np.float64)
     tp = np.diag(conf)

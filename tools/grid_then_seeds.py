@@ -2,11 +2,14 @@
 """
 Chain a GridProbe hyperparameter sweep into a seed-ensemble robustness run.
 
+This is the linear-probing protocol of the MALiBU3D paper (Tab. 3): a grid
+over probe hyperparameters, then 10 seeds of the winner.
+
 Phase 1 -- grid probe: run the given GridProbeSegmentorV2 / GridProbeTrainer
-config (any ``*-lin-grid*`` config: h3d / dales / eclair / malibu3d, any frozen
-backbone). ``GridProbeWinnerSelector`` writes
+config (any semantic-segmentation ``*-lin*`` grid config: DALES / H3D / ECLAIR /
+OpenGF / MALiBU3D, any frozen backbone). ``GridProbeWinnerSelector`` writes
 ``<grid_dir>/grid_search_results.json`` with the probe that had the best
-*validation* mIoU over the whole run.
+*validation* metric (``select_metric``: mIoU, or macro-F1 on H3D) over the run.
 
 Phase 2 -- seed ensemble: take the winner's full ``probe_config`` (loss, lr,
 optimizer, scheduler, input_norm, feat_norm, dropout, grad_clip -- not just the
@@ -15,26 +18,23 @@ lr), replicate it into ``--n-seeds`` probes differing only by random init, swap
 ``GridProbeSeedEnsembleTester`` writes ``<seed_dir>/seed_ensemble_results.json``
 with test mIoU/mAcc/allAcc/f1_macro as mean +/- std across the seeds.
 
-This is the dynamic-winner counterpart of ``tools/gen_grid_seed_configs.py``
-(which bakes each sweep's winning lr into a hardcoded table).
-
 Both phases are ordinary ``tools/train.py`` invocations -- one W&B run each,
 put in a shared ``wandb_group`` so they show up together. The driver is
 idempotent: a phase whose result JSON already exists is skipped, and an
 interrupted phase resumes from ``model/model_last.pth`` -- so a Slurm requeue
 just re-runs this script.
 
-Typical Slurm use (see ``sbatch_grid_then_seeds.sh``)::
+Typical use (``--save-root`` defaults to ``$JOB_DIR`` under Slurm)::
 
     python tools/grid_then_seeds.py \\
-      --grid-config configs/experiment/w110/1/.../sonata-v1m2-h3d-lin-grid.py \\
-      --weight /lustre/.../model/epoch_120.pth \\
-      --save-root $JOB_DIR --n-seeds 10
+      --grid-config configs/h3d/sonata-v1m2-h3d-lin-grid.py \\
+      --weight ckpt/sonata-pretrained/model.pth \\
+      --save-root exp/h3d/sonata_gts --n-seeds 10
 
-Grid already done (e.g. the 336-probe wide sweep, run separately)::
+Grid already run separately::
 
     python tools/grid_then_seeds.py --grid-config <same cfg> --weight <ckpt> \\
-      --skip-grid --grid-dir logs/slurm/<gridjob> --save-root logs/slurm/<thisjob>
+      --skip-grid --grid-dir exp/h3d/<grid_run> --save-root exp/h3d/<seed_run>
 """
 
 from __future__ import annotations
@@ -95,7 +95,7 @@ def _utc_now() -> str:
 
 def resolve_config_path(spec: str) -> Path:
     """Mirror scripts/train.sh: accept an absolute/relative file path, or a
-    name resolved under ``configs/`` (e.g. ``experiment/w110/1/.../foo``)."""
+    name resolved under ``configs/`` (e.g. ``h3d/sonata-v1m2-h3d-lin-grid``)."""
     p = Path(spec)
     if p.is_file():
         return p.resolve()
@@ -118,10 +118,10 @@ def needs_resume(save_path: Path) -> bool:
 def resolve_seed_weight(weight: str | None, grid_dir: Path) -> str | None:
     """Phase-2 weight for the seed ensemble.
 
-  Pretrained runs pass the same external checkpoint to both phases. Random-init
-  runs have no external weight — phase 1 saves the scratch backbone in
-  ``grid_dir/model/model_last.pth`` and phase 2 must reload it (otherwise the
-  backbone would be re-randomized).
+    Pretrained runs pass the same external checkpoint to both phases. Random-init
+    runs have no external weight: phase 1 saves the random backbone in
+    ``grid_dir/model/model_last.pth`` and phase 2 must reload it (otherwise the
+    backbone would be re-randomized).
     """
     if weight:
         return weight
@@ -177,7 +177,7 @@ def read_winner(grid_dir: Path) -> tuple[str, dict, dict]:
     def _f(v):
         return float(v) if v is not None else float("nan")
 
-    # select_metric is absent in pre-macro-F1 grid_search_results.json -> "mIoU".
+    # A result file without select_metric was selected on mIoU.
     stats = {
         "select_metric": data.get("select_metric") or "mIoU",
         "mIoU": _f(winner.get("best_val_mIoU")),
@@ -196,11 +196,11 @@ def build_seed_ensemble_config(
     """Derive a standalone seed-ensemble config from a grid-probe config +
     its winning ``probe_config``.
 
-    Same transform as ``tools/gen_grid_seed_configs.py`` but on a live
-    ``Config`` object (winner comes from ``grid_search_results.json`` at
-    runtime, not a hardcoded lr table), and it carries the *full* winner
-    ``probe_config`` -- loss/optimizer/scheduler/norms/dropout/grad_clip --
-    not only the lr.
+    The ``probes`` dict becomes ``n_seeds`` copies of the *full* winner
+    ``probe_config`` (loss/optimizer/scheduler/norms/dropout/grad_clip, not
+    only the lr), ``GridProbeWinnerSelector`` is swapped for
+    ``GridProbeSeedEnsembleTester``, and the result is dumped to ``out_path``.
+    Returns ``(out_path, probe_names, split_info)``.
     """
     from pointcept.utils.config import Config
 

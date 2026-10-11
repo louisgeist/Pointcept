@@ -1,9 +1,7 @@
-"""Guard: CheckpointLoader must crash when a requested checkpoint is missing.
+"""CheckpointLoader raises when a requested checkpoint is missing (weight path not found, or resume=True
+without weight) instead of silently training from scratch; weight=None, resume=False stays a no-op.
 
-Scratch training (weight=None, resume=False) stays a no-op. A set but missing
-path, or resume=True with no weight, used to log and train from scratch.
-
-Run with: PYTHONPATH=./ pytest tests/test_checkpoint_loader.py
+Run with: PYTHONPATH=. pytest tests/test_checkpoint_loader.py
 """
 
 import unittest

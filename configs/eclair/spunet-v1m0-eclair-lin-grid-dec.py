@@ -1,26 +1,16 @@
 """
-SpUNet-v1m1 grid-search linear probing on ECLAIR — decoder (standard U-Net
-forward) variant, transfer from MALiBU3D multitask supervised pretrain (job
-1052217, w109/1/sp_final/multi-spunet-v1m0-malibu3d_1.py: channels=(32,64,128,
-256,256,128,96,96), layers=(2,3,4,6,2,2,2,2), stride=3).
+Frozen SpUNet (MALiBU3D multitask checkpoint, ckpt/spunet/model.pth) linear probing on ECLAIR
+semantic segmentation (11 classes).
 
-Unlike LitePT/PT-v3-malibu, SpUNetBase's forward never returns a `Point`
-object (no `pooling_parent`/`unpooling_parent`), so GridProbeSegmentorV2's
-automatic multiscale hypercolumn concat does not apply here: with
-`num_classes=0` (final 1x1 conv disabled), the backbone just returns the
-standard full-resolution decoder output — 96ch (`channels[-1]`). See
-spunet-v1m0-eclair-lin-grid-enc.py for the encoder-multiscale counterpart
-(needs the new `point_mode` backbone flag to get a comparable per-point
-feature).
+Probe input: standard U-Net output, i.e. the last decoder stage only (96 channels; num_classes=0
+disables the final 1x1 conv). Probing-strategy study (Tab. A.11 of the MALiBU3D paper).
 
-ECLAIR provides real RGB: ChromaticAutoContrast/Translation/Jitter (train) +
-NormalizeColor (like H3D / semseg-litept ECLAIR); strength uses 1/60000 like
-DALES. Same probe grid as litept-b-v1m0-eclair-lin_dec.py (ce_lovasz x 12 LRs
-x wd=0 x dropout=0 x input_norm=None x AdamW x warmup=5%) for cross-backbone
-comparability. epoch=200 / eval_epoch=10.
+GridProbe: 12 linear probes (CE + Lovasz, AdamW, wd=0, OneCycleLR, lr from 1e-4 to 5e-1) share one
+frozen-backbone forward; tools/grid_then_seeds.py then re-trains the probe with the best validation
+mIoU with 10 seeds.
 
-The frozen backbone is always in eval() mode, which freezes SpUNet's BatchNorm running stats (real
-BatchNorm1d, unlike PT-v3-malibu/LitePT's LayerNorm-dominated stages); SpUNet has no DropPath modules.
+ECLAIR has RGB and intensity: color is normalized (color augmentations at train time) and raw
+intensity is scaled by 1/60000 to the MALiBU3D [0, 1] range.
 """
 
 _base_ = ["../_base_/default_runtime.py"]
@@ -46,7 +36,7 @@ batch_size_per_gpu = 24
 batch_size = batch_size_per_gpu * num_gpu
 batch_size_val = 1
 batch_size_test = 1
-num_worker = 24  # H100 Jean-Zay
+num_worker = 24
 num_worker_test = 2
 mix_prob = 0.8
 empty_cache = False
@@ -93,11 +83,7 @@ names = [
 backbone_channels = (32, 64, 128, 256, 256, 128, 96, 96)
 backbone_out_channels = backbone_channels[-1]
 
-# -----------------------------------------------------------------------------
-# Grid-search probes — AdamW / OneCycleLR: ce_lovasz x lr x wd=0 x dropout=0 x
-# input_norm=none x feat_norm=none x optimizer=AdamW, warmup=5%
-# (1 x 12 x 1 x 1 x 1 x 1 x 1 = 12 probes).
-# -----------------------------------------------------------------------------
+# Grid-search probes — ce_lovasz, AdamW/wd0/OneCycleLR warmup5%, lr sweep only (12 probes).
 _losses = {
     "ce_lovasz": [
         dict(type="CrossEntropyLoss", loss_weight=1.0, ignore_index=ignore_index),

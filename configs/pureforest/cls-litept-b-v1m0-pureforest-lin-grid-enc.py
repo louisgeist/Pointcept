@@ -1,10 +1,16 @@
 """
-LitePT-B GridProbeClassifier on PureForest — encoder multiscale
-(enc_mode=True -> 54+108+216+432+576 = 1386ch), scene mean-pool, N linear
-heads. Frozen Malibu3D multitask ckpt. Strength zero-fill.
+Frozen LitePT-B (MALiBU3D multitask checkpoint, ckpt/litept-b/model.pth) linear probing on
+PureForest tile classification (13 tree species).
 
-AdamW / wd=0 / OneCycleLR warmup 5%, lr sweep {1e-4 .. 5e-1} (12 probes),
-CE only. select_metric=mIoU.
+Probe input: encoder multi-scale features (enc_mode=True, 5 stages, 1386 channels).
+GridProbeClassifier: the frozen features are mean-pooled per tile and fed to 12 linear probes (CE,
+AdamW, wd=0, OneCycleLR, lr from 1e-4 to 5e-1) sharing one backbone forward; the best probe on
+validation mIoU is tested. The PureForest column of Tab. 3 of the MALiBU3D paper uses the cheaper
+offline alternative instead (pooled embeddings + scripts/probe_pureforest_sklearn.py).
+
+PureForest has RGB but no intensity: strength is replaced by the checkpoint's learned mask value.
+Test tiles overlapping MALiBU3D train/val forests are excluded
+(exclude_malibu3d_leakage_tiles=True).
 """
 
 _base_ = ["../_base_/default_runtime.py"]

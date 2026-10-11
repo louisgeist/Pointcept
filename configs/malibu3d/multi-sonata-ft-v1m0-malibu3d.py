@@ -1,31 +1,14 @@
 """
-Sonata-v1m2 SSL-pretrained PT-v3m2 backbone (MALiBU3D fork, epoch 120; released as
-`sonata-pretrained/` in LouisGeist/MALiBU3D-backbones), fine-tuned in MALiBU3D
-multitask mode: segment (v20) + forest_2d + elevation + 4 nathab tile_distribution
-axes (WeightedKL; Habitat Type / Moisture Regime / Soil Chemistry / Bioclimatic Zone, remapped on the fly from natural_habitat) + network
-(roads only, CE + foreground weight=5; railroads/transmission lines dropped;
-scored via APLS at test time).
+MALiBU3D multitask benchmark, Sonata (Tab. 2 of the MALiBU3D paper): PT-v3m2 backbone pretrained
+self-supervised on MALiBU3D with pretrain-sonata-v1m2-malibu3d.py, then fully fine-tuned on the
+five tasks jointly.
 
-Task set / criteria / hooks / Collect pipeline copied verbatim from the "classique"
-multi-task recipe (configs/malibu3d/multi-litept-b-v1m0-malibu3d.py, the
-LitePT-B checkpoint referenced as W_LPT/873542 in README_grid_then_seed.md) --
-only the model block differs.
-
-Backbone is PT-v3m2, not LitePT-B: the Sonata checkpoint's state_dict shapes
-only match a PT-v3m2 backbone built with the exact pretrain encoder hyperparams
-(configs/malibu3d/pretrain-sonata-v1m2-malibu3d.py) -- enc_depths=
-(3,3,3,12,3), enc_channels=(48,96,192,384,512), stride=(3,3,3,3). Loading into
-LitePT-B would hard-fail on a shape mismatch inside matching keys (strict=False
-only tolerates missing/extra *keys*, not mismatched *shapes*).
-
-Full fine-tune with a freshly-initialized decoder on top of the loaded Sonata
-encoder (enc_mode=False): dec_depths/dec_channels/dec_num_head/dec_patch_size
-match the upstream official Sonata full-FT reference
-(configs/sonata/semseg-sonata-v1m1-0c-scannet-ft.py), which uses the same
-enc_channels=(48,96,192,384,512) pretrain backbone. The decoder has no
-counterpart in the SSL checkpoint's state_dict, so CheckpointLoader's
-strict=False load leaves it randomly initialized (same mechanism the upstream
-config itself relies on).
+Same tasks, losses, GradNormLite balancing, schedule (200k iterations, batch 12 on 1 GPU, AMP)
+and data pipeline as multi-litept-b-v1m0-malibu3d.py; the model block and the weight decay
+differ. The encoder hyperparameters must match the pretraining config exactly (the checkpoint
+is loaded by shape); the decoder, with the dimensions of upstream Sonata's ScanNet full
+fine-tuning config, and the task heads are randomly initialized.
+Released checkpoint: ckpt/sonata-ft/model.pth (see README_checkpoints.md).
 """
 
 # -----------------------------------------------------------------------------
@@ -53,9 +36,6 @@ num_worker = 8 * num_gpu
 enable_amp = True
 
 # Data parameters
-# batch_size carried over unchanged from the malibu/LitePT multitask baselines;
-# not recalibrated for this (decoder-less, lighter) backbone -- rerun
-# scripts/find_max_batch_size.py --mix-prob 0.8 before trusting it at scale.
 batch_size = 12  # total batch size across all gpus
 batch_size_val = 8 * num_gpu
 val_voxel_budget = 2_000_000
@@ -84,14 +64,12 @@ wandb_project = "malibu3d_multi"
 # -----------------------------------------------------------------------------
 # Pretrained weight
 # -----------------------------------------------------------------------------
-# Sonata-v1m2 SSL pretrain on MALiBU3D (job 862680), epoch_120 -- the canonical
-# checkpoint used as W_SONATA across cross-domain GridProbe evals
-# (README_grid_then_seed.md), not the final epoch_150.
-# hf download LouisGeist/MALiBU3D-backbones sonata-pretrained/model.pth --local-dir ckpt
+# Sonata pretraining checkpoint (epoch 120 of the 150-epoch run), downloaded with
+#   hf download LouisGeist/MALiBU3D-backbones sonata-pretrained/model.pth --local-dir ckpt
 weight = "ckpt/sonata-pretrained/model.pth"
 
 # -----------------------------------------------------------------------------
-# Multitask configuration : targets configuraiton
+# Multitask configuration: targets, losses, task weights
 # -----------------------------------------------------------------------------
 from pointcept.datasets.malibu3d_config_utils import (
     MALIBU3D_TILE_DISTRIBUTION_TASKS,
@@ -109,8 +87,8 @@ target_keys = (main_task, "forest_2d", "elevation") + nathab_keys + ("network",)
 grad_norm_lite_task_groups = {task_name: "nathab" for task_name in nathab_keys}
 
 
-# Elevation in meters: no Collect key_scales, no denorm via target_scales
-# (matches configs/experiment/w107/7/toward_bm/multi-litept-v1m0-malibu3d_1.py).
+# Elevation is regressed in meters: no target rescaling, hence no denormalization
+# in the metrics.
 target_scales = {}
 
 label_definitions = dict(
@@ -118,15 +96,13 @@ label_definitions = dict(
 )
 
 task_configs = init_task_configs(target_keys, definitions=label_definitions)
-# Network head: ROADS only (RAILROADS channel dropped), supervised with CE only
-# and weight=5 on the foreground pixel class. Mirrors
-# configs/experiment/w107/5/18h/mono_network_ce_road_w5.py.
+# Network task: ROADS channel only (the default also has RAILROADS), trained with
+# cross-entropy alone (no Lovasz) and a 5x weight on road pixels (see below).
 task_configs["network"]["num_networks"] = 1
 task_configs["network"]["channel_names"] = ["ROADS"]
 task_criteria = init_task_criteria(task_configs)
-# Elevation in meters (no Collect key_scales / target_scales denorm above).
-# beta=1.0 in meters ≡ former ELEVATION_SMOOTH_L1_BETA=1e-2 in the old ×0.01
-# space (~1 m Huber threshold). See multi-litept-v1m0-malibu3d_1.py (w107/7/toward_bm).
+# The default beta (1e-2) assumes targets scaled by 0.01; with targets in meters,
+# beta=1.0 keeps the L1/L2 transition at 1 m.
 task_criteria["elevation"] = [
     dict(type="SmoothL1Loss", beta=1.0, loss_weight=1.0),
 ]
@@ -142,19 +118,16 @@ task_criteria["network"] = [
 del _network_ignore
 task_weights = {task_name: 1.0 for task_name in task_configs.keys()}
 
-# Remove the imported helpers from this module's namespace so they do not leak
-# into the Pointcept config dict. The config loader (pointcept/utils/config.py)
-# treats every non-dunder module attribute as a config entry, and Config.dump
-# pipes the resulting Python text through yapf. Yapf cannot reformat function
-# objects rendered as "<function ... at 0x...>" and raises a SyntaxError.
+# Delete the imported helpers: the config loader turns every non-dunder module
+# attribute into a config entry, and Config.dump (yapf) fails on function objects.
 del (
     init_task_configs,
     init_task_criteria,
     MALIBU3D_TILE_DISTRIBUTION_TASKS,
 )
 
-# main_task drives checkpoint selection / mIoU logging, so its num_classes,
-# ignore_index and names are exposed at the data root for backward-compat hooks.
+# main_task drives checkpoint selection; its num_classes / ignore_index / names are
+# also exposed at the top level and in `data` for the hooks that read them there.
 num_classes = task_configs[main_task]["num_classes"]
 ignore_index = task_configs[main_task]["ignore_index"]
 names = task_configs[main_task]["names"]
@@ -163,9 +136,10 @@ names = task_configs[main_task]["names"]
 # Hooks
 # -----------------------------------------------------------------------------
 hooks = [
-    # Remap the SSL teacher/student checkpoint's backbone onto this model's
-    # plain backbone; strict=False (default) tolerates the multi-task heads
-    # and teacher/momentum-encoder keys having no counterpart on either side.
+    # Loads the student backbone of a raw Sonata checkpoint (student.backbone.* ->
+    # backbone.*) as well as the released backbone-only file (already backbone.*).
+    # strict=False ignores teacher/head keys and leaves the decoder and task heads
+    # randomly initialized.
     dict(
         type="CheckpointLoader",
         keywords="module.student.backbone",
@@ -177,7 +151,7 @@ hooks = [
     dict(type="MultiTaskEvaluator", write_cls_iou=True),
     dict(type="CheckpointSaver", save_freq=None),
     dict(type="PreciseEvaluator", test_last=False),
-    # After PreciseEvaluator only (end of training / tools/test.py) -- not on val.
+    # Must follow PreciseEvaluator: scores its saved test logits with APLS (never on val).
     dict(type="NetworkAPLSEvaluator"),
 ]
 
@@ -187,12 +161,9 @@ test = dict(type="MultiTaskTester", verbose=True, write_cls_iou=True)
 # -----------------------------------------------------------------------------
 # Model
 # -----------------------------------------------------------------------------
-# MultiTaskSegmentorV2 attaches per-task heads on top of backbone features
-# (semantic: nn.Linear(backbone_out_channels, num_classes_task); elevation: 1).
-# PT-v3m2, enc_mode=False: encoder dims match the Sonata pretrain checkpoint
-# (loaded by CheckpointLoader below); dec_* is a freshly-initialized decoder,
-# dims copied from the upstream official Sonata full-FT reference
-# (configs/sonata/semseg-sonata-v1m1-0c-scannet-ft.py, same enc_channels).
+# MultiTaskSegmentorV2: one linear head per task on the backbone's per-point features.
+# Encoder dims must match pretrain-sonata-v1m2-malibu3d.py; the decoder (enc_mode=False)
+# uses the dims of upstream Sonata's ScanNet full fine-tuning config.
 model = dict(
     type="MultiTaskSegmentorV2",
     backbone_out_channels=64,
@@ -234,8 +205,7 @@ model = dict(
     main_task=main_task,
     task_criteria=task_criteria,
     task_weights=task_weights,
-    # Real fine-tune, not a frozen probe (contrast with
-    # configs/malibu3d/probe/sonata-v1m2-malibu3d-lin.py's freeze_backbone=True).
+    # Full fine-tuning (the probe/ configs freeze the backbone instead).
     freeze_backbone=False,
 )
 
@@ -320,7 +290,8 @@ data = dict(
                 type="Update",
                 keys_dict={"index_valid_keys": list(multitask_index_valid_keys)},
             ),
-            # Freeze Lambert XY before geometric augs / recentering.
+            # Keep absolute Lambert XY (before recentering and augmentation) for the
+            # raster-target lookup in NetworkRasterToPointLabels.
             dict(type="ExtractAbsXY"),
             dict(type="CenterShift", apply_z=True),
             dict(type="Z_MinShift"),

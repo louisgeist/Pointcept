@@ -1,11 +1,8 @@
-"""
-Tests for rasterize_forest.process_patch: reads a small synthetic GeoTIFF window,
-resamples it to the target grid, and writes forest_2d.npy + meta.json.
+"""rasterize_forest: process_patch on synthetic GeoTIFFs (south-up orientation, native-resolution bypass,
+majority-vote resampling, nodata handling, writes forest_2d.npy + meta.json) and manifest loading.
+The process_patch tests are skipped without rasterio.
 
-Requires rasterio (already a dependency for MALiBU3D preprocessing). Skips cleanly
-if rasterio is not importable in the current environment.
-
-Run with: PYTHONPATH=./ pytest tests/test_rasterize_forest.py
+Run with: PYTHONPATH=. pytest tests/test_rasterize_forest.py
 """
 
 import json
@@ -52,7 +49,7 @@ class TestProcessPatch(unittest.TestCase):
 
     def test_row_orientation_is_flipped_to_south_up(self):
         # Native tiff at 0.5m (== target pixel_m, so no resampling ambiguity):
-        # top-left (north-west) quadrant is forest (1), rest is non-forest (0).
+        # the top-left (north-west) pixel is forest (1), the rest is non-forest (0).
         # In a north-up array, "top-left" is array[0, 0].
         native = np.zeros((4, 4), dtype=np.uint8)
         native[0, 0] = 1
@@ -94,7 +91,7 @@ class TestProcessPatch(unittest.TestCase):
 
     def test_native_resolution_bypass_at_0_2m(self):
         # Native 0.2m tiff, target 0.2m grid: integer-window read, no mode resample.
-        # Checker-like pattern so a wrong window/flip would fail loudly.
+        # Three marked corners, so a wrong window or flip fails loudly.
         native = np.zeros((10, 10), dtype=np.uint8)
         native[0, 0] = 1  # north-west
         native[0, 9] = 1  # north-east

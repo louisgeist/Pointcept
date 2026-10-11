@@ -113,18 +113,14 @@ class TesterBase:
         return model
 
     def _test_loader_worker_kwargs(self, packed):
-        """DataLoader worker settings for test.
+        """DataLoader worker settings for the test loader.
 
-        ``num_worker`` is a train/val prefetch budget; test_mode keeps the dense
-        cloud plus ``fragment_list`` per sample, so it isn't automatically a safe
-        default for a packed (voxel-budget or batch_size_test>1) loader -- on
-        Sonata grid-probe configs, 8 workers x default prefetch_factor=2 held
-        enough packed batches in CPU RAM to OOM-kill the job (plain ``Killed``,
-        no CUDA traceback), even though val at the same voxel budget was fine.
-
-        Set ``cfg.num_worker_test`` to override the worker count for this
-        loader specifically (e.g. ``2``, as used by the grid-probe configs);
-        left unset, it falls back to ``num_worker_per_gpu`` uncapped.
+        Test samples keep the full-resolution cloud plus its ``fragment_list``, so a
+        packed loader (voxel budget or batch_size_test > 1) with the train worker
+        count can exhaust CPU RAM (the process is killed without a CUDA error).
+        ``cfg.num_worker_test`` overrides the worker count (e.g. 2 in the grid-probe
+        configs); otherwise ``num_worker_per_gpu`` is used. Packed loaders also use
+        ``prefetch_factor=1``.
         """
         override = getattr(self.cfg, "num_worker_test", None)
         num_workers = int(override) if override is not None else int(self.cfg.num_worker_per_gpu)
@@ -540,9 +536,8 @@ class SemSegTester(TesterBase):
         else:
             log_dict = None
 
-        # Additive: lets callers that build a SemSegTester in-process (e.g. a
-        # winner-selection hook after a grid search) read the final metrics
-        # without reparsing the log. No existing caller reads this attribute.
+        # Final metrics for in-process callers (e.g. GridProbeWinnerSelector);
+        # None on non-main ranks.
         self.test_metrics = log_dict
 
         self.end_test_timing_and_log(extra_log_dict=log_dict)
@@ -776,24 +771,15 @@ class SemSegTester(TesterBase):
 
 @TESTERS.register_module()
 class GridProbeSemSegTester(TesterBase):
-    """SemSegTester variant for GridProbeSegmentorV2: one shared backbone
-    forward per fragment produces logits for every probe head at once
-    (raw_model.active_probe must be None -- "all probes" mode, see
-    GridProbeSegmentorV2.forward's seg_logits_by_task), instead of the usual
-    one-model-call-per-probe a plain SemSegTester would need if rerun once
-    per probe. Mirrors GridProbeEvaluator's val loop
-    (pointcept/engines/hooks/grid_probe.py), applied to the test-time
-    fragment-voting loop instead.
+    """SemSegTester variant for GridProbeSegmentorV2 that tests every probe head
+    with one backbone forward per fragment (``raw_model.active_probe`` must be None,
+    i.e. all-probes mode, so the model returns ``seg_logits_by_task``).
 
-    Only supports the unpacked (batch_size_test_per_gpu == 1) path -- every
-    grid-probe downstream config already uses that (see CLAUDE.md: DALES/H3D
-    batch_size_test=1) -- and skips the dataset-specific submission-file
-    writers (ScanNet/S3DIS/SemanticKITTI/NuScenes), since grid-probe configs
-    never target those.
+    Only supports ``batch_size_test_per_gpu == 1``. A scene that fails (e.g. OOM)
+    is logged and skipped instead of aborting the test.
 
-    Produces self.test_metrics_by_probe: dict[probe_name -> log_dict], each
-    log_dict shaped like SemSegTester's self.test_metrics
-    ("test/mIoU"/"test/mAcc"/"test/allAcc"/"test/iou_<cls>"/...).
+    Sets ``self.test_metrics_by_probe``: {probe_name: log_dict}, each log_dict shaped
+    like SemSegTester's ``self.test_metrics`` ("test/mIoU", "test/iou_<cls>", ...).
     """
 
     def test(self):
@@ -902,12 +888,9 @@ class GridProbeSemSegTester(TesterBase):
                     )
                 )
             except Exception:
-                # One scene's forward/accumulation failing (e.g. OOM -- the N-probe
-                # accumulation buffers scale with probe count) must not lose every
-                # other scene's and every other probe's already-computed results;
-                # log it, drop this scene from the confusion-matrix totals, and
-                # keep going. See GridProbeSeedEnsembleTester for the matching
-                # all-or-nothing-avoidance on the aggregation side.
+                # A failing scene (e.g. OOM: the accumulation buffers grow with
+                # the number of probes) is dropped from the totals so the other
+                # scenes' results are kept.
                 logger.error(
                     "GridProbeSemSegTester: scene %r failed (%d/%d), skipping -- "
                     "results for other scenes/probes are kept.\n%s",
@@ -945,10 +928,8 @@ class GridProbeSemSegTester(TesterBase):
             for name in probe_names:
                 per_scene = merged_record[name]
                 if not per_scene:
-                    # Every scene that reached this point failed for every probe
-                    # (all-or-nothing per scene, see the try/except above) -- no
-                    # confusion-matrix totals to sum, leave this probe out of
-                    # test_metrics_by_probe rather than crashing on an empty sum.
+                    # Every scene failed: leave this probe out of
+                    # test_metrics_by_probe instead of summing an empty list.
                     logger.error(
                         "[probe=%s] No scenes produced results (all %d skipped) -- "
                         "no test metrics for this probe.",
@@ -992,10 +973,8 @@ class GridProbeSemSegTester(TesterBase):
                         log_dict[f"test/f1_{cls_name}"] = float(f1_class[i])
                 test_metrics_by_probe[name] = log_dict
 
-        # Additive: lets a caller that builds this tester in-process (e.g. a
-        # seed-ensemble aggregation hook) read the final per-probe metrics
-        # without reparsing the log. None on non-main ranks, same convention
-        # as SemSegTester.test_metrics.
+        # Read by in-process callers (GridProbeSeedEnsembleTester); None on
+        # non-main ranks.
         self.test_metrics_by_probe = test_metrics_by_probe
 
         self.end_test_timing_and_log()
@@ -1309,11 +1288,16 @@ class RegressionTester(TesterBase):
 
 @TESTERS.register_module()
 class MultiTaskTester(TesterBase):
-    """Fragment-based test for MultiTaskSegmentorV2 (semantic IoU + regression MAE/RMSE).
+    """Test for MultiTaskSegmentorV2, with the same per-task metrics as MultiTaskEvaluator.
 
-    Expects cfg.data.task_configs and cfg.data.main_task (required when multiple tasks).
-    Ground-truth tensors for each task must be present at full resolution in the sample dict
-    (see MALiBU3DDataset.prepare_test_data).
+    Semantic tasks: mIoU/mAcc/allAcc; pixel_semantic tasks (2D rasters): per-channel
+    exact and buffered precision/recall/F1 plus mIoU; tile_distribution tasks: weighted
+    KL, TV and per-class frequency MAE (optional point-wise mIoU); regression: MAE/RMSE.
+    Expects cfg.data.task_configs and cfg.data.main_task (required with several tasks),
+    and one fragment per scene (test_single_fragment=True). Ground truth must be present
+    at full resolution in the sample dict (see MALiBU3DDataset.prepare_test_data).
+    Per-scene predictions are cached in ``save_path/result`` and reused on rerun; the
+    ``{name}_logits_<task>.npy`` rasters are read by the network APLS evaluation.
     """
 
     def __init__(self, write_cls_iou=False, **kwargs):
@@ -1597,7 +1581,6 @@ class MultiTaskTester(TesterBase):
             if self._uses_multi_scene_batches():
                 assert all(len(d["fragment_list"]) == 1 for d in batch), "Batch size > 1 is only supported with test_single_fragment=True (1 fragment per scene)."
             
-            # Initialize per-scene data structures
             batch_data_names = []
             batch_targets = []
             batch_scene_extra = []
@@ -1664,7 +1647,7 @@ class MultiTaskTester(TesterBase):
                 }
                 pixel_logits_cache_paths = {
                     # Soft foreground probs (r, H, W) in [0, 1]; NaN where no
-                    # LiDAR point fell in that 1 m Lambert cell (unobserved).
+                    # LiDAR point fell in the raster cell (unobserved).
                     t: os.path.join(save_path, f"{data_name}_logits_{t}.npy")
                     for t in pixel_semantic_tasks
                 }
@@ -1715,7 +1698,7 @@ class MultiTaskTester(TesterBase):
                 batch_pixel_dense_sum.append({t: None for t in pixel_semantic_tasks})
                 batch_pixel_dense_cnt.append({t: None for t in pixel_semantic_tasks})
 
-            # Skip model forward when sem/reg/pixel/nathab caches are present.
+            # Skip the forward when every cached prediction file exists.
             batch_td_dist_np = []
             batch_td_pred_np = []
             batch_td_metrics = []
@@ -1825,9 +1808,8 @@ class MultiTaskTester(TesterBase):
                                 batch_reg_cnt[b_idx][task_name][ip] += 1
                             bs = be
 
-                    # Dedicated sum+count accumulator (not the semantic pattern above,
-                    # which sums fragment probabilities with no count tracked — safe
-                    # only for argmax-based mIoU, not for a true KL divergence).
+                    # Probabilities are averaged with an explicit count: the plain
+                    # sum used for semantic tasks is fine for argmax, not for KL.
                     for task_name in tile_distribution_tasks:
                         if task_name not in logits_by_task:
                             continue
@@ -2033,14 +2015,10 @@ class MultiTaskTester(TesterBase):
                     scene_m_iou = np.mean(iou_class[mask]) if mask.any() else 0.0
                     running_iou[task_name].update(scene_m_iou)
 
-                # Test-set precision/recall/F1 for pixel_semantic tasks (foreground
-                # class only). targets_by_task[task_name] is already the dense
-                # (r, H, W) GT raster at full tile resolution (MALiBU3DDataset.
-                # prepare_test_data snapshots it before any per-fragment transform
-                # runs), so no fragment-merging is needed on the GT side --
-                # pixel_logits_np[task_name] (the merged dense prediction, from
-                # either a fresh forward pass or the npy cache) is the only thing
-                # that needed merging, and that already happened above.
+                # Precision/recall/F1 for pixel_semantic tasks (foreground class).
+                # The GT is already the full-tile (r, H, W) raster (taken before any
+                # per-fragment transform in MALiBU3DDataset.prepare_test_data), and
+                # the prediction was merged into a dense raster above.
                 pixel_prf_metrics_scene = {}
                 for task_name in pixel_semantic_tasks:
                     if task_name not in targets_by_task:
@@ -2093,11 +2071,9 @@ class MultiTaskTester(TesterBase):
                             )
                     pixel_prf_metrics_scene[task_name] = channel_stats
 
-                    # mIoU/mAcc/allAcc, summed over channels into one task-level
-                    # confusion histogram (same convention as the online validator's
-                    # per-task pixel_semantic aggregation) and folded into
-                    # sem_metrics_scene so it rides the semantic_tasks aggregation/
-                    # logging path below for free.
+                    # Task-level confusion histogram summed over channels (as in
+                    # MultiTaskEvaluator), aggregated and logged with the semantic
+                    # tasks below.
                     num_classes = int(tc["num_classes"])
                     inter_sum = union_sum = target_sum = None
                     for c in range(num_networks):
@@ -2187,7 +2163,7 @@ class MultiTaskTester(TesterBase):
                     if td_m is not None:
                         td_metrics_scene[task_name] = td_m
 
-                # Point-wise mIoU for nathab axes under CE / Lovasz supervision.
+                # Point-wise mIoU for tile_distribution tasks with pointwise_supervision.
                 for task_name in tile_pw_miou_tasks:
                     if task_name not in targets_by_task:
                         continue
@@ -2704,8 +2680,8 @@ class ClsTester(TesterBase):
         else:
             log_dict = None
 
-        # Same contract as SemSegTester.test_metrics: read by in-process callers
-        # (GridProbeWinnerSelector for GridProbeClassifier / PureForest).
+        # Same contract as SemSegTester.test_metrics (read by
+        # GridProbeWinnerSelector for GridProbeClassifier, e.g. PureForest).
         self.test_metrics = log_dict
 
         self.end_test_timing_and_log(extra_log_dict=log_dict)

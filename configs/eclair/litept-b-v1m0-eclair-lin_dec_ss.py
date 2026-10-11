@@ -1,21 +1,16 @@
 """
-LitePT-Base grid-search linear probing on ECLAIR — decoder Single Scale
-ablation (transfer from MALiBU3D multitask supervised pretrain, job 873542).
+Frozen LitePT-B (MALiBU3D multitask checkpoint, ckpt/litept-b/model.pth) linear probing on ECLAIR
+semantic segmentation (11 classes).
 
-Ablation vs litept-b-v1m0-eclair-lin_dec.py: `dec_traceable=False` probes
-only the native final decoder stage output (dec_channels[0]=72ch), not the
-1404ch hypercolumn concat of all decoder stages + bottleneck. Same signal as
-the multitask pretrain seg_head input. Missing sibling of
-litept-b-v1m0-h3d-lin_dec_ss.py / litept-b-v1m0-dales-lin-grid-dec-ss.py —
-ported by analogy from those (same job 873542 checkpoint, same SS backbone
-dict), onto this directory's own dataset settings (ECLAIR real RGB via
-ChromaticAutoContrast/Translation/Jitter + NormalizeColor, strength 1/60000,
-ignore_index=-1, no `_warmups` axis).
+Probe input: last decoder stage only (dec_traceable=False, 72 channels), i.e. the input of the
+multitask segmentation head. Probing-strategy study (Tab. A.11 of the MALiBU3D paper).
 
-The frozen backbone is always in eval() mode (BatchNorm running stats frozen, DropPath inactive).
+GridProbe: 12 linear probes (CE + Lovasz, AdamW, wd=0, OneCycleLR, lr from 1e-4 to 5e-1) share one
+frozen-backbone forward; tools/grid_then_seeds.py then re-trains the probe with the best validation
+mIoU with 10 seeds.
 
-Grid (12 probes): ce_lovasz x 12 LRs x wd=0 x dropout=0 x
-input_norm=None x AdamW x warmup=5%. epoch=200 / eval_epoch=10.
+ECLAIR has RGB and intensity: color is normalized (color augmentations at train time) and raw
+intensity is scaled by 1/60000 to the MALiBU3D [0, 1] range.
 """
 
 _base_ = ["../_base_/default_runtime.py"]
@@ -42,7 +37,7 @@ batch_size_per_gpu = 24
 batch_size = batch_size_per_gpu * num_gpu
 batch_size_val = 1
 batch_size_test = 1
-num_worker = 24  # H100 Jean-Zay
+num_worker = 24
 num_worker_test = 2
 mix_prob = 0.8
 empty_cache = False
@@ -90,11 +85,7 @@ dec_channels = (72, 108, 216, 432)
 bottleneck_channels = 576
 backbone_out_channels = dec_channels[0]  # 72
 
-# -----------------------------------------------------------------------------
-# Grid-search probes — AdamW / OneCycleLR: ce_lovasz x lr x wd=0 x dropout=0 x
-# input_norm=none x feat_norm=none x optimizer=AdamW, warmup=5%
-# (1 x 12 x 1 x 1 x 1 x 1 x 1 = 12 probes). Same grid as the enc sibling.
-# -----------------------------------------------------------------------------
+# Grid-search probes — ce_lovasz, AdamW/wd0/OneCycleLR warmup5%, lr sweep only (12 probes).
 _losses = {
     "ce_lovasz": [
         dict(type="CrossEntropyLoss", loss_weight=1.0, ignore_index=ignore_index),

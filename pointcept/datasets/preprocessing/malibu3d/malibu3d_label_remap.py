@@ -1,11 +1,11 @@
 """
-MALiBU3D unified label definitions and LUT remapping. (LUT: look-up table)
+MALiBU3D label definitions: raw source ids -> train ids through a look-up table (LUT).
 
-Single registry for the label-based tasks (segment, natural_habitat and its ecological axes).
-Used by preprocess_malibu3d and malibu3d_config_utils (training metadata).
-
-Source-agnostic: remapping applies the same whether labels come from a PLY field
-or a sampled GeoTIFF raster.
+Single registry for the label-based tasks: ``segment`` (land cover, read from the PLY
+``semantic`` field) and ``natural_habitat`` (CarHab ids sampled from a GeoTIFF, plus the
+four ecological-axis groupings used by the ``nathab_*`` targets). Used by
+preprocess_malibu3d.py (on-disk ids) and malibu3d_config_utils.py (class names,
+num_classes and ignore_index of each task).
 """
 
 from __future__ import annotations
@@ -38,7 +38,8 @@ _SEGMENT_NAMES: Tuple[str, ...] = (
     "Void",
 )
 
-# Land-cover taxonomy of the released dataset (15 classes + void).
+# Land-cover taxonomy of the released dataset (15 classes + void), the default.
+# Same ids as "default"; only class 6 is named differently.
 _SEGMENT_V20_NAMES: Tuple[str, ...] = (
     "Building",
     "Greenhouse",
@@ -133,8 +134,9 @@ _NATURAL_HABITAT_BY_MOISTURE_REGIME_NAMES: Tuple[str, ...] = (
     "Void",
 )
 
-# Open / forest CarHab raw-id groups (domain x habitat type x substrate x moisture space),
-# used by `by_habitat_type_ecological`.
+# CarHab raw ids 0-35 enumerate domain (temperate, mediterranean, alpine) x habitat
+# (open, forest) x substrate (acid, basic) x moisture (wet, mesic, dry), moisture
+# fastest. These groups are used by `by_habitat_type_ecological`.
 _NATURAL_HABITAT_OPEN_IDS: Tuple[int, ...] = tuple(
     list(range(0, 6)) + list(range(12, 18)) + list(range(24, 30))
 )
@@ -145,7 +147,11 @@ _NATURAL_HABITAT_FOREST_IDS: Tuple[int, ...] = tuple(
 
 @dataclass(frozen=True)
 class LabelDefinition:
-  """Named label remap: raw source ids -> consecutive train ids via LUT."""
+  """Named label remap: raw source ids -> consecutive train ids via ``lut``.
+
+  ``ignore_index`` is the void train id (also the number of trained classes);
+  ``missing_fill_raw_id`` is the raw id assigned to points without a source value.
+  """
 
   name: str
   task_key: str
@@ -168,7 +174,7 @@ class LabelDefinition:
 
 @dataclass(frozen=True)
 class PreprocessLabelDefinitions:
-  """Bundle of label definitions passed to preprocessing workers."""
+  """Label definitions applied by preprocess_malibu3d.py (one per task)."""
 
   segment: LabelDefinition
   natural_habitat: LabelDefinition
@@ -213,7 +219,7 @@ def _build_segment_v20_lut(num_raw: int = 256, void_train_id: int = 15) -> np.nd
 
 
 def _build_natural_habitat_default_lut() -> np.ndarray:
-  """CarHab raw 42=N/A -> train void (43); raw 43=Autre/routes -> train 42."""
+  """Identity, except CarHab raw 42 (N/A) -> 43 (void) and raw 43 (roads/other) -> 42."""
   lut = np.arange(44, dtype=np.int32)
   lut[42] = 43
   lut[43] = 42
@@ -437,11 +443,11 @@ def build_stored_to_train_lut(
     storage: LabelDefinition,
     target: LabelDefinition,
 ) -> np.ndarray:
-  """Map on-disk label ids (after storage definition) to target train ids.
-  
-  Only for the gap :
-  - Road : saved as 42, raw as 43
-  - Void : saved as 43, raw as 42
+  """LUT from on-disk ids (written with ``storage``) to ``target`` train ids.
+
+  Both definitions must share the raw id space. For the natural-habitat ``default``
+  storage this only matters for the swapped ids (roads: raw 43 stored as 42; void:
+  raw 42 stored as 43).
   """
   if storage.num_raw_classes != target.num_raw_classes:
     raise ValueError(
@@ -458,7 +464,7 @@ def build_stored_to_train_lut(
 
 
 def definition_to_task_config(definition: LabelDefinition) -> Dict[str, object]:
-  """Convert a LabelDefinition to a MALiBU3D semantic task config dict."""
+  """Task config of a LabelDefinition: ``num_classes`` = ``ignore_index`` (void last)."""
   if definition.ignore_index >= 0:
     num_classes = definition.ignore_index
   else:

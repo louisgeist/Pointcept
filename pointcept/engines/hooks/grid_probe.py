@@ -1,10 +1,11 @@
 """
 Grid-Search Linear Probing Hooks
 
-Per-probe validation, per-probe best-checkpoint saving, and end-of-training
-winner selection + automatic test pass for GridProbeSegmentorV2 /
-GridProbeTrainer (see pointcept/models/grid_probe.py,
-pointcept/engines/train.py).
+Hooks for GridProbeTrainer with GridProbeSegmentorV2 / GridProbeClassifier
+(pointcept/models/grid_probe.py): per-probe validation (GridProbeEvaluator),
+per-probe best-checkpoint saving (GridProbeCheckpointSaver) and, after training,
+either selection and test of the winning probe (GridProbeWinnerSelector) or a test
+of every probe with mean/std reporting for seed ensembles (GridProbeSeedEnsembleTester).
 """
 
 import csv
@@ -56,9 +57,9 @@ def _atomic_write_json(path, payload):
     os.replace(tmp_path, path)
 
 
-# Which validation metric drives per-probe best-checkpoint selection
-# (GridProbeEvaluator.select_metric). "mIoU" keeps the historical behavior;
-# "macro_f1" selects on validation macro-F1 (same estimator as test/f1_macro).
+# Validation metrics that can drive per-probe best-checkpoint and winner selection
+# (GridProbeEvaluator.select_metric). "macro_f1" uses the same estimator as
+# test/f1_macro.
 _SELECT_METRICS = ("mIoU", "macro_f1")
 
 _HISTORY_CSV_FIELDNAMES = (
@@ -74,8 +75,8 @@ _HISTORY_CSV_FIELDNAMES = (
 def _atomic_write_history_csv(path, rows):
     tmp_path = path + ".tmp"
     with open(tmp_path, "w", newline="", encoding="utf-8") as f:
-        # restval="" so rows restored from a pre-feature checkpoint (no f1_macro
-        # keys) still write; extrasaction default "raise" guards typos.
+        # restval="" lets rows without the f1_macro keys be written; unknown keys
+        # still raise (extrasaction default).
         writer = csv.DictWriter(
             f, fieldnames=_HISTORY_CSV_FIELDNAMES, restval=""
         )
@@ -165,32 +166,24 @@ def _flatten_for_wandb(d, prefix):
 
 @HOOKS.register_module()
 class GridProbeEvaluator(HookBase):
-    """Per-probe validation: one shared backbone forward per val batch,
-    confusion-matrix mIoU / macro-F1 computed independently per probe head,
-    resume-safe running-best tracking per probe (via
-    HookBase.state_dict/load_state_dict).
+    """Per-probe validation for GridProbeTrainer.
 
-    ``select_metric`` ("mIoU" default, or "macro_f1") picks which validation
-    metric drives per-probe best-checkpoint selection (GridProbeCheckpointSaver)
-    and end-of-run winner selection (GridProbeWinnerSelector). Both metrics are
-    always computed and logged regardless; select_metric is only the selection
-    knob. Under select_metric="mIoU" every decision and every mIoU-named output
-    is bit-identical to the pre-feature behavior.
+    One backbone forward per val batch; mIoU, mAcc, allAcc and macro-F1 are computed
+    from each probe's own confusion histogram. Running bests are checkpointed
+    (state_dict / load_state_dict).
 
-    comm_info["current_metric_value"] is set to THIS epoch's max of the
-    selected metric across probes (not a running best) so CheckpointSaver's
-    own max-over-epochs bookkeeping ends up computing max_p(max_e sel(p, e))
-    into trainer.best_metric_value — which equals max_e(max_p sel(p, e)), i.e.
-    exactly the eventual winning probe's own best value (max commutes over
-    the epoch/probe axes). MetricsJsonWriter's existing best_val_mIoU output
-    is therefore already correct for grid runs (with select_metric="mIoU")
-    with zero changes to that hook.
+    ``select_metric`` ("mIoU" or "macro_f1") is the metric that drives per-probe
+    best-checkpoint saving (GridProbeCheckpointSaver) and winner selection
+    (GridProbeWinnerSelector); both metrics are always computed and logged. It must
+    not change when resuming a run.
 
-    Also writes save_path/grid_probe_miou_history.csv: one row per
-    (epoch, probe) with mIoU/mIoU_best and f1_macro/f1_macro_best, rewritten
-    atomically after every eval so the full per-epoch curve for every probe is
-    on disk — unlike grid_search_results.json (GridProbeWinnerSelector), which
-    only keeps each probe's single best value, not its trajectory.
+    ``comm_info["current_metric_value"]`` is this epoch's max of the selected metric
+    over probes (not a running best). The running max kept by CheckpointSaver in
+    ``trainer.best_metric_value`` is then the winning probe's best value, which
+    MetricsJsonWriter reports.
+
+    Also writes ``save_path/grid_probe_miou_history.csv`` (one row per epoch and
+    probe: mIoU, f1_macro and their running bests), rewritten after every evaluation.
     """
 
     def __init__(self, write_cls_iou=False, select_metric="mIoU"):
@@ -200,27 +193,19 @@ class GridProbeEvaluator(HookBase):
         )
         self.select_metric = select_metric
         self.write_cls_iou = write_cls_iou
-        # Running-best of each metric per probe. BOTH are tracked every epoch
-        # regardless of select_metric (F1 is a cheap numpy call on the
-        # already-synced confusion hist) — select_metric only picks which one
-        # drives selection. Persisted across resume.
+        # Checkpointed state: running best of both metrics per probe (whatever
+        # select_metric is), per-class IoU/accuracy/F1 at each probe's best epoch
+        # for the selected metric (the epoch whose weights GridProbeCheckpointSaver
+        # saved; reported for the winner by GridProbeWinnerSelector), and the
+        # (epoch, probe) rows of grid_probe_miou_history.csv.
         self._best_miou_by_probe = {}
         self._best_f1_by_probe = {}
-        # Per-class IoU/accuracy/F1 at each probe's own best epoch for the
-        # SELECTED metric (i.e. the same epoch GridProbeCheckpointSaver saved
-        # probe_best_{name}.pth for), so GridProbeWinnerSelector can report the
-        # winner's per-class val breakdown without a separate re-evaluation
-        # pass. Persisted across resume (see state_dict/load_state_dict).
         self._best_cls_iou_by_probe = {}
         self._best_cls_acc_by_probe = {}
         self._best_cls_f1_by_probe = {}
-        # This epoch's raw (non-running-best) values; read by
-        # GridProbeCheckpointSaver to decide which probes to save. Not
-        # persisted across resume — recomputed every eval() call.
+        # This epoch's values, read by GridProbeCheckpointSaver (not checkpointed).
         self._last_miou_by_probe = {}
         self._last_f1_by_probe = {}
-        # Full (epoch, probe) history for grid_probe_miou_history.csv —
-        # persisted across resume (see state_dict/load_state_dict).
         self._history = []
 
     def _selected_best_by_probe(self):
@@ -240,9 +225,7 @@ class GridProbeEvaluator(HookBase):
         )
 
     def best_miou(self, name):
-        """Probe's running-best val mIoU, or nan if not tracked yet (e.g. a
-        pre-macro-F1 checkpoint resumed under select_metric='mIoU' with no eval
-        since — _best_miou_by_probe is populated, _best_f1_by_probe is not)."""
+        """Probe's running-best val mIoU, or nan if not tracked yet."""
         v = self._best_miou_by_probe.get(name)
         return float(v) if v is not None else float("nan")
 
@@ -254,16 +237,12 @@ class GridProbeEvaluator(HookBase):
     def _update_bests(
         self, m_iou_by_probe, macro_f1_by_probe, f1_cls_by_probe, cls_hist_by_probe
     ):
-        """Fold this epoch's per-probe metrics into the running-best state.
+        """Fold this epoch's per-probe metrics into the running bests.
 
-        - ``_best_miou_by_probe`` / ``_best_f1_by_probe``: running max of each
-          metric, tracked unconditionally (select_metric only picks which one
-          is *used*, not which one is *computed*).
-        - per-class snapshots (``_best_cls_{iou,acc,f1}_by_probe``): taken on the
-          epoch that (re)sets the running best of the SELECTED metric, ``>=`` so
-          the latest epoch wins ties — identical rule to
-          GridProbeCheckpointSaver, which reads ``_selected_{last,best}_by_probe``
-          so the two can't drift.
+        Both running maxima are always updated. The per-class snapshots are
+        refreshed when the selected metric reaches its running best (``>=``, so the
+        latest epoch wins ties): the same rule GridProbeCheckpointSaver uses to save
+        the probe weights.
         """
         selected_now = (
             macro_f1_by_probe
@@ -302,9 +281,8 @@ class GridProbeEvaluator(HookBase):
         }
 
     def load_state_dict(self, state):
-        # Called only from CheckpointLoader.before_train under cfg.resume, and
-        # CheckpointLoader is the first hook — raising here aborts cleanly
-        # before any training step.
+        # Called by CheckpointLoader (the first hook) on resume, so raising here
+        # aborts before any training step.
         persisted = state.get("select_metric")
         if persisted is not None and persisted != self.select_metric:
             raise RuntimeError(
@@ -331,15 +309,11 @@ class GridProbeEvaluator(HookBase):
         self._history = list(state.get("history", []))
 
     def before_train(self):
-        # Finding: a checkpoint whose hook_states has no "GridProbeEvaluator"
-        # entry (predates this hook's state tracking) is resumed WITHOUT
-        # load_state_dict ever running (CheckpointLoader guards `if state:`), so
-        # the select_metric consistency check is bypassed while
-        # trainer.best_metric_value has already been restored in the OLD metric's
-        # scale. Reset it here so best-checkpoint selection restarts cleanly on
-        # the configured metric. (A fresh run has resume=False; a resume that DID
-        # restore evaluator state either populated _best_f1_by_probe or already
-        # hard-failed in load_state_dict.)
+        # A resumed checkpoint without GridProbeEvaluator state never calls
+        # load_state_dict (so the select_metric check is skipped), and its restored
+        # trainer.best_metric_value may be on another metric's scale. With
+        # select_metric="macro_f1", reset it so best-checkpoint selection restarts
+        # on the configured metric.
         best = getattr(self.trainer, "best_metric_value", None)
         if (
             getattr(self.trainer.cfg, "resume", False)
@@ -443,8 +417,8 @@ class GridProbeEvaluator(HookBase):
             all_acc_by_probe[name] = float(
                 np.sum(intersection) / (np.sum(target_hist) + 1e-10)
             )
-            # Same estimator as test/f1_macro (unmasked mean over all classes,
-            # from the already-synced confusion hist — no extra collective).
+            # Same estimator as test/f1_macro (unmasked mean over all classes),
+            # from the already-synced confusion histogram.
             f1_cls, macro_f1 = f1_scores_from_hist(intersection, union, target_hist)
             macro_f1_by_probe[name] = macro_f1
             f1_cls_by_probe[name] = f1_cls
@@ -506,12 +480,9 @@ class GridProbeEvaluator(HookBase):
                     current_epoch,
                 )
             if self.trainer.cfg.enable_wandb:
-                # Per-probe curves would fan out into len(probe_names) * 4
-                # wandb metrics every epoch; only the eventual winner's own
-                # curve is worth a dashboard line, and GridProbeWinnerSelector
-                # replays that one from _history once training ends. Console
-                # (per-probe logger.info above) and TensorBoard (per-probe
-                # add_scalar above) keep the full per-probe detail.
+                # Only the best-over-probes values go to W&B; per-probe curves
+                # stay in the console and TensorBoard. GridProbeWinnerSelector
+                # replays the winner's curve from _history after training.
                 wandb_log = {
                     "Epoch": current_epoch,
                     "val/mIoU/epoch_best": max(m_iou_by_probe.values()),
@@ -536,9 +507,8 @@ class GridProbeEvaluator(HookBase):
                 "<<<<<<<<<<<<<<<<< End Evaluation <<<<<<<<<<<<<<<<<"
             )
 
-        # See class docstring: this is THIS epoch's max of the SELECTED metric,
-        # not a running best — CheckpointSaver does the running-max itself via
-        # best_metric_value.
+        # This epoch's max of the selected metric over probes, not a running best
+        # (CheckpointSaver keeps the running max; see class docstring).
         if self.select_metric == "macro_f1":
             self.trainer.comm_info["current_metric_value"] = max(
                 macro_f1_by_probe.values()
@@ -568,10 +538,10 @@ class GridProbeEvaluator(HookBase):
 
 @HOOKS.register_module()
 class GridProbeCheckpointSaver(HookBase):
-    """Save each probe head's own best-val weights separately (a few KB —
-    just that head's state_dict, not the whole shared model) whenever it
-    improves this epoch, judged on GridProbeEvaluator.select_metric ("mIoU"
-    default, or "macro_f1"). Must be registered after GridProbeEvaluator.
+    """Save a probe head's weights to ``model/probe_best_<name>.pth`` (head
+    state_dict only, a few KB) plus a JSON sidecar whenever the probe reaches its
+    best value of GridProbeEvaluator.select_metric. Must be registered after
+    GridProbeEvaluator.
     """
 
     def after_epoch(self):
@@ -611,19 +581,16 @@ class GridProbeCheckpointSaver(HookBase):
 
 @HOOKS.register_module()
 class GridProbeWinnerSelector(HookBase):
-    """After training: pick the probe with the best val score over the whole
-    run — judged on GridProbeEvaluator.select_metric ("mIoU" default, or
-    "macro_f1") — reload its best-epoch weights (the live weights at end of
-    training are that probe's LAST epoch, not its BEST, since other probes may
-    have kept training after it peaked), optionally run a precise test pass
-    restricted to just that probe, and write save_path/grid_search_results.json.
+    """After training, pick the probe with the best val ``select_metric`` over the
+    run, reload its best-epoch head (the live weights are from the last epoch), test
+    that probe alone and write ``save_path/grid_search_results.json`` (winner and
+    leaderboard). With W&B, also replays the winner's val/train curves, which are
+    not logged per probe during training.
 
-    Must be registered after GridProbeEvaluator/GridProbeCheckpointSaver, and
-    should be last in the hooks list (frees the per-probe optimizers/
-    schedulers before testing).
+    Must be registered after GridProbeEvaluator / GridProbeCheckpointSaver, last in
+    the hook list (it frees the per-probe optimizers and schedulers before testing).
 
-    skip_test: if True, skip the tester (val-only sweeps). The winner JSON
-    is still written; test_mIoU / test_mAcc / test_allAcc are null.
+    skip_test: skip the test pass (val-only sweeps); the test_* fields are then null.
     """
 
     def __init__(self, skip_test=False):
@@ -691,8 +658,7 @@ class GridProbeWinnerSelector(HookBase):
         cfg = self.trainer.cfg
 
         def _num(d, name):
-            # None (not nan) for JSON when a probe's value isn't tracked yet
-            # (pre-macro-F1 checkpoint resumed under select_metric="mIoU").
+            # None (JSON null) when a probe has no value for this metric.
             v = d.get(name)
             return float(v) if v is not None else None
 
@@ -724,11 +690,8 @@ class GridProbeWinnerSelector(HookBase):
         self.trainer.logger.info("Wrote grid search results to: %s", out_path)
 
         if getattr(cfg, "enable_wandb", False) and wandb.run is not None:
-            # Replay the winning probe's full per-epoch trajectory as its own
-            # clean wandb curve (val/* uses Epoch as step_metric, so this
-            # slots into the normal val chart, not a new x-axis) — this is
-            # the one per-probe curve GridProbeEvaluator intentionally didn't
-            # stream live, to avoid a wandb chart per probe during training.
+            # Replay the winner's per-epoch val curve (x-axis "Epoch", like the
+            # other val/* metrics); GridProbeEvaluator does not log it live.
             winner_history = sorted(
                 (row for row in evaluator._history if row["probe_name"] == winner_name),
                 key=lambda row: row["epoch"],
@@ -739,8 +702,7 @@ class GridProbeWinnerSelector(HookBase):
                     "val/mIoU/winner": row["mIoU"],
                     "val/mIoU_best/winner": row["mIoU_best"],
                 }
-                # .get: history rows restored from a pre-macro-F1 checkpoint
-                # (only reachable under select_metric="mIoU") lack these keys.
+                # Rows restored from a checkpoint may lack the f1_macro keys.
                 if row.get("f1_macro") is not None:
                     log_row["val/f1_macro/winner"] = row["f1_macro"]
                 if row.get("f1_macro_best") is not None:
@@ -749,11 +711,9 @@ class GridProbeWinnerSelector(HookBase):
 
             names = list(getattr(cfg.data, "names", []) or [])
 
-            # Same replay for the winner's train loss/mIoU (+ per-class IoU
-            # when InformationWriter(write_cls_iou=True)) — see
-            # InformationWriter.after_epoch, which intentionally skips
-            # per-probe train/* W&B logging during grid probing for the same
-            # reason as val/* above.
+            # Same replay for the winner's train loss/mIoU (and per-class IoU
+            # with InformationWriter(write_cls_iou=True)), which
+            # InformationWriter does not log per probe to W&B.
             info_writer = _find_hook(self.trainer, InformationWriter)
             if info_writer is not None:
                 train_history = sorted(
@@ -788,12 +748,10 @@ class GridProbeWinnerSelector(HookBase):
             summary.update(
                 _flatten_for_wandb(raw_model.probe_configs[winner_name], "winner/config")
             )
-            # Per-class val IoU/accuracy/F1 snapshotted at the winner's best
-            # *select_metric* epoch (see _best_cls_{iou,acc,f1}_by_probe). NB
-            # winner/best_val_{mIoU,macro_f1} above are all-time running maxes:
-            # under select_metric="macro_f1" the F1 pair is consistent (snapshot
-            # taken on the peak-F1 epoch); under "mIoU" the per-class F1 here is
-            # from the peak-mIoU epoch and can differ from best_val_macro_f1.
+            # Per-class val IoU/accuracy/F1 at the winner's best select_metric
+            # epoch. winner/best_val_{mIoU,macro_f1} above are running maxima over
+            # all epochs: with select_metric="mIoU", the per-class F1 comes from the
+            # best-mIoU epoch and may not match best_val_macro_f1.
             cls_iou = evaluator._best_cls_iou_by_probe.get(winner_name)
             cls_acc = evaluator._best_cls_acc_by_probe.get(winner_name)
             cls_f1 = evaluator._best_cls_f1_by_probe.get(winner_name)
@@ -814,29 +772,19 @@ class GridProbeWinnerSelector(HookBase):
 
 @HOOKS.register_module()
 class GridProbeSeedEnsembleTester(HookBase):
-    """For a "same hyperparameters, different random init" grid rather than a
-    hyperparameter search: there is no single winner to pick, just N
-    replicate probes to average. Reloads each probe's own best-val checkpoint
-    (already saved individually by GridProbeCheckpointSaver for every probe,
-    not just a winner, judged on GridProbeEvaluator.select_metric), runs ONE
-    shared-backbone test pass across all of them
-    (GridProbeSemSegTester -- one backbone forward per fragment, N heads),
-    and writes mean/std of the per-probe test metrics (mIoU/mAcc/allAcc,
-    plus f1_macro and per-class f1_mean when log_test_f1=True, plus
-    per-class IoU mean/std/min/max from ``test/iou_<cls>``) to
-    save_path/seed_ensemble_results.json.
+    """Test every probe of a seed ensemble (same hyperparameters, different random
+    inits) and report mean/std over probes.
 
-    Use in place of GridProbeWinnerSelector, last in the hooks list, with
-    cfg.test = dict(type="GridProbeSemSegTester", ...).
+    Reloads each probe's best-val head (saved by GridProbeCheckpointSaver), runs one
+    shared-backbone test pass over all probes (GridProbeSemSegTester) and writes
+    ``save_path/seed_ensemble_results.json``: mean/std/min/max of test mIoU, mAcc,
+    allAcc and f1_macro, per-class IoU (mean/std/min/max) and F1 (mean, with
+    ``log_test_f1=True``), and per-probe results.
 
-    Robustness: per_probe always has one entry per probe in raw_model.probe_names
-    (probe_config + best_val_mIoU are always populated from in-memory state that
-    can't be missing; test metrics are filled in whenever the tester produced
-    them for that probe, null otherwise) and the JSON is written even if the
-    test pass raises partway through -- a crash/OOM on the shared test forward
-    must not also destroy the val-only results that already exist for every
-    probe. mean/std/max/min are computed only over probes that actually have a
-    numeric test/mIoU, so one missing/NaN probe can't crash the whole write.
+    Use instead of GridProbeWinnerSelector, last in the hook list, with
+    ``cfg.test = dict(type="GridProbeSemSegTester", ...)``. The JSON is written even
+    if the test pass fails (test fields are then null); statistics only use the
+    probes that have test metrics.
     """
 
     def after_train(self):
@@ -875,10 +823,8 @@ class GridProbeSeedEnsembleTester(HookBase):
             tester.test()
             metrics_by_probe = getattr(tester, "test_metrics_by_probe", None) or {}
         except Exception:
-            # Whatever happened (OOM on the shared test forward, a bad scene,
-            # ...), every probe's val-only results (best_val_mIoU, checkpoint)
-            # already exist and must still make it to disk below -- only the
-            # test/* fields end up null instead of losing the whole write.
+            # Keep the val results (best val metrics, checkpoints) if the test
+            # pass fails (e.g. OOM); only the test/* fields end up null.
             test_error = traceback.format_exc()
             self.trainer.logger.error(
                 "GridProbeSeedEnsembleTester: test pass failed, writing "
@@ -907,8 +853,7 @@ class GridProbeSeedEnsembleTester(HookBase):
         f1_macro_stats = _metric_stats(metrics_by_probe, "test/f1_macro")
 
         # Per-class F1 (log_test_f1=True) and IoU (always written by
-        # GridProbeSemSegTester as test/iou_<cls>). Prefer cfg.data.names
-        # order; fall back to first-seen insertion order.
+        # GridProbeSemSegTester as test/iou_<cls>), in cfg.data.names order.
         names = getattr(cfg.data, "names", None) or []
         f1_cls_keys = _discover_class_metric_keys(
             metrics_by_probe,
@@ -1041,9 +986,8 @@ class GridProbeSeedEnsembleTester(HookBase):
                 wandb.run.summary[key] = value
             wandb.log(wandb_summary)
 
-            # Per-seed test mIoU as a small wandb Table -- the summary above
-            # only ever gives 4 numbers (mean/std/max/min); this is what lets
-            # the actual 10-point distribution be inspected/plotted in the UI.
+            # Per-probe results as a W&B table, to inspect the distribution
+            # beyond the summary statistics.
             table = wandb.Table(
                 columns=[
                     "probe_name", "test_mIoU", "test_mAcc", "test_allAcc",

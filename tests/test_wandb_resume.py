@@ -1,6 +1,7 @@
-"""Tests for W&B resume ``_step`` bumping (no live W&B required).
+"""W&B resume: the run's ``_step`` is bumped past the last logged step so resumed logs do not overwrite earlier
+rows (no live W&B required).
 
-Run with: PYTHONPATH=./ pytest tests/test_wandb_resume.py
+Run with: PYTHONPATH=. pytest tests/test_wandb_resume.py
 """
 
 import tempfile
@@ -127,10 +128,9 @@ class TestBumpOnResume(unittest.TestCase):
         self.assertEqual(run._step, 753)
 
     def test_offline_run_skips_api_call(self):
-        # Regression test: on a cluster compute node without internet egress
-        # (e.g. Jean Zay), wandb.Api() blocks in an unbounded retry loop on
-        # ConnectionError instead of raising, so an offline run must never
-        # reach the api.run(...) call at all when no local step is known.
+        # On a compute node without internet access, wandb.Api() retries forever on
+        # ConnectionError instead of raising, so an offline run must never reach
+        # api.run(...), even when no local step is known.
         api = MagicMock()
         run = _FakeWandbRun(21)
         run.settings = SimpleNamespace(mode="offline")
@@ -147,9 +147,8 @@ class TestBumpOnResume(unittest.TestCase):
         api.run.assert_not_called()
 
     def test_local_last_step_bumps_without_touching_api(self):
-        # The common offline-resume path: CheckpointSaver already persisted
-        # the step locally, so the bump must use it directly and never call
-        # wandb.Api() at all (online or offline).
+        # Usual resume path: CheckpointSaver persisted the step locally, so the bump
+        # uses it and never calls wandb.Api() (online or offline).
         api = MagicMock()
         run = _FakeWandbRun(21)
         run.settings = SimpleNamespace(mode="offline")
@@ -189,9 +188,9 @@ class TestLocalLastStep(unittest.TestCase):
 
 
 class TestResumeStepCollisionScenario(unittest.TestCase):
-    """Replay of LPT-B multi 1.2 (W&B run es6alp7s): job 1 vals at
-    epochs 5..25 lived at _step 51, 102, ...; job 2 train logs of
-    epochs 78, 83, ... reused those steps and W&B merged the rows.
+    """Requeued run: job 1 logged validation at epochs 5..25 at _step 51, 102, ...; after
+    resuming, job 2 restarts from a low local _step, so without the bump its train logs of
+    epochs 78, 83, ... reuse those steps and W&B merges the rows.
     """
 
     JOB1_VAL_STEPS = {5: 51, 10: 102, 15: 153, 20: 204, 25: 255, 70: 714}

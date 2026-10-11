@@ -90,8 +90,9 @@ def _pairwise_backbone_cosine_similarities(backbone_grads_by_task):
 def _grad_norm_with_amp_probe(loss, params, probe_scale=1.0):
     """L2 grad norm of ``loss`` w.r.t. ``params``, AMP underflow-safe.
 
-    Scene-level losses (mean-pooled multilabel/classification) produce tiny
-    per-point grads that underflow to 0 in fp16 when probed without scaling.
+    Tile-level losses (e.g. ``tile_distribution`` tasks, pooled over a whole
+    tile) produce tiny per-point grads that underflow to 0 in fp16 when probed
+    without scaling.
     Multiplying the loss by ``probe_scale`` (then dividing the norm) mirrors
     GradScaler and recovers a finite norm. If the scaled probe overflows,
     fall back to an unscaled probe.
@@ -262,7 +263,7 @@ def compute_task_last_layer_grad_norms(
     """Per-task (or per-group) L2 norm of grads w.r.t. the backbone last layer.
 
     Uses raw (unweighted) task losses. Under AMP, pass ``probe_scale`` > 1
-    (e.g. 1024) so scene-level losses do not underflow to a zero norm in
+    (e.g. 1024) so tile-level losses do not underflow to a zero norm in
     fp16. Does not write into ``.grad``. Non-finite / zero norms are omitted.
 
     ``task_groups`` optionally maps task_name -> group_name; tasks sharing a
@@ -348,8 +349,10 @@ def combine_weighted_task_losses(loss_by_task, task_weights, scales=None):
 class GradNormLiteEMA:
     """Per-task EMA of last-layer gradient norms for loss reweighting.
 
-    Checkpointed via ``CheckpointSaver`` / ``CheckpointLoader``
-    (``grad_norm_lite_state``) so a Slurm requeue does not reset the scales.
+    Each task's loss is scaled by ``1 / EMA(norm)`` so that all tasks push
+    the shared last layer with comparable gradient magnitude. Checkpointed via
+    ``CheckpointSaver`` / ``CheckpointLoader`` (``grad_norm_lite_state``) so a
+    resume (e.g. after a Slurm requeue) does not reset the scales.
     """
 
     def __init__(self, alpha=0.1, eps=1e-3):
@@ -415,7 +418,7 @@ class GradNormState:
     to the number of groups. Unlike :class:`GradNormLiteEMA` this keeps genuine
     learnable parameters plus their Adam optimizer state and the per-group
     initial-loss anchors ``L_g(0)`` -- all checkpointed via
-    ``CheckpointSaver`` / ``CheckpointLoader`` so a Slurm requeue does not reset
+    ``CheckpointSaver`` / ``CheckpointLoader`` so a resume does not reset
     the learned balance.
 
     Weight update (per :meth:`update` call, driven every ``grad_norm_interval``

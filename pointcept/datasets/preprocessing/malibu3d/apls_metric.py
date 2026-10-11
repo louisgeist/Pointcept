@@ -34,7 +34,8 @@ Practical sum (undirected graphs, ``D`` symmetric):
 Dataset-level aggregation is a pair-count-weighted average across ROIs (using the
 GT->pred denom), then an unweighted macro-average across network channels.
 
-numpy/scipy only -- no geopandas/shapely dependency.
+The metric itself uses numpy and scipy; ``NETWORK_TYPES`` / ``LoadedNetworkGraph`` are
+imported from ``network_label_utils`` (which imports geopandas).
 """
 
 from __future__ import annotations
@@ -190,12 +191,10 @@ def _closest_point_on_skeleton(
 ) -> Tuple[str, float, dict]:
     """Closest point on the undirected straight-edge skeleton to ``query``.
 
-    Returns ``(kind, dist, info)`` where ``kind`` is ``'node'`` or ``'edge'``.
-    Prefers an existing node when distances are within ``_NODE_REUSE_EPS_M``.
-
-    The edge search is fully vectorized over all edges at once (a plain Python loop here
-    is the dominant cost of ``match_control_points`` -- this function is called once per
-    query point, and used to re-loop over every edge in Python each time).
+    Returns ``(kind, dist, info)`` where ``kind`` is ``'node'``, ``'edge'`` or ``'none'``
+    (empty graph). Prefers an existing node when distances are within
+    ``_NODE_REUSE_EPS_M``. The edge search is vectorized over all edges, since this runs
+    once per query point.
     """
     q = np.asarray(query, dtype=np.float64).reshape(2)
     n = int(node_xy.shape[0])
@@ -257,10 +256,8 @@ def _split_edge_at_point(
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, int]:
     """Split ``edges[edge_idx]`` at ``point`` (fraction ``t`` along u->v).
 
-    Functional (numpy-array) style -- returns the updated ``(node_xy, edges, lengths,
-    new_node_idx)`` rather than mutating Python lists in place, since growing a plain
-    numpy array by concatenation is far cheaper here than round-tripping through
-    per-element Python lists on every call (this runs once per matched query point).
+    Returns the updated ``(node_xy, edges, lengths, new_node_idx)``; the inputs are
+    not modified.
     """
     u, v = int(edges[edge_idx, 0]), int(edges[edge_idx, 1])
     new_idx = node_xy.shape[0]
@@ -289,7 +286,6 @@ def match_control_points(
     - if closest is mid-edge -> split that edge and insert a node.
 
     Returns ``(possibly_augmented_graph, match_idx)`` with ``match_idx`` shape ``(Q,)``.
-    numpy only.
     """
     query_xy = np.asarray(query_xy, dtype=np.float64).reshape(-1, 2)
     n_q = int(query_xy.shape[0])

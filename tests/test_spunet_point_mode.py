@@ -1,9 +1,8 @@
-"""Correctness tests for SpUNet-v1m1's point_mode (per-point encoder
-multiscale output for GridProbeSegmentorV2), independent of _pooling_inverse
-itself: rebuilds the fine->coarse voxel correspondence from scratch via a
-plain Python coordinate dict and cross-checks the broadcast features.
+"""SpUNet-v1m1 point_mode / dec_point_mode (per-point multi-scale encoder/decoder features for
+GridProbeSegmentorV2): _pooling_inverse checked against a plain-Python coordinate reference, and the output
+channel counts. Needs CUDA + spconv; skipped otherwise.
 
-Run with: PYTHONPATH=./ pytest tests/test_spunet_point_mode.py
+Run with: PYTHONPATH=. pytest tests/test_spunet_point_mode.py
 """
 
 import unittest
@@ -37,9 +36,8 @@ def _reference_pooling_inverse(fine_indices, coarse_indices, stride):
 
 
 def _walk_like_grid_probe(point):
-    """Reproduces grid_probe.py's `_forward_backbone` walk exactly (decoder
-    side via unpooling_parent, then encoder side via pooling_parent), so
-    tests exercise the same code path GridProbeSegmentorV2 actually uses."""
+    """Reproduces the feature walk of `_forward_backbone` in models/grid_probe.py (decoder side via
+    unpooling_parent, then encoder side via pooling_parent)."""
     point_list = [point]
     while "unpooling_parent" in point_list[-1].keys():
         point_list.append(point_list[-1].pop("unpooling_parent"))
@@ -240,11 +238,9 @@ class TestSpUNetPointMode(unittest.TestCase):
         self.assertEqual(feat.shape, (n, expected_channels))
 
     def test_dec_stage0_output_row_order_matches_stem(self):
-        """The concat in forward() assumes dec-stage-0's output rows already
-        align with skips[0] (stem) row-for-row — same invariant the plain
-        (non-point-mode) decoder relies on for its own skip-connection concat.
-        Verify it explicitly via an independent coordinate-based check rather
-        than trusting it."""
+        """The concat in forward() assumes dec-stage-0's output rows align row-for-row
+        with skips[0] (stem), as the plain decoder's skip concat does; check it on the
+        voxel indices."""
         model, input_dict, n = self._make_model_and_input(
             stride=3, point_mode=False, dec_point_mode=False
         )

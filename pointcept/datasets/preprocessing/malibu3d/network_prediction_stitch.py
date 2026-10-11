@@ -1,13 +1,11 @@
-"""Stitch per-subtile predicted network probability rasters into one ROI-level raster.
+"""Stitch per-tile predicted network probability rasters into one ROI-level raster.
 
-The GT network graphs (exported by Flair3D-build) are per-ROI, but Pointcept trains and
-predicts per-subtile (see ``rasterize_network.py`` module docstring for the subtile/ROI
-distinction). ``MultiTaskTester`` (``pointcept/engines/test.py``) already writes one
-``{patch_id}_logits_network.npy`` ``(C, H, W)`` soft-probability raster per subtile, using the
-exact same grid as that subtile's ``meta.json["network"]`` (written at preprocessing time by
-``rasterize_network.py:process_patch``). All subtile grids snap to the same global absolute
-1 m Lambert-93 lattice (``GridSpec`` origins are always integer multiples of ``pixel_m``), so
-stitching is pure integer-offset placement -- no reprojection needed.
+Ground-truth network graphs are per ROI, while models predict per tile (subtile of a
+ROI). ``MultiTaskTester`` (``pointcept/engines/test.py``) writes one
+``{patch_id}_logits_network.npy`` ``(C, H, W)`` probability raster per tile, on the grid
+of that tile's ``meta.json["network"]`` (written by ``rasterize_network.py``). All tile
+grids snap to the same absolute 1 m Lambert-93 lattice (``GridSpec`` origins are integer
+multiples of ``pixel_m``), so stitching is integer-offset placement, no resampling.
 """
 
 from __future__ import annotations
@@ -30,8 +28,8 @@ except ImportError:  # pragma: no cover
         GridSpec,
     )
 
-# Re-exported for callers that only need manifest/ROI-grouping / known-missing
-# exclusions (kept here so tools/eval_network_apls.py has a single import surface).
+# Re-exported so that tools/eval_network_apls.py imports tile grouping and
+# known-missing handling from this single module.
 try:
     from rasterize_network import (  # type: ignore  # noqa: F401
         ManifestPatch,
@@ -56,19 +54,16 @@ def group_by_roi_complete_only(
     *,
     drop_incomplete: bool = False,
 ) -> Tuple[List[Tuple[Path, dict, List[Path], dict]], List[dict]]:
-    """Group manifest patches by ROI for APLS / stitch eval.
+    """Group tiles by ROI for the stitched APLS evaluation.
 
-    For each ROI, only subtiles that exist locally (``coord.npy`` present) are
-    kept in ``patch_dirs``. Coverage metadata is attached so callers can log
-    ``N`` missing of ``X`` subtiles.
+    Returns ``(kept, excluded)``: ``kept`` holds ``(roi_dir, flags, patch_dirs,
+    coverage)`` with only the tiles present on disk (``coord.npy``), ``coverage``
+    counting the missing ones; ``excluded`` describes the dropped ROIs.
 
-    By default (``drop_incomplete=False``), incomplete ROIs are **kept** and
-    scored on the available subtiles (holes stay NaN in the stitch -- GT is
-    still the full-ROI graph, so the score can be pessimistic; the log/JSON
-    make that explicit). Set ``drop_incomplete=True`` to restore the old
-    Jean-Zay-strict behaviour (drop any ROI with a missing local subtile).
-
-    ROIs with **zero** local subtiles are always excluded.
+    With ``drop_incomplete=False`` (default), a ROI with missing tiles is kept and
+    scored on the available ones (holes stay NaN in the stitch while the GT is the
+    full-ROI graph, so the score can be pessimistic). ``drop_incomplete=True`` drops
+    it. ROIs without any tile on disk are always excluded.
     """
     grouped: Dict[Path, List["ManifestPatch"]] = defaultdict(list)
     for patch in patches:
@@ -160,11 +155,10 @@ def patch_network_is_confirmed_empty(
 ) -> bool | None:
     """Whether ``meta.json`` confirms zero GT pixels for every ``network_types`` channel.
 
-    ``rasterize_network.py`` skips writing ``network.npy`` for a subtile once it has
-    zero positive pixels across the requested channels (nothing to rasterize) -- that
-    is the common, harmless reason a ``{patch_id}_logits_network.npy`` prediction is
-    absent (myria3d/Pointcept never see a raster grid to predict onto). This lets
-    callers tell that apart from a genuine coverage gap.
+    ``rasterize_network.py`` writes no ``network.npy`` for a tile without any positive
+    pixel, which is the usual, harmless reason why a ``{patch_id}_logits_network.npy``
+    prediction is absent. This lets callers tell that case apart from a real coverage
+    gap.
 
     Returns ``None`` when it can't be determined (missing/malformed meta.json, or a
     requested channel has no recorded pixel count) -- treat that conservatively as
@@ -196,11 +190,11 @@ def stitch_roi_predictions(
     combine: str = "nanmean",
     allow_missing_predictions: bool = False,
 ) -> Tuple[np.ndarray, GridSpec]:
-    """Place each subtile's predicted ``(C,H,W)`` raster onto one shared ROI raster.
+    """Place each tile's predicted ``(C,H,W)`` raster (read from ``save_path``) onto one ROI raster.
 
     Returns ``(roi_probs, roi_grid)``: ``roi_probs`` is ``(C, H_roi, W_roi)`` float32
-    with NaN for cells no subtile *observed by LiDAR* (a real, model-independent gap --
-    both GT and prediction are blind there, so treating it as unobserved is fair).
+    with NaN for cells covered by no tile grid (no LiDAR there, so neither GT nor
+    prediction exists).
     ``C`` is inferred from the first available ``{patch_id}_logits_network.npy``.
     Overlapping subtile cells are combined per ``combine`` (``"nanmean"`` default;
     ``"max"``/``"first"`` for sensitivity checks).

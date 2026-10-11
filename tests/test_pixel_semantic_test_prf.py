@@ -1,9 +1,7 @@
-"""
-Tests for binary_prf_counts (pointcept.utils.misc) and the dilated P/R/F1 path
-used by MultiTaskTester for pixel_semantic tasks (e.g. network) from a scene's
-dense prediction/target grids.
+"""binary_prf_counts (exact TP/FP/FN) and the dilated precision/recall/F1 that MultiTaskTester computes for
+pixel_semantic tasks from a scene's dense prediction/target grids.
 
-Run with: PYTHONPATH=./ pytest tests/test_pixel_semantic_test_prf.py
+Run with: PYTHONPATH=. pytest tests/test_pixel_semantic_test_prf.py
 """
 
 import unittest

@@ -1,7 +1,7 @@
-"""
-Tests for apply_subset_selection: stratified sidecar filter and max_sample head slice.
+"""apply_subset_selection (stratified-subset CSV filter, max_sample head slice, include_names) and
+scene_matches_include_name.
 
-Run with: PYTHONPATH=./ pytest tests/test_apply_subset_selection.py
+Run with: PYTHONPATH=. pytest tests/test_apply_subset_selection.py
 """
 
 import csv

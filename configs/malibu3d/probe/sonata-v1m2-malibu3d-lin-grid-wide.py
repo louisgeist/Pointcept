@@ -1,23 +1,14 @@
 """
-Sonata-v1m2 wide grid-search linear probe on MALiBU3D segment (v20) — Jean Zay.
-
-Explicit nested-loop cartesian (no cartesian_probes helper): loss × lr × wd ×
-input_norm (unitsphere), all AdamW + CosineAnnealing. Shared frozen PT-v3m2
-forward once per batch — see pointcept/models/grid_probe.py and GridProbeTrainer.
-
-Intended checkpoint (pretrain job 862680, epoch 9):
-  /lustre/fsn1/projects/rech/unv/usi32yh/logs/pointcept_logs/slurm/862680/model/epoch_9.pth
-Launch via scripts/sonata/sbatch_lin_grid_probe.sh (A100) or _h100.sh.
-
-Grid (336 probes):
-  4 losses (ce_lovasz, ce, focal_g2, focal_g1)
-  × 7 LRs (1e-5 … 5e-2)
-  × 3 weight decays (0, 1e-4, 1e-6)
-  × 4 input_norm (l2, linf, l1, none)
-  Fixed: feat_norm=None, dropout=0, AdamW, CosineAnnealingLR, grad_clip=3.0.
-
-Val uses stratified 2k subset capped at max_sample=100. Final winner gets a
-full test pass.
+Wide linear-probe grid search on a frozen Sonata encoder for MALiBU3D land-cover segmentation
+(`segment`, v20). Same backbone, pipeline and winner selection as sonata-v1m2-malibu3d-lin-grid.py,
+with 336 probes trained on one shared backbone forward pass:
+  4 losses (CE + Lovasz, CE, focal gamma=2, focal gamma=1)
+  x 7 learning rates (1e-5 to 5e-2)
+  x 3 weight decays (0, 1e-6, 1e-4)
+  x 4 input normalizations (l2, linf, l1, none),
+all with AdamW, cosine annealing, no feature norm, no dropout, grad clip 3.
+10k iterations; validation on 100 tiles of the stratified validation subset; the winning
+probe gets a full test pass. Pass the checkpoint with --options weight=<path>.
 """
 
 _base_ = ["../../_base_/default_runtime.py"]
@@ -31,7 +22,7 @@ batch_size = batch_size_per_gpu * num_gpu
 batch_size_val = 1
 batch_size_test = max(1, batch_size // 2)
 num_worker = 8 * num_gpu
-num_worker_test = 2  # packed grid-probe test loader OOMs above this locally/on JZ
+num_worker_test = 2  # more test workers run out of host RAM (dense test clouds)
 mix_prob = 0.8
 empty_cache = False
 enable_amp = True
@@ -53,7 +44,7 @@ wandb_run_name = (
 )
 
 # -----------------------------------------------------------------------------
-# Labels (segment v20)
+# Labels (segment v20: 15 classes + void), must match malibu3d_label_remap v20.
 # -----------------------------------------------------------------------------
 label_definitions = dict(segment="v20")
 num_classes = 15
@@ -78,7 +69,7 @@ names = [
 ]
 
 # -----------------------------------------------------------------------------
-# Grid-search probes — explicit loss × lr × wd × input_norm loops
+# Grid-search probes: loss x lr x weight decay x input_norm
 # -----------------------------------------------------------------------------
 _losses = {
     "ce_lovasz": [
@@ -127,7 +118,7 @@ _wds = {
     "1e-6": 1e-6,
 }
 
-# Unitsphere feature normalization (ProbeHead.input_norm).
+# input_norm projects the features onto the l2 / linf / l1 unit sphere before the head.
 _norms = {
     "l2": "l2",
     "linf": "linf",
@@ -268,7 +259,7 @@ data = dict(
         csv_manifest=csv_manifest,
         min_points=min_points,
         stratified_subset_manifest=val_stratified_subset_manifest,
-        # Wider than periodic lin-probe (20): stabler ranking across 336 probes.
+        # More val tiles than the other probes (20) for a stabler ranking of 336 probes.
         max_sample=100,
         target_keys=["segment"],
         primary_target_key="segment",
@@ -347,7 +338,7 @@ hooks = [
     ),
     dict(type="IterationTimer", warmup_iter=2),
     dict(type="InformationWriter"),
-    # cls IoU off: 336 probes × 15 classes every eval would dominate the log.
+    # Per-class IoU off: 336 probes x 15 classes per evaluation would flood the log.
     dict(type="GridProbeEvaluator", write_cls_iou=False),
     dict(type="GridProbeCheckpointSaver"),
     dict(type="CheckpointSaver", save_freq=None),

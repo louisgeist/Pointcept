@@ -1,37 +1,21 @@
 """
-LitePT-Base grid-search linear probing on OpenGF (ground filtering) --
-encoder multiscale variant. Same frozen backbone checkpoint (job 873542,
-MALiBU3D multitask supervised pretrain) as the DALES/H3D/ECLAIR LitePT-B
-lin-grid-enc siblings, for cross-domain comparability.
+Frozen LitePT-B (MALiBU3D multitask checkpoint, ckpt/litept-b/model.pth) linear probing on OpenGF
+ground filtering (Ground / Non-ground).
 
-Binary task: 0=Ground, 1=Non-ground. On-disk `segment.npy` actually carries a
-3rd raw label (2=Outlier, ~0.05-0.5% of points depending on scene, see
-preprocessing/opengf/preprocess_opengf.py). Train/val merge it into
-Non-ground via `RemapSegment` -- Qin et al.'s official "outliers treated as
-NG" training convention (CVPRW 2021 Sec 4.4). **Test evaluates "Test II
-(w/o outliers)"**: `data.test` is restricted to `T2` (the only test region
-with outlier points; `include_names="T2"`) and uses `DropSegmentClass`
-instead of `RemapSegment` -- outliers are physically deleted before the
-model sees them (Sec 4.5), not just excluded from the loss/metric like
-`ignore_index` would do. To instead reproduce "Test II (w outliers)" or
-"Test I" (T1, no outliers either way), swap `DropSegmentClass` back for
-`RemapSegment` and/or change `include_names`.
+Probe input: encoder multi-scale features (enc_mode=True): the 5 encoder stages, broadcast back to
+the input points and concatenated (1386 channels). Default probing protocol (Tab. 3 of the MALiBU3D
+paper).
 
-OpenGF ships its own held-out `val` split (9 scenes, one per training
-terrain) -- unlike DALES, val != test here (mirrors the H3D config shape).
+GridProbe: 12 linear probes (CE + Lovasz, AdamW, wd=0, OneCycleLR, lr from 1e-4 to 5e-1) share one
+frozen-backbone forward; tools/grid_then_seeds.py then re-trains the probe with the best validation
+mIoU with 10 seeds.
 
-strength_feat_scale reuses DALES's `1/60000` convention (raw LAS intensity ->
-MALiBU3D [0,1]): OpenGF's observed intensity range (checked on a local
-download) tops out around 60000-65000, same order of magnitude as DALES'.
-
-Encoder levels (enc_mode), grid, probe grid, and hook wiring are copied
-verbatim from litept-b-v1m0-dales-lin-grid-enc.py, except `epoch`: OpenGF has
-~5.2x more train tiles than DALES (1359 vs 261), so DALES' `epoch=400` would
-give ~5.2x more total iterations too -- lowered to `epoch=50` here so total
-iterations (epoch * train_tiles // batch_size, ~3900) land in DALES' own
-ballpark (~3900) instead. Same rationale applies to every other OpenGF
-lin-grid config (all at `epoch=50`) and the from-scratch
-semseg-litept-b-v1m0-opengf.py (`epoch=200`, DALES' from-scratch ballpark).
+OpenGF has no usable RGB: color is replaced by the checkpoint's learned mask value; raw intensity is
+scaled by 1/60000. Mix3D is off (mix_prob=0) for all OpenGF configs. Outlier points (raw label 2)
+are merged into Non-ground for training and validation (Qin et al., CVPRW 2021, Sec. 4.4); the test
+split is restricted to region T2 with outliers removed ("Test II w/o outliers", Sec. 4.5). To
+evaluate "Test II with outliers" or "Test I", use RemapSegment instead of DropSegmentClass and/or
+change include_names. skip_test=True leaves testing to the seed phase.
 """
 
 _base_ = ["../_base_/default_runtime.py"]
@@ -47,7 +31,7 @@ coord_feat_scale = 0.01  # must match MALiBU3D multitask pretrain
 strength_feat_scale = 1 / 60000  # OpenGF raw intensity -> MALiBU3D [0,1] convention (DALES-like range)
 
 num_gpu = 1
-epoch = 50  # ~3900 iters (1359 train tiles // 24) -- roughly DALES's ballpark, see decision context
+epoch = 50  # OpenGF has ~5x more train tiles than DALES (400 epochs): similar iteration count
 eval_epoch = 10
 lr = 5e-2
 patch_size = 1024
@@ -59,7 +43,7 @@ batch_size_per_gpu = 24
 batch_size = batch_size_per_gpu * num_gpu
 batch_size_val = 1
 batch_size_test = 1
-num_worker = 24 * num_gpu  # H100 Jean-Zay
+num_worker = 24 * num_gpu
 num_worker_test = 2
 mix_prob = 0
 empty_cache = False
@@ -73,11 +57,10 @@ weight = "ckpt/litept-b/model.pth"
 
 wandb_project = f"pointcept_{dataset_type[:-7].lower()}"
 
-# Hooks
-# Order matters: GridProbeEvaluator before GridProbeCheckpointSaver/CheckpointSaver;
-# GridProbeWinnerSelector last (frees the per-probe optimizers/schedulers, then runs
-# its own SemSegTester pass on the winning probe — replaces PreciseEvaluator, which
-# never sets raw_model.active_probe and would break under GridProbeSegmentorV2).
+# Hooks. Order matters: GridProbeEvaluator before the checkpoint savers, and
+# GridProbeWinnerSelector last (frees the per-probe optimizers, picks the best probe
+# on validation and tests it unless skip_test=True). PreciseEvaluator is not used:
+# it does not select a probe.
 hooks = [
     dict(
         type="CheckpointLoader",
@@ -159,7 +142,7 @@ model = dict(
     backbone_out_channels=backbone_out_channels,
     backbone=dict(
         type="LitePT-v1",
-        in_channels=7,  # coord(3) + color(3, fake) + strength(1)
+        in_channels=7,  # coord(3) + color(3, absent: learned fill value) + strength(1)
         order=("z", "z-trans", "hilbert", "hilbert-trans"),
         stride=(3, 3, 3, 3),
         enc_depths=(3, 3, 3, 12, 3),

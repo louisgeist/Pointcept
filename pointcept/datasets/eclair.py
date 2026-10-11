@@ -10,20 +10,20 @@ from pointcept.utils.logger import get_root_logger
 
 @DATASETS.register_module()
 class ECLAIRDataset(DefaultDataset):
-    """ECLAIR aerial LiDAR semantic segmentation dataset.
+    """ECLAIR aerial LiDAR semantic segmentation dataset (11 classes, ids 0-10).
+
+    Scenes are written by preprocessing/eclair/preprocess_eclair.py; each has a
+    meta.json with the tile's ``review_category``.
 
     Args:
         include_pseudo: If True (default), keep all train scenes including
             pseudo-labeled tiles (`review_category == "rejected"`). If False,
             keep only approved (ground-truth) train scenes. Val/test are
             already GT-only in the official split.
-        min_points: Optional dict mapping split name to a minimum point-count
-            threshold. Tiles below it are excluded, checked against
-            `coord.npy`'s shape (read via `mmap_mode="r"`, so this doesn't
-            load full tiles into memory — cheap even for the whole split).
-            Unlike `MALiBU3DDataset.min_points`, no manifest column is needed
-            since ECLAIR has no national-scale csv_manifest. Mirrors
-            MALiBU3DDataset's restriction: "test" cannot be thresholded.
+        min_points: Optional dict mapping split name to a minimum point count.
+            Smaller tiles are excluded; the count is read from `coord.npy`'s
+            header (`mmap_mode="r"`), so no tile is fully loaded. As in
+            `MALiBU3DDataset`, the "test" split cannot be thresholded.
     """
 
     def __init__(self, include_pseudo=True, min_points=None, **kwargs):

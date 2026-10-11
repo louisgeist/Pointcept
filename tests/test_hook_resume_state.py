@@ -1,15 +1,7 @@
-"""
-Tests for the HookBase.state_dict()/load_state_dict() checkpoint-resume contract.
+"""HookBase.state_dict()/load_state_dict(): evaluator hooks persist their "best so far" trackers across a
+resume, so logged running-max curves do not reset (checkpoint selection itself uses trainer.best_metric_value).
 
-Several evaluator hooks (ClsEvaluator, RegressionEvaluator, MultiTaskEvaluator) track
-a "best metric so far" in a plain instance attribute purely for W&B/TensorBoard
-display (checkpoint *selection* itself only ever depends on trainer.best_metric_value,
-which CheckpointSaver/CheckpointLoader already persist). Before this state_dict hook
-was added, those instance attributes were not persisted across a resume and silently
-reset to their initial sentinel (-inf / {}), so a "best so far" curve — which should be
-a monotonic running max by construction — could visibly dip right after a resume.
-
-Run with: PYTHONPATH=./ pytest tests/test_hook_resume_state.py
+Run with: PYTHONPATH=. pytest tests/test_hook_resume_state.py
 """
 
 import unittest
@@ -164,7 +156,7 @@ class TestGridProbeEvaluatorResumeState(unittest.TestCase):
         self.assertIs(iou_hook._selected_last_by_probe(), iou_hook._last_miou_by_probe)
 
     def test_resume_pre_feature_checkpoint_with_miou_selection_ok(self):
-        # Old checkpoint: no "select_metric" key, no F1 dicts.
+        # Checkpoint without a "select_metric" key or F1 dicts.
         old_state = {
             "best_miou_by_probe": {"p0": 0.5},
             "best_cls_iou_by_probe": {},

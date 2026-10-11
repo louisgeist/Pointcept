@@ -2,27 +2,27 @@
 Standalone test pass for a saved GridProbe winner checkpoint.
 
 GridProbeWinnerSelector.after_train() (pointcept/engines/hooks/grid_probe.py)
-already runs this same test pass automatically at the end of a grid-probe
-job, but only when skip_test=False *and* training reaches after_train (a
-mini/no-test sweep, or a job killed by the Slurm walltime mid-run, leaves
-model/probe_best_<name>.pth on disk with no test ever run). This script
-reproduces that exact path standalone: build the model from the ORIGINAL
-grid config (same probes dict, so head architecture matches), load the
-backbone from cfg.weight (same keyword remap as the CheckpointLoader hook),
-load one probe head from a probe_best_<name>.pth file, set it as the
-active probe, and run the tester.
+runs this same test pass at the end of a grid-probe job, but only when
+skip_test=False *and* training reaches after_train. A sweep run without test,
+or a job stopped before the end, leaves model/probe_best_<name>.pth on disk
+untested. This script reproduces that path: build the model from the original
+grid config (same probes dict, so the head architecture matches), load the
+backbone from cfg.weight (same key remap as the CheckpointLoader hook), load
+one probe head from a probe_best_<name>.pth file, make it the active probe,
+and run the tester.
 
 Usage:
     export PYTHONPATH=$PWD
     python tools/test_grid_probe_winner.py \
-      --config-file configs/experiment/w109/5/13h_adamw_h3d/sonata-v1m2-h3d-lin-grid_6.py \
-      --options save_path=logs/slurm/1241411/test_probe_best \
-                probe_name=ce_lovasz_lr1e-2_wd0_do0_none_fnnone_adamw_w5 \
-                probe_weight=logs/slurm/1241411/model/probe_best_ce_lovasz_lr1e-2_wd0_do0_none_fnnone_adamw_w5.pth
+      --config-file configs/h3d/sonata-v1m2-h3d-lin-grid.py \
+      --options save_path=exp/h3d/sonata_grid/test_probe_best \
+                probe_name=<name> \
+                probe_weight=exp/h3d/sonata_grid/model/probe_best_<name>.pth
 
 probe_name must match a key of the config's `probes` dict (the
 probe_best_<name>.pth suffix). probe_weight is that file's path; cfg.weight
-(already set in the config) is used for the frozen backbone, unchanged.
+(set in the config, or via --options weight=ckpt/<name>/model.pth) is the
+frozen backbone.
 """
 
 from collections import OrderedDict

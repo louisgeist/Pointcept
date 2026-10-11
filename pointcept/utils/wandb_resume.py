@@ -5,7 +5,7 @@ never pass ``step=epoch`` to ``wandb.log``: after a Slurm requeue that value
 is below the run's internal step and W&B would drop the log. The remaining
 hazard is a *new process* that resumes the same run id while the local
 ``_step`` counter restarts near zero and collides with already-uploaded
-history (train logs of epoch N merge with leftover val logs of epoch N-73).
+history (logs of a late epoch get merged into the history row of an early one).
 
 Call ``bump_wandb_step_on_resume`` once after ``wandb.init(resume=...)`` so
 the next ``wandb.log`` lands past ``lastHistoryStep``.
@@ -13,11 +13,10 @@ the next ``wandb.log`` lands past ``lastHistoryStep``.
 The step is sourced locally (``wandb_last_step.txt`` next to
 ``wandb_run_id.txt`` in ``save_path``, refreshed each epoch by
 ``CheckpointSaver``) rather than via ``wandb.Api()``: that call ignores
-``WANDB_MODE=offline`` and, on a compute node with no internet egress (e.g.
-Jean Zay), blocks in an unbounded retry loop on ConnectionError instead of
-raising — silently burning the whole job's walltime before training even
-starts. The local file works identically online and offline and needs no
-network at all.
+``WANDB_MODE=offline`` and, on a compute node with no internet access,
+blocks in an unbounded retry loop on ConnectionError instead of raising,
+using up the job's walltime before training starts. The local file works
+identically online and offline.
 """
 
 import os

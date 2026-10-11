@@ -91,6 +91,9 @@ class Collect(object):
         optional_keys: keys to include only if present (e.g. "inverse" for test single-fragment).
         feat_scales: per-key multipliers applied only when building feat (not to keys).
         key_scales: per-key multipliers applied to entries listed in keys (e.g. elevation).
+        For color/normal/strength in feat_keys, an existing ``<key>_mask`` is collected
+        too, with ``<key>_feat_start/_end`` giving that modality's columns in ``feat``.
+        ``origin_offset`` is added when any ``origin_*`` key is present.
         """
         if offset_keys_dict is None:
             offset_keys_dict = dict(offset="coord")
@@ -297,17 +300,15 @@ class CenterShift(object):
 
 @TRANSFORMS.register_module()
 class ExtractAbsXY(object):
-    """Save absolute Lambert XY before geometric shifts normalize them away.
+    """Save absolute Lambert-93 XY (``abs_xy``) before augmentations move the points.
 
-    Reconstructs absolute XY in **float64** as ``coord.astype(f64) + coord_translation``
-    (MALiBU3D stores ``coord_translation`` as float64 and local ``coord`` as float32).
-    Do **not** cast the translation to float32 — that loses ~0.5–1 m at Lambert Y
-    and breaks 1 m network cell binning.
+    Computed in **float64** as ``coord.astype(f64) + coord_translation`` (MALiBU3D
+    stores ``coord_translation`` as float64 and local ``coord`` as float32). Do **not**
+    cast the translation to float32: that loses ~0.5-1 m at Lambert Y and breaks 1 m
+    raster cell binning.
 
-    This is a pre-augmentation buffer for network raster lookup; prefer converting
-    to integer cell indices via ``NetworkRasterToPointLabels`` before Collect.
-    Automatically appends ``abs_xy`` to ``index_valid_keys`` so GridSample
-    (including test voxelize) subsets it with the points.
+    Consumed by ``NetworkRasterToPointLabels``. Appends ``abs_xy`` to
+    ``index_valid_keys`` so GridSample (including test voxelize) subsets it with the points.
     """
 
     def __call__(self, data_dict):
@@ -328,29 +329,24 @@ class ExtractAbsXY(object):
 
 @TRANSFORMS.register_module()
 class NetworkRasterToPointLabels(object):
-    """Lookup binary pixel-semantic rasters onto points; emit int cell indices.
+    """Look up a binary pixel-semantic raster at each point; emit integer cell indices.
 
-    Converts ``data_dict[target_key]`` from ``(r, H, W)`` to point-wise ``(N, r)`` so
-    Mix3D carries labels with points. Also writes:
+    Converts ``data_dict[target_key]`` from ``(r, H, W)`` to point-wise ``(N, r)``
+    (``ignore_index`` outside the raster) so Mix3D carries the labels with the points.
+    Also writes:
 
-    - ``{target_key}_cell`` ``(N, 2)`` int64 — absolute Lambert cells ``(iy, ix)``
-      from ``floor(abs_xy / pixel_m)`` (Mix3D-safe pooling keys)
-    - ``{target_key}_pix`` ``(N, 2)`` int64 — relative ``(iy, ix)`` on the GT grid
+    - ``{target_key}_cell`` ``(N, 2)`` int64: absolute Lambert cells ``(iy, ix)``
+      from ``floor(abs_xy / pixel_m)`` (pooling keys that stay valid after Mix3D)
+    - ``{target_key}_pix`` ``(N, 2)`` int64: ``(iy, ix)`` relative to the GT grid,
       for dense test scatter
+    - ``{target_key}_height`` / ``_width`` when ``keep_grid_meta``
 
-    Binning uses ``abs_xy`` float64 (from ``ExtractAbsXY``) and float64 origins read
-    from ``{target_key}_origin_x`` / ``{target_key}_origin_y`` / ``{target_key}_pixel_m``.
+    Binning uses the float64 ``abs_xy`` (from ``ExtractAbsXY``) and the float64
+    ``{target_key}_origin_x`` / ``_origin_y`` / ``_pixel_m`` set by MALiBU3DDataset.
+    Use one instance per pixel task (``target_key="network"`` / ``"forest_2d"``); their
+    keys do not collide and their order does not matter.
 
-    ``target_key`` defaults to ``"network"`` so existing configs that instantiate this
-    transform without arguments (``dict(type="NetworkRasterToPointLabels")``) keep their
-    exact current behavior. Pass ``target_key="forest_2d"`` (or any other registered
-    pixel_semantic task name) to bin a different, independently-gridded raster, so e.g.
-    ``network`` and ``forest_2d`` can run as two separate instances of this transform in
-    the same pipeline without their cell/pix/grid-meta keys colliding.
-
-    Run after GridSample / SphereCrop and before ToTensor / Collect. When two instances
-    run on the same data_dict (one per pixel_semantic task), order between them does not
-    matter.
+    Run after GridSample / SphereCrop and before ToTensor / Collect.
     """
 
     def __init__(self, target_key="network", ignore_index=2, keep_grid_meta=True):
@@ -418,13 +414,9 @@ class NetworkRasterToPointLabels(object):
             data_dict[f"{key}_height"] = np.asarray([height], dtype=np.int64)
             data_dict[f"{key}_width"] = np.asarray([width], dtype=np.int64)
 
-        # NOTE: unlike the original single-task implementation, abs_xy is
-        # intentionally *not* popped here. A multi-task pipeline runs this
-        # transform once per pixel_semantic target (e.g. "network" then
-        # "forest_2d" on the same data_dict) and each instance needs abs_xy to
-        # still be present. Leaving it behind is harmless: Collect only gathers
-        # explicitly listed keys, so an un-Collected abs_xy is simply discarded
-        # with the rest of the per-sample dict.
+        # abs_xy is kept in data_dict: another instance of this transform (other
+        # pixel task) may still need it, and Collect drops it anyway. It only leaves
+        # index_valid_keys, while the now point-wise outputs join it.
 
         if "index_valid_keys" in data_dict:
             keys = [k for k in data_dict["index_valid_keys"] if k != "abs_xy"]
@@ -437,6 +429,8 @@ class NetworkRasterToPointLabels(object):
 
 @TRANSFORMS.register_module()
 class Z_MinShift(object):
+    """Shift ``coord`` so that the lowest point has z = 0."""
+
     def __call__(self, data_dict):
         if "coord" in data_dict.keys():
             z_min = data_dict["coord"][:, 2].min()
@@ -445,6 +439,8 @@ class Z_MinShift(object):
 
 @TRANSFORMS.register_module()
 class Z_RandomOffset(object):
+    """Add one random z offset ~ N(0, std) to the whole cloud."""
+
     def __init__(self, std=0.1):
         self.std = std
         
@@ -458,7 +454,7 @@ class Z_RandomOffset(object):
 class RandomDropout(object):
     def __init__(self, dropout_ratio=0.2, dropout_application_ratio=0.5):
         """
-        upright_axis: axis index among x,y,z, i.e. 2 for z
+        With probability dropout_application_ratio, randomly drop dropout_ratio of the points.
         """
         self.dropout_ratio = dropout_ratio
         self.dropout_application_ratio = dropout_application_ratio
@@ -562,7 +558,7 @@ class RandomRotateTargetAngle(object):
 
 @TRANSFORMS.register_module()
 class FixedScaleCoord(object):
-    """Deterministic uniform scale on ``coord`` (e.g. aerial /25 before GridSample)."""
+    """Deterministic uniform scale of ``coord`` (e.g. to match a backbone pre-trained at another scale)."""
 
     def __init__(self, scale=1.0):
         self.scale = float(scale)
@@ -974,6 +970,13 @@ class HueSaturationTranslation(object):
 
 @TRANSFORMS.register_module()
 class FillMissingFeat(object):
+    """Create ``feat_key`` as an ``(N, feat_dim)`` constant array when the scene lacks it.
+
+    Also sets ``{feat_key}_mask`` to all True, so models with a learned mask value
+    (Collect's ``<key>_mask``) treat the whole modality as missing. Used to feed
+    datasets without RGB (e.g. DALES) to backbones that expect color.
+    """
+
     def __init__(
         self,
         feat_key,
@@ -988,7 +991,6 @@ class FillMissingFeat(object):
     def __call__(self, data_dict):
         n = data_dict["coord"].shape[0]
         
-        # If the key `feat_key` is not in data_dict, create it and set the mask to True.
         if self.feat_key not in data_dict:
             data_dict[self.feat_key] = np.full(
                 (n, self.feat_dim), self.fill_value, dtype=np.float32
@@ -1000,6 +1002,12 @@ class FillMissingFeat(object):
 
 @TRANSFORMS.register_module()
 class RandomDropStrength(object):
+    """With probability ``drop_application_ratio``, zero ``drop_ratio`` of the intensities.
+
+    With ``keep_mask=True``, dropped points are flagged in ``strength_mask`` (OR-ed
+    with any existing mask) so the model can tell them from a true zero.
+    """
+
     def __init__(
         self,
         drop_ratio=0.2,
@@ -1038,7 +1046,9 @@ class RandomDropColor(object):
         keep_mask=False,
     ):
         """
-        upright_axis: axis index among x,y,z, i.e. 2 for z
+        With probability drop_application_ratio, zero drop_ratio of the colors.
+        With keep_mask=True, dropped points are flagged in color_mask (OR-ed with any
+        existing mask).
         """
         self.drop_ratio = drop_ratio
         self.drop_application_ratio = drop_application_ratio
@@ -1076,6 +1086,8 @@ class GridSample(object):
         test_single_fragment=False,
         voxel_repr="point",
     ):
+        # test_single_fragment (test mode only): one fragment with one point per voxel
+        # instead of count.max() fragments; an inverse map is always returned.
         # voxel_repr (test mode only):
         # - "point": keep one real point per voxel (i-th after hash sort; first if
         #   test_single_fragment=True).

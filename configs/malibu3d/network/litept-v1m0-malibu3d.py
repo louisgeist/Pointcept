@@ -1,11 +1,9 @@
 """
-LitePT-v1 on MALiBU3D (coord + RGB + strength in feat_keys).
-
-Mono-task MALiBU3D config for target ``network`` (binary 1 m Lambert pixel
-semantic segmentation of ROADS / RAILROADS / TRANSMISSION_LINES).
-
-Requires ``network.npy`` written by
-``rasterize_network.py`` and ``ExtractAbsXY`` before geometric shifts.
+LitePT-S trained from scratch on MALiBU3D road-network prediction alone: point features are
+max-pooled into 1 m Lambert pixels and each pixel is classified for the ROADS and RAILROADS
+masks (rasterized from the network graphs, CE + Lovasz). APLS is computed on the test split
+after training. Short schedule: 10k iterations, 500-iteration linear lr warmup, then constant lr.
+Self-contained: inherits only from _base_/default_runtime.py.
 """
 
 # -----------------------------------------------------------------------------
@@ -35,7 +33,7 @@ batch_size_test = batch_size // 4
 
 grid_size = 0.1
 point_max = 102400
-# Mix3D OK: NetworkRasterToPointLabels makes network point-wise before collate.
+# Mix3D is safe: NetworkRasterToPointLabels turns the raster into point labels before collation.
 mix_prob = 0.8
 
 patch_size = 1024
@@ -57,7 +55,7 @@ wandb_run_name = (
 wandb_project = "malibu3d_network"
 
 # -----------------------------------------------------------------------------
-# Mono-task configuration : targets configuration
+# Single-task configuration
 # -----------------------------------------------------------------------------
 from pointcept.datasets.malibu3d_config_utils import (
     init_task_configs,
@@ -73,15 +71,12 @@ task_configs = init_task_configs(target_keys)
 task_criteria = init_task_criteria(task_configs)
 task_weights = {main_task: 1.0}
 
-# Remove the imported helpers from this module's namespace so they do not leak
-# into the Pointcept config dict. The config loader (pointcept/utils/config.py)
-# treats every non-dunder module attribute as a config entry, and Config.dump
-# pipes the resulting Python text through yapf. Yapf cannot reformat function
-# objects rendered as "<function ... at 0x...>" and raises a SyntaxError.
+# Delete the imported helpers: the config loader turns every non-dunder module
+# attribute into a config entry, and Config.dump (yapf) fails on function objects.
 del init_task_configs, init_task_criteria
 
-# main_task drives checkpoint selection / mIoU logging, so its num_classes,
-# ignore_index and names are exposed at the data root for backward-compat hooks.
+# main_task drives checkpoint selection; its num_classes / ignore_index / names are
+# also exposed at the top level and in `data` for the hooks that read them there.
 num_classes = task_configs[main_task]["num_classes"]
 ignore_index = task_configs[main_task]["ignore_index"]
 names = task_configs[main_task]["names"]
@@ -97,7 +92,7 @@ hooks = [
     dict(type="MultiTaskEvaluator", write_cls_iou=True),
     dict(type="CheckpointSaver", save_freq=None),
     dict(type="PreciseEvaluator", test_last=False),
-    # After PreciseEvaluator only (end of training / tools/test.py) -- not on val.
+    # Must follow PreciseEvaluator: scores its saved test logits with APLS (never on val).
     dict(type="NetworkAPLSEvaluator"),
 ]
 
@@ -107,7 +102,7 @@ test = dict(type="MultiTaskTester", verbose=True, write_cls_iou=True)
 # -----------------------------------------------------------------------------
 # Model
 # -----------------------------------------------------------------------------
-# MultiTaskSegmentorV2: max-pool points into 1 m pixels, then Linear(C -> 2*r).
+# MultiTaskSegmentorV2: max-pool points into 1 m pixels, then Linear(C -> 2 classes x r channels).
 model = dict(
     type="MultiTaskSegmentorV2",
     backbone_out_channels=72,
@@ -224,7 +219,8 @@ data = dict(
                 type="Update",
                 keys_dict={"index_valid_keys": list(multitask_index_valid_keys)},
             ),
-            # Freeze Lambert XY before geometric augs / recentering.
+            # Keep absolute Lambert XY (before recentering and augmentation) for the
+            # raster-target lookup in NetworkRasterToPointLabels.
             dict(type="ExtractAbsXY"),
             dict(type="CenterShift", apply_z=True),
             dict(type="Z_MinShift"),

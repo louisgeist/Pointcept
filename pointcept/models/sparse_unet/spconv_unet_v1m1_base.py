@@ -22,15 +22,14 @@ from pointcept.models.utils.structure import Point
 
 
 def _pooling_inverse(fine_indices, coarse_indices, stride):
-    """For each row of `fine_indices` ([Nf, 4] = batch, z, y, x), the row of
-    `coarse_indices` ([Nc, 4]) it pools into under a stride-`stride`,
-    padding-0, kernel_size==stride SparseConv3d (a clean non-overlapping
-    partition: coarse_coord = fine_coord // stride, batch unchanged).
+    """Fine-to-coarse voxel mapping of a SpUNet down-sampling step.
 
-    Matches coordinates against the *actual* coarse tensor produced by
-    spconv (rather than trusting a derived formula for spconv's own output
-    coordinates) so this only depends on the pooling being a true partition,
-    not on spconv's internal offset convention.
+    For each row of `fine_indices` ([Nf, 4] = batch, z, y, x), returns the row
+    of `coarse_indices` ([Nc, 4]) it pools into, for a SparseConv3d with
+    kernel_size == stride and no padding (a non-overlapping partition:
+    coarse_coord = fine_coord // stride, batch unchanged). The match is done
+    against the coarse tensor actually produced by spconv, so it relies only on
+    the pooling being a partition, not on spconv's output-coordinate convention.
     """
     fine_key = fine_indices.clone()
     fine_key[:, 1:] = torch.div(fine_indices[:, 1:], stride, rounding_mode="floor")
@@ -50,12 +49,10 @@ def _pooling_inverse(fine_indices, coarse_indices, stride):
 
 
 def _walk_pooling_parent_chain(point):
-    """Consumes a pooling_parent/pooling_inverse chain (as built by
-    SpUNetBase._point_mode_forward) in place and returns the finest level's
-    fully concatenated feat — the same accumulation grid_probe.py's
-    _forward_backbone performs lazily on whatever Point a backbone returns,
-    but usable here immediately so the encoder chain can be merged into
-    dec_point_mode's own chain before returning from forward().
+    """Consume a pooling_parent/pooling_inverse chain (built by
+    SpUNetBase._point_mode_forward) and return the finest level's concatenated
+    features. Same walk as DefaultSegmentorV2 / GridProbeSegmentorV2, done here
+    so the encoder features can be appended to the dec_point_mode output.
     """
     while "pooling_parent" in point.keys():
         parent = point.pop("pooling_parent")
@@ -155,6 +152,9 @@ class SpUNetBase(nn.Module):
         base_channels=32,
         channels=(32, 64, 128, 256, 256, 128, 96, 96),
         layers=(2, 3, 4, 6, 2, 2, 2, 2),
+        # MALiBU3D additions: `stride` (int, or one value per stage) sets the
+        # kernel size and stride of the down/up-sampling convs (upstream: 2);
+        # `point_mode` / `dec_point_mode` are described below.
         stride=2,
         enc_mode=False,
         point_mode=False,
@@ -176,31 +176,23 @@ class SpUNetBase(nn.Module):
         self.num_stages = len(layers) // 2
         self.stride = _as_stage_strides(stride, self.num_stages)
         self.enc_mode = enc_mode
-        # point_mode: like enc_mode (no decoder), but instead of the
-        # classification-style global scatter-mean over the whole scene,
-        # returns a `Point` chain (stem -> stage0 -> ... -> bottleneck) with
-        # `pooling_parent`/`pooling_inverse` populated the same way
-        # PointTransformerV3's GridPooling does, so GridProbeSegmentorV2's
-        # generic encoder-multiscale walk (grid_probe.py) concatenates every
-        # stage's per-point feature (broadcast up to the finest/stem
-        # resolution) instead of collapsing to one vector per scene. No new
-        # trainable parameters — pure post-hoc reshaping of the already-frozen
-        # encoder forward pass, so it works with a checkpoint trained without
-        # this flag.
+        # point_mode: encoder multi-scale features for linear probing. Instead
+        # of logits, forward returns the encoder levels (stem, stage0, ...,
+        # bottleneck) as a Point chain linked by `pooling_parent` /
+        # `pooling_inverse`, like PT-v3's GridPooling, so that
+        # DefaultSegmentorV2 / GridProbeSegmentorV2 concatenate every level
+        # onto the finest voxels (unlike enc_mode, which returns one pooled
+        # vector per scene). No new parameters: works with any SpUNet checkpoint.
         self.point_mode = point_mode
-        # dec_point_mode: the decoder-side counterpart, mirroring LitePT/PT-v3's
-        # dec_traceable/traceable hypercolumn (decoder stages + encoder
-        # bottleneck): builds an `unpooling_parent`/`pooling_inverse` chain
-        # over the 4 decoder stage outputs + the bottleneck (832ch here), via
-        # the exact same _pooling_inverse coordinate matching as point_mode —
-        # decoder stage s's output lives on the identical voxel set as
-        # skips[s] (guaranteed by up[s] reusing down[s]'s indice_key), so the
-        # correspondence is recomputed directly from the decoder's own tensors
-        # rather than assumed. May be combined with point_mode=True: the
-        # encoder's raw multiscale (stem+stage0..stage2, bottleneck dropped to
-        # avoid duplicating it) is then concatenated on top, giving a ~1088ch
-        # "everything the frozen backbone computed" feature — see
-        # _dec_point_mode_forward and forward().
+        # dec_point_mode: the decoder counterpart (like LitePT dec_traceable):
+        # forward returns the decoder stage outputs and the bottleneck as a
+        # Point chain linked by `unpooling_parent` / `pooling_inverse`, giving
+        # a decoder hypercolumn (832 channels with the default `channels`).
+        # Decoder stage s lives on the same voxels as skips[s] (up[s] reuses
+        # down[s]'s indice_key), so the mapping is computed with
+        # _pooling_inverse as in point_mode. Combined with point_mode=True, the
+        # encoder levels except the bottleneck (already included) are appended
+        # (1088 channels with the default `channels`).
         self.dec_point_mode = dec_point_mode
 
         norm_fn = partial(nn.BatchNorm1d, eps=1e-3, momentum=0.01)
@@ -364,16 +356,14 @@ class SpUNetBase(nn.Module):
         if self.point_mode or self.dec_point_mode:
             enc_extra_feat = None
             if self.point_mode:
-                # Drop the bottleneck level when also building the decoder
-                # chain (dec_point_mode carries it already) to avoid
-                # concatenating the identical 256ch block twice.
+                # With dec_point_mode, the decoder chain already contains the
+                # bottleneck: leave it out here so it is not concatenated twice.
                 enc_levels = skips[:-1] if self.dec_point_mode else skips
                 enc_point = self._point_mode_forward(enc_levels)
                 if not self.dec_point_mode:
                     return enc_point
-                # Walk the pooling_parent chain now (mirrors grid_probe.py's
-                # own walk) to get the fully concatenated finest-level feat —
-                # enc_point.feat alone would just be the coarsest raw level.
+                # Concatenate the encoder levels now (enc_point.feat alone is
+                # only the coarsest level) to append them to the decoder output.
                 enc_extra_feat = _walk_pooling_parent_chain(enc_point)
             point = self._dec_point_mode_forward(skips)
             if enc_extra_feat is not None:
@@ -397,13 +387,12 @@ class SpUNetBase(nn.Module):
         return x.features
 
     def _point_mode_forward(self, skips):
-        """Build the stem->...->bottleneck Point chain for point_mode.
+        """Build the stem -> ... -> bottleneck Point chain for point_mode.
 
-        `skips` holds every encoder stage's SparseConvTensor, finest (stem,
-        post conv_input, pre any pooling) first and coarsest (bottleneck)
-        last — exactly the levels GridProbeSegmentorV2's encoder-multiscale
-        walk (grid_probe.py `_forward_backbone`) expects, in the same
-        finest-first concat order LitePT/PT-v3's enc_mode produces.
+        `skips`: the encoder SparseConvTensors, finest (stem output, before any
+        pooling) first and coarsest last. Returns the coarsest Point; its
+        `pooling_parent` chain gives the finest-first concatenation order of
+        LitePT / PT-v3 enc_mode.
         """
         points = [Point(feat=level.features) for level in skips]
         for s in range(len(skips) - 1, 0, -1):
@@ -414,15 +403,14 @@ class SpUNetBase(nn.Module):
         return points[-1]
 
     def _dec_point_mode_forward(self, skips):
-        """Build the bottleneck->...->dec-stage0 Point chain for dec_point_mode.
+        """Run the decoder and build its Point chain for dec_point_mode.
 
-        Mirrors PT-v3's GridUnpooling(traceable=True): at each decode step,
-        the *coarser* point (this step's input) keeps a `pooling_inverse`
-        mapping its own rows to the *finer* point (this step's output,
-        `unpooling_parent` on the finer -> coarser), so grid_probe.py's
-        decoder-side walk concatenates finest-first: dec-stage0's own feat,
-        then dec-stage1, dec-stage2, dec-stage3, then the bottleneck.
-        `skips` is consumed (popped) here, same as the plain decoder forward.
+        Mirrors PT-v3's GridUnpooling(traceable=True): each finer point links
+        to the coarser one through `unpooling_parent`, and the coarser point
+        holds the `pooling_inverse` mapping from the finer rows to its own.
+        The hypercolumn walk then concatenates dec-stage0, dec-stage1, ...,
+        and the bottleneck, finest first. `skips` is consumed (popped), as in
+        the plain decoder forward.
         """
         x = skips.pop(-1)  # bottleneck
         point = Point(feat=x.features)

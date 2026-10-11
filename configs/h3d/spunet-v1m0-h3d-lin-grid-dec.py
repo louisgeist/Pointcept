@@ -1,22 +1,16 @@
 """
-SpUNet-v1m1 grid-search linear probing on H3D — decoder (standard U-Net
-forward) variant, transfer from MALiBU3D multitask supervised pretrain (job
-1052217, w109/1/sp_final/multi-spunet-v1m0-malibu3d_1.py: channels=(32,64,128,
-256,256,128,96,96), layers=(2,3,4,6,2,2,2,2), stride=3).
+Frozen SpUNet (MALiBU3D multitask checkpoint, ckpt/spunet/model.pth) linear probing on H3D semantic
+segmentation (11 classes).
 
-Unlike LitePT/PT-v3-malibu, SpUNetBase's forward never returns a `Point`
-object (no `pooling_parent`/`unpooling_parent`), so GridProbeSegmentorV2's
-automatic multiscale hypercolumn concat does not apply here: with
-`num_classes=0` (final 1x1 conv disabled), the backbone just returns the
-standard full-resolution decoder output — 96ch (`channels[-1]`). See
-spunet-v1m0-h3d-lin-grid-enc.py for the encoder-multiscale counterpart (needs
-the new `point_mode` backbone flag to get a comparable per-point feature).
+Probe input: standard U-Net output, i.e. the last decoder stage only (96 channels; num_classes=0
+disables the final 1x1 conv). Probing-strategy study (Tab. A.11 of the MALiBU3D paper).
 
-Same probe grid as litept-b-v1m0-h3d-lin_dec.py (AdamW/wd0/OneCycleLR
-warmup5%, lr sweep over 12 values, epoch=2000/eval_epoch=10) for
-cross-backbone comparability. The frozen backbone is always in eval() mode, which freezes SpUNet's BatchNorm running stats (real BatchNorm1d, unlike PT-v3-malibu/LitePT's LayerNorm-dominated stages); SpUNet has no DropPath modules. H3D fill/aug/feature_mask_values unchanged from the
-LitePT-B H3D ref (no real intensity -> FillMissingFeat "strength").
-skip_test=False, log_test_f1=True (required for H3D lin-grid configs).
+GridProbe: 12 linear probes (CE + Lovasz, AdamW, wd=0, OneCycleLR, lr from 1e-4 to 5e-1) share one
+frozen-backbone forward; tools/grid_then_seeds.py then re-trains the probe with the best validation
+macro-F1 with 10 seeds.
+
+H3D has RGB but no intensity: strength is replaced by the checkpoint's learned mask value. The
+winning probe is tested on the test split with F1 logged (log_test_f1=True).
 """
 
 _base_ = ["../_base_/default_runtime.py"]
@@ -56,11 +50,10 @@ weight = "ckpt/spunet/model.pth"
 
 wandb_project = f"pointcept_{dataset_type[:-7].lower()}"
 
-# Hooks
-# Order matters: GridProbeEvaluator before GridProbeCheckpointSaver/CheckpointSaver;
-# GridProbeWinnerSelector last (frees the per-probe optimizers/schedulers, then runs
-# its own SemSegTester pass on the winning probe — replaces PreciseEvaluator, which
-# never sets raw_model.active_probe and would break under GridProbeSegmentorV2).
+# Hooks. Order matters: GridProbeEvaluator before the checkpoint savers, and
+# GridProbeWinnerSelector last (frees the per-probe optimizers, picks the best probe
+# on validation and tests it unless skip_test=True). PreciseEvaluator is not used:
+# it does not select a probe.
 hooks = [
     dict(
         type="CheckpointLoader",
@@ -96,11 +89,7 @@ names = [
 backbone_channels = (32, 64, 128, 256, 256, 128, 96, 96)
 backbone_out_channels = backbone_channels[-1]
 
-# -----------------------------------------------------------------------------
-# Grid-search probes — AdamW / OneCycleLR: ce_lovasz x lr x wd=0 x dropout=0 x
-# input_norm=none x feat_norm=none x optimizer=AdamW, warmup=5%
-# (1 x 12 x 1 x 1 x 1 x 1 x 1 = 12 probes).
-# -----------------------------------------------------------------------------
+# Grid-search probes — ce_lovasz, AdamW/wd0/OneCycleLR warmup5%, lr sweep only (12 probes).
 _losses = {
     "ce_lovasz": [
         dict(type="CrossEntropyLoss", loss_weight=1.0, ignore_index=ignore_index),
@@ -181,7 +170,7 @@ model = dict(
     backbone_out_channels=backbone_out_channels,
     backbone=dict(
         type="SpUNet-v1m1",
-        in_channels=7,  # coord(3) + color(3) + strength(1, fake/zero)
+        in_channels=7,  # coord(3) + color(3) + strength(1, absent: learned fill value)
         num_classes=0,  # disable final 1x1 conv — backbone returns per-point features
         channels=backbone_channels,
         layers=(2, 3, 4, 6, 2, 2, 2, 2),

@@ -2,10 +2,11 @@
 Regular XY grid tiling for Pointcept preprocessing.
 
 Splits a scene dict (coord + arbitrary aligned npy arrays) into spatial tiles
-on the horizontal plane, using the point cloud axis-aligned bounding box.
+on the horizontal plane, using the point cloud's axis-aligned bounding box.
+Tiles are named ``"<row>-<col>"`` with ``row`` the X index and ``col`` the Y index.
 
-- ``split_scene_xy_regular``: fixed ``N × N`` cells (same count along X and Y).
-- ``split_scene_xy_by_chunk_size``: physical step in XY ``(nx × ny`` may differ).
+- ``split_scene_xy_regular``: fixed ``N x N`` cells (same count along X and Y).
+- ``split_scene_xy_by_chunk_size``: target tile size in XY (``nx x ny`` may differ).
 """
 
 from __future__ import annotations

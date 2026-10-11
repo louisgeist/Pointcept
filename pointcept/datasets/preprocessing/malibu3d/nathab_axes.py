@@ -1,12 +1,10 @@
-"""Ecological-axis layout for on-disk ``natural_habitat.npy``.
+"""Ecological-axis layout of the on-disk ``natural_habitat.npy``.
 
-Pointcept preprocess bakes CarHab ids ``(N,)`` into ``uint8 (N, 4)`` using the
-same column order / LUTs as the MALiBU3D Hugging Face release
-(``Flair3D-build/scripts/hf_release/common.py``).
+preprocess_malibu3d.py converts per-point CarHab ids ``(N,)`` into ``uint8 (N, 4)``,
+with the same column order and LUTs as the MALiBU3D Hugging Face release.
 
-Column ``i`` matches ``NATHAB_AXIS_KEYS[i]`` and is produced by remapping
-storage definition ``default`` (CarHab 0..43) through
-``NATHAB_AXIS_DEFINITIONS[i]``.
+Column ``i`` is the ``NATHAB_AXIS_KEYS[i]`` target, obtained by remapping the
+stored CarHab ids (definition ``default``, 0..43) through ``NATHAB_AXIS_DEFINITIONS[i]``.
 """
 
 from __future__ import annotations
@@ -66,7 +64,7 @@ NATHAB_CARHAB_MAX_ID = 43
 NATHAB_ONDISK_DEFINITION = "ecological_axes"
 NATHAB_NUM_AXES = len(NATHAB_AXIS_KEYS)
 
-# meta.json extras under key "natural_habitat_layout" (alongside label_definitions).
+# Written to meta.json under "natural_habitat_layout" by preprocess_malibu3d.py.
 NATHAB_LAYOUT_META: Dict[str, object] = {
     "layout": "axes",
     "dtype": "uint8",
@@ -84,7 +82,7 @@ def is_nathab_axes_array(array: np.ndarray) -> bool:
 
 
 def is_nathab_carhab_array(array: np.ndarray) -> bool:
-    """True if ``array`` looks like legacy CarHab ids ``(N,)``."""
+    """True if ``array`` looks like unconverted CarHab ids ``(N,)``."""
     values = np.asarray(array)
     return values.ndim == 1
 

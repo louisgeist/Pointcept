@@ -4,7 +4,7 @@ Weights come from the Hugging Face repo (``hf auth login`` first while it is pri
 
     export PYTHONPATH=$PWD
     python scripts/hf_release/forward_example.py --model litept-b --tile <tile_name> --split val
-    python scripts/hf_release/forward_example.py --model ptv3 --weight ckpt_cleaned/ptv3/model.pth --tile <tile_name>
+    python scripts/hf_release/forward_example.py --model ptv3 --weight ckpt/ptv3/model.pth --tile <tile_name>
     python scripts/hf_release/forward_example.py --model sonata-pretrained --tile <tile_name>   # features only
 
 Multitask models (sonata-ft, litept-b, ptv3, spunet, kpconvx) print, per task, the predicted classes /

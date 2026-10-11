@@ -1,21 +1,10 @@
 """
-LitePT-Base semantic segmentation on H3D (coord + RGB point features).
+LitePT-B semantic segmentation on H3D (11 classes), trained from scratch: the "LitePT
+fully-supervised" reference of Tab. 3 of the MALiBU3D paper.
 
-Backbone dims and optimization recipe mirror the LitePT-Base used in
-configs/malibu3d/multi-litept-b-v1m0-malibu3d.py / configs/dales/semseg-litept-b-v1m0-dales.py,
-adapted to H3D single-task semseg (DefaultSegmentorV2, no multitask wiring)
-and trained from scratch (no pretrained weight). See
-configs/h3d/semseg-litept-v1m0-h3d.py for the LitePT-Small counterpart.
-
-H3D has real RGB but no native intensity (LAS intensity is all-zero), so
-features stay native: coord + color only. No FillMissingFeat / strength
-channel (those are reserved for GridProbes that must match a MALiBU3D
-pretrained 7-ch input). RandomDropColor + learned color masking follow the
-ECLAIR / MALiBU3D Lite-B RGB recipe.
-
-This config is intentionally self-contained: it inherits only from
-default_runtime and can be read top-to-bottom without cross-referencing
-other H3D configs.
+Single-task DefaultSegmentorV2 with the LitePT-B backbone of the MALiBU3D multitask model. Input
+features: coord + color only (H3D has no intensity). Color dropout (RandomDropColor) with a learned
+color mask value follows the MALiBU3D recipe.
 """
 
 # -----------------------------------------------------------------------------
@@ -34,10 +23,10 @@ num_exp = 1
 # Hardware parameters
 num_gpu = 1
 num_worker = 8 * num_gpu
-enable_amp = True  # LitePT-Base is heavier than Small; matches multi-litept-b-v1m0-malibu3d.py
+enable_amp = True
 
 # Data parameters
-batch_size = 12  # total batch size across all gpus; LitePT-Base convention (vs 24 for Small)
+batch_size = 12  # total batch size across all gpus
 batch_size_val = batch_size // 2
 
 grid_size = 0.1
@@ -95,7 +84,7 @@ model = dict(
         type="LitePT-v1",
         in_channels=6,  # coord (3) + color (3)
         order=("z", "z-trans", "hilbert", "hilbert-trans"),
-        # LitePT-Base dims (matches multi-litept-b-v1m0-malibu3d.py backbone).
+        # LitePT-B dims (same backbone as configs/malibu3d/multi-litept-b-v1m0-malibu3d.py).
         stride=(3, 3, 3, 3),
         enc_depths=(3, 3, 3, 12, 3),
         enc_channels=(54, 108, 216, 432, 576),

@@ -1,16 +1,15 @@
 """
-Sonata-v1m1 grid-search linear probing on H3D (coord scale 1/10) — official indoor release baseline
-for suppmat (cross-domain aerial).
+Frozen official indoor Sonata release (ckpt/sonata/pretrain-sonata-v1m1-0-base.pth) linear probing
+on H3D semantic segmentation (Tab. A.1 of the MALiBU3D paper).
 
-Frozen PT-v3m2 encoder (enc_mode=True → multi-scale concat 1232ch) from the
-Meta/HuggingFace Sonata pretrain (pretrain-sonata-v1m1-0-base.pth). Indoor
-backbone: in_channels=9 (coord+color+normal), stride=(2,2,2,2). H3D provides
-RGB (NormalizeColor); normals are zero-filled via FillMissingFeat. Scene coords
-are rescaled by 1/10 before GridSample; grid_size=0.02 (native indoor Sonata pretrain).
+Probe input: encoder multi-scale features (enc_mode=True, 1232 channels) of the indoor PT-v3m2
+backbone (in_channels=9: coord, color, normal; stride 2). Coordinates are divided by 10 to approach
+indoor scene scale and the grid keeps the indoor pretraining size (0.02). H3D RGB is used; normals
+are zero-filled.
 
-AdamW / wd=0 / OneCycleLR warmup 5%, lr swept over 12 values. select_metric=
-macro_f1. epoch=2000 / eval_epoch=10. Chain into seed ensemble via
-tools/grid_then_seeds.py.
+GridProbe: 12 linear probes (CE + Lovasz, AdamW, wd=0, OneCycleLR, lr from 1e-4 to 5e-1) share one
+frozen-backbone forward; tools/grid_then_seeds.py then re-trains the probe with the best validation
+macro-F1 with 10 seeds.
 """
 
 _base_ = ["../_base_/default_runtime.py"]

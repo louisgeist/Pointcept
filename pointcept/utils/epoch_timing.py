@@ -11,6 +11,7 @@ import pointcept.utils.comm as comm
 
 
 def begin_epoch_wall_timing():
+    """Synchronize CUDA and return the start time for ``finalize_epoch_wall_timing``."""
     if torch.cuda.is_available():
         torch.cuda.synchronize()
     return time.perf_counter()
@@ -24,6 +25,12 @@ def finalize_epoch_wall_timing(
     wandb_dict=None,
     log_console=False,
 ):
+    """Measure the wall time since ``start_time`` (all ranks synchronized) and log it.
+
+    On the main process, ``{prefix}/s_per_epoch`` and ``{prefix}/h_per_epoch`` are added
+    to ``wandb_dict`` when given, else logged to W&B directly (if enabled). Returns the
+    elapsed seconds.
+    """
     if torch.cuda.is_available():
         torch.cuda.synchronize()
     comm.synchronize()

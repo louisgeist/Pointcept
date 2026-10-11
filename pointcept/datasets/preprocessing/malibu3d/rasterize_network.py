@@ -1,29 +1,28 @@
-"""Standalone backfill: write network.npy (3, H, W) binary masks per MALiBU3D tile.
+"""Write the ``network.npy`` (3, H, W) binary masks of every MALiBU3D tile from the road graphs.
 
-Driven by the tile CSV (MALiBU3D ``tiles.csv`` or a legacy split manifest, read
-via ``tile_catalog.py``; same contract as ``preprocess_malibu3d``): each LiDAR
-tile must already exist under ``data_root`` with ``coord.npy``. Missing patches are hard errors (manifest is the source of
-truth; disk is only checked). Known-missing tiles listed in
-``missing_coord_tiles.details.csv`` are skipped.
+Driven by the tile CSV (``tiles.csv`` or an older split manifest, read via
+``tile_catalog.py``): each tile must already exist under ``data_root`` with
+``coord.npy`` (missing tiles are errors, except those listed in the known-missing file,
+default ``data/malibu3d/missing_coord_tiles.details.csv``).
 
-Loads graphs exported by Flair3D-build ``export_network_graphs.py``, densifies
-each ROI network once into unique 1 m Lambert cells (longitudinal step plus
-optional lateral ``± line_width_m / 2`` offsets), then slices those cells into
-per-patch grids. Empty masks write ``meta.network`` only (no ``network.npy``).
+Ground-truth networks are graphs (``{dept}_{roi}_{NETWORK}_graph.gpkg``, one per ROI
+and network type, read from each ROI directory, which is the Hugging Face layout, or
+from ``--network_graphs_root``). Each ROI graph is densified once into unique 1 m
+Lambert-93 cells (longitudinal step plus optional lateral ``± line_width_m / 2``
+offsets), which are then sliced into each tile's grid. Channels follow
+``NETWORK_TYPES`` (ROADS, RAILROADS, TRANSMISSION_LINES). Tiles without any positive
+pixel only get ``meta.json["network"]`` (``empty: true``), no ``network.npy``.
 
-Every ``*_graph.gpkg`` found under ``--network_graphs_root`` (default: each ROI
-directory, the Hugging Face layout of the dataset) is rasterized. Only
-ROADS has a catalog flag (``has_roads_graph``, legacy ``ROADS``): a ``True`` flag
-with a missing ROADS graph is a hard error. RAILROADS / TRANSMISSION_LINES have
-no flag (not released) and are rasterized whenever their graph exists.
+Only ROADS has a catalog flag (``has_roads_graph``, older ``ROADS``): a ``True`` flag
+with a missing ROADS graph is an error. RAILROADS / TRANSMISSION_LINES have no flag and
+are rasterized whenever their graph exists.
 
 Example::
 
-python pointcept/datasets/preprocessing/malibu3d/rasterize_network.py \
-    --data_root data/malibu3d \
-    --network_graphs_root /data/geist/Flair3D-build/data/network_graphs \
-    --split_manifest_csv data/malibu3d/tiles_D067.csv \
-    --num_workers 24
+    python pointcept/datasets/preprocessing/malibu3d/rasterize_network.py \
+        --data_root data/malibu3d \
+        --split_manifest_csv data/malibu3d/tiles.csv \
+        --num_workers 16
 """
 
 from __future__ import annotations
@@ -41,7 +40,7 @@ import numpy as np
 from tqdm import tqdm
 
 # Prefer sibling imports so this script runs without the full Pointcept stack
-# (geopandas env without torch / termcolor).
+# (e.g. in a geopandas environment without torch).
 _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
@@ -85,7 +84,7 @@ REQUIRED_MANIFEST_COLUMNS = frozenset(
 
 @dataclass(frozen=True)
 class ManifestPatch:
-    """One LIDARHD patch listed in the split manifest."""
+    """One LiDAR tile listed in the tile CSV."""
 
     split: str
     dept_year: str
@@ -117,11 +116,11 @@ def load_manifest_patches(
     network_types: Sequence[str] = NETWORK_TYPES,
     known_missing: Optional[set[Tuple[str, str]]] = None,
 ) -> Tuple[List[ManifestPatch], int]:
-    """Load LiDAR tiles from ``tiles.csv`` / legacy manifest (optionally filtered by split).
+    """Load the tiles of ``tiles.csv`` / an older manifest (optionally filtered by split).
 
-    Skips ``(split, patch_id)`` in ``known_missing`` (same exclusions as training).
-    Returns ``(patches, n_skipped_known_missing)``. ``network_types`` is kept for
-    API compatibility; only ROADS carries a catalog flag.
+    Skips ``(split, patch_id)`` in ``known_missing``. Returns
+    ``(patches, n_skipped_known_missing)``. Only ROADS carries a catalog flag; it is
+    recorded when ``"ROADS"`` is in ``network_types``.
     """
     if not split_manifest_csv.is_file():
         raise FileNotFoundError(f"split_manifest_csv not found: {split_manifest_csv}")
@@ -155,11 +154,10 @@ def load_manifest_patches(
 def group_by_roi(
     patches: List[ManifestPatch], data_root: Path
 ) -> List[Tuple[Path, Dict[str, bool], List[Path]]]:
-    """Group manifest patches by ROI dir; resolve paths and hard-fail if missing.
+    """Group tiles by ROI directory; raise if any tile lacks ``coord.npy``.
 
-    Returns a sorted list of ``(roi_dir, flags, patch_dirs)``. Existing patches in
-    a ROI are kept even if siblings are missing — but any unexpected absence
-    still raises after the full scan.
+    Returns a sorted list of ``(roi_dir, flags, patch_dirs)``. Flags must agree within
+    a ROI. All missing tiles are listed in a single error after the full scan.
     """
     grouped: Dict[Path, List[ManifestPatch]] = defaultdict(list)
     for patch in patches:
@@ -238,7 +236,7 @@ def _densify_roi_cells(
     sample_step_m: float,
     line_width_m: float,
 ) -> Dict[str, np.ndarray]:
-    """Densify each network type once into unique absolute 1 m cells."""
+    """Densify each network type of a ROI once into unique absolute ``pixel_m`` cells."""
     cells_by_type: Dict[str, np.ndarray] = {}
     for network_type in NETWORK_TYPES:
         segments = segments_by_type.get(
@@ -263,7 +261,7 @@ def process_patch(
     line_width_m: float,
     force_reload_bounds: bool = False,
 ) -> dict:
-    """Write network.npy (if non-empty) and update meta.json. Returns stats dict."""
+    """Write the tile's network.npy (if non-empty) and its grid in meta.json; return stats."""
     meta = _read_meta(patch_dir)
     bounds = None if force_reload_bounds else _load_cached_bounds(meta)
     if bounds is None:
@@ -326,7 +324,7 @@ def _process_roi_task(
     line_width_m: float,
     force_reload_bounds: bool,
 ) -> dict:
-    """Worker entry: load ROI graphs once, densify once, process all patches."""
+    """Worker entry: load and densify the ROI graphs once, then process all its tiles."""
     roi_path = Path(roi_dir)
     segments_by_type = load_roi_exported_networks(
         Path(network_graphs_root) if network_graphs_root else None,

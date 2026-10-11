@@ -1,32 +1,13 @@
 """
-LitePT-Base semantic segmentation on OpenGF (coord + strength LiDAR features),
-trained from scratch -- from-scratch baseline counterpart to the GridProbe
-(frozen-backbone linear-probe) configs, mirroring
-configs/dales/semseg-litept-b-v1m0-dales.py.
+LitePT-B ground filtering on OpenGF (Ground / Non-ground), trained from scratch: the "LitePT
+fully-supervised" reference of Tab. 3 of the MALiBU3D paper.
 
-Binary task: 0=Ground, 1=Non-ground. On-disk `segment.npy` carries a 3rd raw
-label (2=Outlier, see preprocessing/opengf/preprocess_opengf.py). Train/val
-merge it into Non-ground via `RemapSegment` (Qin et al.'s official training
-convention). `data.test` evaluates **"Test II (w/o outliers)"**: restricted
-to `T2` (`include_names="T2"`, the only test region with outlier points)
-with `DropSegmentClass` physically removing them before the model sees the
-cloud -- same convention as the GridProbe configs.
-
-OpenGF has no usable RGB (see preprocess_opengf.py) -- `feat_keys` is
-coord+strength only (in_channels=4), same as DALES (no fake "color" channel
-here, unlike the GridProbe configs' `FillMissingFeat`).
-
-OpenGF ships its own held-out `val` split (unlike DALES, which reuses `test`
-for val) -- `data.val.split="val"`.
-
-lr/eval_epoch are carried over unchanged from the DALES reference (untuned
-for OpenGF specifically); `epoch` is lowered from DALES' 1000 to 200 so total
-iterations (epoch * train_tiles // batch_size) land in DALES' own ballpark
-despite OpenGF having ~5x more train tiles (1359 vs 261).
-
-This config is intentionally self-contained: it inherits only from
-default_runtime and can be read top-to-bottom without cross-referencing
-other OpenGF configs.
+Single-task DefaultSegmentorV2 with the LitePT-B backbone of the MALiBU3D multitask model. Input
+features: coord + strength (OpenGF has no usable RGB; raw intensity scaled by 1/60000). Mix3D is
+off. Outlier points (raw label 2) are merged into Non-ground for training and validation (Qin et
+al., CVPRW 2021, Sec. 4.4); the test split is restricted to region T2 with outliers removed ("Test
+II w/o outliers", Sec. 4.5). To evaluate "Test II with outliers" or "Test I", use RemapSegment
+instead of DropSegmentClass and/or change include_names.
 """
 
 # -----------------------------------------------------------------------------
@@ -45,10 +26,10 @@ num_exp = 1
 # Hardware parameters
 num_gpu = 1
 num_worker = 8 * num_gpu
-enable_amp = True  # LitePT-Base is heavier than Small; matches multi-litept-b-v1m0-malibu3d.py
+enable_amp = True
 
 # Data parameters
-batch_size = 12  # total batch size across all gpus; LitePT-Base convention (vs 24 for Small)
+batch_size = 12  # total batch size across all gpus
 batch_size_val = 1
 batch_size_test = 1
 
@@ -60,7 +41,7 @@ patch_size = 1024
 
 # Optimization parameters
 lr = 1e-3
-epoch = 200  # ~22600 iters (1359 train tiles // 12) -- roughly DALES's from-scratch ballpark
+epoch = 200  # OpenGF has ~5x more train tiles than DALES (1000 epochs): similar iteration count
 eval_epoch = 20
 
 
@@ -107,7 +88,7 @@ model = dict(
         type="LitePT-v1",
         in_channels=4,  # coord (3) + strength (1) -- OpenGF has no usable color/RGB
         order=("z", "z-trans", "hilbert", "hilbert-trans"),
-        # LitePT-Base dims (matches multi-litept-b-v1m0-malibu3d.py backbone).
+        # LitePT-B dims (same backbone as configs/malibu3d/multi-litept-b-v1m0-malibu3d.py).
         stride=(3, 3, 3, 3),
         enc_depths=(3, 3, 3, 12, 3),
         enc_channels=(54, 108, 216, 432, 576),

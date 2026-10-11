@@ -1,9 +1,10 @@
 """
-Sonata-v1m2 linear probing on ECLAIR semantic segmentation.
+Linear probe of a Sonata ECLAIR pretraining checkpoint (pretrain-sonata-v1m2-eclair.py) on ECLAIR
+semantic segmentation, used to track representation quality during pretraining.
 
-Frozen PT-v3m2 encoder (enc_mode); classic 100-epoch schedule for periodic
-probes launched from the ECLAIR Sonata pretrain job. Full val split (62 tiles);
-no test. Strength uses 1/60000 (raw uint16 intensity → MALiBU3D [0,1]).
+Frozen PT-v3m2 encoder multi-scale features (enc_mode=True, 1232 channels) with one linear head (CE
++ Lovasz, AdamW, lr=1e-2); the checkpoint is passed as `weight`. 100 epochs, validated 10 times on
+the full val split; no test. Raw intensity is scaled by 1/60000.
 """
 
 _base_ = ["../../_base_/default_runtime.py"]
@@ -15,7 +16,7 @@ num_gpu = 1
 batch_size_per_gpu = 24
 batch_size = batch_size_per_gpu * num_gpu
 batch_size_val = 1
-num_worker = 16  # H100 Jean-Zay
+num_worker = 16
 mix_prob = 0.8
 clip_grad = 3.0
 empty_cache = False
@@ -198,8 +199,8 @@ data = dict(
 # -----------------------------------------------------------------------------
 # Hooks
 # -----------------------------------------------------------------------------
-# No PreciseEvaluator / test split: periodic probes only need best val mIoU
-# (written by MetricsJsonWriter → metrics.json → pretrain CSV).
+# No test split: a probe only reports its best validation mIoU (MetricsJsonWriter
+# writes it to save_path/metrics.json).
 hooks = [
     dict(
         type="CheckpointLoader",

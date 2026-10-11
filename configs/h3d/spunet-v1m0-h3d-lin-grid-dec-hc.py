@@ -1,25 +1,16 @@
 """
-SpUNet-v1m1 grid-search linear probing on H3D — decoder hypercolumn /
-multi-scale variant (same frozen checkpoint as
-spunet-v1m0-h3d-lin-grid-{enc,dec,enc-dec}.py, job 1052217, MALiBU3D multitask
-supervised pretrain: channels=(32,64,128,256,256,128,96,96),
-layers=(2,3,4,6,2,2,2,2), stride=3).
+Frozen SpUNet (MALiBU3D multitask checkpoint, ckpt/spunet/model.pth) linear probing on H3D semantic
+segmentation (11 classes).
 
-Sets `dec_point_mode=True` alone (spconv_unet_v1m1_base.py): the decoder
-hypercolumn chain (dec0(96)+dec1(96)+dec2(128)+dec3(256)+bottleneck(256) =
-832ch), mirroring LitePT/PT-v3's dec_traceable/traceable convention of
-"decoder stages + encoder bottleneck". Counterpart to the plain single-scale
-decoder (spunet-v1m0-h3d-lin-grid-dec.py, 96ch), encoder-only
-(spunet-v1m0-h3d-lin-grid-enc.py, 512ch), and combined enc+dec
-(spunet-v1m0-h3d-lin-grid-enc-dec.py, 1088ch). See
-tests/test_spunet_point_mode.py (`test_dec_point_mode_forward_shape`) for the
-shape/row-alignment correctness check.
+Probe input: decoder multi-scale features (dec_point_mode=True): the 4 decoder stages plus the
+bottleneck, concatenated (832 channels). Probing-strategy study (Tab. A.11 of the MALiBU3D paper).
 
-Same probe grid as litept-b-v1m0-h3d-lin_enc.py (AdamW/wd0/OneCycleLR
-warmup5%, lr sweep over 12 values, epoch=2000/eval_epoch=10) for
-cross-backbone comparability. The frozen backbone is always in eval() mode, which freezes SpUNet's BatchNorm running stats (real BatchNorm1d); SpUNet has no DropPath modules. H3D fill/aug/feature_mask_values unchanged
-from the LitePT-B H3D ref (no real intensity -> FillMissingFeat "strength").
-skip_test=False, log_test_f1=True (required for H3D lin-grid configs).
+GridProbe: 12 linear probes (CE + Lovasz, AdamW, wd=0, OneCycleLR, lr from 1e-4 to 5e-1) share one
+frozen-backbone forward; tools/grid_then_seeds.py then re-trains the probe with the best validation
+macro-F1 with 10 seeds.
+
+H3D has RGB but no intensity: strength is replaced by the checkpoint's learned mask value. The
+winning probe is tested on the test split with F1 logged (log_test_f1=True).
 """
 
 _base_ = ["../_base_/default_runtime.py"]
@@ -59,11 +50,10 @@ weight = "ckpt/spunet/model.pth"
 
 wandb_project = f"pointcept_{dataset_type[:-7].lower()}"
 
-# Hooks
-# Order matters: GridProbeEvaluator before GridProbeCheckpointSaver/CheckpointSaver;
-# GridProbeWinnerSelector last (frees the per-probe optimizers/schedulers, then runs
-# its own SemSegTester pass on the winning probe — replaces PreciseEvaluator, which
-# never sets raw_model.active_probe and would break under GridProbeSegmentorV2).
+# Hooks. Order matters: GridProbeEvaluator before the checkpoint savers, and
+# GridProbeWinnerSelector last (frees the per-probe optimizers, picks the best probe
+# on validation and tests it unless skip_test=True). PreciseEvaluator is not used:
+# it does not select a probe.
 hooks = [
     dict(
         type="CheckpointLoader",
@@ -99,11 +89,7 @@ names = [
 backbone_channels = (32, 64, 128, 256, 256, 128, 96, 96)
 backbone_out_channels = 96 + 96 + 128 + 256 + 256
 
-# -----------------------------------------------------------------------------
-# Grid-search probes — AdamW / OneCycleLR: ce_lovasz x lr x wd=0 x dropout=0 x
-# input_norm=none x feat_norm=none x optimizer=AdamW, warmup=5%
-# (1 x 12 x 1 x 1 x 1 x 1 x 1 = 12 probes).
-# -----------------------------------------------------------------------------
+# Grid-search probes — ce_lovasz, AdamW/wd0/OneCycleLR warmup5%, lr sweep only (12 probes).
 _losses = {
     "ce_lovasz": [
         dict(type="CrossEntropyLoss", loss_weight=1.0, ignore_index=ignore_index),
@@ -184,8 +170,8 @@ model = dict(
     backbone_out_channels=backbone_out_channels,
     backbone=dict(
         type="SpUNet-v1m1",
-        in_channels=7,  # coord(3) + color(3) + strength(1, fake/zero)
-        num_classes=0,  # unused in dec_point_mode (no final conv applied) — kept for checkpoint key compat
+        in_channels=7,  # coord(3) + color(3) + strength(1, absent: learned fill value)
+        num_classes=0,  # unused in dec_point_mode (no final conv applied)
         channels=backbone_channels,
         layers=(2, 3, 4, 6, 2, 2, 2, 2),
         stride=3,

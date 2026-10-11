@@ -30,6 +30,12 @@ INTERPOLATION_MODE = {
 
 @DATASETS.register_module()
 class DefaultDataset(Dataset):
+    """Scenes stored as ``<data_root>/<split>/<scene>/*.npy`` (one array per asset).
+
+    ``max_sample``, ``stratified_subset_manifest`` and ``include_names`` restrict the
+    scene list after ``get_data_list`` (see ``subset_utils.apply_subset_selection``).
+    """
+
     VALID_ASSETS = [
         "coord",
         "color",

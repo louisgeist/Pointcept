@@ -1,17 +1,17 @@
 """
-PT-v3-malibu grid-search linear probing on DALES — decoder hypercolumn /
-multi-scale variant (transfer from MALiBU3D multitask supervised pretrain at
-w109/2/ptv3_wd/multi-ptv3-v1m0-malibu3d_5.py, job 1052200).
+Frozen PTv3 (MALiBU3D multitask checkpoint, ckpt/ptv3/model.pth) linear probing on DALES semantic
+segmentation (8 classes).
 
-Unlike w109/4/ptv3_lin/ptv3-v1m0-dales-lin_1.py (finest decoder stage only,
-64ch), this config sets `traceable=True` so GridProbeSegmentorV2 concatenates
-every decoder-stage feature + the encoder bottleneck into one 1024-dim vector
-per point (64+64+128+256 + 512). Same DALES-has-no-RGB handling as the other
-PTv3/LitePT DALES lin configs.
+Probe input: decoder multi-scale features (traceable=True): the 4 decoder stages plus the encoder
+bottleneck, concatenated (1024 channels). Probing-strategy study (Tab. A.11 of the MALiBU3D paper).
 
-Grid (12 probes): ce_lovasz, AdamW/wd0/OneCycleLR warmup5%, lr sweep {1e-4 … 5e-1}.
-epoch=400 / eval_epoch=10. AMP enabled (fp16).
-The frozen backbone is always in eval() mode (DropPath(0.3) inactive; PT-v3-malibu has no BatchNorm).
+GridProbe: 12 linear probes (CE + Lovasz, AdamW, wd=0, OneCycleLR, lr from 1e-4 to 5e-1) share one
+frozen-backbone forward; tools/grid_then_seeds.py then re-trains the probe with the best validation
+mIoU with 10 seeds.
+
+DALES has no RGB: color is replaced by the checkpoint's learned mask value; raw intensity is scaled
+by 1/60000 to the MALiBU3D [0, 1] range. DALES has no validation split, so validation runs on the
+test split; skip_test=True leaves testing to the seed phase.
 """
 
 _base_ = ["../_base_/default_runtime.py"]
@@ -39,7 +39,7 @@ batch_size_per_gpu = 24
 batch_size = batch_size_per_gpu * num_gpu
 batch_size_val = 1
 batch_size_test = 1
-num_worker = 24 * num_gpu  # H100 Jean-Zay
+num_worker = 24 * num_gpu
 num_worker_test = 2
 mix_prob = 0.8
 empty_cache = False
@@ -53,11 +53,10 @@ weight = "ckpt/ptv3/model.pth"
 
 wandb_project = f"pointcept_{dataset_type[:-7].lower()}"
 
-# Hooks
-# Order matters: GridProbeEvaluator before GridProbeCheckpointSaver/CheckpointSaver;
-# GridProbeWinnerSelector last (frees the per-probe optimizers/schedulers, then runs
-# its own SemSegTester pass on the winning probe — replaces PreciseEvaluator, which
-# never sets raw_model.active_probe and would break under GridProbeSegmentorV2).
+# Hooks. Order matters: GridProbeEvaluator before the checkpoint savers, and
+# GridProbeWinnerSelector last (frees the per-probe optimizers, picks the best probe
+# on validation and tests it unless skip_test=True). PreciseEvaluator is not used:
+# it does not select a probe.
 hooks = [
     dict(
         type="CheckpointLoader",
@@ -147,7 +146,7 @@ model = dict(
     backbone_out_channels=backbone_out_channels,
     backbone=dict(
         type="PT-v3-malibu",
-        in_channels=7,  # coord(3) + color(3, fake) + strength(1)
+        in_channels=7,  # coord(3) + color(3, absent: learned fill value) + strength(1)
         order=("z", "z-trans", "hilbert", "hilbert-trans"),
         stride=(3, 3, 3, 3),
         enc_depths=(2, 2, 2, 6, 2),

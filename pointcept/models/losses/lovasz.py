@@ -123,7 +123,8 @@ def _lovasz_softmax_flat(probas, labels, classes="present", class_seen=None):
         @param classes: 'all' for all, 'present' for classes present in labels, or a list of classes to average.
     """
     if probas.numel() == 0:
-        # only void pixels, the gradients should be 0
+        # only void pixels: return a 0-dim zero that stays in the graph
+        # (zero gradient), so it can be summed with the other losses
         return probas.sum()
     C = probas.size(1)
     losses = []

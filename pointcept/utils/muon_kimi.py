@@ -48,17 +48,19 @@ class MuonKIMI(torch.optim.Optimizer):
     - We believe this optimizer is unlikely to work well for training with small batch size.
     - We believe it may not work well for finetuning pretrained models, but we haven't tested this.
 
+    Parameters with ndim >= 2 are optimized by Muon; 0/1-D parameters, and every parameter
+    of a group with ``force_adamw=True``, are optimized by the internal AdamW.
+
     Arguments:
-        muon_params: The parameters to be optimized by Muon.
-        lr: The learning rate. The updates will have spectral norm of `lr`. (0.02 is a good default)
+        params: Parameters or parameter groups (a group may set ``force_adamw``).
+        lr: The learning rate, shared by Muon and AdamW. Muon updates are rescaled by
+            0.2 * sqrt(max(fan_out, fan_in)) of the parameter matrix.
+        weight_decay: Decoupled weight decay, shared by Muon and AdamW.
         momentum: The momentum used by the internal SGD. (0.95 is a good default)
         nesterov: Whether to use Nesterov-style momentum in the internal SGD. (recommended)
-        ns_steps: The number of Newton-Schulz iterations to run. (6 is probably always enough)
-        {0, 1}-D or are detected as being the embed or lm_head will be optimized by AdamW as well.
-        adamw_lr: The learning rate for the internal AdamW.
+        ns_steps: The number of Newton-Schulz iterations to run.
         adamw_betas: The betas for the internal AdamW.
         adamw_eps: The epsilon for the internal AdamW.
-        adamw_wd: The weight decay for the internal AdamW.
     """
 
     def __init__(

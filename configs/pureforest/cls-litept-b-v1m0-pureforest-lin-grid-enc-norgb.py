@@ -1,19 +1,13 @@
 """
-NO-RGB ABLATION (LitePT-B): reference Malibu3D/MALiBU3D multitask checkpoint
-(job 873542 / ckpt/malibu3d/litept_b_multitask), but colour is removed on
-every forward -- RandomDropColor(1.0, 1.0, keep_mask=True) right after
-NormalizeColor in train/val/test, so GridProbeClassifier's frozen
-feature_mask_values replaces the 3 colour channels with the checkpoint's
-learned color_mask_value. Strength/geometry untouched. Chromatic* train augs
-dropped (they'd only jitter a channel that is then fully masked). Otherwise
-identical to configs/pureforest/cls-litept-b-v1m0-pureforest-lin-grid-enc.py.
+No-RGB ablation (Tab. 4 of the MALiBU3D paper) of cls-litept-b-v1m0-pureforest-lin-grid-enc.py:
+frozen LitePT-B (MALiBU3D multitask checkpoint, ckpt/litept-b/model.pth) linear probing on
+PureForest tile classification without color.
 
-LitePT-B GridProbeClassifier on PureForest -- encoder multiscale
-(enc_mode=True -> 54+108+216+432+576 = 1386ch), scene mean-pool, N linear
-heads. Strength zero-fill.
-
-AdamW / wd=0 / OneCycleLR warmup 5%, lr sweep {1e-4 .. 5e-1} (12 probes),
-CE only. select_metric=mIoU.
+Color is dropped on every train/val/test forward (RandomDropColor with drop_ratio=1,
+keep_mask=True), so the backbone sees the checkpoint's learned color mask value instead of RGB; the
+color augmentations are removed. Everything else (encoder multi-scale features mean-pooled per tile,
+12-lr GridProbeClassifier, strength replaced by the learned mask value, leakage-filtered test split)
+is identical to the RGB config.
 """
 
 _base_ = ["../_base_/default_runtime.py"]
@@ -234,7 +228,7 @@ data = dict(
             dict(type="RandomScale", scale=[0.9, 1.1]),
             dict(type="RandomFlip", p=0.5),
             dict(type="RandomJitter", sigma=0.005, clip=0.02),
-            # Chromatic* augs removed: colour is fully masked below (noRGB ablation).
+            # Chromatic* augs removed: color is fully masked below (no-RGB ablation).
             dict(
                 type="GridSample",
                 grid_size=grid_size,

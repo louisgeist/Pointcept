@@ -1,9 +1,8 @@
-"""
-Tests for shared unitsphere caching in GridProbeSegmentorV2 / ProbeHead, and for
-GridProbeEvaluator's per-probe best-checkpoint selection metric (select_metric,
-"mIoU" default or "macro_f1").
+"""GridProbe: shared input-norm caching across ProbeHeads, GridProbeEvaluator best-probe selection
+(select_metric "mIoU" or "macro_f1") and resume robustness, history CSV, seed-ensemble per-class stats, and the
+always-eval frozen backbone.
 
-Run with: PYTHONPATH=./ pytest tests/test_grid_probe.py
+Run with: PYTHONPATH=. pytest tests/test_grid_probe.py
 """
 
 import unittest
@@ -126,9 +125,9 @@ class TestGridProbeSelectMetric(unittest.TestCase):
     """GridProbeEvaluator._update_bests + the selection helpers that
     GridProbeCheckpointSaver / GridProbeWinnerSelector read."""
 
-    # per-epoch synthetic per-probe metrics: probe A peaks in mIoU at epoch 1
-    # but in macro-F1 at (a later) epoch; probe B the other way around, and B's
-    # macro-F1 ties its running best on epoch 3.
+    # Synthetic per-probe metrics per epoch: probe A peaks in mIoU at epoch 1 but in
+    # macro-F1 at epoch 2; probe B peaks in mIoU at epoch 2 but in macro-F1 at epoch 1,
+    # and ties that macro-F1 best at epoch 3.
     EPOCHS = [
         # (m_iou, macro_f1, cls_iou_snapshot)
         {"A": (0.60, 0.50, [0.1, 0.1]), "B": (0.30, 0.90, [0.2, 0.2])},
@@ -204,7 +203,7 @@ class TestGridProbeSelectMetric(unittest.TestCase):
                 if best.get(name) is not None and not (val < best[name])
             }
             self.assertEqual(saver_keys, cls_snapshot_keys)
-        # smoke: the class is importable/usable
+        # The saver itself is only smoke-checked here.
         self.assertTrue(hasattr(GridProbeCheckpointSaver, "after_epoch"))
 
 
@@ -229,9 +228,9 @@ class _FakeTrainer:
 
 
 class TestGridProbeResumeDesyncRobustness(unittest.TestCase):
-    """A pre-macro-F1 checkpoint resumed under select_metric='mIoU' restores
-    _best_miou_by_probe but leaves _best_f1_by_probe empty (and vice-versa is
-    impossible). Downstream reporting must not KeyError on that."""
+    """A checkpoint without macro-F1 state, resumed under select_metric='mIoU', restores
+    _best_miou_by_probe but leaves _best_f1_by_probe empty (the reverse cannot happen).
+    Reporting must not KeyError on that."""
 
     def test_best_helpers_return_nan_when_untracked(self):
         hook = GridProbeEvaluator()  # mIoU
@@ -244,7 +243,7 @@ class TestGridProbeResumeDesyncRobustness(unittest.TestCase):
         hook = GridProbeEvaluator()  # mIoU selection
         hook.trainer = _FakeTrainer()
         hook._best_miou_by_probe = {"p0": 0.4, "p1": 0.6}
-        hook._best_f1_by_probe = {}  # pre-feature checkpoint, no eval since resume
+        hook._best_f1_by_probe = {}  # checkpoint without F1 state, no eval since resume
         hook.after_train()  # must not raise
 
     def test_before_train_resets_stale_best_metric_value(self):

@@ -1,9 +1,7 @@
-"""
-Tests for MALIBU3D_PIXEL_SEMANTIC_TASKS registration of forest_2d and the
-per-task-name generalization of init_multitask_collect_keys (previously
-hardcoded to the literal "network_*" key set).
+"""forest_2d's entry in MALIBU3D_PIXEL_SEMANTIC_TASKS, and init_multitask_collect_keys emitting per-task
+"<task>_*" raster keys for each pixel_semantic task (network, forest_2d) without collisions.
 
-Run with: PYTHONPATH=./ pytest tests/test_pixel_semantic_collect_keys.py
+Run with: PYTHONPATH=. pytest tests/test_pixel_semantic_collect_keys.py
 """
 
 import unittest

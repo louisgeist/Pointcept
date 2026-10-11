@@ -1,14 +1,11 @@
 """
-Sonata-v1m2 pretraining on ECLAIR (train split only).
+Sonata-v1m2 self-supervised pretraining of a PT-v3m2 backbone on the ECLAIR train split (exploratory
+experiment, not used in the MALiBU3D paper).
 
-Features: coord + color + strength (in_channels=7). ECLAIR stores raw uint16
-intensity; Collect scales global/local strength by 1/60000 to match the
-MALiBU3D [0,1] convention used by Sonata outdoor probes.
-Schedule: iter-limited (total_iters / iter_per_epoch=1000).
-No online evaluation; periodic linear-probe jobs on epoch_*.pth.
-
-With batch_size=96, ~12 classic steps/epoch over 1059 train tiles
-(include_pseudo=True), so 150_000 iters ≈ 12_500 dataset passes.
+Adapted from configs/malibu3d/pretrain-sonata-v1m2-malibu3d.py: coord + color + strength inputs
+(in_channels=7, raw intensity scaled by 1/60000), 0.1 m grid with stride 3, scene-level
+color/strength dropout, iteration-based schedule (150k iterations, 1000 per trainer epoch), no
+online evaluation (checkpoints are evaluated with probe/sonata-v1m2-eclair-lin.py).
 """
 
 _base_ = ["../_base_/default_runtime.py"]
@@ -16,8 +13,7 @@ _base_ = ["../_base_/default_runtime.py"]
 # -----------------------------------------------------------------------------
 # Run-level settings
 # -----------------------------------------------------------------------------
-# Hardware template: 6×4 H100 (Jean-Zay); see scripts/sonata/sbatch_pretrain_eclair_h100.sh
-# batch_size_per_gpu=4 confirmed safe with stride=(3,3,3,3) on Sonata MALiBU3D.
+# 24 GPUs x 4 scenes; 4 scenes per GPU fit with stride=(3, 3, 3, 3), as in the MALiBU3D pretraining.
 num_gpu = 24
 batch_size_per_gpu = 4
 batch_size = batch_size_per_gpu * num_gpu  # → 96
@@ -26,11 +22,9 @@ mix_prob = 0
 clip_grad = 3.0
 # Skip optimizer/scheduler when global grad L2 is NaN/Inf (all-reduced across ranks).
 skip_nan_grad = True
-# Diagnostic for NaN investigation: surfaces gradient/global and
-# gradient/weight_update per-iteration in W&B/TensorBoard instead of only as a
-# per-epoch average. No-op for the heavier per-task breakdown this flag also
-# gates (train.py's compute_task_gradient_norms), since that path requires
-# model.backbone_parameters, which Sonata doesn't have.
+# Log the global gradient norm and weight update every iteration (helps catch divergence).
+# The per-task breakdown this flag also enables needs model.backbone_parameters, which
+# Sonata does not have, so it is skipped.
 log_task_gradient_norms = True
 empty_cache = False
 enable_amp = True
@@ -38,15 +32,13 @@ amp_dtype = "bfloat16"
 find_unused_parameters = False
 grid_size = 0.1
 stride = (3, 3, 3, 3)
-max_size = 65_536  # points-per-view budget (MultiViewGenerator); calibrate via
-                   # scripts/find_max_view_size.py when batch_size_per_gpu changes
+max_size = 65_536  # points-per-view budget (MultiViewGenerator); bounds GPU memory
 strength_feat_scale = 1 / 60000  # raw uint16 intensity → MALiBU3D [0,1] convention
 
 # match_max_r must scale with the point spacing at the matching resolution
 # (grid_size after up_cast_level=2 pooling stages), not be a fixed absolute
-# distance: upstream Sonata (configs/sonata/pretrain-sonata-v1m2-0-uni-teacher-head.py)
-# uses match_max_r=0.32 with grid_size=0.02/stride=(2,2,...) -> voxel=0.08m, a 4x
-# margin. Keep the same ~4x margin here (grid_size=0.1 -> voxel=0.9m).
+# distance: upstream Sonata uses match_max_r=0.32 with grid_size=0.02 and stride 2
+# (voxel 0.08 m, a 4x margin). Keep the same 4x margin here (voxel 0.9 m).
 match_max_r_factor = 4
 match_max_r = match_max_r_factor * grid_size * stride[0] * stride[1]
 
@@ -140,7 +132,7 @@ model = dict(
 # -----------------------------------------------------------------------------
 # Optimizer / scheduler
 # -----------------------------------------------------------------------------
-base_lr = 0.004  # Sonata default : 0.004
+base_lr = 0.004  # Sonata default
 lr_decay = 0.9  # layer-wise lr decay
 
 base_wd = 0.04
@@ -172,16 +164,10 @@ scheduler = dict(
 # -----------------------------------------------------------------------------
 dataset_type = "ECLAIRDataset"
 data_root = "data/eclair"
-# Train split has a handful of near-empty "rejected" (pseudo-labeled) tiles —
-# 5 out of 1059 have well under 1500 points, isolated from the rest of the
-# distribution (next-smallest tile has ~5000 points; see
-# scripts/eclair/analyze_point_counts.py). MultiViewGenerator's
-# local_view_scale=(0.1, 0.4) then produces views as small as ~150 points on
-# these outliers, which destabilizes Sonata's teacher-student matching and
-# caused a NaN crash around iter ~20k (2026-09-19 pretrain run). MALiBU3D
-# guards against this class of tile via its own min_points; mirror it here
-# with a threshold picked from the actual size distribution, not copied from
-# MALiBU3D's 1000 (which wouldn't even exclude all of these outliers).
+# A few pseudo-labeled train tiles are near-empty (well under 1500 points, while the
+# next-smallest tile has ~5000). With local_view_scale=(0.1, 0.4) their local views
+# shrink to ~150 points, which destabilizes teacher-student matching (NaN loss).
+# 2000 excludes exactly these outliers.
 min_points = {"train": 2000}
 
 transform = [

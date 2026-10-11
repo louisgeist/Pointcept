@@ -93,7 +93,7 @@ class LinearLR(lr_scheduler.LinearLR):
         end_factor=1.0,
         total_iters=5,
         last_epoch=-1,
-        total_steps=None, # useless, just for compatibility with configs
+        total_steps=None, # ignored; the trainer sets total_steps on every scheduler
     ):
         super().__init__(
             optimizer=optimizer,

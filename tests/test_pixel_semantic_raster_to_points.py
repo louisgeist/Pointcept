@@ -1,14 +1,7 @@
-"""
-Tests for NetworkRasterToPointLabels's target_key generalization: the transform
-used to be hardcoded to the literal "network" field name; it must now support an
-arbitrary pixel_semantic target_key (e.g. "forest_2d") while preserving its exact
-historical behavior when called without target_key (defaults to "network").
+"""NetworkRasterToPointLabels: raster -> per-point labels for any pixel_semantic target_key (default "network"),
+and two calls in sequence on the same data_dict (one per task) both working, since "abs_xy" is not consumed.
 
-Also verifies the multi-task ordering requirement: since a real multi-task pipeline
-runs this transform once per pixel_semantic task on the *same* data_dict, the first
-call must not consume "abs_xy" so the second call can still use it.
-
-Run with: PYTHONPATH=./ pytest tests/test_pixel_semantic_raster_to_points.py
+Run with: PYTHONPATH=. pytest tests/test_pixel_semantic_raster_to_points.py
 """
 
 import unittest
@@ -68,10 +61,8 @@ class TestExplicitTargetKey(unittest.TestCase):
 
 class TestTwoPixelSemanticTasksInSequence(unittest.TestCase):
     def test_network_then_forest_2d_both_succeed_on_same_data_dict(self):
-        # Regression test: the original implementation popped "abs_xy" after use,
-        # which would silently no-op the *second* NetworkRasterToPointLabels call
-        # in a multi-task pipeline (network then forest_2d), leaving forest_2d's
-        # raster un-converted (still dense) all the way to Collect.
+        # If the first call popped "abs_xy", the second call would silently do nothing
+        # and forest_2d's raster would reach Collect still dense.
         abs_xy = np.array([[0.5, 0.5]], dtype=np.float64)
         network_raster = np.array([[[1]]], dtype=np.uint8)  # (1, 1, 1)
         forest_raster = np.array([[[0]]], dtype=np.uint8)  # (1, 1, 1)

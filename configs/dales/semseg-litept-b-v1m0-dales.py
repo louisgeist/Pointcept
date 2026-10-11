@@ -1,15 +1,10 @@
 """
-LitePT-Base semantic segmentation on DALES (coord + strength LiDAR features).
+LitePT-B semantic segmentation on DALES (8 classes), trained from scratch: the "LitePT
+fully-supervised" reference of Tab. 3 of the MALiBU3D paper.
 
-Backbone dims and augmentation pipeline mirror the LitePT-Base backbone used
-in configs/malibu3d/multi-litept-b-v1m0-malibu3d.py, adapted to DALES
-single-task semseg (DefaultSegmentorV2, no multitask wiring) and trained from
-scratch (no pretrained weight). See configs/dales/semseg-litept-v1m0-dales.py
-for the LitePT-Small counterpart this config is derived from.
-
-This config is intentionally self-contained: it inherits only from
-default_runtime and can be read top-to-bottom without cross-referencing
-other DALES configs.
+Single-task DefaultSegmentorV2 with the LitePT-B backbone of the MALiBU3D multitask model. Input
+features: coord + strength (DALES has no RGB; raw intensity scaled by 1/60000). DALES has no
+validation split, so validation runs on the test split.
 """
 
 # -----------------------------------------------------------------------------
@@ -28,10 +23,10 @@ num_exp = 1
 # Hardware parameters
 num_gpu = 1
 num_worker = 8 * num_gpu
-enable_amp = True  # LitePT-Base is heavier than Small; matches multi-litept-b-v1m0-malibu3d.py
+enable_amp = True
 
 # Data parameters
-batch_size = 12  # total batch size across all gpus; LitePT-Base convention (vs 24 for Small)
+batch_size = 12  # total batch size across all gpus
 
 grid_size = 0.1
 point_max = 102400
@@ -88,7 +83,7 @@ model = dict(
         type="LitePT-v1",
         in_channels=4,  # coord (3) + strength (1) -- DALES has no color/RGB
         order=("z", "z-trans", "hilbert", "hilbert-trans"),
-        # LitePT-Base dims (matches multi-litept-b-v1m0-malibu3d.py backbone).
+        # LitePT-B dims (same backbone as configs/malibu3d/multi-litept-b-v1m0-malibu3d.py).
         stride=(3, 3, 3, 3),
         enc_depths=(3, 3, 3, 12, 3),
         enc_channels=(54, 108, 216, 432, 576),

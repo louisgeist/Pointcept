@@ -1,3 +1,10 @@
+"""
+Prompt-driven normalization (PDNorm) from Point Prompt Training
+(PPT, https://arxiv.org/abs/2308.09718), moved here from Pointcept's
+point_prompt_training package, which this repository does not include.
+Imported by PT-v3m1 and only used when pdnorm_bn / pdnorm_ln is enabled.
+"""
+
 import torch.nn as nn
 
 from pointcept.models.modules import PointModule, PointSequential

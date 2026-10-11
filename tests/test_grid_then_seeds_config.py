@@ -1,8 +1,7 @@
-"""
-Tests for tools/grid_then_seeds.py's seed-ensemble config generation and
-CSV aggregation.
+"""tools/grid_then_seeds.py: seed-ensemble config generation from a grid-probe config and winner, and summary
+CSV aggregation. Config paths are repo-relative: run from the repository root.
 
-Run with: PYTHONPATH=./ pytest tests/test_grid_then_seeds_config.py
+Run with: PYTHONPATH=. pytest tests/test_grid_then_seeds_config.py
 """
 
 import json
@@ -25,7 +24,7 @@ GRID_CONFIG = "configs/h3d/sonata-v1m2-h3d-lin-grid.py"
 # ...and a cartesian_probes one (import inside the config file).
 GRID_CONFIG_CARTESIAN = "configs/malibu3d/probe/sonata-v1m2-malibu3d-lin-grid-wide.py"
 
-# DALES: no held-out val, every config points data.val and data.test at split="test"
+# DALES: no held-out val, so every config points data.val and data.test at split="test"
 GRID_CONFIG_DALES = "configs/dales/spunet-v1m0-dales-lin-grid-enc.py"
 
 # OpenGF: has its own held-out val split (like H3D), unlike DALES

@@ -162,6 +162,7 @@ class TrainerBase:
         if torch.cuda.is_available(): # synchronize GPU before measuring runtime
             torch.cuda.synchronize()
         total_runtime_seconds = time.perf_counter() - self.total_runtime_start_time
+        # On a resumed run, report the runtime accumulated over all run segments.
         if (
             comm.is_main_process()
             and getattr(self, "cfg", None) is not None
@@ -238,19 +239,17 @@ class Trainer(TrainerBase):
         self.logger.info("=> Building hooks ...")
         self.register_hooks(self.cfg.hooks)
         self._gradient_accumulation_counter = 0
-        # GradNormLite EMA of last-layer norms. Built eagerly so CheckpointLoader
-        # can restore into it before the first step. Mutually exclusive with
-        # grad_norm (enforced in default_config_parser).
+        # GradNormLite: EMA of per-task last-layer gradient norms. Built eagerly so
+        # CheckpointLoader can restore it before the first step.
         self._grad_norm_lite_ema = None
         if getattr(cfg, "grad_norm_lite", False):
             self._grad_norm_lite_ema = GradNormLiteEMA(
                 alpha=getattr(cfg, "grad_norm_lite_ema_alpha", 0.1),
                 eps=getattr(cfg, "grad_norm_lite_eps", 1e-3),
             )
-        # Real GradNorm (Chen et al. 2018): learnable per-group loss weights +
-        # their Adam state + L_g(0) anchors. Built eagerly so CheckpointLoader
-        # can restore into it before the first step. Mutually exclusive with
-        # grad_norm_lite (enforced in default_config_parser).
+        # GradNorm (Chen et al. 2018): learnable per-group loss weights, their
+        # optimizer state and initial losses L_g(0). Built eagerly so
+        # CheckpointLoader can restore it before the first step.
         self._grad_norm_state = None
         if getattr(cfg, "grad_norm", False):
             _gn_model = (
@@ -343,7 +342,8 @@ class Trainer(TrainerBase):
                 iter_idx = self.epoch * len(self.train_loader) + int(
                     self.comm_info["iter"]
                 )
-                # Scene-level losses underflow in fp16 without a probe scale.
+                # Losses are scaled before measuring gradient norms: small
+                # (e.g. scene-level) losses underflow in fp16 otherwise.
                 amp_probe_scale = float(
                     getattr(
                         self.cfg,
@@ -351,8 +351,8 @@ class Trainer(TrainerBase):
                         1024.0 if self.cfg.enable_amp else 1.0,
                     )
                 )
-                # Optional task_name -> group_name map: tasks sharing a group
-                # get one pooled EMA scale instead of independent ones.
+                # Optional task_name -> group_name map: tasks in the same group
+                # share one pooled EMA scale.
                 task_groups = getattr(self.cfg, "grad_norm_lite_task_groups", None)
                 if iter_idx > 0 and iter_idx % interval == 0:
                     norms = compute_task_last_layer_grad_norms(
@@ -361,7 +361,8 @@ class Trainer(TrainerBase):
                         probe_scale=amp_probe_scale,
                         task_groups=task_groups,
                     )
-                    # Align with SyncBatchNorm: sync across ranks only when sync_bn.
+                    # Average the norms across ranks only with sync_bn, like the
+                    # BatchNorm statistics.
                     if getattr(self.cfg, "sync_bn", False):
                         if task_groups:
                             task_order = sorted(
@@ -433,9 +434,9 @@ class Trainer(TrainerBase):
                         task_groups=task_groups,
                     )
                     loss_by_group = group_task_losses(loss_by_task, task_groups)
-                    # Keep w_g bit-identical across ranks: average the scalar
-                    # inputs (not gated on sync_bn -- unlike GradNormLite, the
-                    # weights themselves must not diverge).
+                    # Always average the inputs across ranks (unlike GradNormLite,
+                    # not gated on sync_bn): the learned weights w_g must stay
+                    # identical on every rank.
                     order = gn_state.group_names
                     grad_norms = all_reduce_mean_task_norms(
                         grad_norms, task_names=order
@@ -662,6 +663,8 @@ class Trainer(TrainerBase):
         val_loader = None
         if self.cfg.evaluate:
             val_data = build_dataset(self.cfg.data.val)
+            # Optional: pack val tiles into variable-size batches under a total
+            # voxel budget (per-tile n_voxels read from the tile table).
             voxel_budget = getattr(self.cfg, "val_voxel_budget", None)
             if voxel_budget is not None:
                 max_batch_size = int(self.cfg.batch_size_val_per_gpu)
@@ -738,38 +741,25 @@ class Trainer(TrainerBase):
 
 @TRAINERS.register_module("GridProbeTrainer")
 class GridProbeTrainer(Trainer):
-    """Trainer for GridProbeSegmentorV2: N linear probe heads, each with its
-    own optimizer/scheduler/grad_clip type and hyperparameters, sharing one
-    frozen-backbone forward per batch, then one shared backward over the sum
-    of every active probe's loss (heads share no trainable params, so this
-    gives every head exactly its own gradient in one autograd pass — cheaper
-    than one backward() per probe, but keeps every active probe's forward+loss
-    graph alive simultaneously until that point: ~440MB/probe measured on the
-    wide-grid config (batch_size=12, point_max=102400) — cap probe count to
-    what fits (~100 is a safe margin on an 80GB GPU; verify per-config with
-    scripts/sonata/diagnose_grid_probe_vram.py rather than assuming).
+    """Trainer for GridProbeSegmentorV2 / GridProbeClassifier: a grid of linear
+    probe heads trained in parallel on one frozen backbone.
 
-    self.optimizer / self.scheduler / self.scaler become dict[str, ...] here
-    (one entry per probe) instead of the base Trainer's single instance —
-    hooks that assume a single optimizer/scheduler/scaler (InformationWriter's
-    Lr: line, CheckpointSaver, CheckpointLoader) branch on
-    `isinstance(trainer.optimizer, dict)` / `isinstance(trainer.scaler, dict)`.
+    Each probe has its own optimizer, scheduler, grad clipping and (under AMP)
+    GradScaler, built from its probe config, so ``self.optimizer``,
+    ``self.scheduler`` and ``self.scaler`` are dicts keyed by probe name; the hooks
+    that use them (InformationWriter, CheckpointSaver, CheckpointLoader) handle
+    this case. Separate scalers keep an fp16 overflow in one head from skipping
+    the other heads' steps. AMP precision itself stays global, since the
+    backbone forward is shared.
 
-    Under AMP, each probe owns its own GradScaler so a fp16 overflow on one
-    head cannot collapse the shared scale or freeze every probe's scheduler.
-    One backward still runs on the sum of per-probe scaled losses (heads are
-    disjoint, so each scale only multiplies that probe's grads).
+    Each step runs one backbone forward and one backward over the sum of all
+    active probe losses. Heads share no trainable parameters, so each head gets
+    exactly its own gradient, but all probe graphs stay alive until the backward
+    (about 440 MB per probe at batch_size=12, point_max=102400; ~100 probes fit on
+    an 80 GB GPU), which bounds the grid size.
 
-    Precision (enable_amp/amp_dtype) stays a single global setting: the
-    backbone forward (the expensive part) runs once under one autocast
-    context shared by every probe head, so per-probe precision would gain
-    nothing while complicating the shared-backward argument this class
-    relies on (see module docstring in models/grid_probe.py).
-
-    Diagnostics tied to MultiTaskSegmentorV2's heterogeneous-task-weight
-    machinery (grad_norm_lite, log_task_gradient_norms, skip_nan_grad,
-    global_gradient_diag logging) are intentionally not implemented here —
-    those cfg flags are simply never read, no crash risk, just an omission.
+    The multitask-only options (grad_norm_lite, grad_norm,
+    log_task_gradient_norms, skip_nan_grad) are ignored by this trainer.
     """
 
     def _raw_model(self):
@@ -848,26 +838,16 @@ class GridProbeTrainer(Trainer):
             for opt in self.optimizer.values():
                 opt.zero_grad()
 
-        # One frozen-backbone forward, then one shared backward over the sum
-        # of every active probe's (optionally AMP-scaled) loss: heads share
-        # zero trainable params (only the frozen backbone), so one backward()
-        # on the sum gives every head exactly its own gradient. Cheaper in
-        # wall-clock than one backward() per probe (no repeated autograd-
-        # engine dispatch), at the cost of keeping every active probe's
-        # forward+loss graph alive at once until this point -- ~440MB/probe
-        # measured (batch_size=12, point_max=102400, wide-grid config), so
-        # cap probe count accordingly (see GridProbeSegmentorV2 docstring /
-        # scripts/sonata/diagnose_grid_probe_vram.py).
+        # One frozen-backbone forward, then a single backward over the sum of
+        # every active probe's (optionally AMP-scaled) loss. This is faster than
+        # one backward per probe; see the class docstring for the memory cost.
         raw_model = self._raw_model()
         with auto_cast(
             enabled=self.cfg.enable_amp, dtype=AMP_DTYPE[self.cfg.amp_dtype]
         ):
             feat_by_norm, point, active = raw_model.prepare_batch(input_dict)
-            # Backbone-internal-only state (serialized order/inverse for every
-            # order, per-stage pad/unpad/cu_seqlens, sparse_conv_feat, ...) --
-            # nothing below reads `point` again, but the reference would
-            # otherwise sit in this frame's locals (Python doesn't drop it
-            # until the function returns) for the whole per-probe loop.
+            # Free the backbone's Point (serialization orders, padding buffers,
+            # sparse tensors) before the per-probe loop; nothing below uses it.
             del point
             target = input_dict.get(raw_model.target_key)
             loss_by_task = {}

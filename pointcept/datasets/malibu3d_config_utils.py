@@ -1,15 +1,15 @@
 """
-MALiBU3D multi-target label configs (semantic class names / counts and elevation regression).
+Per-task configuration of the MALiBU3D targets, used by configs and by MALiBU3DDataset.
 
-Class names, num_classes (the logit dimension) and ignore_index of the label-based tasks
-come from the label definitions of ``malibu3d_label_remap``.
+For every target key it provides the task config read by the multitask model, evaluator
+and tester (task type, number of classes, ignore index, class names, ...), the default
+losses (``init_task_criteria``) and the Collect / index_valid keys of the data pipeline
+(``init_multitask_collect_keys``). Targets:
 
-
-This file is used to configure, for each task/target:
- - Number of classes
- - Ignore index
- - Names
- - Loss
+- ``segment``: point-wise land cover; classes come from ``malibu3d_label_remap``.
+- ``forest_2d``, ``network``: binary 1 m rasters (``pixel_semantic``).
+- ``nathab_*``: the four natural-habitat ecological axes (``tile_distribution``).
+- ``elevation``: point-wise height above the DTM (``regression``).
 """
 
 from __future__ import annotations
@@ -23,9 +23,9 @@ import numpy as np
 # definitions of ``malibu3d_label_remap`` (see ``get_semantic_config``).
 MALIBU3D_SEMANTIC_TASKS: Tuple[str, ...] = ("segment",)
 
-# Binary 2D pixel semantic tasks (1 m Lambert masks). Not point-wise.
-# Training / heads use ROADS + RAILROADS only. On-disk ``network.npy`` may still
-# be (3, H, W) with TRANSMISSION_LINES as channel 2; MALiBU3DDataset slices to these.
+# Binary 2D pixel semantic tasks (1 m Lambert-93 masks), not point-wise.
+# ``network`` trains on ROADS + RAILROADS. rasterize_network.py also writes
+# TRANSMISSION_LINES as channel 2; MALiBU3DDataset slices it away.
 NETWORK_CHANNEL_NAMES: Tuple[str, ...] = (
     "ROADS",
     "RAILROADS",
@@ -38,10 +38,9 @@ MALIBU3D_PIXEL_SEMANTIC_TASKS: Dict[str, Dict[str, Any]] = {
         "ignore_index": 2,
         "channel_names": list(NETWORK_CHANNEL_NAMES),
         "names": ["Background", "Foreground", "Void"],
-        # Buffer ("relaxed") precision/recall/F1 tolerance, in pixels (1 px = 1 m on
-        # this task's Lambert grid). See MultiTaskEvaluator / MultiTaskTester
-        # pixel_semantic handling (val and test).
-        "buffer_radius_px": 3, # for dilated recall/precision/f1
+        # Tolerance of the buffered ("relaxed") precision/recall/F1, in pixels (1 px = 1 m),
+        # reported by MultiTaskEvaluator / MultiTaskTester on val and test.
+        "buffer_radius_px": 3,
         "enable_dilated_prf": True,
     },
     "forest_2d": {
@@ -51,19 +50,19 @@ MALIBU3D_PIXEL_SEMANTIC_TASKS: Dict[str, Dict[str, Any]] = {
         "ignore_index": 2,
         "channel_names": ["FOREST"],
         "names": ["Not Forest", "Forest", "Void"],
-        # Area-coverage class: mean-pool point features per cell (unlike network's
-        # default max-pool, which suits catching a single strong "line here" signal).
+        # Area-coverage class: mean-pool point features per cell (network uses the default
+        # max-pool, which suits catching a single strong "line here" signal).
         "pooling": "mean",
-        # Buffer/dilated tolerance is a diagnostic for thin curvilinear masks
-        # (road/rail); not meaningful for a blobby area-coverage mask like forest.
+        # Buffered metrics are meant for thin curvilinear masks (road/rail), not for an
+        # area-coverage mask like forest.
         "enable_dilated_prf": False,
     },
 }
 
-# Nathab ecological-axis distribution tasks: point-wise per-axis categorical labels.
-# On-disk ``natural_habitat.npy`` is ``uint8 (N, 4)`` (baked at preprocess); the loader
-# unpacks columns into these ``nathab_*`` keys. Values are the
-# ``malibu3d_label_remap`` definition name each axis column corresponds to.
+# Natural-habitat ecological axes: point-wise categorical labels per axis, trained by
+# default as tile-level class distributions. ``natural_habitat.npy`` is ``uint8 (N, 4)``;
+# MALiBU3DDataset unpacks its columns into these ``nathab_*`` keys. Values are the
+# ``malibu3d_label_remap`` definition of each axis.
 MALIBU3D_TILE_DISTRIBUTION_TASKS: Dict[str, str] = {
     "nathab_habitat_type": "by_habitat_type_ecological",
     "nathab_moisture_regime": "by_moisture_regime",
@@ -79,13 +78,12 @@ MALIBU3D_TILE_DISTRIBUTION_TARGET_KEYS: Tuple[str, ...] = tuple(
     MALIBU3D_TILE_DISTRIBUTION_TASKS.keys()
 )
 
-# Keys passed to GridSample / index_valid_keys (superset of all MALiBU3D targets).
-# Only **per-point** arrays belong here. Scene-level tensors (e.g. ``coord_translation``
-# shape (3,), or ``network`` raster (C,H,W) before NetworkRasterToPointLabels) must
-# NOT be listed — GridSample would index them with point ids → IndexError.
-# ``network`` / ``network_cell`` / ``network_pix`` are appended by
-# NetworkRasterToPointLabels after GridSample.
-# ``abs_xy`` is a pre-aug float64 per-point buffer consumed by that transform.
+# index_valid_keys for GridSample & co. (superset of all MALiBU3D targets).
+# Only **per-point** arrays belong here. Scene-level arrays (``coord_translation`` (3,),
+# a ``(C, H, W)`` raster before NetworkRasterToPointLabels) must NOT be listed: GridSample
+# would index them with point ids (IndexError). ``{key}`` / ``{key}_cell`` / ``{key}_pix``
+# of pixel_semantic tasks are appended by NetworkRasterToPointLabels once they are
+# point-wise. ``abs_xy`` is the float64 per-point XY that transform consumes.
 MALIBU3D_MULTITASK_INDEX_VALID_KEYS: Tuple[str, ...] = (
     "coord",
     "color",
@@ -105,12 +103,13 @@ MALIBU3D_MULTITASK_INDEX_VALID_KEYS: Tuple[str, ...] = (
     "nathab_bioclimatic_zone",
 )
 
-# Optional Collect prefix keys before target_keys (backbone-specific).
+# Backbone-specific Collect keys placed before the targets (``collect_prefix_keys``).
 MALIBU3D_COLLECT_PREFIX_NONE: Tuple[str, ...] = ()
 MALIBU3D_COLLECT_PREFIX_GRID: Tuple[str, ...] = ("grid_coord",)
 MALIBU3D_COLLECT_PREFIX_LITEPT: Tuple[str, ...] = ("grid_coord", "grid_size")
 
-# Point-wise elevation regression (not class indices).
+# Point-wise elevation regression. The target (meters) is multiplied by
+# ``target_scale`` before the loss; NaN targets (no DTM) are masked out.
 ELEVATION_TARGET_SCALE = 0.01
 ELEVATION_SMOOTH_L1_BETA = 1e-2
 
@@ -127,12 +126,11 @@ def get_semantic_config(
     target_key: str,
     definition: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Return a deep copy of the semantic config for the given target_key.
+    """Return a deep copy of the semantic task config for ``target_key``.
 
-    When ``definition`` is omitted, uses ``DEFAULT_LABEL_DEFINITION_NAMES`` from
-    ``malibu3d_label_remap`` (forest=default, natural_habitat=by_habitat_x_domain, …).
-
-    Adds task_type set to "semantic" for use with MultiTaskSegmentorV2.
+    ``definition`` names a label definition of ``malibu3d_label_remap`` (default:
+    ``DEFAULT_LABEL_DEFINITION_NAMES``, i.e. ``v20`` for ``segment``). The config has
+    ``task_type="semantic"``.
     """
     if target_key not in MALIBU3D_SEMANTIC_TASKS:
         keys = ", ".join(sorted(MALIBU3D_SEMANTIC_TASKS))
@@ -151,10 +149,10 @@ def get_semantic_config(
 
 
 def get_multitask_regression_task_config_elevation() -> Dict[str, Any]:
-    """Task config dict for point-wise elevation regression in MultiTaskSegmentorV2.
+    """Task config for point-wise elevation regression (``task_type="regression"``).
 
-    Expects an "elevation" tensor in input_dict when MALiBU3D loads elevation (elevation
-    listed in target_keys), i.e. task targets are keyed by task_name.
+    The model reads the target from ``input_dict["elevation"]``, which MALiBU3DDataset
+    provides when ``"elevation"`` is in its target_keys.
     """
     out = deepcopy(MALIBU3D_ELEVATION)
     out["task_type"] = "regression"
@@ -173,17 +171,14 @@ def get_tile_distribution_config(
     target_key: str,
     definition: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Return a deep copy of the tile-distribution axis config for the given target_key.
+    """Return a deep copy of the config of one natural-habitat axis (``nathab_*``).
 
-    Each nathab axis target_key (see ``MALIBU3D_TILE_DISTRIBUTION_TASKS``) is derived
-    from the ``natural_habitat`` LabelDefinition registry (raw CarHab ids), not from
-    an eponymous registry entry of its own — unlike semantic tasks, where target_key
-    IS the ``malibu3d_label_remap`` task_key.
-
-    Adds task_type set to "tile_distribution" for use with MultiTaskSegmentorV2.
-    Default training uses tile-pooled WeightedKL; set ``pointwise_supervision=True``
-    (via ``enable_nathab_pointwise_supervision``) for CE + Lovasz on point labels
-    while keeping tile-distribution inference / KL–TV metrics.
+    Classes come from the ``natural_habitat`` definition named in
+    ``MALIBU3D_TILE_DISTRIBUTION_TASKS`` (or ``definition``). The config has
+    ``task_type="tile_distribution"``: by default the model is trained with a
+    weighted KL loss on the tile-level class distribution. Use
+    ``enable_nathab_pointwise_supervision`` to train with CE + Lovasz on the point
+    labels instead; inference and the KL / TV metrics stay tile-level either way.
     """
     if target_key not in MALIBU3D_TILE_DISTRIBUTION_TASKS:
         keys = ", ".join(sorted(MALIBU3D_TILE_DISTRIBUTION_TASKS.keys()))
@@ -208,10 +203,10 @@ def get_tile_distribution_config(
 def enable_nathab_pointwise_supervision(
     task_configs: Dict[str, Any],
 ) -> Dict[str, Any]:
-    """Opt in to CE + Lovasz point-wise training for nathab tile_distribution axes.
+    """Switch the nathab axes to point-wise CE + Lovasz training.
 
     Mutates and returns ``task_configs``. Call after ``init_task_configs`` and before
-    ``init_task_criteria``. Inference / KL–TV eval stay on the tile_distribution path;
+    ``init_task_criteria``. Inference and KL / TV metrics stay tile-level;
     MultiTaskEvaluator / MultiTaskTester also report mIoU when this flag is set.
     """
     for name in MALIBU3D_TILE_DISTRIBUTION_TASKS:
@@ -242,18 +237,16 @@ def init_multitask_collect_keys(
     *,
     collect_prefix_keys: Tuple[str, ...] = (),
 ) -> Tuple[Tuple[str, ...], Tuple[str, ...], Tuple[str, ...]]:
-    """Build train/val Collect keys and index_valid_keys for MALiBU3D configs.
+    """Return ``(train_keys, val_keys, index_valid_keys)`` for MALiBU3D configs.
 
-    train: coord + collect_prefix_keys + target_keys (+ per pixel_semantic task's cell
-    ints / grid meta)
-    val: coord + collect_prefix_keys + (task, origin_task) per point-wise target + inverse
+    - train: coord + collect_prefix_keys + pixel-task grid keys + target_keys
+    - val: coord + collect_prefix_keys + pixel-task grid keys + ``(key, origin_key)``
+      per point-wise target (``key`` alone for pixel tasks) + inverse
 
-    For every pixel_semantic target in ``target_keys`` (e.g. ``network``, ``forest_2d``),
-    Collect includes ``{key}_cell`` / ``{key}_pix`` (int64 Lambert indices from
-    ``NetworkRasterToPointLabels(target_key=key)``), plus ``{key}_origin_*``,
-    ``{key}_pixel_m``, and ``{key}_height`` / ``{key}_width`` for dense test. Each
-    pixel_semantic task gets its own independent key set, so e.g. ``network`` and
-    ``forest_2d`` can coexist in the same multi-task run without collisions.
+    The grid keys of a pixel_semantic target ``key`` are ``{key}_cell`` / ``{key}_pix``
+    (int64 cell indices from ``NetworkRasterToPointLabels(target_key=key)``),
+    ``{key}_origin_x/y``, ``{key}_pixel_m`` and ``{key}_height/width`` (dense test).
+    Each pixel task has its own key set, so ``network`` and ``forest_2d`` can coexist.
     """
     _validate_target_keys(target_keys)
     base = ("coord",) + collect_prefix_keys
@@ -284,10 +277,11 @@ def init_task_configs(
     target_keys: Tuple[str, ...],
     definitions: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
-    """Initialize the task config dictionary for the given target_keys.
+    """Return ``{task_name: task_config}`` for the given target_keys.
 
-    ``definitions`` maps task names to label definition names in ``malibu3d_label_remap``
-    (must match preprocessing v2 ``--{task}_definition`` flags).
+    ``definitions`` optionally maps task names to label definition names of
+    ``malibu3d_label_remap``. For ``segment`` it must match the definition the data was
+    preprocessed with (``--segment_definition``), else labels and logits disagree.
     """
     definitions = definitions or {}
     out = {}
@@ -322,13 +316,12 @@ def get_missing_target_fill_value(
     - Semantic targets fall back to the on-disk storage definition's ignore_index.
     - Natural-habitat axes fall back to each axis' void id.
     - Elevation regression falls back to NaN so masked losses ignore it.
-    - Network pixel masks fallback to an empty (r, 1, 1) zero raster (absence).
+    - Pixel masks fall back to an all-zero ``(r, 1, 1)`` raster (no positive pixel).
 
-    ``pixel_semantic_config`` optionally overrides the registry lookup for
-    pixel_semantic targets (e.g. a per-config ``num_networks``/``channel_names``
-    override, such as dropping RAILROADS from the ``network`` task) — pass the
-    caller's ``task_configs[target_key]`` when it was constructed with such an
-    override so the missing-tile fallback shape stays consistent with it.
+    ``pixel_semantic_config`` overrides the registry lookup for pixel_semantic
+    targets: pass the caller's ``task_configs[target_key]`` when it changes
+    ``num_networks`` (e.g. RAILROADS dropped from ``network``) so the fallback keeps
+    the same channel count.
     """
     if target_key in MALIBU3D_SEMANTIC_TASKS:
         from pointcept.datasets.preprocessing.malibu3d.malibu3d_label_remap import (
@@ -369,7 +362,10 @@ def get_missing_target_fill_value(
     raise KeyError(f"Unknown target_key '{target_key}'. Expected one of: {keys}")
 
 def init_task_criteria(task_configs: Dict[str, Any]) -> Dict[str, Any]:
-    """Initialize the task criteria dictionary for the given target_keys.
+    """Return the default losses ``{task_name: [loss cfg, ...]}`` for ``task_configs``.
+
+    semantic / pixel_semantic: CE + Lovasz; regression: SmoothL1; tile_distribution:
+    weighted KL, or CE + Lovasz when ``pointwise_supervision`` is set.
     """
     task_criteria = {}
     for task_name, task_config in task_configs.items():

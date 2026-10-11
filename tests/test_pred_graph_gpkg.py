@@ -1,8 +1,7 @@
-"""Roundtrip PixelGraph -> GeoPackage -> load_roi_exported_network_graph.
+"""Predicted road graphs: PixelGraph -> GeoPackage -> load_roi_exported_network_graph round trip, output
+paths, and the per-ROI APLS JSON written next to each predicted graph by eval_network_apls.
 
-Also checks the APLS sidecar dump written next to predicted graphs.
-
-Run with: PYTHONPATH=./ pytest tests/test_pred_graph_gpkg.py
+Run with: PYTHONPATH=. pytest tests/test_pred_graph_gpkg.py
 """
 
 from __future__ import annotations

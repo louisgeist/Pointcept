@@ -1,37 +1,25 @@
-"""Standalone backfill: write forest_2d.npy (1, H, W) masks per MALiBU3D tile.
+"""Write the ``forest_2d.npy`` (1, H, W) mask of every MALiBU3D tile from the FOREST GeoTIFFs.
 
-Driven by the tile CSV (MALiBU3D ``tiles.csv`` or a legacy split manifest, read
-via ``tile_catalog.py``; same contract as ``preprocess_malibu3d``): each LiDAR
-tile must already exist under ``data_root`` with ``coord.npy``. Missing patches are hard errors (manifest is the source of
-truth; disk is only checked). Known-missing tiles listed in
-``missing_coord_tiles.details.csv`` are skipped.
+Driven by the tile CSV (``tiles.csv`` or an older split manifest, read via
+``tile_catalog.py``): each tile must already exist under ``data_root`` with
+``coord.npy`` (missing tiles are errors, except those listed in the known-missing file,
+default ``data/malibu3d/missing_coord_tiles.details.csv``).
 
-Unlike ``rasterize_network.py`` (which rasterizes a vector graph), FOREST is
-already a raster: this script reads the window of the source FOREST GeoTIFF
-covering each tile's own point-cloud bounding box and maps it to the target
-``pixel_m`` grid (majority-vote resample, or a direct integer-window read when
-``pixel_m`` matches the native GeoTIFF resolution and the grids are in phase),
-then writes it out in the same south-up ``(1, H, W)`` layout used by
-``network.npy`` / ``NetworkRasterToPointLabels``. FOREST coverage is complete
-for every (dept_year, roi) couple, so (unlike network) there is no "expected
-but absent" case -- every manifest patch gets a ``forest_2d.npy``.
+FOREST is already a raster: this script reads the window of the tile's GeoTIFF that
+covers its point bounding box and maps it onto the tile's ``pixel_m`` grid (a direct
+integer-window read when the GeoTIFF has that resolution and is in phase with the grid,
+else a majority-vote resampling). The mask is written south-up, like ``network.npy``,
+for ``NetworkRasterToPointLabels``, and the grid is stored in ``meta.json["forest_2d"]``.
+FOREST covers every tile, so a missing GeoTIFF makes the run fail.
 
-Example (Hecate, D067)::
+Example::
 
-python pointcept/datasets/preprocessing/malibu3d/rasterize_forest.py \
-    --data_root data/malibu3d \
-    --source_dataset_root data/malibu3d/raw \
-    --split_manifest_csv data/malibu3d/tiles_D067.csv \
-    --pixel_m 1.0
-
-Example (Jean Zay, full manifest)::
-
-python pointcept/datasets/preprocessing/malibu3d/rasterize_forest.py \
-    --data_root data/malibu3d \
-    --source_dataset_root /lustre/fswork/projects/rech/unv/usi32yh/Pointcept/data/malibu3d/raw \
-    --split_manifest_csv data/malibu3d/tiles.csv \
-    --pixel_m 1.0 \
-    --num_workers 8
+    python pointcept/datasets/preprocessing/malibu3d/rasterize_forest.py \
+        --data_root data/malibu3d \
+        --source_dataset_root data/malibu3d/raw \
+        --split_manifest_csv data/malibu3d/tiles.csv \
+        --pixel_m 1.0 \
+        --num_workers 8
 """
 
 from __future__ import annotations
@@ -82,7 +70,7 @@ REQUIRED_MANIFEST_COLUMNS = frozenset(
 
 @dataclass(frozen=True)
 class ManifestPatch:
-    """One LIDARHD patch listed in the split manifest."""
+    """One LiDAR tile listed in the tile CSV."""
 
     split: str
     dept_year: str
@@ -105,7 +93,10 @@ def load_manifest_patches(
     splits: Optional[Sequence[str]] = None,
     known_missing: Optional[set] = None,
 ) -> Tuple[List[ManifestPatch], int]:
-    """Load LiDAR tiles from ``tiles.csv`` / legacy manifest (optionally filtered by split)."""
+    """Load the tiles of ``tiles.csv`` / an older manifest, minus ``known_missing``.
+
+    Returns ``(patches, n_skipped_known_missing)``.
+    """
     if not split_manifest_csv.is_file():
         raise FileNotFoundError(f"split_manifest_csv not found: {split_manifest_csv}")
     missing_cols = sorted(REQUIRED_MANIFEST_COLUMNS - tile_csv_columns(split_manifest_csv))
@@ -250,18 +241,15 @@ def process_patch(
             )
             resampled = True
 
-    # Map the raster's own nodata sentinel (if declared) to ignore_index --
-    # mirrors the nodata->void mapping sample_raster_to_points does for the
-    # per-point `forest` task (preprocess_malibu3d.py). Without this, a
-    # stray nodata value would be written verbatim into forest_2d.npy and
-    # only surface later as an opaque CUDA nll_loss assert during training.
+    # Map the raster's nodata value (if declared) to ignore_index. Otherwise it would
+    # be written verbatim into forest_2d.npy and only surface later as an opaque CUDA
+    # nll_loss assert during training.
     if nodata is not None:
         raw = np.where(raw == nodata, ignore_index, raw)
 
-    # rasterio reads north-up (row 0 = north/top); the MALiBU3D grid
-    # convention used by network.npy / NetworkRasterToPointLabels is south-up
-    # (row 0 = south, row index increases with northing) -- see
-    # network_xy_raster_utils.mask_from_absolute_cells. Flip to match.
+    # rasterio reads north-up (row 0 = north); the MALiBU3D grid convention used by
+    # network.npy / NetworkRasterToPointLabels is south-up (row index increases with
+    # northing, see network_xy_raster_utils.mask_from_absolute_cells). Flip to match.
     forest = np.flipud(raw).astype(np.uint8, copy=False)
     forest = forest[np.newaxis, :, :]  # (1, H, W)
 

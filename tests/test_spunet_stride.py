@@ -1,6 +1,7 @@
-"""Smoke tests for SpUNet-v1m1 pooling stride (does not change stage count).
+"""SpUNet-v1m1 pooling stride: an int stride is broadcast to every stage without changing the stage count, and
+the model still runs a forward pass. Needs CUDA + spconv; skipped otherwise.
 
-Run with: PYTHONPATH=./ pytest tests/test_spunet_stride.py
+Run with: PYTHONPATH=. pytest tests/test_spunet_stride.py
 """
 
 import unittest

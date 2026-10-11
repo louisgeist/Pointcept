@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# Chain PureForest linear probes on GPU (torch LBFGS) for all MS-encoder tags.
+# Run the PureForest linear probe (torch L-BFGS on GPU) on every embedding set in TAGS,
+# i.e. the encoder multiscale ("_ms") embeddings written by
+# scripts/extract_pureforest_pooled_embeddings.py to ${OUT}/<tag>/.
 #
-# Matches the probe block in
-#   pointcept/datasets/preprocessing/pureforest/README.md
-# but adds ``--device cuda`` (train/val tensors resident per aggregation).
+# Same commands as the probe block of pointcept/datasets/preprocessing/pureforest/README.md,
+# plus ``--device cuda`` (train/val tensors stay on the GPU for each aggregation).
+# Tags without embeddings are reported as FAIL and skipped; the exit code is 1 if any failed.
 #
-# Usage (hecate / local, preferably inside tmux):
+# Usage (long run: use tmux or a batch job):
 #   bash scripts/pureforest/run_sklearn_probes_gpu.sh
 #   DEVICE=cuda:1 SKIP_EXISTING=1 bash scripts/pureforest/run_sklearn_probes_gpu.sh
 #   EXTRA_ARGS='--fresh' bash scripts/pureforest/run_sklearn_probes_gpu.sh

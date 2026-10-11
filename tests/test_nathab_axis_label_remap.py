@@ -1,7 +1,7 @@
-"""
-Tests for the natural-habitat ecological-axis label definitions and the CarHab -> axes bake.
+"""Natural-habitat ecological-axis label definitions (LUTs from the CarHab ids) and the CarHab -> packed axes
+conversion.
 
-Run with: PYTHONPATH=./ pytest tests/test_nathab_axis_label_remap.py
+Run with: PYTHONPATH=. pytest tests/test_nathab_axis_label_remap.py
 """
 
 import unittest

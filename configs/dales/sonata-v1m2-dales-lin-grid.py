@@ -1,24 +1,16 @@
 """
-Sonata-v1m2 seed-ensemble linear probing on DALES — 10 probes with IDENTICAL
-hyperparameters (the best lr from the earlier lr-grid sweep), differing only
-by random init, to report test mIoU/mAcc/allAcc as mean±std across seeds
-instead of a single point estimate. Reuses the GridProbe machinery (shared
-frozen-backbone forward across all probes) purely to avoid paying the
-backbone cost 10x, not for hyperparameter search.
+Frozen Sonata (MALiBU3D SSL-pretrained backbone, ckpt/sonata-pretrained/model.pth) linear probing
+on DALES semantic segmentation (8 classes), seed-ensemble form.
 
-Frozen PT-v3m2 encoder (enc_mode=True → multi-scale concat 1232ch) from the
-MALiBU3D Sonata pretrain job 862680, epoch_120. DALES has no RGB — Sonata was
-pretrained with scene-level RandomDropColor/RandomDropStrength (drop_value=0.0)
-so `FillMissingFeat` synthesizes a zero "color" channel (in_channels=7). No
-learned masked-feat at pretrain time, so literal zero fill is faithful.
+Probe input: encoder multi-scale features (enc_mode=True): the 5 encoder stages, broadcast back to
+the input points and concatenated (1232 channels). Unlike the other configs of this directory, the
+10 probes share one hyperparameter set (CE + Lovasz, AdamW, wd=0, OneCycleLR, lr=0.02) and differ
+only by their random initialization; GridProbeSeedEnsembleTester tests every probe and reports the
+mean and std of the test metrics.
 
-10 probes, identical config, each getting its own random Linear init from
-sequential construction in GridProbeSegmentorV2.__init__ (no seed field
-needed). Test-set aggregation: GridProbeSeedEnsembleTester (in place of
-GridProbeWinnerSelector) + GridProbeSemSegTester (test = dict(...) below)
-reload every probe's best-val checkpoint, run one shared-backbone test pass
-across all 10, and write save_path/seed_ensemble_results.json with
-mean/std of test_mIoU/test_mAcc/test_allAcc.
+DALES has no RGB: color is zero-filled, as in Sonata pretraining (modality dropout with zeros, no
+learned mask value); raw intensity is scaled by 1/60000. DALES has no validation split, so
+validation runs on the test split.
 """
 
 _base_ = ["../_base_/default_runtime.py"]
@@ -35,7 +27,7 @@ strength_feat_scale = 1 / 60000  # DALES raw intensity → MALiBU3D [0,1] conven
 num_gpu = 1
 epoch = 400
 eval_epoch = 10
-lr = 0.02  # best lr from the earlier 12-value lr-grid sweep on DALES/Sonata
+lr = 0.02  # best lr of the 12-lr grid on DALES for this backbone
 patch_size = 1024
 
 test_single_fragment = True
@@ -45,7 +37,7 @@ batch_size_per_gpu = 24
 batch_size = batch_size_per_gpu * num_gpu
 batch_size_val = 1
 batch_size_test = 1
-num_worker = 24  # H100 Jean-Zay
+num_worker = 24
 num_worker_test = 2
 mix_prob = 0.8
 empty_cache = False
@@ -59,14 +51,10 @@ weight = "ckpt/sonata-pretrained/model.pth"
 
 wandb_project = f"pointcept_{dataset_type[:-7].lower()}"
 
-# Hooks
-# Order matters: GridProbeEvaluator before GridProbeCheckpointSaver/CheckpointSaver;
-# GridProbeSeedEnsembleTester last (frees the per-probe optimizers/schedulers, then
-# runs one shared-backbone GridProbeSemSegTester pass across ALL 10 probes and
-# aggregates mean/std — replaces PreciseEvaluator, which never sets
-# raw_model.active_probe and would break under GridProbeSegmentorV2, and replaces
-# GridProbeWinnerSelector, which only tests a single "winner" — there is no winner
-# concept for a seed ensemble).
+# Hooks. Order matters: GridProbeEvaluator before the checkpoint savers, and
+# GridProbeSeedEnsembleTester last (frees the per-probe optimizers, then tests all
+# probes in one shared-backbone pass and aggregates mean/std). There is no winner
+# to select, hence no GridProbeWinnerSelector.
 hooks = [
     dict(
         type="CheckpointLoader",
@@ -103,10 +91,9 @@ names = [
 # Encoder levels (enc_mode): 48+96+192+384+512 = 1232
 backbone_out_channels = 1232
 
-# Seed-ensemble probes — ce_lovasz, AdamW/wd0/OneCycleLR warmup5%, lr fixed at the
-# best value from the earlier lr-grid sweep; only the random init differs across
-# probes (each ProbeHead.linear draws its own init from sequential construction in
-# GridProbeSegmentorV2.__init__ — no explicit seed field needed).
+# Seed-ensemble probes — ce_lovasz, AdamW/wd0/OneCycleLR warmup5%, fixed lr. Only the
+# random init differs: each probe head draws its own init when GridProbeSegmentorV2
+# builds the heads in sequence, so no explicit seed is needed.
 _criteria = [
     dict(type="CrossEntropyLoss", loss_weight=1.0, ignore_index=ignore_index),
     dict(type="LovaszLoss", mode="multiclass", loss_weight=1.0, ignore_index=ignore_index),
@@ -150,7 +137,7 @@ model = dict(
     backbone_out_channels=backbone_out_channels,
     backbone=dict(
         type="PT-v3m2",
-        in_channels=7,  # coord(3) + color(3, fake/zero) + strength(1)
+        in_channels=7,  # coord(3) + color(3, absent: zero-filled) + strength(1)
         order=("z", "z-trans", "hilbert", "hilbert-trans"),
         stride=(3, 3, 3, 3),
         enc_depths=(3, 3, 3, 12, 3),

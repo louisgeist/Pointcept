@@ -38,8 +38,8 @@ class CrossEntropyLoss(nn.Module):
         )
 
     def forward(self, pred, target):
-        # When all targets are ignore_index, nn.CrossEntropyLoss returns NaN.
-        # Return 0 in the graph so loss.requires_grad stays True; gradient is 0.
+        # nn.CrossEntropyLoss returns NaN when every target is ignore_index;
+        # return a zero that stays in the graph instead (zero gradient).
         if (target != self.ignore_index).any():
             return self.loss(pred, target) * self.loss_weight
         return pred.sum() * 0.0
@@ -49,6 +49,7 @@ class CrossEntropyLoss(nn.Module):
 class WeightedKLDivLoss(nn.Module):
     """Annotation-count-weighted KL(target || pred) over per-tile distributions.
 
+    Loss of the ``tile_distribution`` tasks of MultiTaskSegmentorV2.
     ``pred``/``target``: (M, C) probabilities (not logits) for M tiles that have
     at least one non-void point for this axis; ``weight``: (M,) non-void point
     counts per tile. Returns sum(weight * KL(target||pred)) / sum(weight).
@@ -70,7 +71,11 @@ class WeightedKLDivLoss(nn.Module):
 
 @LOSSES.register_module()
 class SmoothL1Loss(nn.Module):
-    """Smooth L1 on finite elements only (ignores NaN/Inf in pred or target)."""
+    """Smooth L1 on finite elements only (ignores NaN/Inf in pred or target).
+
+    Used for elevation (height above ground) regression, where NaN targets mark
+    points without a valid DTM value.
+    """
 
     def __init__(self, beta=1.0, loss_weight=1.0):
         super().__init__()

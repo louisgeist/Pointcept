@@ -36,6 +36,13 @@ from pointcept.models.kpconvx.utils.torch_pyramid import build_base_pyramid, fil
 
 @MODELS.register_module("kpconvx_base")
 class KPConvXBase(nn.Module):
+    """KPConvX backbone (Pointcept wrapper of Apple's KPConvX).
+
+    forward returns a tensor: logits (per point for task='cloud_segmentation',
+    per scene for 'classification'); with 'cloud_segmentation' and
+    num_classes <= 0, per-point features of the last decoder layer; with
+    enc_mode=True, per-point encoder multi-scale features.
+    """
 
     def __init__(self,
                  input_channels,
@@ -69,6 +76,8 @@ class KPConvXBase(nn.Module):
                  bn_momentum=0.1,
                  smooth_labels=False,  # True only for classification
                  class_w=(),
+                 # MALiBU3D addition: return encoder multi-scale features
+                 # instead of logits (see forward).
                  enc_mode=False,
                  ):
         super(KPConvXBase, self).__init__()
@@ -247,7 +256,10 @@ class KPConvXBase(nn.Module):
 
             # New head
             self.head = nn.Sequential(self.get_unary_block(layer_C[0], layer_C[0]))
-            # num_classes<=0: feature backbone only (e.g. MultiTaskSegmentorV2 external heads).
+            # MALiBU3D change: the output Linear is a separate `final` module
+            # (DefaultSegmentor keeps `final.` trainable when the backbone is
+            # frozen). num_classes <= 0: no output layer, the model returns
+            # features for external heads (e.g. MultiTaskSegmentorV2).
             self.final = (
                 None
                 if self.num_logits <= 0
@@ -454,13 +466,12 @@ class KPConvXBase(nn.Module):
                     feats = layer_pool(in_dict.points[l+1], in_dict.points[l], feats, in_dict.pools[l])
 
         if self.enc_mode:
-            # Encoder-only multiscale hypercolumn (for frozen-backbone linear
-            # probing, e.g. GridProbeSegmentorV2): gather every stage's raw
-            # (pre-decoder) feature back onto the original (level-0) points
-            # and concatenate, finest stage first. Requires grid_pool=True:
-            # in_dict.upsamples[i] only holds adjacent-level cluster indices,
-            # so a stage living at level `s` is chain-gathered down through
-            # levels s-1, s-2, ..., 0.
+            # Encoder multi-scale features (e.g. for GridProbeSegmentorV2):
+            # gather every encoder stage's output onto the level-0 points and
+            # concatenate them, finest stage first. Requires grid_pool=True:
+            # in_dict.upsamples[i] gives each level-i point its level-(i+1)
+            # cluster only, so a stage at level s is gathered through levels
+            # s-1, ..., 0.
             stage_feats = skip_feats + [feats]
             gathered = []
             for level, stage_feat in enumerate(stage_feats):

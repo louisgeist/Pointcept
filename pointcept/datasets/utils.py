@@ -58,10 +58,10 @@ def _summarize_pack_batches(batches, sizes, voxel_budget):
 
 
 def load_voxel_size_csv(path):
-    """Load tile_id -> n_voxels from tiles.csv or an enriched scene_split_manifest CSV.
+    """Load tile_id -> n_voxels from tiles.csv or an older split manifest with n_voxels.
 
-    The id column is ``tile_id`` (tiles.csv) or ``patch_id`` (legacy manifest).
-    Rows with missing/non-positive n_voxels are skipped.
+    The id column is ``tile_id`` (tiles.csv) or ``patch_id`` (older manifest).
+    Rows with a non-empty ``error`` field or a missing/non-positive n_voxels are skipped.
     """
     import csv
 
@@ -93,10 +93,10 @@ def load_voxel_size_csv(path):
 
 
 def resolve_dataset_voxel_sizes(dataset):
-    """Return per-index n_voxels for packing from dataset.csv_manifest.
+    """Return ``(sizes, 0)``: the n_voxels of every scene of ``dataset.data_list``.
 
-    Requires csv_manifest column n_voxels for every sample.
-    Raises ValueError with a clear message if the column or values are missing.
+    Sizes come from the ``n_voxels`` column of ``dataset.csv_manifest``; a missing
+    column or value raises ValueError naming the script that adds it.
     """
     import os
 
@@ -195,13 +195,12 @@ def pack_indices_by_voxel_budget(sizes, voxel_budget, max_batch_size):
 
 
 class VoxelBudgetBatchSampler(torch.utils.data.Sampler):
-    """BatchSampler packing dataset indices by a voxel (or point) budget.
+    """Batch sampler packing scenes under a voxel (or point) budget per batch.
 
-    Scenes are packed with First Fit Decreasing (sort by size descending, place
-    each scene in the first batch that fits). See
-    https://en.wikipedia.org/wiki/First-fit-decreasing_bin_packing
-    Batches are deterministically sharded across distributed ranks
-    (stride by world_size).
+    Used for val/test when ``val_voxel_budget`` / ``test_voxel_budget`` is set, so
+    batches of very unequal tiles fit in memory. Scenes are packed with First Fit
+    Decreasing (``pack_indices_by_voxel_budget``), at most ``max_batch_size`` per
+    batch; the batch list is fixed and sharded across ranks by stride ``world_size``.
     """
 
     def __init__(
@@ -466,11 +465,11 @@ def regroup_batch(batch, N, original_offsets, data_keys):
 
 
 def _merge_scene_level_labels(labels):
-    """Merge scalar per-scene labels when point_collate_fn pair-mixes offset.
+    """Merge per-scene labels when point_collate_fn mixes scenes in pairs (Mix3D).
 
-    Pair-mix keeps boundaries at offset[1], offset[3], ... and offset[-1], so each
-    merged group uses the first scene label of the pair (last scene alone if odd).
-    Supports scalar scene labels (B,) and (B, 1).
+    Mixing keeps offset boundaries 1, 3, ... and -1, so each merged scene takes the
+    label of the first scene of its pair (the last scene stays alone if B is odd).
+    Supports labels of shape (B,) and (B, 1).
     """
     if labels.ndim > 1:
         n = int(labels.shape[0])
@@ -489,7 +488,7 @@ def _merge_scene_level_labels(labels):
     return torch.cat([labels[0:-1:2], labels[-1:]])
 
 
-# Scene-level targets (one label per point cloud before mix).
+# Scene-level targets (one label per point cloud), e.g. the PureForest tile class.
 _SCENE_SCALAR_LABEL_KEYS = ("category",)
 
 

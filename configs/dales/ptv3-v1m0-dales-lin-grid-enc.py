@@ -1,21 +1,18 @@
 """
-PT-v3-malibu grid-search linear probing on DALES — encoder multiscale variant
-(same frozen checkpoint as ptv3-v1m0-dales-lin-grid.py, job 1095469, MALiBU3D
-multitask supervised pretrain at w109/2/ptv3_wd/multi-ptv3-v1m0-malibu3d_5.py).
+Frozen PTv3 (MALiBU3D multitask checkpoint, ckpt/ptv3/model.pth) linear probing on DALES semantic
+segmentation (8 classes).
 
-`enc_mode=True` drops the decoder entirely; GridProbeSegmentorV2's generic
-encoder-side multiscale concat (walking `pooling_parent` links — see
-grid_probe.py) hands the probes a 992ch concat of the 5 raw encoder stages
-(32+64+128+256+512). Counterpart to the sibling decoder-hypercolumn config
-(1024ch, `traceable=True`) — same probe grid, same checkpoint, only the
-tapped feature changes, so the two are directly comparable.
+Probe input: encoder multi-scale features (enc_mode=True): the 5 encoder stages, broadcast back to
+the input points and concatenated (992 channels). Default probing protocol (Tab. 3 of the MALiBU3D
+paper).
 
-Same probe grid as litept-b-v1m0-dales-lin-grid-enc.py (ce_lovasz x 12 LRs,
-AdamW/wd0/OneCycleLR warmup5%, epoch=400/eval_epoch=10) for cross-backbone
-comparability. The frozen backbone is always in eval() mode (DropPath(0.3) inactive; PT-v3-malibu has no BatchNorm). Z_MinShift/Z_RandomOffset added to the train/val/test
-pipeline (missing from the older DALES PTv3/LitePT lin-grid configs) per the
-Z-normalization convention used by the H3D/ECLAIR lin-grid configs.
-Same DALES-has-no-RGB handling as the other PTv3/LitePT DALES lin configs.
+GridProbe: 12 linear probes (CE + Lovasz, AdamW, wd=0, OneCycleLR, lr from 1e-4 to 5e-1) share one
+frozen-backbone forward; tools/grid_then_seeds.py then re-trains the probe with the best validation
+mIoU with 10 seeds.
+
+DALES has no RGB: color is replaced by the checkpoint's learned mask value; raw intensity is scaled
+by 1/60000 to the MALiBU3D [0, 1] range. DALES has no validation split, so validation runs on the
+test split; skip_test=True leaves testing to the seed phase.
 """
 
 _base_ = ["../_base_/default_runtime.py"]
@@ -43,7 +40,7 @@ batch_size_per_gpu = 24
 batch_size = batch_size_per_gpu * num_gpu
 batch_size_val = 1
 batch_size_test = 1
-num_worker = 24 * num_gpu  # H100 Jean-Zay
+num_worker = 24 * num_gpu
 num_worker_test = 2
 mix_prob = 0.8
 empty_cache = False
@@ -57,11 +54,10 @@ weight = "ckpt/ptv3/model.pth"
 
 wandb_project = f"pointcept_{dataset_type[:-7].lower()}"
 
-# Hooks
-# Order matters: GridProbeEvaluator before GridProbeCheckpointSaver/CheckpointSaver;
-# GridProbeWinnerSelector last (frees the per-probe optimizers/schedulers, then runs
-# its own SemSegTester pass on the winning probe — replaces PreciseEvaluator, which
-# never sets raw_model.active_probe and would break under GridProbeSegmentorV2).
+# Hooks. Order matters: GridProbeEvaluator before the checkpoint savers, and
+# GridProbeWinnerSelector last (frees the per-probe optimizers, picks the best probe
+# on validation and tests it unless skip_test=True). PreciseEvaluator is not used:
+# it does not select a probe.
 hooks = [
     dict(
         type="CheckpointLoader",
@@ -150,7 +146,7 @@ model = dict(
     backbone_out_channels=backbone_out_channels,
     backbone=dict(
         type="PT-v3-malibu",
-        in_channels=7,  # coord(3) + color(3, fake) + strength(1)
+        in_channels=7,  # coord(3) + color(3, absent: learned fill value) + strength(1)
         order=("z", "z-trans", "hilbert", "hilbert-trans"),
         stride=(3, 3, 3, 3),
         enc_depths=(2, 2, 2, 6, 2),

@@ -1,3 +1,17 @@
+"""
+Generic task wrappers around a backbone.
+
+- DefaultSegmentor: the backbone owns its output classifier (e.g. SpUNet, KPConvX).
+- DefaultSegmentorV2: backbone + linear point-wise ``seg_head``.
+- DefaultRegressorV2: backbone + linear point-wise scalar head (e.g. elevation).
+- MultiTaskSegmentorV2: one shared backbone and one head per MALiBU3D task
+  (point-wise semantics, tile-level class distributions, 2D raster masks, regression).
+- DefaultClassifier: backbone + scene pooling + linear ``cls_head`` (e.g. PureForest).
+
+All of them accept ``freeze_backbone`` (see FrozenBackboneEvalMixin) and
+``feature_mask_values`` (see LearnedMaskedFeatMixin).
+"""
+
 import torch
 import torch.nn as nn
 import torch_scatter
@@ -34,6 +48,7 @@ class FrozenBackboneEvalMixin:
     ``requires_grad=False`` *and* a backbone that is re-pinned to eval() on
     every ``.train()`` call. There is deliberately no opt-out flag.
 
+    The host class must define ``self.backbone`` and ``self.freeze_backbone``.
     The mixin must come before ``nn.Module`` in the bases (so that its
     ``train`` overrides ``nn.Module.train``).
     """
@@ -54,6 +69,20 @@ class FrozenBackboneEvalMixin:
 
 
 class LearnedMaskedFeatMixin:
+    """Replaces missing input features by a learned per-modality value.
+
+    Some points have no valid value for a feature modality (e.g. no RGB, or a
+    color dropped by ``RandomDropColor(keep_mask=True)``). ``Collect`` then
+    provides a boolean ``{key}_mask`` (True = missing) and the slice
+    ``[{key}_feat_start, {key}_feat_end)`` of that modality inside ``feat``.
+    When enabled, masked rows of that slice are overwritten by a learnable
+    vector ``{key}_mask_value`` before the backbone forward, instead of the
+    constant fill value written by the data pipeline.
+
+    ``feature_mask_values``: ``dict(enable=bool, masked_feat_keys=(...))``;
+    supported keys are ``color`` (3 ch), ``normal`` (3 ch) and ``strength`` (1 ch).
+    """
+
     def _init_learned_masked_feat(self, feature_mask_values=None):
         cfg = feature_mask_values or {}
         self.enable_learned_masked_feat = bool(cfg.get("enable", False))
@@ -78,16 +107,13 @@ class LearnedMaskedFeatMixin:
         expected_dims = {"color": 3, "normal": 3, "strength": 1}
         feat = input_dict["feat"]
         for feat_key in self.learned_masked_feat_keys:
-            # Get the mask of points where the feature is masked.
-            mask_key = f"{feat_key}_mask" 
-            
+            mask_key = f"{feat_key}_mask"
+
             if mask_key not in input_dict:
-                # If no mask, then there is no need to apply filling with the learned value.
                 continue
-            
-            # The features (color, normal, coord, etc.) are already concatenated
-            # in the "feat" tensor. Thus, the start and end keys are necessary to
-            # locate the slice of the feature in the "feat" tensor.
+
+            # Modalities are already concatenated in "feat"; Collect records
+            # where each one starts and ends.
             start_key = f"{feat_key}_feat_start"
             end_key = f"{feat_key}_feat_end"
 
@@ -121,6 +147,7 @@ class LearnedMaskedFeatMixin:
             feat[:, start:end] = filled
             
     def _print_learned_masked_feat(self):
+        """Print the learned fill values (called by the trainer at the end of training)."""
         if not self.enable_learned_masked_feat:
             print("Learned masked feat is not enabled.")
             return
@@ -142,7 +169,7 @@ class LearnedMaskedFeatMixin:
 
 @MODELS.register_module()
 class DefaultSegmentor(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeatMixin):
-    """Segmentor whose backbone owns the output classifier (legacy, pre-V2).
+    """Segmentor whose backbone owns the output classifier (the backbone returns logits).
 
     freeze_backbone=True means ALL of the following (there is no separate flag):
       * every backbone parameter has requires_grad=False (no gradient, never
@@ -170,8 +197,8 @@ class DefaultSegmentor(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeatMixi
         self.freeze_backbone = freeze_backbone
         self._init_learned_masked_feat(feature_mask_values=feature_mask_values)
         if self.freeze_backbone:
-            # Keep segmentation heads trainable for backbones that own their
-            # own output classifier (e.g., SpUNet: "final", KPConvX: "final").
+            # The backbone-owned output layer ("final" in SpUNet and KPConvX)
+            # stays trainable.
             keep_segmentation_head_prefixes = ("final.")
             for name, param in self.backbone.named_parameters():
                 if name.startswith(keep_segmentation_head_prefixes):
@@ -182,8 +209,8 @@ class DefaultSegmentor(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeatMixi
     def forward(self, input_dict):
         self._fill_masked_feat_with_learned_value(input_dict)
         if "condition" in input_dict.keys():
-            # PPT (https://arxiv.org/abs/2308.09718)
-            # currently, only support one batch one condition
+            # Dataset condition for PDNorm (PPT, https://arxiv.org/abs/2308.09718);
+            # only one condition per batch is supported.
             input_dict["condition"] = input_dict["condition"][0]
         seg_logits = self.backbone(input_dict)
         # train
@@ -191,8 +218,8 @@ class DefaultSegmentor(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeatMixi
             loss = self.criteria(seg_logits, input_dict["segment"])
             return_dict = dict(loss=loss)
             with torch.no_grad():
-                # Expose predictions for epoch-level confusion accumulation in hooks (train/mIoU).
-                # (We avoid logging this tensor directly; the writer filters non-scalars.)
+                # Used by the hooks to accumulate the train confusion matrix
+                # (train mIoU); the writer only logs scalars.
                 return_dict["pred"] = seg_logits.argmax(dim=1)
             return return_dict
         # eval
@@ -245,10 +272,9 @@ class DefaultSegmentorV2(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeatMi
         if self.freeze_backbone:
             for p in self.backbone.parameters():
                 p.requires_grad = False
-            # Learned masked-feat fill values (e.g. color_mask_value) are part of
-            # how raw features are prepared for the backbone, not part of the
-            # trainable head — freeze them too so a linear probe stays faithful
-            # to the representation the backbone was pretrained with.
+            # Learned masked-feat fill values (e.g. color_mask_value) belong to
+            # the backbone input, not to the head: freeze them too so a linear
+            # probe sees the inputs the backbone was trained with.
             if self.enable_learned_masked_feat:
                 for feat_key in self.learned_masked_feat_keys:
                     mask_value = getattr(self, f"{feat_key}_mask_value", None)
@@ -257,6 +283,7 @@ class DefaultSegmentorV2(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeatMi
             self._pin_frozen_backbone_eval()
 
     def get_ignore_index(self) -> int:
+        """ignore_index of the first criterion that defines one (-1 otherwise)."""
         if self._ignore_index is not None:
             return self._ignore_index
         for c in getattr(self.criteria, "criteria", []):
@@ -272,16 +299,15 @@ class DefaultSegmentorV2(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeatMi
         self._fill_masked_feat_with_learned_value(input_dict)
         point = Point(input_dict)
         point = self.backbone(point)
-        # Backbone added after v1.5.0 return Point instead of feat and use DefaultSegmentorV2
-        # TODO: remove this part after make all backbone return Point only.
+        # Point-based backbones (PT-v3, LitePT, SpUNet in point modes) return a
+        # Point; the others (SpUNet, KPConvX) return a per-point feature tensor.
         if isinstance(point, Point):
-            # Decoder-side multiscale concat: only populated when the backbone's
-            # decoder was built with dec_traceable=True (e.g. LitePT's
-            # `dec_traceable`). Walks from the final (finest) decoder output back
-            # to the raw encoder bottleneck, concatenating each level's
-            # pre-fusion feature gathered to the next-finer point count. No-op
-            # (point_list stays [point]) for any backbone that never sets
-            # dec_traceable=True.
+            # Decoder hypercolumn, only present when the decoder is traceable
+            # (LitePT dec_traceable=True, PT-v3m2 / PT-v3-malibu traceable=True,
+            # SpUNet dec_point_mode=True): follow the `unpooling_parent` links
+            # from the finest decoder output to the encoder bottleneck, then
+            # concatenate every level's output gathered onto the finest points,
+            # finest first. No-op for a non-traceable decoder.
             point_list = [point]
             while "unpooling_parent" in point_list[-1].keys():
                 point_list.append(point_list[-1].pop("unpooling_parent"))
@@ -290,7 +316,10 @@ class DefaultSegmentorV2(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeatMi
                 assert "pooling_inverse" in child.keys()
                 parent.feat = torch.cat([parent.feat, child.feat[child.pooling_inverse]], dim=-1)
             point = point_list[0]
-            # Encoder-side multiscale concat (enc_mode=True backbones).
+            # Encoder multi-scale features (enc_mode=True, or SpUNet
+            # point_mode=True): the backbone returns the coarsest point; follow
+            # the `pooling_parent` links down to the finest level, concatenating
+            # each coarser feature gathered onto the finer points (finest first).
             while "pooling_parent" in point.keys():
                 assert "pooling_inverse" in point.keys()
                 parent = point.pop("pooling_parent")
@@ -303,15 +332,15 @@ class DefaultSegmentorV2(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeatMi
         seg_logits = self.seg_head(feat)
         return_dict = dict()
         if return_point:
-            # PCA evaluator parse feat and coord in point
+            # Expose the output Point (feat, coord, ...), e.g. for feature extraction.
             return_dict["point"] = point
         # train
         if self.training:
             loss = self.criteria(seg_logits, input_dict["segment"])
             return_dict["loss"] = loss
             with torch.no_grad():
-                # Expose predictions for epoch-level confusion accumulation in hooks.
-                # (We avoid logging this tensor directly; the writer filters non-scalars.)
+                # Used by the hooks to accumulate the train confusion matrix
+                # (train mIoU); the writer only logs scalars.
                 return_dict["pred"] = seg_logits.argmax(dim=1)
         # eval
         elif "segment" in input_dict.keys():
@@ -328,7 +357,9 @@ class DefaultSegmentorV2(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeatMi
 class DefaultRegressorV2(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeatMixin):
     """Point-wise scalar regression (mirror of DefaultSegmentorV2).
 
-    Reads float targets from input_dict[target_key] and writes predictions to reg_pred.
+    Reads float targets from input_dict[target_key] (default ``elevation``) and
+    writes predictions to ``reg_pred``. The loss is returned whenever the target
+    is in the batch (train and val).
 
     freeze_backbone=True means ALL of the following (there is no separate flag):
       * every backbone parameter has requires_grad=False (no gradient, never
@@ -362,6 +393,8 @@ class DefaultRegressorV2(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeatMi
             self._pin_frozen_backbone_eval()
 
     def _forward_backbone(self, input_dict):
+        """Per-point backbone features; encoder multi-scale features (enc_mode)
+        are concatenated as in DefaultSegmentorV2 (no decoder hypercolumn)."""
         point = Point(input_dict)
         point = self.backbone(point)
         if isinstance(point, Point):
@@ -395,26 +428,38 @@ class DefaultRegressorV2(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeatMi
 
 @MODELS.register_module()
 class MultiTaskSegmentorV2(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeatMixin):
-    """Backbone-shared multi-task segmentor (semantic classification + optional regression).
-    
-    "V2" because it is the MultiTask version of the DefaultSegmentorV2.
+    """Multi-task model: one shared backbone, one linear head per task (MALiBU3D).
 
-    Each entry in the task_configs mapping must set "task_type" to "semantic",
-    "tile_distribution", "pixel_semantic" or "regression".
+    The multi-task counterpart of DefaultSegmentorV2. ``task_configs`` maps each
+    task name (also its target key in ``input_dict``) to a config whose
+    ``task_type`` is one of:
 
-    - Semantic and tile_distribution tasks read targets from input_dict[task_name] and
-      write point-wise logits to seg_logits_by_task.
-    - Pixel_semantic tasks pool point features into raster cells and write logits to
-      pixel_seg_logits_by_task.
-    - Regression tasks read the float target from input_dict[task_name] and write
-      predictions to reg_pred_by_task.
+    - ``semantic``: point-wise classification (e.g. ``segment``); logits in
+      ``seg_logits_by_task``.
+    - ``tile_distribution``: point-wise logits (``seg_logits_by_task``) trained
+      at tile level: per-tile mean predicted probabilities vs. the tile's
+      empirical label distribution, with the task criteria (WeightedKLDivLoss).
+      With ``pointwise_supervision=True`` the criteria are applied point-wise
+      instead (e.g. natural-habitat axes).
+    - ``pixel_semantic``: 2D raster masks (e.g. ``network`` roads/railroads,
+      ``forest_2d``): point features are pooled into the 1 m raster cells and
+      one head predicts ``num_networks`` channels of ``num_classes`` logits.
+      Needs the ``{task}_cell`` / ``{task}_pix`` keys written by
+      ``NetworkRasterToPointLabels``.
+    - ``regression``: point-wise scalar (e.g. ``elevation``); predictions in
+      ``reg_pred_by_task``.
 
-    The "main_task" name must refer to a semantic task (checkpoint / mIoU convention).
+    ``main_task`` (default: first task; semantic, tile_distribution or
+    pixel_semantic) provides ``seg_logits`` / ``pred``, which the single-task
+    hooks use (e.g. checkpoint selection on its mIoU). ``task_weights`` scale
+    each task loss in the total ``loss``; ``task_criteria`` gives per-task loss
+    configs (``criteria`` is the fallback).
 
-    Outputs:
-    - seg_logits and seg_logits_by_task: semantic tasks only,
-    - reg_pred_by_task: mapping task name -> 1D point-wise predictions for regression tasks,
-    - loss and loss_by_task when the corresponding targets are present in the batch.
+    Outputs: ``seg_logits``, ``seg_logits_by_task``, ``reg_pred_by_task``,
+    ``pixel_seg_{logits,target}_by_task`` (per cell) and
+    ``pixel_seg_{logits,target}_dense_by_task`` (per-scene rasters, see
+    ``_compute_pixel_logits``); ``loss`` and ``loss_by_task`` when any target is
+    in the batch; ``pred`` / ``pred_by_task`` in training.
 
     freeze_backbone=True means ALL of the following (there is no separate flag):
       * every backbone parameter has requires_grad=False (no gradient, never
@@ -494,7 +539,8 @@ class MultiTaskSegmentorV2(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeat
                         f"num_classes and num_networks must be > 0 for "
                         f"pixel_semantic task '{task_name}'."
                     )
-                # One Linear(C -> 2*r), reshaped to (P, r, 2) at forward time.
+                # One Linear(C -> r * num_classes), viewed as (P, r, num_classes)
+                # in forward (r = num_networks channels).
                 self.pixel_seg_heads[task_name] = nn.Linear(
                     backbone_out_channels, num_classes * num_networks
                 )
@@ -508,6 +554,8 @@ class MultiTaskSegmentorV2(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeat
                 p.requires_grad = False
             self._pin_frozen_backbone_eval()
 
+    # The three accessors below are used by the GradNorm loss balancing and the
+    # per-task gradient-norm logging (pointcept/utils/gradient_norm.py).
     def backbone_parameters(self):
         return [p for p in self.backbone.parameters() if p.requires_grad]
 
@@ -556,17 +604,18 @@ class MultiTaskSegmentorV2(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeat
         ignore_index=2,
         pooling="max",
     ):
-        """Pool point features into Lambert pixels; gather point-wise GT.
+        """Pool point features into raster cells (pixels) and gather each cell's label.
 
-        Point labels are ``(N, r)`` (from ``NetworkRasterToPointLabels``).
-        ``cell`` ``(N, 2)`` absolute ``(iy, ix)`` — Mix3D-safe unique keys.
-        ``pix`` ``(N, 2)`` relative ``(iy, ix)`` — dense scatter on GT grid.
-        ``pooling`` is ``"max"`` (default, e.g. ``network`` — catches a single
-        strong "there's a line here" signal) or ``"mean"`` (e.g. ``forest_2d`` —
-        an area-coverage class benefits from averaging the signal across every
-        point in a cell rather than just the strongest one).
-        Dense meta is only filled when per-scene ``H,W`` length matches ``offset``
-        (skip under Mix3D).
+        ``point_labels`` ``(N, r)``: per-point raster labels written by
+        ``NetworkRasterToPointLabels``. ``cell`` ``(N, 2)``: absolute Lambert
+        ``(iy, ix)``, used as pooling keys (unique across scenes mixed by Mix3D).
+        ``pix`` ``(N, 2)``: ``(iy, ix)`` relative to the scene's GT raster, used to
+        scatter predictions back onto it. A cell takes the label of its first point.
+        ``pooling``: ``"max"`` suits thin structures where one strong point
+        response is enough (``network``); ``"mean"`` suits area-coverage classes
+        (``forest_2d``).
+        The dense-raster meta is only filled when one ``(height, width)`` is
+        available per scene, i.e. not when Mix3D merged scenes.
 
         Returns
         -------
@@ -672,6 +721,9 @@ class MultiTaskSegmentorV2(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeat
         )
 
     def _compute_pixel_logits(self, feat, input_dict):
+        """Per-cell logits ``(P, r, num_classes)`` and targets ``(P, r)`` of each
+        pixel_semantic task present in the batch, plus per-scene dense rasters
+        (``None`` when they cannot be built)."""
         logits_by_task = {}
         targets_by_task = {}
         dense_by_task = {}
@@ -707,15 +759,12 @@ class MultiTaskSegmentorV2(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeat
             logits_by_task[task_name] = logits
             targets_by_task[task_name] = targets
 
-            # Dense soft foreground probs (r, H, W) aligned on the GT Lambert grid.
-            # Observed pixels (at least one point in the 1 m cell): softmax class-1
-            # probability in [0, 1]. Unobserved pixels (no point in that cell): NaN.
-            # Built only when grid meta matches offset (skipped under Mix3D).
-            #
-            # dense_target mirrors this on the GT side: observed cells hold the pooled
-            # label (long, may equal ignore_index for void); unobserved cells hold -1
-            # (ignore_index is a valid observed value, so it can't double as the
-            # unobserved sentinel).
+            # Dense foreground probabilities (r, H, W) on the scene's GT raster:
+            # softmax class-1 probability for observed pixels (at least one point
+            # in the 1 m cell), NaN for unobserved ones. Not built under Mix3D.
+            # dense_target is the GT counterpart: the cell label for observed
+            # pixels (possibly ignore_index), -1 for unobserved ones (ignore_index
+            # is a valid observed value, so it cannot also mean "unobserved").
             dense_list = []
             dense_target_list = []
             cursor = 0
@@ -758,6 +807,7 @@ class MultiTaskSegmentorV2(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeat
         return logits_by_task, targets_by_task, dense_by_task, dense_target_by_task
 
     def _forward_backbone(self, input_dict):
+        """Same as DefaultRegressorV2._forward_backbone."""
         point = Point(input_dict)
         point = self.backbone(point)
         if isinstance(point, Point):
@@ -795,6 +845,11 @@ class MultiTaskSegmentorV2(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeat
         pixel_logits_by_task=None,
         pixel_targets_by_task=None,
     ):
+        """Weighted sum of the losses of the tasks whose target is in the batch.
+
+        Returns ``(total_loss, loss_by_task)`` (unweighted per-task losses); raises
+        if no task target is present.
+        """
         total_loss = None
         loss_by_task = {}
         pixel_logits_by_task = pixel_logits_by_task or {}
@@ -821,6 +876,8 @@ class MultiTaskSegmentorV2(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeat
                         logits, input_dict[task_name]
                     )
                 else:
+                    # Tile level: per-tile mean predicted distribution vs. the
+                    # tile's label histogram, weighted by its labelled-point count.
                     target = input_dict[task_name].reshape(-1).long()
                     num_classes = int(task_config["num_classes"])
                     ignore_index = int(task_config["ignore_index"])
@@ -832,9 +889,8 @@ class MultiTaskSegmentorV2(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeat
                     )
                     keep = n_t > 0
                     if not keep.any():
-                        # Keep logits in the graph so DDP always sees this head's grads
-                        # (zero) even when no tile in the batch has a valid point for
-                        # this axis.
+                        # No labelled point in the batch: keep the logits in the
+                        # graph so DDP still sees a (zero) gradient for this head.
                         task_loss = logits.sum() * 0.0
                     else:
                         task_loss = self.criteria_by_task[task_name](
@@ -885,10 +941,11 @@ class MultiTaskSegmentorV2(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeat
         if self.main_task in logits_by_task:
             main_logits = logits_by_task[self.main_task]
         elif self.main_task in pixel_logits_by_task:
-            # Compatibility: expose first-network logits as seg_logits.
+            # pixel_semantic main task: expose its first channel (per cell).
             main_logits = pixel_logits_by_task[self.main_task][:, 0, :]
         else:
-            # Fallback for configs where main_task has no batch target this step.
+            # main_task absent from this batch: fall back to another task's
+            # logits so that seg_logits always exists.
             main_logits = next(iter(logits_by_task.values()), None)
             if main_logits is None and pixel_logits_by_task:
                 main_logits = next(iter(pixel_logits_by_task.values()))[:, 0, :]
@@ -942,10 +999,8 @@ class AttentiveScenePool(nn.Module):
         self.attn_drop = nn.Dropout(attn_drop) if attn_drop > 0.0 else nn.Identity()
 
     def forward(self, feat, offset):
-        """
-        feat: (N, C) : per-point features
-        offset: (B+1) : offset of the point cloud for each batch
-        """
+        """feat: (N, C) per-point features; offset: (B,) cumulative point counts
+        per scene. Returns (B, C) attention-weighted scene features."""
         indptr = nn.functional.pad(offset, (1, 0))
         k = self.key_proj(feat)
         v = self.value_proj(feat)
@@ -963,6 +1018,9 @@ class AttentiveScenePool(nn.Module):
 @MODELS.register_module()
 class DefaultClassifier(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeatMixin):
     """Backbone + scene pooling + linear ``cls_head`` classifier.
+
+    ``pooling``: ``mean``, ``max`` or ``attention`` (AttentiveScenePool) over the
+    per-point backbone features of each scene; target key ``category``.
 
     freeze_backbone=True means ALL of the following (there is no separate flag):
       * every backbone parameter has requires_grad=False (no gradient, never
@@ -1026,17 +1084,17 @@ class DefaultClassifier(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeatMix
                 backbone_out = self.backbone(point)
         else:
             backbone_out = self.backbone(point)
-        # Backbone added after v1.5.0 return Point instead of feat
-        # And after v1.5.0 feature aggregation for classification operated in classifier
-        # TODO: remove this part after make all backbone return Point only.
+        # Point-based backbones return a Point (pooled here, on its own offset,
+        # i.e. at the coarsest level for enc_mode); the others return a tensor,
+        # either per point or already scene-pooled (e.g. SpUNet enc_mode=True).
         if isinstance(backbone_out, Point):
             feat = self._pool_scene_feat(backbone_out.feat, backbone_out.offset)
         elif isinstance(backbone_out, torch.Tensor):
-            # Output is not pooled
+            # Per-point features
             if backbone_out.shape[0] == offset[-1]:
                 feat = self._pool_scene_feat(backbone_out, offset)
-                
-            # Output is already mean-pooled
+
+            # Already mean-pooled by the backbone
             elif backbone_out.shape[0] == offset.numel():
                 if self.pooling != "mean":
                     raise ValueError(
@@ -1060,7 +1118,7 @@ class DefaultClassifier(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeatMix
             loss = self.criteria(cls_logits.float(), input_dict["category"])
             return_dict = dict(loss=loss)
             with torch.no_grad():
-                # Expose predictions for epoch-level confusion accumulation in hooks.
+                # Used by the hooks to accumulate the train confusion matrix.
                 return_dict["pred"] = cls_logits.argmax(dim=1)
             return return_dict
         elif "category" in input_dict.keys():

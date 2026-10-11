@@ -1,31 +1,17 @@
 """
-SpUNet-v1m1 grid-search linear probing on H3D — encoder multiscale variant
-(same frozen checkpoint as spunet-v1m0-h3d-lin-grid-dec.py, job 1052217,
-MALiBU3D multitask supervised pretrain: channels=(32,64,128,256,256,128,96,96),
-layers=(2,3,4,6,2,2,2,2), stride=3).
+Frozen SpUNet (MALiBU3D multitask checkpoint, ckpt/spunet/model.pth) linear probing on H3D semantic
+segmentation (11 classes).
 
-SpUNetBase never returned a `Point` with `pooling_parent`/`unpooling_parent`
-links, and its pre-existing `enc_mode=True` is a *classification* mode
-(scatter-mean-pools every voxel to one feature per whole scene — see
-modelnet40/cls-spunet-v1m1-0-base.py) — unusable for a per-point segmentation
-probe (shape mismatch against `segment`).
+Probe input: encoder multi-scale features (point_mode=True): stem + 4 encoder stages, broadcast back
+to the input voxels and concatenated (512 channels). Default probing protocol (Tab. 3 of the
+MALiBU3D paper).
 
-Uses the new `point_mode=True` backbone flag (spconv_unet_v1m1_base.py) that
-instead builds a `Point` chain (stem -> stage0 -> ... -> bottleneck) with
-`pooling_parent`/`pooling_inverse` populated the same way PT-v3's GridPooling
-does, so GridProbeSegmentorV2's existing generic encoder-multiscale walk
-concatenates every stage's per-point feature broadcast up to the finest
-(stem) resolution — no scatter, no new trainable parameters (see
-tests/test_spunet_point_mode.py). Levels concatenated (finest first):
-stem(32) + stage0(32) + stage1(64) + stage2(128) + stage3/bottleneck(256) =
-512ch. Counterpart to the sibling decoder config (96ch, standard
-full-resolution U-Net output).
+GridProbe: 12 linear probes (CE + Lovasz, AdamW, wd=0, OneCycleLR, lr from 1e-4 to 5e-1) share one
+frozen-backbone forward; tools/grid_then_seeds.py then re-trains the probe with the best validation
+macro-F1 with 10 seeds.
 
-Same probe grid as litept-b-v1m0-h3d-lin_enc.py (AdamW/wd0/OneCycleLR
-warmup5%, lr sweep over 12 values, epoch=2000/eval_epoch=10) for
-cross-backbone comparability. The frozen backbone is always in eval() mode, which freezes SpUNet's BatchNorm running stats (real BatchNorm1d); SpUNet has no DropPath modules. H3D fill/aug/feature_mask_values unchanged
-from the LitePT-B H3D ref (no real intensity -> FillMissingFeat "strength").
-skip_test=False, log_test_f1=True (required for H3D lin-grid configs).
+H3D has RGB but no intensity: strength is replaced by the checkpoint's learned mask value. The
+winning probe is tested on the test split with F1 logged (log_test_f1=True).
 """
 
 _base_ = ["../_base_/default_runtime.py"]
@@ -65,11 +51,10 @@ weight = "ckpt/spunet/model.pth"
 
 wandb_project = f"pointcept_{dataset_type[:-7].lower()}"
 
-# Hooks
-# Order matters: GridProbeEvaluator before GridProbeCheckpointSaver/CheckpointSaver;
-# GridProbeWinnerSelector last (frees the per-probe optimizers/schedulers, then runs
-# its own SemSegTester pass on the winning probe — replaces PreciseEvaluator, which
-# never sets raw_model.active_probe and would break under GridProbeSegmentorV2).
+# Hooks. Order matters: GridProbeEvaluator before the checkpoint savers, and
+# GridProbeWinnerSelector last (frees the per-probe optimizers, picks the best probe
+# on validation and tests it unless skip_test=True). PreciseEvaluator is not used:
+# it does not select a probe.
 hooks = [
     dict(
         type="CheckpointLoader",
@@ -105,11 +90,7 @@ names = [
 backbone_channels = (32, 64, 128, 256, 256, 128, 96, 96)
 backbone_out_channels = 32 + sum(backbone_channels[:4])  # 512
 
-# -----------------------------------------------------------------------------
-# Grid-search probes — AdamW / OneCycleLR: ce_lovasz x lr x wd=0 x dropout=0 x
-# input_norm=none x feat_norm=none x optimizer=AdamW, warmup=5%
-# (1 x 12 x 1 x 1 x 1 x 1 x 1 = 12 probes).
-# -----------------------------------------------------------------------------
+# Grid-search probes — ce_lovasz, AdamW/wd0/OneCycleLR warmup5%, lr sweep only (12 probes).
 _losses = {
     "ce_lovasz": [
         dict(type="CrossEntropyLoss", loss_weight=1.0, ignore_index=ignore_index),
@@ -190,8 +171,8 @@ model = dict(
     backbone_out_channels=backbone_out_channels,
     backbone=dict(
         type="SpUNet-v1m1",
-        in_channels=7,  # coord(3) + color(3) + strength(1, fake/zero)
-        num_classes=0,  # unused in point_mode (no final conv applied) — kept for checkpoint key compat
+        in_channels=7,  # coord(3) + color(3) + strength(1, absent: learned fill value)
+        num_classes=0,  # unused in point_mode (no final conv applied)
         channels=backbone_channels,
         layers=(2, 3, 4, 6, 2, 2, 2, 2),
         stride=3,

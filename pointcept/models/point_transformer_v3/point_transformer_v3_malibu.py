@@ -1,14 +1,13 @@
 """
-Point Transformer V3 — Malibu
+Point Transformer V3, MALiBU3D variant (registered as "PT-v3-malibu")
 
-GridPooling computation follows PT-v3m2, which allows a flexible pooling
-stride: any integer, e.g. 3 instead of the usual 2.
+A copy of PT-v3m2 (point_transformer_v3m2_sonata.py, by Xiaoyang Wu) with one
+change: the stem is a SubMConv3d with kernel_size=5 (as in PT-v3m1) instead of
+PT-v3m2's Linear, followed by LayerNorm + GELU, and it therefore runs after
+serialization/sparsification. Pooling is PT-v3m2's GridPooling, which accepts
+any integer stride (e.g. 3), unlike PT-v3m1's power-of-two serialized pooling.
 
-Still a PTv3 backbone (serialized attention, LayerNorm/GELU, no BatchNorm); the
-only architectural difference with PT-v3m2 is the stem: a SubMConv3d with
-kernel_size=5 (as in PT-v3m1) instead of PT-v3m2's Linear, followed by
-LayerNorm + GELU. Because of that, stem weights are not interchangeable with
-PT-v3m2 / Sonata checkpoints.
+Stem weights are not interchangeable with PT-v3m2 / Sonata checkpoints.
 """
 
 from addict import Dict

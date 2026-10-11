@@ -7,6 +7,22 @@ Suivi du nettoyage de la branche `malibu3d` avant la création du repo public.
 - Release publique : nouveau repo propre (un seul commit), créé à la fin à partir de `malibu3d`.
 - Après chaque phase : relancer le harnais et le comparer à la référence (voir Phase 0), puis faire un commit.
 
+## Où on en est (2026-10-11, fin de session)
+
+- Phases 0 à 5 terminées. Phase 6 (commentaires/docstrings) faite : 184 fichiers .py + 5 non-.py, AST inchangé partout, pytest OK ; commit au vert du harnais.
+- Rapports des agents de la Phase 6 (valeurs de code à changer + bugs suspects) : `local/release_inventory/phase6_reports.md`. Les corrections sûres sont faites dans un commit séparé (voir Phase 6 ci-dessous) ; le reste est listé dans « Questions pour Louis ».
+- Prochaine étape : Phase 7 (README, CITATION.cff, LICENSE, environment.yml).
+
+### Questions pour Louis
+
+1. **Noms de classes en français** : `nathab_moisture_regime` = « Humide / Mesique / Sec » (`malibu3d_label_remap.py`, apparaissent dans les métriques) et les 43 noms CarHab de `_NATURAL_HABITAT_NAMES` (coquille « Routes & voies verrées »). Passer en anglais (« Wet / Mesic / Dry », …) ? À aligner sur la carte du dataset HF.
+2. **DALES n'a pas de split val** : toutes les configs DALES valident sur le split test (sélection du lr et du checkpoint sur test). À dire dans le papier / le README ?
+3. **Probes PureForest** : `point_max=5000` à l'entraînement (102400 ailleurs) et `enable_amp=False`, sans justification dans le code. Valeurs voulues ?
+4. **`enable_wandb = True`** par défaut (comme Pointcept amont) : un utilisateur sans `wandb login` aura une invite. Le passer à `False` dans la release, ou le documenter ?
+5. **`black`** : il reformaterait 171 fichiers (surtout du code propre au fork, mais aussi 18 fichiers de `pointcept/models`). Le passer sur tout le repo, seulement sur le code du fork, ou pas du tout ?
+6. **`scripts/train.sh`** : le `rm -rf exp/malibu3d/<nom>` systématique (ajout du fork, absent de l'amont) effaçait aussi les runs relancés avec `-r true`. Il est supprimé (comportement amont : le dossier est réutilisé). OK ?
+7. **Config DALES Sonata** : `configs/dales/sonata-v1m2-dales-lin-grid.py` était un ensemble de 10 graines à lr fixé (0.02), pas une grille. Remise en grille de 12 lr comme les autres (décision D1). OK ?
+
 ## Décisions
 
 | Sujet | Décision |
@@ -93,7 +109,7 @@ Constats en cours de route :
 - [x] Clés de `meta.json` sur disque : aucune ne contient « flair3d » → format des données inchangé ; clés des checkpoints inchangées
 - [x] `grep -i flair3d` vide hors `Flair3D-build` (Phase 6), `RELEASE_*` et READMEs internes ; FLAIR-HUB intact
 - [x] Harnais complet avec la table de renommage : 0 échec (configs, poids initiaux, datasets, forwards, entraînements). `local/regression/ref` = capture post-renommage
-- [ ] `scripts/unzip_malibu3d.py` écrit dans `{output_root}/data/{split}` alors que les configs lisent `data/malibu3d/{split}` → à aligner (Phase 7, avec la doc d'installation)
+- [x] `scripts/unzip_malibu3d.py` écrit dans `{output_root}/data/{split}` alors que les configs lisent `data/malibu3d/{split}` → aligné en Phase 5 (`b7c4288`)
 - [ ] Régénérer / vérifier les configs citées dans le README des checkpoints HF (`multi-*-v1m0-malibu3d.py`) au moment de la mise à jour de la model card
 
 ## Phase 5 — Code obsolète dans les fichiers conservés
@@ -116,9 +132,12 @@ La release HF ne livre **ni** `meta.json`, **ni** `network.npy`, **ni** `forest.
 
 ## Phase 6 — Commentaires et docstrings
 
-- [ ] Passe module par module : anglais, docstrings courtes, plus de références internes (semaines, jobs, dates)
-- [ ] Vérifier que l'AST est inchangé (seuls les commentaires et docstrings ont bougé) ; formatter avec `black`
-- [ ] Harnais + commit
+- [x] Passe module par module (7 agents en parallèle, consignes : `local/release_inventory/phase6_brief.md`) : anglais, docstrings courtes, plus de références internes (semaines, jobs, dates, machines, chemins perso, Flair3D-build). Docstrings de configs : modèle, tâche, protocole, table du papier, checkpoint `ckpt/<nom>/model.pth`. Énoncés faux corrigés au passage (voir rapports)
+- [x] AST inchangé sur les 184 .py modifiés (`local/release_inventory/ast_same.py`) ; les 2 .sh : seules des lignes `#` ont changé
+- [x] pytest (232) + harnais complet → commit
+- [ ] Commit séparé « valeurs de code » d'après les rapports : noms de runs wandb (H100/A100/epoch_120/warmup0%, suffixes des ablations), `csv_manifest` de Sonata-FT → `tiles.csv`, messages et textes d'aide internes (hecate/JZ/Flair3D-build/mmap fallback/legacy GradScaler/pre-macro-F1), id de run wandb réel dans un test, `train.sh`/`test.sh` (wipe + `DATASET=scannet`), branches de test des datasets supprimés dans `SemSegTester`, petits bugs morts (`FocalLoss.total()`, print de debug, `if …: pass`), config DALES Sonata remise en grille
+- [ ] `black` : décision de Louis (question 5)
+- Restent pour la Phase 7/8 (dans les rapports) : `tests/test_checkpoint_forward.py` (chemins de checkpoints locaux, manifests régionaux, clés Sonata à revérifier), `scripts/build_image.sh` (installe OCNN/CLIP/Swin3D), noms TAGS de `scripts/pureforest/run_sklearn_probes_gpu.sh`, en-tête de `malibu3d_leakage_excluded_test_tiles.txt`, `scripts/analyze_malibu3d_test_point_voxel_counts.py` (ne lit pas `tiles.csv`), documenter la compilation de `cpp_wrappers` KPConvX (distutils → Python ≤ 3.11) et le téléchargement du checkpoint Sonata officiel
 
 ## Phase 7 — Documentation de release
 

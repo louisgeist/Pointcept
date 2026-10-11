@@ -1,26 +1,11 @@
 """
-LitePT-Base full-supervision semantic segmentation on ECLAIR, trained from
-scratch (no pretrained weight). Ablation baseline (abla1_preECLAIR) against
-the Sonata / MALiBU3D-multitask-pretrained ECLAIR probes in sibling
-w110 folders (abla_grid_on_eclair, grid_eclair_18h, ...): this config
-measures what full end-to-end supervised training on ECLAIR alone reaches,
-with no pretraining.
+LitePT-B semantic segmentation on ECLAIR (11 classes), trained from scratch: the "LitePT
+fully-supervised" reference of Tab. 3 of the MALiBU3D paper.
 
-Architecture, hooks and augmentation pipeline mirror
-configs/malibu3d/multi-litept-b-v1m0-malibu3d.py / segment/litept-b-v1m0-malibu3d.py
-(LitePT-Base backbone dims, MultiTaskSegmentorV2 wired for the single
-"segment" task, MultiTaskEvaluator/MultiTaskTester) rather than the plainer
-DefaultSegmentorV2 used in configs/dales/semseg-litept-b-v1m0-dales.py, so
-this stays directly comparable to the MALiBU3D multitask recipe. ECLAIR has
-real RGB (unlike DALES), so ChromaticAutoContrast/Translation/Jitter +
-RandomDropColor are kept, and strength uses 1/60000 (raw uint16 intensity ->
-MALiBU3D [0,1] convention), matching configs/eclair/litept-b-v1m0-eclair-lin_enc.py.
-
-This config is intentionally self-contained: it inherits only from
-default_runtime and can be read top-to-bottom without cross-referencing
-other MALiBU3D / ECLAIR configs (task_configs/criteria are hand-written here
-rather than going through pointcept.datasets.malibu3d_config_utils, which is
-tied to the MALiBU3D label taxonomy).
+Uses the MALiBU3D multitask wiring (MultiTaskSegmentorV2, MultiTaskEvaluator/MultiTaskTester) with
+the single "segment" task, so the recipe matches configs/malibu3d/multi-litept-b-v1m0-malibu3d.py:
+LitePT-B backbone, color augmentations and color/strength dropout with learned mask values. Input
+features: coord + color + strength (raw intensity scaled by 1/60000).
 """
 
 # -----------------------------------------------------------------------------
@@ -38,11 +23,11 @@ num_exp = 1
 
 # Hardware parameters
 num_gpu = 1
-num_worker = 24  # H100
+num_worker = 24
 enable_amp = True
 
 # Data parameters
-batch_size = 12  # total batch size across all gpus; LitePT-Base convention (vs 24 for Small)
+batch_size = 12  # total batch size across all gpus
 
 grid_size = 0.1
 point_max = 102400
@@ -122,7 +107,7 @@ test = dict(type="MultiTaskTester", verbose=True, write_cls_iou=True)
 # -----------------------------------------------------------------------------
 # Model
 # -----------------------------------------------------------------------------
-# LitePT-Base official dims (matches multi-litept-b-v1m0-malibu3d.py backbone).
+# LitePT-B dims (same backbone as configs/malibu3d/multi-litept-b-v1m0-malibu3d.py).
 model = dict(
     type="MultiTaskSegmentorV2",
     backbone_out_channels=72,

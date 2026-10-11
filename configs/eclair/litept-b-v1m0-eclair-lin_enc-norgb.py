@@ -1,18 +1,13 @@
 """
-NO-RGB ABLATION (LitePT-B): probes are trained AND evaluated with colour removed on every forward -- RandomDropColor(1.0, 1.0, keep_mask=True) after NormalizeColor in train/val/test, so GridProbeSegmentorV2's frozen feature_mask_values replaces the 3 colour channels with the checkpoint's learned color_mask_value. Strength/geometry untouched. Chromatic* train augs dropped (they'd only jitter a channel that is then fully masked). Otherwise identical to the RGB reference below.
+No-RGB ablation (Tab. 4 of the MALiBU3D paper) of litept-b-v1m0-eclair-lin_enc.py: frozen LitePT-B
+(MALiBU3D multitask checkpoint, ckpt/litept-b/model.pth) linear probing on ECLAIR semantic
+segmentation (11 classes) without color.
 
-LitePT-Base grid-search linear probing on ECLAIR — encoder multiscale variant
-(transfer from MALiBU3D multitask supervised pretrain, job 873542).
-
-`enc_mode=True` → 1386ch concat of the 5 raw encoder stages
-(54+108+216+432+576).
-
-ECLAIR provides real RGB: ChromaticAutoContrast/Translation/Jitter (train)
-+ NormalizeColor (like H3D / semseg-litept ECLAIR); strength uses 1/60000
-like DALES. Reference copy of w109/6/3_grid_eclair/litept-b-v1m0-eclair-lin_enc_200ep.py.
-
-Grid (12 probes): ce_lovasz x 12 LRs x wd=0 x dropout=0 x
-input_norm=None x AdamW x warmup=5%. epoch=200 / eval_epoch=10.
+Color is dropped on every train/val/test forward (RandomDropColor with drop_ratio=1,
+keep_mask=True), so the backbone sees the checkpoint's learned color mask value instead of RGB; the
+color augmentations are removed. Everything else (encoder multi-scale features, 1386 channels; 12-lr
+GridProbe; selection on validation mIoU; intensity scaled by 1/60000) is identical to the RGB
+config.
 """
 
 _base_ = ["../_base_/default_runtime.py"]
@@ -39,7 +34,7 @@ batch_size_per_gpu = 24
 batch_size = batch_size_per_gpu * num_gpu
 batch_size_val = 1
 batch_size_test = 1
-num_worker = 24  # H100 Jean-Zay
+num_worker = 24
 num_worker_test = 2
 mix_prob = 0.8
 empty_cache = False
@@ -86,11 +81,7 @@ names = [
 enc_channels = (54, 108, 216, 432, 576)
 backbone_out_channels = sum(enc_channels)
 
-# -----------------------------------------------------------------------------
-# Grid-search probes — AdamW / OneCycleLR: ce_lovasz x lr x wd=0 x dropout=0 x
-# input_norm=none x feat_norm=none x optimizer=AdamW, warmup=5%
-# (1 x 12 x 1 x 1 x 1 x 1 x 1 = 12 probes).
-# -----------------------------------------------------------------------------
+# Grid-search probes — ce_lovasz, AdamW/wd0/OneCycleLR warmup5%, lr sweep only (12 probes).
 _losses = {
     "ce_lovasz": [
         dict(type="CrossEntropyLoss", loss_weight=1.0, ignore_index=ignore_index),
@@ -225,7 +216,7 @@ data = dict(
             dict(type="RandomScale", scale=[0.9, 1.1]),
             dict(type="RandomFlip", p=0.5),
             dict(type="RandomJitter", sigma=0.005, clip=0.02),
-            # Chromatic* augs removed: colour is fully masked below (noRGB ablation).
+            # Chromatic* augs removed: color is fully masked below (no-RGB ablation).
             dict(
                 type="GridSample",
                 grid_size=grid_size,

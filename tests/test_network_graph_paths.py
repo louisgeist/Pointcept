@@ -1,4 +1,7 @@
-"""Ground-truth road graphs are found either under network_graphs_root or in each ROI directory."""
+"""Ground-truth road graphs are found either under network_graphs_root or in each ROI directory.
+
+Run with: PYTHONPATH=. pytest tests/test_network_graph_paths.py
+"""
 
 import tempfile
 import unittest

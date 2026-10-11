@@ -4,14 +4,16 @@
 Loads ``{train,val,test}.npz`` produced by
 ``scripts/extract_pureforest_pooled_embeddings.py``, builds four feature views
 (mean / max / concat / sum), fits a classification head, selects the best
-config on val, then reports test once.
+config on val, then reports test once. The PureForest column of the linear
+probing table of the MALiBU3D paper (Tab. 3) uses the linear head on GPU
+(full-batch L-BFGS).
 
 Heads (``--head``):
 
 - ``linear`` (default): multinomial logistic regression with an L2 ``C`` grid.
   Backends: omit ``--device`` for CPU sklearn; set ``--device cuda|cpu`` for
   torch LBFGS (train/val uploaded once per aggregation).
-- ``mlp``: PureForest Fig.7-style head
+- ``mlp``: the MLP head of the PureForest paper (Fig. 7)
   ``Linear(C→hidden) → LeakyReLU(0.2) → Dropout → Linear(hidden→K)``
   trained with Adam + CE. Always uses torch; ``--device`` defaults to ``cuda``
   if available else ``cpu``. Grid: ``agg × lr × weight_decay × dropout``.
@@ -23,24 +25,28 @@ aggregation, e.g. ``[:2]`` / ``[2:]`` / ``full``. Blocks come from
 
 Usage::
 
+    # Linear head, CPU sklearn backend
     python scripts/probe_pureforest_sklearn.py \\
-      --embeddings-dir stats/pureforest/embeddings/sonata_outdoor \\
-      --output-dir stats/pureforest/sklearn_probe/sonata_outdoor \\
+      --embeddings-dir stats/pureforest/embeddings/sonata_pretrained_ms \\
+      --output-dir stats/pureforest/sklearn_probe/sonata_pretrained_ms \\
       -v
 
+    # Linear head, torch L-BFGS on GPU
     python scripts/probe_pureforest_sklearn.py \\
       --embeddings-dir stats/pureforest/embeddings/litept_b_malibu3d_ms \\
       --output-dir stats/pureforest/sklearn_probe/litept_b_malibu3d_ms_torch \\
       --device cuda -v
 
+    # MLP head
     python scripts/probe_pureforest_sklearn.py \\
       --embeddings-dir stats/pureforest/embeddings/kpconvx_malibu3d_ms \\
       --output-dir stats/pureforest/sklearn_probe/kpconvx_malibu3d_ms_mlp \\
       --head mlp --device cuda -v
 
+    # Two finest encoder levels only
     python scripts/probe_pureforest_sklearn.py \\
-      --embeddings-dir stats/pureforest/embeddings/sonata_outdoor_ms \\
-      --output-dir stats/pureforest/sklearn_probe_scales/sonata_outdoor_ms/scale_p0-2 \\
+      --embeddings-dir stats/pureforest/embeddings/sonata_pretrained_ms \\
+      --output-dir stats/pureforest/sklearn_probe_scales/sonata_pretrained_ms/scale_p0-2 \\
       --scale-slice '[:2]' --device cuda -v
 
 Progress is written after every grid fit to ``grid_progress.json``
@@ -441,7 +447,7 @@ def _build_mlp_sequential(in_features: int, num_classes: int, hidden: int, dropo
 
 
 class TorchMLPHead:
-    """PureForest Fig.7-style probe head: Linear→hidden→Dropout→Linear→K."""
+    """MLP probe head of the PureForest paper (Fig. 7): Linear→hidden→Dropout→Linear→K."""
 
     def __init__(self, in_features: int, num_classes: int, hidden: int, dropout: float):
         self.hidden = int(hidden)
@@ -1582,7 +1588,7 @@ def main():
                     release_torch_agg_bundle(x_t, y_t, x_v, w_ce, device)
                 continue
 
-            # sklearn: scale+fit per (agg, C) as before
+            # sklearn backend: standardize + fit per (agg, C)
             for c_value in args.Cs:
                 grid_i += 1
                 key = _pair_key(agg, c_value)

@@ -9,6 +9,7 @@ def denorm_regression_prediction(pred, scale: float):
 
 
 def get_regression_target_scale(target_scales, target_key: str) -> float:
+    """Normalization scale of ``target_key`` in ``target_scales`` (1.0 if not set)."""
     if not target_scales:
         return 1.0
     return float(target_scales.get(target_key, 1.0))

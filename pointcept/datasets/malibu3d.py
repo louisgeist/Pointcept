@@ -1,9 +1,10 @@
 """
-MALiBU3D Dataset (LidarHD-like preprocessed scenes).
+MALiBU3D dataset: LiDAR HD tiles preprocessed into Pointcept scene folders.
 
-Scenes are expected under data_root as:
-  <data_root>/<split>/<dept_year>_LIDARHD/<roi>/<scene_id>/
-with assets: coord.npy, color.npy, segment.npy, optionally strength.npy, normal.npy.
+Tiles live under ``<data_root>/<split>/<dept_year>_LIDARHD/<roi>/<tile_id>/`` with
+coord.npy (float32, relative to the float64 coord_translation.npy), color.npy,
+strength.npy, segment.npy and, depending on the tile, natural_habitat.npy ((N, 4)
+ecological axes), elevation.npy and the 1 m rasters forest_2d.npy / network.npy.
 """
 
 import os
@@ -53,19 +54,17 @@ MALIBU3D_ALLOWED_TARGETS = (
 
 @DATASETS.register_module()
 class MALiBU3DDataset(DefaultDataset):
-    """Dataset for MALiBU3D / LidarHD preprocessed Pointcept scenes.
-    
-    
-    
-    :param csv_manifest: Tile list CSV: the MALiBU3D ``tiles.csv`` (canonical) or a
-        legacy ``scene_split_manifest.csv`` (rows with ``LIDARHD!=True`` skipped).
-        Read via ``preprocessing/malibu3d/tile_catalog.py``.
+    """MALiBU3D tiles with any subset of the benchmark targets.
+
+    :param csv_manifest: Tile list CSV: the MALiBU3D ``tiles.csv`` or an older
+        ``scene_split_manifest.csv``, read via ``preprocessing/malibu3d/tile_catalog.py``.
+        When None, scenes are globbed from ``data_root/<split>/`` like DefaultDataset.
 
     :param min_points: Optional dict mapping split name ("train"/"val") to a minimum
         point-count threshold. Tiles below the threshold are excluded, using the
-        "n_points" column of csv_manifest (filled in tiles.csv; for a legacy manifest
-        populate it via scripts/analyze_malibu3d_test_point_voxel_counts.py --write_manifest). Raises if
-        the "n_points" column is missing/empty for a row in a thresholded split, or if
+        "n_points" column of csv_manifest (filled in tiles.csv; for an older manifest
+        populate it via scripts/analyze_malibu3d_test_point_voxel_counts.py --write_manifest).
+        Raises if "n_points" is missing/empty for a row in a thresholded split, or if
         "test" is given a threshold.
 
     :param target_keys: Target keys: "segment", the pixel targets "forest_2d" and "network",
@@ -83,13 +82,13 @@ class MALiBU3DDataset(DefaultDataset):
 
     VALID_ASSETS = [*DefaultDataset.VALID_ASSETS, *MALIBU3D_SPECIFIC_ASSETS]
 
+    # Targets that some tiles lack (no CarHab coverage, no DTM, roads not rasterized):
+    # a missing file is replaced by the target's ignore/NaN fill instead of raising.
     MALIBU3D_OPTIONAL_TARGETS = (
         *NATHAB_AXIS_KEYS,
         "elevation",
         "network",
     )
-    #TODO@Geist : elevation should be complete, but I noticed some missing part in D049
-    # e.g.: UU-S1-15
 
     def __init__(
         self,
@@ -101,11 +100,8 @@ class MALiBU3DDataset(DefaultDataset):
         **kwargs,
     ):
         self.csv_manifest = csv_manifest
-        # Optional per-target task_config overrides (e.g. a config-local "network"
-        # entry with num_networks/channel_names trimmed to drop a channel such as
-        # RAILROADS). Only pixel_semantic entries are consulted here; falls back
-        # to the MALIBU3D_PIXEL_SEMANTIC_TASKS registry default when absent so
-        # existing configs that don't pass this keep their exact behavior.
+        # Only pixel_semantic entries are consulted (num_networks / channel_names);
+        # other targets always use the registry defaults.
         self.task_configs = dict(task_configs) if task_configs else {}
         if isinstance(target_keys, str):
             target_keys = [target_keys]
@@ -136,7 +132,6 @@ class MALiBU3DDataset(DefaultDataset):
         self.primary_target_key = primary_target_key
         if primary_target_key in MALIBU3D_PIXEL_SEMANTIC_TARGETS:
             if any(tk in MALIBU3D_SEMANTIC_TARGETS for tk in self.target_keys):
-                # Allowed later for multitask; keep mono-task simple for now.
                 pass
         if "elevation" in self.target_keys and len(self.target_keys) > 1:
             if self.primary_target_key not in MALIBU3D_SEMANTIC_TARGETS:
@@ -157,8 +152,8 @@ class MALiBU3DDataset(DefaultDataset):
                     "the full test set. Only 'train'/'val' thresholds are allowed."
                 )
         self.min_points = min_points
-        # tile_id -> (origin_x, origin_y) of its rasters, from tiles.csv; used when meta.json is absent
-        # (the Hugging Face release ships no meta.json).
+        # tile_id -> (origin_x, origin_y) of its 1 m rasters, from tiles.csv. Used when the
+        # tile has no meta.json, which is the case of the Hugging Face release.
         self.raster_origins = {}
         self._warned_missing_network = False
 
@@ -235,9 +230,9 @@ class MALiBU3DDataset(DefaultDataset):
     def _unpack_natural_habitat_axes(self, data_dict, n, scene):
         """Unpack ``natural_habitat.npy`` ``(N, 4)`` ecological axes into ``nathab_*`` int32 vectors.
 
-        The packed array is removed so pointwise semantic reshape cannot flatten it. A tile
-        preprocessed before the axes bake stores raw CarHab ids ``(N,)``: its natural-habitat
-        labels are then ignored (warning logged once).
+        The packed array is removed so the point-wise label reshape cannot flatten it. A
+        ``natural_habitat.npy`` holding raw CarHab ids ``(N,)`` (not converted to axes) is
+        ignored, with a warning logged once.
         """
         if "natural_habitat" not in data_dict:
             return data_dict
@@ -273,14 +268,15 @@ class MALiBU3DDataset(DefaultDataset):
 
         Training heads use ``num_networks`` channels from
         ``get_pixel_semantic_config(target_key)``. On-disk rasters may have more
-        channels than the task trains on (e.g. historical ``network.npy`` with
-        TRANSMISSION_LINES as channel 2); those are sliced via
+        channels than the task trains on (``rasterize_network.py`` writes ROADS,
+        RAILROADS, TRANSMISSION_LINES); the trained ones are selected by name via
         ``meta.{target_key}.channel_order`` when present, else the first ``r``
-        channels.
+        channels are kept.
 
-        Empty tiles may omit ``{target_key}.npy`` and only store
-        ``meta.{target_key}`` (``empty: true`` + width/height); those are
-        synthesized as zeros.
+        Tiles without any positive pixel have no ``{target_key}.npy``, only
+        ``meta.{target_key}`` (``empty: true`` + width/height); they get an all-zero
+        raster. Grid origin and pixel size come from meta.json, or from tiles.csv
+        (``raster_origins``) when there is no meta.json.
 
         ``self.task_configs[target_key]``, when set, overrides the registry's
         ``num_networks``/``channel_names`` (e.g. to drop RAILROADS from ``network``).
@@ -320,7 +316,7 @@ class MALiBU3DDataset(DefaultDataset):
             and target_key in data_dict
             and os.path.basename(scene) in getattr(self, "raster_origins", {})
         ):
-            # Released layout: no meta.json; 1 m rasters georeferenced by tiles.csv.
+            # Hugging Face layout: no meta.json; 1 m rasters georeferenced by tiles.csv.
             origin_x, origin_y = self.raster_origins[os.path.basename(scene)]
             pixel_m = RELEASE_RASTER_PIXEL_M
 
@@ -341,7 +337,7 @@ class MALiBU3DDataset(DefaultDataset):
             )
             raster = raster.astype(np.uint8, copy=False)
         elif raster_meta:
-            # Preprocess wrote meta only (empty mask) or optional missing fill path.
+            # Empty mask: rasterize_network.py wrote the grid size in meta.json only.
             h = int(raster_meta.get("height", 1))
             w = int(raster_meta.get("width", 1))
             raster = np.zeros((r, max(h, 1), max(w, 1)), dtype=np.uint8)
@@ -360,7 +356,7 @@ class MALiBU3DDataset(DefaultDataset):
                 f"target key '{target_key}' but {target_key}.npy missing under scene: {scene}"
             )
 
-        # Align tiny optional fill (1,1) to meta grid when present.
+        # Expand the (r, 1, 1) missing-target fill to the meta grid when it is known.
         if raster.shape[1] == 1 and raster.shape[2] == 1 and raster_meta:
             h = int(raster_meta.get("height", 1))
             w = int(raster_meta.get("width", 1))
@@ -397,10 +393,18 @@ class MALiBU3DDataset(DefaultDataset):
                 )
             indices = [name_to_idx[name] for name in channel_names]
             return raster[indices]
-        # Historical preprocess order: ROADS, RAILROADS, TRANSMISSION_LINES, ...
+        # No channel_order: assume rasterize_network.py's order (ROADS, RAILROADS, ...).
         return raster[:r]
 
     def get_data(self, idx):
+        """Load a tile and attach its targets, keyed by task name.
+
+        Point-wise labels become int32 ``(N,)`` (nathab axes are unpacked from
+        natural_habitat.npy), pixel rasters keep ``(C, H, W)`` plus their grid
+        origin / pixel size, elevation becomes float32 ``(N,)``. Missing optional
+        targets get their fill value. For an elevation-only run, ``segment`` is set
+        to -1 so the generic pipeline still finds a label array.
+        """
         data_dict = super().get_data(idx)
         n = int(data_dict["coord"].shape[0])
         scene = self.data_list[idx % len(self.data_list)]
@@ -500,10 +504,11 @@ class MALiBU3DDataset(DefaultDataset):
         return data_dict
 
     def prepare_test_data(self, idx):
-        """Full-resolution multitask targets are popped into `result_dict` before voxelization.
+        """Test-time sample with every target kept at full resolution.
 
-        DefaultDataset only preserves `segment` + optional `origin_segment` / `inverse`,
-        which breaks multitask evaluation on the whole scene.
+        Same as ``DefaultDataset.prepare_test_data``, except that all ``target_keys``
+        (not only ``segment``), the ``origin_*`` keys and ``inverse`` are moved to the
+        result dict before voxelization, so multitask metrics cover the whole tile.
         """
         with record_data_pipeline("dataset.get_data"):
             data_dict = self.get_data(idx)
@@ -513,8 +518,8 @@ class MALiBU3DDataset(DefaultDataset):
             if key not in data_dict:
                 continue
             if key in MALIBU3D_PIXEL_SEMANTIC_TARGETS:
-                # Keep raster in data_dict so fragments still carry it for the
-                # pixel_semantic head; also expose GT at scene level for metrics.
+                # Copy, not pop: fragments still need the raster for the
+                # pixel_semantic head.
                 result_dict[key] = deepcopy(data_dict[key])
             else:
                 result_dict[key] = data_dict.pop(key)

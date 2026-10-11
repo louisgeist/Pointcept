@@ -1,5 +1,5 @@
 """
-Sonata v1m1 Base
+Sonata v1m2 (uni teacher head)
 
 Author: Xiaoyang Wu (xiaoyang.wu.cs@gmail.com)
 Please cite our work if the code is helpful to you.
@@ -26,10 +26,9 @@ from pointcept.models.utils import offset2batch, offset2bincount, batch2offset
 from pointcept.utils.comm import get_world_size, all_gather
 from pointcept.utils.scheduler import CosineScheduler
 
-# pointcept's get_root_logger() sets the "pointcept" logger to ERROR level on
-# non-zero ranks (to avoid duplicate spam); explicitly set our own level so
-# this diagnostic isn't silently swallowed on the other 31/32 ranks where the
-# empty-match issue is equally likely to occur.
+# MALiBU3D addition (non-finite loss diagnostics, see _warn_empty_match_groups).
+# get_root_logger() sets the "pointcept" logger to ERROR on non-zero ranks; this
+# module logger keeps WARNING so the diagnostic is visible on every rank.
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.WARNING)
 
@@ -197,8 +196,8 @@ class Sonata(PointModel):
         for p in self.teacher.parameters():
             p.requires_grad = False
 
-        # Debug for NaN investigation: rolling history of (tile name, point count
-        # per view) dumped via _dump_nan_debug_buffer the moment loss goes non-finite.
+        # (tile name, points per view) of the last iterations, printed by
+        # _dump_nan_debug_buffer when the loss becomes non-finite.
         self._nan_debug_buffer = collections.deque(maxlen=5)
 
     def before_train(self):
@@ -327,9 +326,12 @@ class Sonata(PointModel):
         return point_mask, point_cluster
 
     def _warn_empty_match_groups(self, name, batch, match_index):
-        """Debug diagnostic for NaN loss: segment_coo(reduce='mean') silently
-        returns NaN for any batch id with 0 matched points (empty-tensor mean).
-        Logs which batch id(s) hit that, to confirm/refute before segment_coo runs."""
+        """Warn about views (batch ids) with no matched point.
+
+        Such a view gets a 0 loss from segment_coo(reduce='mean') (or is dropped
+        if it is the last id), and when no view has any match the loss becomes
+        NaN (mean of an empty tensor). Typical cause: degenerate, tiny crops.
+        """
         all_ids = set(batch.unique().tolist())
         matched_ids = (
             set(batch[match_index[:, 0]].unique().tolist())
@@ -346,9 +348,9 @@ class Sonata(PointModel):
             )
 
     def _record_nan_debug_entry(self, data_dict, global_point, local_point):
-        """Debug diagnostic for NaN loss: buffers (tile name, point count per
-        view) each iteration so _dump_nan_debug_buffer can report exactly which
-        tile(s)/crop(s) were in the batch the moment loss goes non-finite."""
+        """Record (tile name, points per global/local view) for this iteration,
+        so that _dump_nan_debug_buffer can report which tiles were in the
+        batches preceding a non-finite loss."""
         names = list(data_dict.get("name", []))
         global_counts = offset2bincount(global_point.offset).tolist()
         local_counts = offset2bincount(local_point.offset).tolist()
@@ -367,10 +369,9 @@ class Sonata(PointModel):
         self._nan_debug_buffer.append(per_tile)
 
     def _dump_nan_debug_buffer(self):
-        # print (not logger): get_logger only attaches a FileHandler on rank 0,
-        # so a logger.warning/error call on other ranks would only reach that
-        # rank's own stdout/stderr, never the shared train.log.
-        rank = dist.get_rank() if get_world_size() > 1 else 0
+        # print to stdout and stderr rather than log: the log file handler only
+        # exists on rank 0, while any rank can hit the non-finite loss.
+        rank =dist.get_rank() if get_world_size() > 1 else 0
         header = (
             f"[Sonata NaN-dump] rank={rank} non-finite loss, "
             f"last {len(self._nan_debug_buffer)} iters:"

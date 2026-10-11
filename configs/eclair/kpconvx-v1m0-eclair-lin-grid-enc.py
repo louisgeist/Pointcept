@@ -1,59 +1,18 @@
 """
-KPConvX grid-search linear probing on ECLAIR — encoder multiscale variant
-(MALiBU3D multitask supervised pretrain, configs/malibu3d/multi-kpconvx-v1m0-malibu3d.py
-recipe: input_channels=7, kp_radius=3.2, radius_scaling=3.0,
-neighbor_limits=(12,16,20,20,20), layer_blocks=(3,3,9,12,3), init_channels=64,
-channel_scaling=1.414, grid_size=0.1, point_max=40000, drop_path_rate=0.3 at
-pretrain time).
+Frozen KPConvX (MALiBU3D multitask checkpoint, ckpt/kpconvx/model.pth) linear probing on ECLAIR
+semantic segmentation (11 classes).
 
-`enc_mode=True` (new `kpconvx_base.py` flag) skips the decoder entirely and
-returns the 5 raw encoder-stage features, each gathered back onto the
-original points via KPConvX's pyramid `upsamples` cluster indices (chained
-through intermediate levels — KPConvX only stores adjacent-level indices,
-unlike PT-v3/LitePT's `pooling_parent`) and concatenated finest-first.
+Probe input: encoder multi-scale features (enc_mode=True): the 5 encoder stages, gathered back to
+the input points through the pooling indices and concatenated (928 channels). Default probing
+protocol (Tab. 3 of the MALiBU3D paper).
 
-IMPORTANT — channel widths are NOT the nominal per-stage `layer_C`
-([64,96,128,192,256]). With grid_pool=True, KPConvX bumps the LAST block of
-each stage to the NEXT stage's channel width before pooling (so pooling never
-changes channel count), so the captured stage features are already at
-[96,128,192,256,256] (stage 5, the last, has no further transition so it
-stays at layer_C[4]=256). Verified empirically via a synthetic forward pass +
-manual replay (max abs diff 0.0 against both a 0-hop and 1-hop manual
-gather) — see plan file / scratchpad/check_kpconvx_enc_mode.py.
-backbone_out_channels = 96+128+192+256+256 = 928.
+GridProbe: 12 linear probes (CE + Lovasz, AdamW, wd=0, OneCycleLR, lr from 1e-4 to 5e-1) share one
+frozen-backbone forward; tools/grid_then_seeds.py then re-trains the probe with the best validation
+mIoU with 10 seeds. point_max=100000 exceeds the KPConvX pretraining crop (40000) to match the input
+size of the other backbones; drop_path_rate=0 removes the (parameter-free) stochastic-depth layers.
 
-`drop_path_rate=0` on the backbone: KPConvX's stochastic depth uses its own
-`DropPathPack` class (pointcept/models/kpconvx/utils/generic_blocks.py), not
-`timm.layers.DropPath`. `GridProbeSegmentorV2` eval()s the whole frozen backbone, so
-DropPathPack is inactive regardless; drop_path_rate=0 additionally makes every
-block use `nn.Identity()` (no learnable params either way, so this is
-checkpoint-compatible with the drop_path_rate=0.3 pretrain).
-
-point_max=100_000 — deliberately larger than the KPConvX pretrain's own
-SphereCrop budget (40000); roughly matches the ~102400 convention used by
-the other backbones' GridProbe configs (LitePT/PT-v3/SpUNet/Sonata). Set by
-user instruction. SphereCrop point_max is a data-pipeline parameter, not
-part of the backbone architecture/checkpoint, so this doesn't break
-checkpoint loading — but the frozen backbone was never trained on scenes
-this large, so its features at this crop scale are unverified.
-
-weight = Jean Zay job 1159986 (KPConvX multitask MALiBU3D, same recipe as
-configs/malibu3d/multi-kpconvx-v1m0-malibu3d.py) — not reachable from
-Hecate (Jean-Zay-only lustre path, see CLAUDE.md local-vs-JZ data note), so
-CheckpointLoader can only be exercised on Jean Zay.
-
-batch_size=24 on a single GPU (vs. the pretrain's global 24 spread over 6-8
-GPUs) — set by hand per user instruction; the frozen-backbone, no-backward
-probe forward is far cheaper than full multitask training, so this has not
-been formally verified against a find_max_batch_size.py run at this batch
-size, only inferred from that gap.
-
-ECLAIR provides real RGB: ChromaticAutoContrast/Translation/Jitter (train) +
-NormalizeColor (like H3D / semseg-litept ECLAIR); strength uses 1/60000 like
-DALES. Same probe grid as litept-b-v1m0-eclair-lin_enc.py /
-ptv3-v1m0-eclair-lin-grid-enc.py (ce_lovasz x 12 LRs x wd=0 x dropout=0 x
-input_norm=None x AdamW x warmup=5%) for cross-backbone comparability.
-epoch=200 / eval_epoch=10.
+ECLAIR has RGB and intensity: color is normalized (color augmentations at train time) and raw
+intensity is scaled by 1/60000 to the MALiBU3D [0, 1] range.
 """
 
 _base_ = ["../_base_/default_runtime.py"]
@@ -64,7 +23,7 @@ num_exp = 1
 num_classes = 11
 ignore_index = -1
 grid_size = 0.1
-point_max = 100_000  # deliberately > pretrain's 40000 SphereCrop budget — see docstring
+point_max = 100_000  # above the KPConvX pretrain crop (40000), close to the other backbones' 102400
 coord_feat_scale = 0.01  # must match MALiBU3D multitask pretrain
 strength_feat_scale = 1 / 60000  # raw uint16 intensity → MALiBU3D [0,1] convention
 kp_radius = 3.2
@@ -78,7 +37,7 @@ lr = 5e-2
 
 test_single_fragment = True
 
-# misc custom setting — see docstring above (set by hand, not calibrated).
+# misc custom setting
 batch_size_per_gpu = 24
 batch_size = batch_size_per_gpu * num_gpu
 batch_size_val = 1
@@ -126,15 +85,12 @@ names = [
     "Vehicle",
 ]
 
-# Encoder levels (enc_mode): actual captured widths, see docstring — NOT layer_C.
+# Encoder levels (enc_mode) as captured: with grid_pool=True the last block of each stage
+# already has the next stage's width, so these are not the nominal per-stage widths.
 enc_channels = (96, 128, 192, 256, 256)
 backbone_out_channels = sum(enc_channels)
 
-# -----------------------------------------------------------------------------
-# Grid-search probes — AdamW / OneCycleLR: ce_lovasz x lr x wd=0 x dropout=0 x
-# input_norm=none x feat_norm=none x optimizer=AdamW, warmup=5%
-# (1 x 12 x 1 x 1 x 1 x 1 x 1 = 12 probes).
-# -----------------------------------------------------------------------------
+# Grid-search probes — ce_lovasz, AdamW/wd0/OneCycleLR warmup5%, lr sweep only (12 probes).
 _losses = {
     "ce_lovasz": [
         dict(type="CrossEntropyLoss", loss_weight=1.0, ignore_index=ignore_index),
@@ -240,7 +196,7 @@ model = dict(
         grid_pool=True,
         upsample_n=3,
         first_inv_layer=1,
-        drop_path_rate=0,  # see docstring — required for correct eval-pinning
+        drop_path_rate=0,  # no stochastic depth on a frozen backbone (parameter-free, checkpoint-compatible)
         norm="batch",
         bn_momentum=0.1,
         smooth_labels=False,

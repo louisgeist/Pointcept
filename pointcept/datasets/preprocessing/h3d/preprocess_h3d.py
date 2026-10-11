@@ -4,7 +4,7 @@ Preprocess H3D (Hessigheim 3D) LAS/LAZ point clouds into Pointcept scene folders
 March 2018 release: three input files live side by side under ``<dataset_root>/LiDAR/``.
 The script maps each file to a split and writes Pointcept layouts under ``--output_root``.
 
-**Input** (``--dataset_root`` = epoch root, default: ``/data/h3d/Epoch_March2018``)::
+**Input** (``--dataset_root`` = epoch root, default: ``data/h3d/Epoch_March2018``)::
 
     dataset_root/
     └── LiDAR/
@@ -12,7 +12,7 @@ The script maps each file to a split and writes Pointcept layouts under ``--outp
         ├── Mar18_val.laz                → split val
         └── Mar18_test_GroundTruth.las   → split test
 
-**Output** (``--output_root``, default: ``/data/h3d``)::
+**Output** (``--output_root``, default: ``data/h3d``)::
 
     output_root/
     ├── train/Mar18_train/coord.npy, segment.npy, color.npy
@@ -23,7 +23,8 @@ With ``--chunk-size S`` (horizontal step in coordinate units), each file is spli
 into an XY grid of roughly ``S``-wide tiles; scene folders are named ``<basename>_<row>-<col>``
 (e.g. ``Mar18_train_0-1``). Default chunk size is infinity (one folder per source file).
 
-Semantic class IDs are 0–10 (except 11 for Void).
+coord is shifted so that each file's minimum is at the origin; color is RGB in [0, 255];
+segment keeps the LAS classification ids (0-10, 11 = Void).
 
 Requires: ``pip install laspy lazrs`` or ``mamba install -c conda-forge laspy lazrs-python``
 
@@ -93,10 +94,10 @@ def read_las_laz(filepath: str) -> Dict[str, np.ndarray]:
     # Keep the native uint16 dtype from laspy: the bitwise diagnostic/descale below is
     # ~20x cheaper on uint16 than on a float64 cast of the same array.
     rgb = np.stack([np.asarray(las.red), np.asarray(las.green), np.asarray(las.blue)], axis=1)
-    # H3D's LAS RGB fields store 16-bit values with the true 8-bit source shifted left
-    # by 8 bits (standard IGN/LAStools/PDAL convention: verified 0 exceptions across
-    # all Mar18 files), not a continuous 16-bit sensor range — descale with a fixed
-    # right-shift, never a per-tile max stretch (that invents a tile-dependent brightness).
+    # H3D's LAS RGB fields store the 8-bit source shifted left by 8 bits (LAStools/PDAL
+    # convention; holds for every Mar18 file), not a continuous 16-bit range: descale
+    # with a fixed right-shift, never a per-tile max stretch (that would invent a
+    # tile-dependent brightness). The print below checks the convention.
     off_multiple = int(np.count_nonzero(rgb & 0xFF))
     print(
         f"[H3D] {os.path.basename(filepath)}: raw RGB max={int(rgb.max())}, "

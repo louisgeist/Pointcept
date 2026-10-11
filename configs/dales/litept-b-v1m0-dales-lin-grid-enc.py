@@ -1,22 +1,18 @@
 """
-LitePT-Base grid-search linear probing on DALES — encoder multiscale variant
-(same frozen backbone checkpoint as litept-b-v1m0-dales-lin-grid.py, job
-873542, MALiBU3D multitask supervised pretrain).
+Frozen LitePT-B (MALiBU3D multitask checkpoint, ckpt/litept-b/model.pth) linear probing on DALES
+semantic segmentation (8 classes).
 
-Ablation vs the sibling decoder-hypercolumn config: `enc_mode=True` drops the
-decoder entirely and GridProbeSegmentorV2's generic encoder-side multiscale
-concat (walking `pooling_parent` links — see grid_probe.py) hands the probes
-a 1386ch concat of the 5 raw encoder stages (54+108+216+432+576), the same
-mechanism sonata-v1m2-dales-lin-grid.py uses for its 1232ch Sonata encoder
-feat. Point: isolate whether Sonata's much higher GridProbe DALES starting
-mIoU (see val/mIoU_best/winner comparison) is mainly an SSL-vs-supervised
-effect or an encoder-vs-decoder-feature effect — same supervised checkpoint,
-same probe grid, only the tapped feature changes.
+Probe input: encoder multi-scale features (enc_mode=True): the 5 encoder stages, broadcast back to
+the input points and concatenated (1386 channels). Default probing protocol (Tab. 3 of the MALiBU3D
+paper).
 
-Grid (12 probes): ce_lovasz, AdamW/wd0/OneCycleLR warmup5%, lr sweep {1e-4 … 5e-1}.
-epoch=400 / eval_epoch=10. AMP enabled
-(fp16). Same DALES-has-no-RGB handling as the other LitePT-B DALES lin
-configs.
+GridProbe: 12 linear probes (CE + Lovasz, AdamW, wd=0, OneCycleLR, lr from 1e-4 to 5e-1) share one
+frozen-backbone forward; tools/grid_then_seeds.py then re-trains the probe with the best validation
+mIoU with 10 seeds.
+
+DALES has no RGB: color is replaced by the checkpoint's learned mask value; raw intensity is scaled
+by 1/60000 to the MALiBU3D [0, 1] range. DALES has no validation split, so validation runs on the
+test split; skip_test=True leaves testing to the seed phase.
 """
 
 _base_ = ["../_base_/default_runtime.py"]
@@ -44,7 +40,7 @@ batch_size_per_gpu = 24
 batch_size = batch_size_per_gpu * num_gpu
 batch_size_val = 1
 batch_size_test = 1
-num_worker = 24 * num_gpu # H100 Jean-Zay
+num_worker = 24 * num_gpu
 num_worker_test = 2
 mix_prob = 0.8
 empty_cache = False
@@ -58,11 +54,10 @@ weight = "ckpt/litept-b/model.pth"
 
 wandb_project = f"pointcept_{dataset_type[:-7].lower()}"
 
-# Hooks
-# Order matters: GridProbeEvaluator before GridProbeCheckpointSaver/CheckpointSaver;
-# GridProbeWinnerSelector last (frees the per-probe optimizers/schedulers, then runs
-# its own SemSegTester pass on the winning probe — replaces PreciseEvaluator, which
-# never sets raw_model.active_probe and would break under GridProbeSegmentorV2).
+# Hooks. Order matters: GridProbeEvaluator before the checkpoint savers, and
+# GridProbeWinnerSelector last (frees the per-probe optimizers, picks the best probe
+# on validation and tests it unless skip_test=True). PreciseEvaluator is not used:
+# it does not select a probe.
 hooks = [
     dict(
         type="CheckpointLoader",
@@ -151,7 +146,7 @@ model = dict(
     backbone_out_channels=backbone_out_channels,
     backbone=dict(
         type="LitePT-v1",
-        in_channels=7,  # coord(3) + color(3, fake) + strength(1)
+        in_channels=7,  # coord(3) + color(3, absent: learned fill value) + strength(1)
         order=("z", "z-trans", "hilbert", "hilbert-trans"),
         stride=(3, 3, 3, 3),
         enc_depths=(3, 3, 3, 12, 3),

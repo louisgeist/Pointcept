@@ -1,8 +1,10 @@
-"""Shared, dataset-agnostic pieces for the extract_<dataset>_grid_probe_features.py
-scripts (currently DALES and MALiBU3D). See extract_dales_grid_probe_features.py
-for the full design rationale (flash-attn shim, spconv ConvAlgo.Native
-workaround, per-class stratified sampling). Only the dataset/transform-pipeline
-construction is dataset-specific and stays in each script.
+"""Helpers to build a frozen backbone from a GridProbe config for offline feature
+extraction, outside the trainer (single process, no DDP).
+
+Used by ``scripts/extract_pureforest_pooled_embeddings.py``. Handles missing
+flash-attn (SDPA fallback), forces spconv's native convolution algorithm (see
+``force_native_conv_algo``) and loads weights with the config's CheckpointLoader
+key remapping. ``PerClassCollector`` caps sampled point features per class.
 """
 
 from __future__ import annotations
@@ -82,19 +84,14 @@ def load_checkpoint_into_model(model, weight_path, keywords="", replacement=None
 def force_native_conv_algo(model):
     """Force every spconv layer to ConvAlgo.Native (spconv's plain
     gather-scatter implementation) instead of the default auto-tuned
-    MaskImplicitGemm path.
+    MaskImplicitGemm path. Returns the number of layers changed.
 
-    On this machine (spconv-cu118 2.3.8 / cumm-cu118 0.7.11, RTX A6000
-    sm_86), the auto-tuner's kernel search comes up empty as soon as a
-    *second* distinct (in_channels, out_channels, kernel_size) SubMConv3d
-    shape is used in the same process -- reproduced down to a 2-call
-    standalone repro (stem k=5 7->54 then any other shape both fail
-    identically on real data and on synthetic data alike), so it's an
-    autotuner/kernel-coverage gap in this spconv+cumm+driver combo, not a
-    shape or data-density issue. ConvAlgo.Native sidesteps the tuner
-    entirely (verified: full LitePT-B forward, 102400 pts, 0.6s). Slower
-    than the fused kernel would be, irrelevant for a few dozen tiles' worth
-    of one-off feature extraction.
+    With some spconv/cumm builds (observed with spconv-cu118 2.3.8 and
+    cumm-cu118 0.7.11 on sm_86), the auto-tuner finds no kernel as soon as a
+    second distinct (in_channels, out_channels, kernel_size) SubMConv3d shape
+    is used in the same process. ConvAlgo.Native bypasses the tuner; it is
+    slower than the fused kernels, which does not matter for offline
+    extraction.
     """
     import spconv.pytorch as spconv
     from spconv.pytorch.core import ConvAlgo
@@ -108,11 +105,10 @@ def force_native_conv_algo(model):
 
 
 def build_model_for_extraction(cfg, weight_path, device, rand_init=False):
-    """`rand_init=True` skips the CheckpointLoader entirely -- the model
-    keeps its fresh nn.Module init (whatever the backbone's own reset_parameters
-    does), used as a from-scratch baseline against the pretrained/finetuned
-    features (e.g. a "litept_enc_randinit" UMAP panel). `weight_path` is
-    ignored in that case.
+    """Build ``cfg.model`` in eval mode on ``device`` and load ``weight_path``.
+
+    ``rand_init=True`` skips loading and keeps the random initialization (a
+    random-backbone baseline); ``weight_path`` is then ignored.
     """
     from pointcept.models.builder import build_model
 
@@ -166,8 +162,8 @@ def build_model_for_extraction(cfg, weight_path, device, rand_init=False):
 class PerClassCollector:
     """Caps each tile's contribution and the final pooled total at
     `points_per_class`, per class. Not a statistically exact reservoir
-    (later tiles aren't down-weighted against earlier ones) -- fine for a
-    UMAP sanity-check sample, and keeps memory bounded throughout.
+    (later tiles are not down-weighted against earlier ones), but memory
+    stays bounded.
     """
 
     def __init__(self, num_classes, points_per_class, rng):

@@ -47,8 +47,8 @@ def best_miou_tag(split, task=None):
 def define_wandb_metrics(task_names=None, semantic_task_names=None):
     """Register W&B metric axes for train/val/test and per-task namespaces.
 
-    ``semantic_task_names`` is kept for backward compatibility and is merged
-    into ``task_names`` when provided.
+    ``task_names`` and ``semantic_task_names`` are merged; every task gets
+    ``{train,val,test}/<task>/*`` metrics plotted against ``Epoch``.
     """
     wandb.define_metric("Epoch")
     wandb.define_metric("Iter")
