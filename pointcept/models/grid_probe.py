@@ -8,8 +8,9 @@ per batch instead of once per grid point.
 
   - GridProbeSegmentorV2: semantic segmentation probes (per-point logits,
     target e.g. "segment").
-  - GridProbeClassifier: tile/scene classification probes (multi-scale
-    features -> scene pooling -> linear heads, target e.g. "category").
+  - PooledFeatureExtractor: no probe head; frozen multi-scale features pooled
+    per scene (mean and max), for the offline PureForest probe
+    (tools/probe_pureforest.py).
 
 This module only defines the probe heads and their losses. Per-probe
 optimizers/schedulers are handled by GridProbeTrainer (pointcept/engines/train.py),
@@ -103,6 +104,35 @@ def _input_norm_cache(feat, heads, names, channel_blocks=None):
         if key not in cache:
             cache[key] = _unitsphere(feat, head.input_norm, head.eps, channel_blocks)
     return cache
+
+
+def multiscale_backbone_feat(backbone, input_dict):
+    """Per-point backbone features, with the decoder hypercolumn and the encoder
+    multi-scale features concatenated finest level first, exactly as in
+    DefaultSegmentorV2.forward (see the comments there). Returns (feat, point)."""
+    point = Point(input_dict)
+    point = backbone(point)
+    if isinstance(point, Point):
+        # Decoder hypercolumn (traceable decoders only; no-op otherwise).
+        point_list = [point]
+        while "unpooling_parent" in point_list[-1].keys():
+            point_list.append(point_list[-1].pop("unpooling_parent"))
+        for i in reversed(range(1, len(point_list))):
+            child, parent = point_list[i], point_list[i - 1]
+            assert "pooling_inverse" in child.keys()
+            parent.feat = torch.cat([parent.feat, child.feat[child.pooling_inverse]], dim=-1)
+        point = point_list[0]
+        # Encoder multi-scale features (enc_mode / SpUNet point_mode).
+        while "pooling_parent" in point.keys():
+            assert "pooling_inverse" in point.keys()
+            parent = point.pop("pooling_parent")
+            inverse = point.pop("pooling_inverse")
+            parent.feat = torch.cat([parent.feat, point.feat[inverse]], dim=-1)
+            point = parent
+        feat = point.feat
+    else:
+        feat = point
+    return feat, point
 
 
 class ProbeHead(nn.Module):
@@ -288,32 +318,7 @@ class GridProbeSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
         return self.probe_names
 
     def _forward_backbone(self, input_dict):
-        """Per-point backbone features, with the decoder hypercolumn and the
-        encoder multi-scale features concatenated finest level first, exactly
-        as in DefaultSegmentorV2.forward (see the comments there)."""
-        point = Point(input_dict)
-        point = self.backbone(point)
-        if isinstance(point, Point):
-            # Decoder hypercolumn (traceable decoders only; no-op otherwise).
-            point_list = [point]
-            while "unpooling_parent" in point_list[-1].keys():
-                point_list.append(point_list[-1].pop("unpooling_parent"))
-            for i in reversed(range(1, len(point_list))):
-                child, parent = point_list[i], point_list[i - 1]
-                assert "pooling_inverse" in child.keys()
-                parent.feat = torch.cat([parent.feat, child.feat[child.pooling_inverse]], dim=-1)
-            point = point_list[0]
-            # Encoder multi-scale features (enc_mode / SpUNet point_mode).
-            while "pooling_parent" in point.keys():
-                assert "pooling_inverse" in point.keys()
-                parent = point.pop("pooling_parent")
-                inverse = point.pop("pooling_inverse")
-                parent.feat = torch.cat([parent.feat, point.feat[inverse]], dim=-1)
-                point = parent
-            feat = point.feat
-        else:
-            feat = point
-        return feat, point
+        return multiscale_backbone_feat(self.backbone, input_dict)
 
     def prepare_batch(self, input_dict):
         """Run the backbone once; return (features by input_norm, Point, active probe names)."""
@@ -390,101 +395,48 @@ class GridProbeSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
 
 
 @MODELS.register_module()
-class GridProbeClassifier(GridProbeSegmentorV2):
-    """N linear probe heads for tile/scene classification.
+class PooledFeatureExtractor(nn.Module, LearnedMaskedFeatMixin):
+    """Frozen backbone -> per-scene mean and max pooled multi-scale features.
 
-    Same probe grid and shared frozen backbone as GridProbeSegmentorV2, but the
-    per-point (multi-scale) features are pooled per scene (``pooling``: mean or
-    max) to [B, C] before the heads. Target key defaults to ``category``
-    (e.g. PureForest).
-
-    Use with GridProbeTrainer + GridProbeEvaluator (reads ``target_key``) and
-    ``test=dict(type="ClsTester")`` through GridProbeWinnerSelector
-    (``cls_logits`` is exposed once ``active_probe`` is set).
-
-    Encoder multi-scale features, as for the segmentation probes:
+    No head and no loss: used by tools/probe_pureforest.py, which fits a linear
+    classifier offline on the pooled features of every tile. The backbone stays
+    in eval() and runs under torch.no_grad(). Multi-scale features as for the
+    GridProbe configs:
       - LitePT / PT-v3 / KPConvX: ``enc_mode=True``
       - SpUNet: ``point_mode=True`` (its ``enc_mode`` scene-pools inside the
         backbone and gives only the last-stage features)
     """
 
-    def __init__(
-        self,
-        probes,
-        backbone_out_channels,
-        num_classes,
-        ignore_index=-1,
-        backbone=None,
-        target_key="category",
-        freeze_backbone=True,
-        feature_mask_values=None,
-        drop_leading_channels=0,
-        channel_blocks=None,
-        pooling="mean",
-    ):
-        super().__init__(
-            probes=probes,
-            backbone_out_channels=backbone_out_channels,
-            num_classes=num_classes,
-            ignore_index=ignore_index,
-            backbone=backbone,
-            target_key=target_key,
-            freeze_backbone=freeze_backbone,
-            feature_mask_values=feature_mask_values,
-            drop_leading_channels=drop_leading_channels,
-            channel_blocks=channel_blocks,
-        )
-        pooling = str(pooling)
-        if pooling not in ("mean", "max"):
-            raise ValueError(
-                f"GridProbeClassifier.pooling must be 'mean' or 'max', got {pooling!r}."
-            )
-        self.pooling = pooling
+    def __init__(self, backbone, feature_mask_values=None):
+        super().__init__()
+        self.backbone = build_model(backbone)
+        self._init_learned_masked_feat(feature_mask_values=feature_mask_values)
+        for p in self.parameters():
+            p.requires_grad = False
+        self.eval()
 
-    def _pool_scene_feat(self, feat, offset):
-        indptr = F.pad(offset, (1, 0))
-        if self.pooling == "mean":
-            return _safe_segment_csr_mean(feat, indptr)
-        return torch_scatter.segment_csr(feat, indptr, reduce="max")
+    def train(self, mode=True):
+        return super().train(False)
 
-    def prepare_batch(self, input_dict):
-        """As GridProbeSegmentorV2.prepare_batch, with scene pooling before the input norms."""
+    @torch.no_grad()
+    def forward(self, input_dict):
+        """Return (mean_feat, max_feat), each [B, C]."""
         self._fill_masked_feat_with_learned_value(input_dict)
-        if self.freeze_backbone:
-            with torch.no_grad():
-                feat, point = self._forward_backbone(input_dict)
-        else:
-            feat, point = self._forward_backbone(input_dict)
-        if self.drop_leading_channels:
-            feat = feat[..., self.drop_leading_channels :]
-
+        feat, point = multiscale_backbone_feat(self.backbone, input_dict)
         offset = input_dict["offset"]
         if isinstance(point, Point) and "offset" in point.keys():
             offset = point.offset
         n_scenes = int(offset.numel())
         n_points = int(offset[-1].item()) if n_scenes > 0 else 0
         if feat.shape[0] == n_scenes:
-            # Already scene-pooled (e.g. SpUNet enc_mode=True).
-            pass
-        elif feat.shape[0] == n_points:
-            feat = self._pool_scene_feat(feat, offset)
-        else:
+            # Already scene-pooled inside the backbone (e.g. SpUNet enc_mode).
+            return feat, feat.clone()
+        if feat.shape[0] != n_points:
             raise ValueError(
-                "Unexpected backbone feature shape "
-                f"{tuple(feat.shape)} for offset with {n_scenes} scenes and "
-                f"{n_points} points (pooling={self.pooling!r})."
+                f"Unexpected backbone feature shape {tuple(feat.shape)} for offset "
+                f"with {n_scenes} scenes and {n_points} points."
             )
-
-        active = self._active_probe_names()
-        feat = _prepare_shared_feat(feat)
-        feat_by_norm = _input_norm_cache(feat, self.heads, active, self.channel_blocks)
-        return feat_by_norm, point, active
-
-    def forward(self, input_dict, return_point=False):
-        return_dict = super().forward(input_dict, return_point=return_point)
-        # ClsTester and the classification logging read cls_logits(_by_task).
-        if "seg_logits_by_task" in return_dict:
-            return_dict["cls_logits_by_task"] = return_dict["seg_logits_by_task"]
-        if "seg_logits" in return_dict:
-            return_dict["cls_logits"] = return_dict["seg_logits"]
-        return return_dict
+        indptr = F.pad(offset, (1, 0))
+        mean_feat = _safe_segment_csr_mean(feat, indptr)
+        max_feat = torch_scatter.segment_csr(feat, indptr, reduce="max")
+        return mean_feat, max_feat

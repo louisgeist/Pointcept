@@ -89,28 +89,21 @@ polygon) overlaps a MALiBU3D train/val tile. Configs evaluating MALiBU3D backbon
 ## 4. Training and probing
 
 - Supervised training from scratch: `configs/pureforest/cls-litept-b-v1m0-pureforest.py`.
-- Frozen-backbone linear probing (grid over learning rates, encoder multi-scale features):
-  `configs/pureforest/cls-*-pureforest-lin-grid-enc*.py`, with the checkpoint path in `weight`.
 
 ```bash
 python tools/train.py --config-file configs/pureforest/cls-litept-b-v1m0-pureforest.py
 ```
 
-A cheaper alternative to the online probe extracts pooled embeddings once, then fits the probe offline:
+- Linear probe of a frozen backbone (PureForest column of the paper): `configs/pureforest/probe-*.py`,
+  with the checkpoint path in `weight`. `tools/probe_pureforest.py` pools the frozen encoder multi-scale
+  features of every tile once, then fits a logistic regression for each pooling and L2 strength of
+  `probe` in the config, selects the best on validation and reports test.
 
 ```bash
 export PYTHONPATH=$PWD
-# One GPU pass: per-tile mean- and max-pooled encoder features -> {split}.npz + meta.json
-python scripts/extract_pureforest_pooled_embeddings.py \
-  --config configs/pureforest/cls-litept-b-v1m0-pureforest-lin-grid-enc.py \
-  --weight ckpt/litept-b/model.pth \
-  --output-dir stats/pureforest/embeddings/litept-b \
-  --splits train val test --batch-size 24
-
-# Linear (logistic regression, grid over C) or MLP head (--head mlp); selection on val
-python scripts/probe_pureforest_sklearn.py \
-  --embeddings-dir stats/pureforest/embeddings/litept-b \
-  --output-dir stats/pureforest/sklearn_probe/litept-b
+python tools/probe_pureforest.py --config-file configs/pureforest/probe-litept-b-v1m0-pureforest.py
+# -> exp/pureforest/probe-litept-b-v1m0-pureforest/{train,val,test}.npz, metrics.json
 ```
 
-See the `--help` of both scripts for the other options (`--point-max`, `--device cuda`, `--scale-slice`, ...).
+The pooled features are reused when the command is run again (`--force-extract` recomputes them).
+`--point-budget` caps the points per extraction batch (PureForest tiles vary about 10x in size).

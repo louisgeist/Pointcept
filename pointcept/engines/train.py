@@ -740,7 +740,7 @@ class Trainer(TrainerBase):
 
 @TRAINERS.register_module("GridProbeTrainer")
 class GridProbeTrainer(Trainer):
-    """Trainer for GridProbeSegmentorV2 / GridProbeClassifier: a grid of linear
+    """Trainer for GridProbeSegmentorV2: a grid of linear
     probe heads trained in parallel on one frozen backbone.
 
     Each probe has its own optimizer, scheduler, grad clipping and (under AMP)

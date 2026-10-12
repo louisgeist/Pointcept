@@ -1,7 +1,7 @@
 """
 Grid-Search Linear Probing Hooks
 
-Hooks for GridProbeTrainer with GridProbeSegmentorV2 / GridProbeClassifier
+Hooks for GridProbeTrainer with GridProbeSegmentorV2
 (pointcept/models/grid_probe.py): per-probe validation (GridProbeEvaluator),
 per-probe best-checkpoint saving (GridProbeCheckpointSaver) and, after training,
 either selection and test of the winning probe (GridProbeWinnerSelector) or a test

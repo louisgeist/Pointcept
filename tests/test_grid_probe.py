@@ -1,6 +1,6 @@
 """GridProbe: shared input-norm caching across ProbeHeads, GridProbeEvaluator best-probe selection
-(select_metric "mIoU" or "macro_f1") and resume robustness, history CSV, seed-ensemble per-class stats, and the
-always-eval frozen backbone.
+(select_metric "mIoU" or "macro_f1") and resume robustness, history CSV, seed-ensemble per-class stats, the
+always-eval frozen backbone, and the per-scene pooling of PooledFeatureExtractor.
 
 Run with: PYTHONPATH=. pytest tests/test_grid_probe.py
 """
@@ -22,8 +22,8 @@ from pointcept.engines.hooks.grid_probe import (
 from pointcept.models.builder import MODELS
 from pointcept.models.kpconvx.utils.generic_blocks import DropPathPack
 from pointcept.models.grid_probe import (
-    GridProbeClassifier,
     GridProbeSegmentorV2,
+    PooledFeatureExtractor,
     ProbeHead,
     _input_norm_cache,
     _prepare_shared_feat,
@@ -406,12 +406,17 @@ class TestFrozenBackboneStaysEval(unittest.TestCase):
         )
 
     def test_backbone_eval_after_train_call(self):
-        for cls in (GridProbeSegmentorV2, GridProbeClassifier):
-            model = self._build(cls).train()
-            self.assertTrue(model.training)
-            self.assertTrue(model.heads.training)
-            for name, m in model.backbone.named_modules():
-                self.assertFalse(m.training, f"{cls.__name__}: {name} in train mode")
+        model = self._build().train()
+        self.assertTrue(model.training)
+        self.assertTrue(model.heads.training)
+        for name, m in model.backbone.named_modules():
+            self.assertFalse(m.training, f"{name} in train mode")
+
+    def test_pooled_feature_extractor_always_eval_and_frozen(self):
+        model = PooledFeatureExtractor(backbone=dict(type="_TestStochasticBackbone")).train()
+        for name, m in model.named_modules():
+            self.assertFalse(m.training, f"{name} in train mode")
+        self.assertFalse(any(p.requires_grad for p in model.parameters()))
 
     def test_batchnorm_running_stats_do_not_drift(self):
         model = self._build().train()
@@ -429,6 +434,16 @@ class TestFrozenBackboneStaysEval(unittest.TestCase):
     def test_legacy_flags_removed(self):
         with self.assertRaises(TypeError):
             self._build(bn_eval_mode=False)
+
+
+class TestPooledFeatureExtractor(unittest.TestCase):
+    def test_mean_and_max_per_scene(self):
+        model = PooledFeatureExtractor(backbone=dict(type="_TestStochasticBackbone"))
+        feat = torch.arange(20, dtype=torch.float32).reshape(5, 4)
+        offset = torch.tensor([2, 5])
+        mean_feat, max_feat = model(dict(coord=torch.zeros(5, 3), feat=feat, offset=offset))
+        self.assertTrue(torch.allclose(mean_feat, torch.stack([feat[:2].mean(0), feat[2:].mean(0)])))
+        self.assertTrue(torch.equal(max_feat, torch.stack([feat[1], feat[4]])))
 
 
 if __name__ == "__main__":

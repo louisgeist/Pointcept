@@ -2538,8 +2538,7 @@ class ClsTester(TesterBase):
         else:
             log_dict = None
 
-        # Same contract as SemSegTester.test_metrics (read by
-        # GridProbeWinnerSelector for GridProbeClassifier, e.g. PureForest).
+        # Same contract as SemSegTester.test_metrics.
         self.test_metrics = log_dict
 
         self.end_test_timing_and_log(extra_log_dict=log_dict)

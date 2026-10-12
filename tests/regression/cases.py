@@ -118,8 +118,6 @@ _PROBE_BASE = [
     "batch_size=4", "batch_size_val=1", "batch_size_test=1", "epoch=2", "eval_epoch=2",
 ]
 _PROBE_SMALL = _PROBE_BASE + ["data.train.max_sample=8", "data.val.max_sample=2", "data.test.max_sample=1"]
-# PureForestDataset has no max_sample: use the 26-tile-per-split toy copy instead.
-_PUREFOREST_SMALL = _PROBE_BASE + [f"data.{s}.data_root=data/pureforest_toy" for s in ("train", "val", "test")]
 TRAIN = {
     "train-multi-litept-b": ("configs/malibu3d/multi-litept-b-v1m0-malibu3d.py", _FLAIR_SMALL),
     "train-multi-spunet": ("configs/malibu3d/multi-spunet-v1m0-malibu3d.py", _FLAIR_SMALL),
@@ -137,8 +135,6 @@ TRAIN = {
                                  _PROBE_SMALL + [f"weight={CKPT['litept-b']}"]),
     "train-probe-opengf-spunet": ("configs/opengf/spunet-v1m0-opengf-lin-grid-enc.py",
                                   _PROBE_SMALL + [f"weight={CKPT['spunet']}"]),
-    "train-probe-pureforest-litept-b": ("configs/pureforest/cls-litept-b-v1m0-pureforest-lin-grid-enc.py",
-                                        _PUREFOREST_SMALL + [f"weight={CKPT['litept-b']}"]),
     "train-ablation-nognl": ("configs/malibu3d/ablations/multi-litept-b-v1m0-malibu3d-nognl.py", _FLAIR_SMALL),
     "train-ablation-gradnorm": ("configs/malibu3d/ablations/multi-litept-b-v1m0-malibu3d-gradnorm.py",
                                 _FLAIR_SMALL),
