@@ -165,7 +165,7 @@ dataset_type = "MALiBU3DDataset"
 data_root = "data/malibu3d"
 csv_manifest = "data/malibu3d/tiles.csv"
 min_points = {"train": 1000}
-val_stratified_subset_manifest = "data/malibu3d/manifests/val_dev_subset_2000.csv"
+val_stratified_subset_manifest = "data/malibu3d/manifests/val_subset_2000.csv"
 
 train_multitask_keys, val_multitask_keys, multitask_index_valid_keys = (
     init_multitask_collect_keys(

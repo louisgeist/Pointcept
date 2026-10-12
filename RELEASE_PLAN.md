@@ -11,7 +11,7 @@ Suivi du nettoyage de la branche `malibu3d` avant la création du repo public.
 
 - Phases 0 à 6 terminées. Phase 6 : commentaires/docstrings (`cce7089`, poussé), puis un commit « valeurs de code » d'après les rapports des agents (**committé en local, PAS poussé** : voir la question 0).
 - Rapports des agents de la Phase 6 (valeurs de code à changer + bugs suspects) : `local/release_inventory/phase6_reports.md`. Ce qui reste à trancher est dans « Questions pour Louis » ; ce qui relève des Phases 7/8 est listé à la fin de la Phase 6.
-- Prochaine étape : Phase 7 (README, CITATION.cff, LICENSE, environment.yml). Ne pas la commencer avant d'avoir réglé la question 0.
+- Prochaine étape : Phase 7 (README, CITATION.cff, LICENSE, environment.yml). La question 0 est réglée (miroir à la fin, plus de push d'ici là) : on peut la commencer.
 
 ### Reprendre sans l'historique de la conversation
 
@@ -22,16 +22,17 @@ Suivi du nettoyage de la branche `malibu3d` avant la création du repo public.
   - harnais (~1 h) : `CUDA_VISIBLE_DEVICES=0 PYTHONPATH=. $PY tests/regression/harness.py capture --stage all --out local/regression/new`, puis `$PY tests/regression/harness.py compare local/regression/ref local/regression/new` ; après vérification d'un changement voulu : `$PY tests/regression/harness.py accept local/regression/ref local/regression/new <configs ou cas>`
   - GPU : toujours `cuda:0` sur hecate (spconv plante sur `cuda:1`)
 
-### Questions pour Louis
+### Questions pour Louis (réponses du 2026-10-12)
 
-0. **Le fork `github.com/louisgeist/Pointcept` est public** (un fork d'un repo public ne peut pas passer en privé), alors que le papier est en double aveugle. Les branches `flair3d` et `malibu3d`, le tag `malibu3d-submission`, `RELEASE_PLAN.md` et `RELEASE_INVENTORY.md` (écarts papier ↔ runs) y sont déjà poussés. Proposition : créer un repo privé qui n'est pas un fork (`git push --mirror`), faire pointer `origin` dessus, puis supprimer ces branches et ce tag du fork public (ou le fork entier). Les commits restent peut-être accessibles par SHA via le réseau amont ; seul le support GitHub peut les purger. **Ne plus pousser tant que ce n'est pas réglé.**
-1. **Noms de classes en français** : `nathab_moisture_regime` = « Humide / Mesique / Sec » (`malibu3d_label_remap.py`, apparaissent dans les métriques) et les 43 noms CarHab de `_NATURAL_HABITAT_NAMES` (coquille « Routes & voies verrées »). Passer en anglais (« Wet / Mesic / Dry », …) ? À aligner sur la carte du dataset HF.
-2. **DALES n'a pas de split val** : toutes les configs DALES valident sur le split test (sélection du lr et du checkpoint sur test). À dire dans le papier / le README ?
-3. **Probes PureForest** : `point_max=5000` à l'entraînement (102400 ailleurs) et `enable_amp=False`, sans justification dans le code. Valeurs voulues ?
-4. **`enable_wandb = True`** par défaut (comme Pointcept amont) : un utilisateur sans `wandb login` aura une invite. Le passer à `False` dans la release, ou le documenter ?
-5. **`black`** : il reformaterait 171 fichiers (surtout du code propre au fork, mais aussi 18 fichiers de `pointcept/models`). Le passer sur tout le repo, seulement sur le code du fork, ou pas du tout ?
-6. **`scripts/train.sh`** : le `rm -rf exp/malibu3d/<nom>` systématique (ajout du fork, absent de l'amont) effaçait aussi les runs relancés avec `-r true`. Il est supprimé (comportement amont : le dossier est réutilisé). OK ?
-7. **Config DALES Sonata** : `configs/dales/sonata-v1m2-dales-lin-grid.py` était un ensemble de 10 graines à lr fixé (0.02), pas une grille. Remise en grille de 12 lr comme les autres (décision D1). OK ?
+0. **Fork public** (`github.com/louisgeist/Pointcept`, double aveugle) → **on ne touche à rien pour l'instant**. Le `git push --mirror` vers un repo privé non-fork, puis le nettoyage du fork public, se feront **à la toute fin**. D'ici là : **ne plus pousser** sur `origin` (le miroir partira du dépôt local).
+1. **Noms de classes en anglais** → oui. `by_moisture_regime` : « Humid / Mesic / Dry » (noms de `labels.json` sur HF). Les 43 noms CarHab (`_NATURAL_HABITAT_NAMES`) ne servent qu'à `preprocess_malibu3d.py` (PLY bruts → `natural_habitat.npy` `(N, 4)`) et au `meta.json` qu'il écrit ; la release HF livre déjà les 4 axes et le dataloader n'utilise pas ces noms. Ils restent comme documentation de la définition de stockage → les traduire (et corriger « verrées »).
+2. **DALES sans split val** → pratique courante, rien dans le papier ni le README ; une ligne de commentaire dans les configs DALES (« DALES has no val split; validation runs on test, as is standard »).
+3. **Probes PureForest** : les chiffres du papier viennent de `extract_pureforest_pooled_embeddings.py` + `probe_pureforest_sklearn.py` (L-BFGS sur les embeddings poolés). L'extraction ne lit dans les configs `cls-*-pureforest-lin-grid-enc*.py` que le modèle, le poids et le pipeline **val** ; `point_max=5000` et `enable_amp` ne servent qu'à l'entraînement en ligne `GridProbeClassifier`, derrière aucun chiffre du papier. → Louis d'accord sur le principe (option a). Proposition à valider : configs réduites `configs/pureforest/probe-<backbone>-pureforest.py` (modèle + poids + pipeline d'extraction), un seul point d'entrée `tools/probe_pureforest.py` (extraction puis L-BFGS), suppression de la voie en ligne (branches classification de `GridProbeTrainer`/évaluateur si plus rien ne s'en sert ; `GridProbeClassifier._forward_backbone` reste).
+4. **`enable_wandb = True`** (`configs/_base_/default_runtime.py:93`) : vient de Pointcept amont (#413, avril 2025), pas du fork. Proposition : garder la valeur amont et documenter `--options enable_wandb=False` dans le README.
+5. **`black`** → validé : partout sauf `pointcept/models/kpconvx/` (code Apple) et les fichiers amont que le fork n'a pas modifiés. AST vérifié avec `ast_same.py`.
+8. **`preprocess_malibu3d.py` obsolète ?** (question de Louis) La release HF livre les `.npy` au format attendu ; les PLY bruts et les GeoTIFF ne sont pas publiés, et les labels des PLY viennent de Flair3D-build (non public). Donc inutilisables par un utilisateur : `preprocess_malibu3d.py`, `unzip_raw_archives.py`, `rasterize_forest.py` (`forest_2d` livré), la compatibilité `scene_split_manifest.csv`, les 43 noms CarHab et les LUT CarHab → axes. À garder : `rasterize_network.py` (`network.npy` non livré), `tile_catalog.py`, `nathab_axes.py` (déballage `(N, 4)`, sans les LUT), les noms de classes de `malibu3d_label_remap.py`, APLS. → à valider ; retirer aussi l'étape preprocessing du harnais.
+6. `train.sh` sans `rm -rf` → OK.
+7. Config DALES Sonata remise en grille de 12 lr → OK.
 
 ## Décisions
 
@@ -51,7 +52,7 @@ Suivi du nettoyage de la branche `malibu3d` avant la création du repo public.
 
 ## À livrer sur Hugging Face avec le dataset
 
-- [ ] `manifests/val_dev_subset_2000.csv` (sous-ensemble stratifié de validation lu par les configs par défaut via `val_stratified_subset_manifest`). Aujourd'hui : `data/flair3d_plus/manifests/val_dev_subset_2000.csv`, ignoré par git. Une fois publié, faire pointer les configs et la doc vers le fichier HF. **Attention : la copie locale (hecate) n'a que 773 lignes** ; publier la version complète (2000 tuiles, sans doute sur Jean Zay). Le script qui le construisait (`build_stratified_subset.py`) est supprimé : il dépendait de `natural_habitat_multilabel.npy`, non livré.
+- [ ] `manifests/val_subset_2000.csv` (renommé, sans « dev ») : les 2000 tuiles val de Jean Zay (`$WORK/Pointcept/data/flair3d_plus/manifests/val_dev_subset_2000.csv`, 9 juillet), réduites aux colonnes `split,tile_id`. Fichier prêt : `local/release_inventory/hf_manifests/val_subset_2000.csv` (original JZ à côté), aussi copié dans `data/flair3d_plus/manifests/` sur hecate. Configs mises à jour, doc courte `docs/val_subset.md` (à intégrer au README / carte HF en Phase 7). La copie de hecate `val_dev_subset_2000.csv` (773 lignes = tout le val de D067) est obsolète. Sélection calculée sur les labels de juillet (land cover v18 + multilabel) : non reconstructible depuis la release, le CSV fait référence.
 - [ ] Vérifier que le `tiles.csv` publié contient bien la colonne `n_voxels` (utilisée par les budgets de voxels en val/test). Elle est présente dans la copie locale.
 
 ## Phase 0 — Snapshot et harnais de non-régression
