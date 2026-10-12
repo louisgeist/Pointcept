@@ -52,7 +52,7 @@ Suivi du nettoyage de la branche `malibu3d` avant la création du repo public.
 
 ## À livrer sur Hugging Face avec le dataset
 
-- [ ] `manifests/val_subset_2000.csv` (renommé, sans « dev ») : les 2000 tuiles val de Jean Zay (`$WORK/Pointcept/data/flair3d_plus/manifests/val_dev_subset_2000.csv`, 9 juillet), réduites aux colonnes `split,tile_id`. Fichier prêt : `local/release_inventory/hf_manifests/val_subset_2000.csv` (original JZ à côté), aussi copié dans `data/flair3d_plus/manifests/` sur hecate. Configs mises à jour, doc courte `docs/val_subset.md` (à intégrer au README / carte HF en Phase 7). La copie de hecate `val_dev_subset_2000.csv` (773 lignes = tout le val de D067) est obsolète. Sélection calculée sur les labels de juillet (land cover v18 + multilabel) : non reconstructible depuis la release, le CSV fait référence.
+- [ ] `manifests/val_subset_2000tiles.csv` (renommé, sans « dev ») : les 2000 tuiles val de Jean Zay (`$WORK/Pointcept/data/flair3d_plus/manifests/val_dev_subset_2000.csv`, 9 juillet), réduites aux colonnes `split,tile_id`. Fichier prêt : `local/release_inventory/hf_manifests/val_subset_2000tiles.csv` (original JZ à côté), aussi copié dans `data/flair3d_plus/manifests/` sur hecate. Configs mises à jour, doc courte `docs/val_subset.md` (à intégrer au README / carte HF en Phase 7). La copie de hecate `val_dev_subset_2000.csv` (773 lignes = tout le val de D067) est obsolète. Sélection calculée sur les labels de juillet (land cover v18 + multilabel) : non reconstructible depuis la release, le CSV fait référence.
 - [ ] Vérifier que le `tiles.csv` publié contient bien la colonne `n_voxels` (utilisée par les budgets de voxels en val/test). Elle est présente dans la copie locale.
 
 ## Phase 0 — Snapshot et harnais de non-régression

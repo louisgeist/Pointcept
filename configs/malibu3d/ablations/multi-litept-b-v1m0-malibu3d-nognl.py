@@ -213,7 +213,7 @@ dataset_type = "MALiBU3DDataset"
 data_root = "data/malibu3d"
 csv_manifest = "data/malibu3d/tiles.csv"
 min_points = {"train": 1000}
-val_stratified_subset_manifest = "data/malibu3d/manifests/val_subset_2000.csv"
+val_stratified_subset_manifest = "data/malibu3d/manifests/val_subset_2000tiles.csv"
 
 # Opt-in APLS scoring of PreciseEvaluator test logits (see NetworkAPLSEvaluator /
 # tools/test.py). ``split`` must match ``data.test.split`` so stitched ROIs find
