@@ -58,10 +58,9 @@ def _summarize_pack_batches(batches, sizes, voxel_budget):
 
 
 def load_voxel_size_csv(path):
-    """Load tile_id -> n_voxels from tiles.csv or an older split manifest with n_voxels.
+    """Load tile_id -> n_voxels from tiles.csv (``tile_id`` and ``n_voxels`` columns).
 
-    The id column is ``tile_id`` (tiles.csv) or ``patch_id`` (older manifest).
-    Rows with a non-empty ``error`` field or a missing/non-positive n_voxels are skipped.
+    Rows with a missing or non-positive n_voxels are skipped.
     """
     import csv
 
@@ -70,17 +69,13 @@ def load_voxel_size_csv(path):
         reader = csv.DictReader(handle)
         if reader.fieldnames is None:
             raise ValueError(f"Empty voxel size CSV: {path}")
-        id_column = "tile_id" if "tile_id" in reader.fieldnames else "patch_id"
-        required = {id_column, "n_voxels"}
+        required = {"tile_id", "n_voxels"}
         missing = required - set(reader.fieldnames)
         if missing:
             raise KeyError(f"Missing columns in {path}: {sorted(missing)}")
         for row in reader:
-            error = (row.get("error") or "").strip()
-            if error:
-                continue
-            patch_id = (row.get(id_column) or "").strip()
-            if not patch_id:
+            tile_id = (row.get("tile_id") or "").strip()
+            if not tile_id:
                 continue
             n_voxels = row.get("n_voxels")
             if n_voxels in (None, ""):
@@ -88,7 +83,7 @@ def load_voxel_size_csv(path):
             size = int(float(n_voxels))
             if size <= 0:
                 continue
-            sizes[patch_id] = size
+            sizes[tile_id] = size
     return sizes
 
 
@@ -96,7 +91,7 @@ def resolve_dataset_voxel_sizes(dataset):
     """Return ``(sizes, 0)``: the n_voxels of every scene of ``dataset.data_list``.
 
     Sizes come from the ``n_voxels`` column of ``dataset.csv_manifest``; a missing
-    column or value raises ValueError naming the script that adds it.
+    column or value raises ValueError.
     """
     import os
 
@@ -104,9 +99,7 @@ def resolve_dataset_voxel_sizes(dataset):
     if not manifest_path:
         raise ValueError(
             "Voxel-budget packing requires dataset.csv_manifest with an n_voxels "
-            "column. Set data.*.csv_manifest, then enrich it with:\n"
-            "  python scripts/analyze_malibu3d_test_point_voxel_counts.py "
-            "--write_manifest <manifest.csv> ..."
+            "column: set data.*.csv_manifest to the MALiBU3D tiles.csv."
         )
     if not os.path.isfile(manifest_path):
         raise FileNotFoundError(
@@ -122,11 +115,7 @@ def resolve_dataset_voxel_sizes(dataset):
         raise ValueError(
             f"Voxel-budget packing requires column 'n_voxels' in csv_manifest, "
             f"but it was not found in:\n  {manifest_path}\n"
-            "Enrich the manifest after preprocess, e.g.:\n"
-            "  python scripts/analyze_malibu3d_test_point_voxel_counts.py \\\n"
-            f"    --csv_manifest {manifest_path} \\\n"
-            f"    --write_manifest {manifest_path} \\\n"
-            "    --splits val,test --grid_size 0.1"
+            "Use the MALiBU3D tiles.csv, which has n_voxels for every tile."
         )
 
     csv_sizes = load_voxel_size_csv(manifest_path)
@@ -149,9 +138,7 @@ def resolve_dataset_voxel_sizes(dataset):
         raise ValueError(
             f"Voxel-budget packing: {len(missing_ids)}/{len(data_list)} scenes have "
             f"no positive n_voxels in csv_manifest:\n  {manifest_path}\n"
-            f"Examples: {examples}{more}\n"
-            "Re-run analyze_malibu3d_test_point_voxel_counts.py --write_manifest "
-            "for the missing splits/scenes."
+            f"Examples: {examples}{more}"
         )
     return sizes, 0
 

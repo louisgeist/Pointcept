@@ -1,8 +1,8 @@
 """
 MALiBU3D multitask benchmark, LitePT-B trained from scratch (Tab. 2 of the MALiBU3D paper).
 
-The five tasks are learned jointly on one backbone: land-cover segmentation (`segment`, v20
-labels), road-network prediction (`network`, roads only, 1 m raster, scored with APLS at test
+The five tasks are learned jointly on one backbone: land-cover segmentation (`segment`),
+road-network prediction (`network`, roads only, 1 m raster, scored with APLS at test
 time), natural-habitat distribution on 4 ecological axes (`nathab_*`, tile-wise weighted KL),
 forest cover (`forest_2d` raster) and elevation regression (meters). GradNormLite balances the
 task losses. 200k iterations, batch 12 on 1 GPU, AMP, Mix3D.
@@ -75,7 +75,7 @@ from pointcept.datasets.malibu3d_config_utils import (
 )
 
 main_task = "segment"
-nathab_keys = tuple(MALIBU3D_TILE_DISTRIBUTION_TASKS.keys())
+nathab_keys = MALIBU3D_TILE_DISTRIBUTION_TASKS
 target_keys = (main_task, "forest_2d", "elevation") + nathab_keys + ("network",)
 # nathab_* axes are unpacked from on-disk natural_habitat.npy (N, 4) in get_data.
 # GradNormLite: pool the 4 nathab axes into one "nathab" group.
@@ -86,11 +86,7 @@ grad_norm_lite_task_groups = {task_name: "nathab" for task_name in nathab_keys}
 # in the metrics.
 target_scales = {}
 
-label_definitions = dict(
-    segment="v20",
-)
-
-task_configs = init_task_configs(target_keys, definitions=label_definitions)
+task_configs = init_task_configs(target_keys)
 # Network task: ROADS channel only (the default also has RAILROADS), trained with
 # cross-entropy alone (no Lovasz) and a 5x weight on road pixels (see below).
 task_configs["network"]["num_networks"] = 1

@@ -1,6 +1,6 @@
 """
 Linear-probe grid search on a frozen Sonata encoder (PT-v3m2, enc_mode, 1232-d multi-scale
-encoder features) for MALiBU3D land-cover segmentation (`segment`, v20).
+encoder features) for MALiBU3D land-cover segmentation (`segment`).
 
 8 independent linear heads (2 losses x 3 learning rates, plus 2 hand-written probes) are
 trained on one shared backbone forward pass per batch (GridProbeTrainer,
@@ -44,10 +44,8 @@ wandb_run_name = (
 )
 
 # -----------------------------------------------------------------------------
-# Labels (segment v20: 15 classes + void), written out here: must match the v20
-# definition of pointcept/datasets/preprocessing/malibu3d/malibu3d_label_remap.py.
+# Labels (land cover: 15 classes + Void), as in pointcept/datasets/malibu3d_labels.py.
 # -----------------------------------------------------------------------------
-label_definitions = dict(segment="v20")
 num_classes = 15
 ignore_index = 15
 names = [

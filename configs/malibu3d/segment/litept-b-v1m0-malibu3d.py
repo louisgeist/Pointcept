@@ -1,5 +1,5 @@
 """
-LitePT-B trained from scratch on MALiBU3D land-cover segmentation alone (`segment`, v20 labels),
+LitePT-B trained from scratch on MALiBU3D land-cover segmentation alone (`segment`),
 with a single CE + Lovasz head. Same backbone, inputs (coord, RGB, intensity), schedule (200k
 iterations, batch 12 on 1 GPU, AMP) and augmentations as ../multi-litept-b-v1m0-malibu3d.py.
 Self-contained: inherits only from _base_/default_runtime.py.
@@ -65,11 +65,7 @@ main_task = "segment"
 target_keys = (main_task,)
 origin_main_task = f"origin_{main_task}"
 
-label_definitions = dict(
-    segment="v20",
-)
-
-task_configs = init_task_configs(target_keys, definitions=label_definitions)
+task_configs = init_task_configs(target_keys)
 task_criteria = init_task_criteria(task_configs)
 task_weights = {main_task: 1.0}
 

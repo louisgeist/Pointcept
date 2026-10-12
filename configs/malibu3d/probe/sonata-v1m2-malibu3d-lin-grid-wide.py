@@ -1,6 +1,6 @@
 """
 Wide linear-probe grid search on a frozen Sonata encoder for MALiBU3D land-cover segmentation
-(`segment`, v20). Same backbone, pipeline and winner selection as sonata-v1m2-malibu3d-lin-grid.py,
+(`segment`). Same backbone, pipeline and winner selection as sonata-v1m2-malibu3d-lin-grid.py,
 with 336 probes trained on one shared backbone forward pass:
   4 losses (CE + Lovasz, CE, focal gamma=2, focal gamma=1)
   x 7 learning rates (1e-5 to 5e-2)
@@ -44,9 +44,8 @@ wandb_run_name = (
 )
 
 # -----------------------------------------------------------------------------
-# Labels (segment v20: 15 classes + void), must match malibu3d_label_remap v20.
+# Labels (land cover: 15 classes + Void), as in pointcept/datasets/malibu3d_labels.py.
 # -----------------------------------------------------------------------------
-label_definitions = dict(segment="v20")
 num_classes = 15
 ignore_index = 15
 names = [

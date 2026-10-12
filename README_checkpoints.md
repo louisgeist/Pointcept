@@ -60,7 +60,7 @@ result per task:
 export PYTHONPATH=$PWD
 python scripts/hf_release/forward_example.py --model litept-b \
     --tile D067-2021_AU-S1-21_3-6 --split val \
-    --csv-manifest data/malibu3d/raw/scene_split_manifest_D067.csv --max-points 30000 \
+    --csv-manifest data/malibu3d/tiles.csv --max-points 30000 \
     --save out_litept_b.npz
 ```
 

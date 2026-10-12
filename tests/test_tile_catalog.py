@@ -1,5 +1,5 @@
-"""tile_catalog: the released tiles.csv and the older scene_split_manifest.csv schema normalize to the same
-Tile records, and the loaders built on it (voxel sizes, rasterization, preprocessing) accept both.
+"""tile_catalog: tiles.csv rows are read into Tile records, and the loaders built on it (voxel sizes,
+road rasterization) read the same tiles.
 
 Run with: PYTHONPATH=. pytest tests/test_tile_catalog.py
 """
@@ -27,18 +27,6 @@ TILES_CSV = (
     "data/val/D075-2021_LIDARHD/UU-S1-4.zip,True,False,False,"
     "D075_UU-S1-4_ROADS_graph.gpkg,2021-05-01,2021-04-01,30.0,1000,800,"
     "1.0,2.0,3,4\n"
-)
-
-LEGACY_CSV = (
-    "split,dept_year,roi,scene_i_j,patch_id,LIDARHD,NATURAL_HABITAT,LAND_USE,DEM_ELEV,"
-    "ROADS,RAILROADS,TRANSMISSION_LINES,date_aerial_rgb,date_lidarhd,date_gap_days,"
-    "n_points,n_voxels\n"
-    "train,D004-2021,AA-S1-32,1-1,D004-2021_AA-S1-32_1-1,True,False,True,True,True,"
-    "False,False,2021-06-27,2021-06-26,1.0,261926,177624\n"
-    "train,D004-2021,AA-S1-32,1-2,D004-2021_AA-S1-32_1-2,False,False,False,False,,,,"
-    "2021-06-27,,<NA>,,\n"
-    "val,D075-2021,UU-S1-4,1-2,D075-2021_UU-S1-4_1-2,True,True,False,False,False,"
-    "True,True,2021-05-01,2021-04-01,30.0,1000,800\n"
 )
 
 EXPECTED = [
@@ -71,7 +59,6 @@ EXPECTED = [
 ]
 
 
-# Raster georeferencing exists only in the released tiles.csv.
 RASTER_GEOREF = [
     dict(raster_origin_x=927440.0, raster_origin_y=6302945.0, raster_width=103, raster_height=103),
     dict(raster_origin_x=1.0, raster_origin_y=2.0, raster_width=3, raster_height=4),
@@ -83,23 +70,17 @@ class TestTileCatalog(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.tiles_csv = os.path.join(self._tmp.name, "tiles.csv")
-        self.legacy_csv = os.path.join(self._tmp.name, "scene_split_manifest.csv")
         with open(self.tiles_csv, "w", encoding="utf-8") as f:
             f.write(TILES_CSV)
-        with open(self.legacy_csv, "w", encoding="utf-8") as f:
-            f.write(LEGACY_CSV)
 
     def tearDown(self):
         self._tmp.cleanup()
 
-    def test_both_schemas_normalize_identically(self):
+    def test_read_tiles(self):
         self.assertEqual(read_tiles(self.tiles_csv), EXPECTED_TILES_CSV)
-        # Legacy LIDARHD=False row is dropped; extra legacy columns are ignored.
-        self.assertEqual(read_tiles(self.legacy_csv), EXPECTED)
 
     def test_split_filter(self):
         self.assertEqual(read_tiles(self.tiles_csv, ["val"]), EXPECTED_TILES_CSV[1:])
-        self.assertEqual(read_tiles(self.legacy_csv, ["train"]), EXPECTED[:1])
 
     def test_tile_dir(self):
         self.assertEqual(
@@ -129,58 +110,26 @@ class TestTileCatalog(unittest.TestCase):
         with self.assertRaises(ValueError):
             read_tiles(path)
 
-    def test_voxel_sizes_accept_tile_id(self):
+    def test_voxel_sizes(self):
         from pointcept.datasets.utils import load_voxel_size_csv
 
         expected = {"D004-2021_AA-S1-32_1-1": 177624, "D075-2021_UU-S1-4_1-2": 800}
         self.assertEqual(load_voxel_size_csv(self.tiles_csv), expected)
-        self.assertEqual(load_voxel_size_csv(self.legacy_csv), expected)
 
-    def test_rasterize_network_loader_both_schemas(self):
+    def test_rasterize_network_loader(self):
         from pointcept.datasets.preprocessing.malibu3d.rasterize_network import (
             load_manifest_patches,
         )
 
-        for path in (self.tiles_csv, self.legacy_csv):
-            patches, n_skipped = load_manifest_patches(pathlib.Path(path))
-            self.assertEqual(n_skipped, 0)
-            self.assertEqual(
-                [(p.patch_id, p.flags_dict) for p in patches],
-                [
-                    ("D004-2021_AA-S1-32_1-1", {"ROADS": True}),
-                    ("D075-2021_UU-S1-4_1-2", {"ROADS": False}),
-                ],
-            )
-
-    def test_rasterize_forest_loader_both_schemas(self):
-        from pointcept.datasets.preprocessing.malibu3d.rasterize_forest import (
-            load_manifest_patches,
+        patches, n_skipped = load_manifest_patches(pathlib.Path(self.tiles_csv))
+        self.assertEqual(n_skipped, 0)
+        self.assertEqual(
+            [(p.patch_id, p.flags_dict) for p in patches],
+            [
+                ("D004-2021_AA-S1-32_1-1", {"ROADS": True}),
+                ("D075-2021_UU-S1-4_1-2", {"ROADS": False}),
+            ],
         )
-
-        for path in (self.tiles_csv, self.legacy_csv):
-            patches, _ = load_manifest_patches(pathlib.Path(path), splits=["train"])
-            self.assertEqual(
-                [p.lidar_patch_stem() for p in patches],
-                ["D004-2021_LIDARHD_AA-S1-32_1-1"],
-            )
-
-    def test_preprocess_loader_both_schemas(self):
-        try:
-            from pointcept.datasets.preprocessing.malibu3d.preprocess_malibu3d import (
-                load_manifest_tasks,
-            )
-        except ImportError as exc:  # plyfile / rasterio missing
-            self.skipTest(str(exc))
-
-        for path in (self.tiles_csv, self.legacy_csv):
-            tasks = sorted(load_manifest_tasks(path, ["train", "val"]), key=lambda t: t.patch_id)
-            self.assertEqual(
-                [(t.patch_id, t.has_natural_habitat, t.has_dem_elev, t.date_gap_days) for t in tasks],
-                [
-                    ("D004-2021_AA-S1-32_1-1", False, True, 1.0),
-                    ("D075-2021_UU-S1-4_1-2", True, False, 30.0),
-                ],
-            )
 
 
 if __name__ == "__main__":

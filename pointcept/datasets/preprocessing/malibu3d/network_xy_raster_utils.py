@@ -125,8 +125,7 @@ def grid_from_xy_bounds(
 def abs_xy_bounds_from_coord(patch_dir: Path) -> tuple[float, float, float, float]:
     """Return (xmin, ymin, xmax, ymax) in absolute Lambert meters for one patch dir.
 
-    Reads coord.npy + coord_translation.npy (mmap'd, XY-only scan). Shared by
-    rasterize_network.py and rasterize_forest.py.
+    Reads coord.npy + coord_translation.npy (mmap'd, XY-only scan).
     """
     patch_dir = Path(patch_dir)
     coord_path = patch_dir / "coord.npy"
@@ -155,7 +154,6 @@ def load_known_missing_tiles(path: Path | None) -> set[tuple[str, str]]:
 
     Accepts either a CSV with a ``reason`` column (rows whose reason is not
     ``missing_coord_file`` are ignored) or a plain ``split,patch_id,...`` text file.
-    Shared by rasterize_network.py and rasterize_forest.py.
     """
     if path is None:
         return set()

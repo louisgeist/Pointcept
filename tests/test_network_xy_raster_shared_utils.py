@@ -1,4 +1,4 @@
-"""Preprocessing helpers shared by rasterize_network.py and rasterize_forest.py (network_xy_raster_utils.py):
+"""Preprocessing helpers of rasterize_network.py (network_xy_raster_utils.py):
 abs_xy_bounds_from_coord, load_known_missing_tiles and default_missing_coord_details_csv.
 
 Run with: PYTHONPATH=. pytest tests/test_network_xy_raster_shared_utils.py

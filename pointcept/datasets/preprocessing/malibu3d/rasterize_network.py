@@ -127,8 +127,7 @@ def load_manifest_patches(
     missing_cols = sorted(REQUIRED_MANIFEST_COLUMNS - tile_csv_columns(split_manifest_csv))
     if missing_cols:
         raise ValueError(
-            f"split_manifest_csv missing columns {missing_cols} "
-            "(expected tiles.csv or scene_split_manifest.csv with ROADS)."
+            f"split_manifest_csv missing columns {missing_cols} (expected tiles.csv)."
         )
 
     skip = known_missing or set()
@@ -518,8 +517,7 @@ def build_argparser() -> argparse.ArgumentParser:
         type=str,
         required=True,
         help=(
-            "tiles.csv (or legacy scene_split_manifest.csv with ROADS); "
-            "drives which patches to process"
+            "tiles.csv (or a subset of its rows): drives which tiles to process"
         ),
     )
     p.add_argument(

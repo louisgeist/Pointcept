@@ -1,6 +1,6 @@
 """
 Linear probe of a frozen Sonata encoder (PT-v3m2, enc_mode, 1232-d multi-scale encoder features)
-on MALiBU3D land-cover segmentation (`segment`, v20), with one CE + Lovasz linear head. Short
+on MALiBU3D land-cover segmentation (`segment`), with one CE + Lovasz linear head. Short
 schedule (1000 iterations) to monitor checkpoints during Sonata pretraining: validation on 20
 tiles of the stratified validation subset, no test pass; the best val mIoU is written to
 save_path/metrics.json. Pass the checkpoint with --options weight=<path>.
@@ -39,10 +39,8 @@ wandb_run_name = (
 )
 
 # -----------------------------------------------------------------------------
-# Labels (segment v20: 15 classes + void), written out here: must match the v20
-# definition of pointcept/datasets/preprocessing/malibu3d/malibu3d_label_remap.py.
+# Labels (land cover: 15 classes + Void), as in pointcept/datasets/malibu3d_labels.py.
 # -----------------------------------------------------------------------------
-label_definitions = dict(segment="v20")
 num_classes = 15
 ignore_index = 15
 names = [

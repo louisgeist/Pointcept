@@ -20,10 +20,9 @@ batch_size_test = None  # auto adapt to bs 1 for each gpu
 # Val/test batching by voxel budget (None = fixed batch_size_*). When set, the loader
 # (VoxelBudgetBatchSampler) packs scenes up to this many voxels per batch, and
 # batch_size_val / batch_size_test become the max number of scenes per batch.
-# Scene sizes come from the n_voxels column of data.*.csv_manifest (present in
-# tiles.csv; scripts/analyze_malibu3d_test_point_voxel_counts.py --write_manifest
-# adds it to another manifest). Independent of the train point_max; about 8x the
-# median n_voxels is a reasonable start.
+# Scene sizes come from the n_voxels column of data.*.csv_manifest (tiles.csv).
+# Independent of the train point_max; about 8x the median n_voxels is a reasonable
+# start.
 test_voxel_budget = None  # e.g. 1_200_000
 val_voxel_budget = None  # e.g. 1_200_000
 # Worker count of the test DataLoader (None = num_worker). Test samples keep the

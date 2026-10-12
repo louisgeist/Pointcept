@@ -35,7 +35,7 @@ META_NAMES = (
     "palettes.json",
     "tiles.csv",
     "tiles.parquet",
-    "scene_split_manifest.csv",
+    "val_subset_2000tiles.csv",
     "README.md",
     "LICENSE",
     "SHA256SUMS",

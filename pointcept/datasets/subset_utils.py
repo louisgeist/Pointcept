@@ -1,9 +1,9 @@
 """
 Scene-list restriction applied by DefaultDataset after ``get_data_list``.
 
-In order: keep the tiles listed in a CSV sidecar (``split`` + ``tile_id`` or ``patch_id``
-columns), e.g. the fixed stratified validation subset used by the MALiBU3D configs; then
-the scenes matching ``include_names``; then the first ``max_sample`` scenes.
+In order: keep the tiles listed in a CSV sidecar (``split`` and ``tile_id`` columns), e.g.
+the fixed validation subset used by the MALiBU3D configs; then the scenes matching
+``include_names``; then the first ``max_sample`` scenes.
 """
 
 from __future__ import annotations
@@ -82,7 +82,7 @@ def matching_include_name(path: str, names: Sequence[str]) -> Optional[str]:
 
 
 def load_sidecar_keys(manifest_path: str) -> Set[Tuple[str, str]]:
-    """Read ``{(split, tile_id)}`` from a sidecar CSV (id column ``tile_id`` or ``patch_id``)."""
+    """Read ``{(split, tile_id)}`` from a sidecar CSV (``split`` and ``tile_id`` columns)."""
     if not os.path.isfile(manifest_path):
         raise FileNotFoundError(f"Stratified subset sidecar not found: {manifest_path}")
 
@@ -91,17 +91,16 @@ def load_sidecar_keys(manifest_path: str) -> Set[Tuple[str, str]]:
         reader = csv.DictReader(handle)
         if reader.fieldnames is None:
             raise ValueError(f"Empty sidecar CSV: {manifest_path}")
-        id_column = "tile_id" if "tile_id" in reader.fieldnames else "patch_id"
-        missing = {"split", id_column} - set(reader.fieldnames)
+        missing = {"split", "tile_id"} - set(reader.fieldnames)
         if missing:
             raise KeyError(
                 f"Sidecar CSV missing columns {sorted(missing)}: {manifest_path}"
             )
         for row in reader:
             split = (row.get("split") or "").strip()
-            patch_id = (row.get(id_column) or "").strip()
-            if split and patch_id:
-                keys.add((split, patch_id))
+            tile_id = (row.get("tile_id") or "").strip()
+            if split and tile_id:
+                keys.add((split, tile_id))
     return keys
 
 

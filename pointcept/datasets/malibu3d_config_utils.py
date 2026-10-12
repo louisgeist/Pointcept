@@ -6,7 +6,7 @@ and tester (task type, number of classes, ignore index, class names, ...), the d
 losses (``init_task_criteria``) and the Collect / index_valid keys of the data pipeline
 (``init_multitask_collect_keys``). Targets:
 
-- ``segment``: point-wise land cover; classes come from ``malibu3d_label_remap``.
+- ``segment``: point-wise land cover (classes in ``malibu3d_labels``).
 - ``forest_2d``, ``network``: binary 1 m rasters (``pixel_semantic``).
 - ``nathab_*``: the four natural-habitat ecological axes (``tile_distribution``).
 - ``elevation``: point-wise height above the DTM (``regression``).
@@ -19,8 +19,14 @@ from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 
-# Point-wise semantic targets. Their classes, names and ignore index come from the label
-# definitions of ``malibu3d_label_remap`` (see ``get_semantic_config``).
+from pointcept.datasets.malibu3d_labels import (
+    NATHAB_AXES,
+    NATHAB_AXIS_KEYS,
+    SEGMENT_NAMES,
+    semantic_task_config,
+)
+
+# Point-wise semantic targets (classes in ``malibu3d_labels``).
 MALIBU3D_SEMANTIC_TASKS: Tuple[str, ...] = ("segment",)
 
 # Binary 2D pixel semantic tasks (1 m Lambert-93 masks), not point-wise.
@@ -61,22 +67,14 @@ MALIBU3D_PIXEL_SEMANTIC_TASKS: Dict[str, Dict[str, Any]] = {
 
 # Natural-habitat ecological axes: point-wise categorical labels per axis, trained by
 # default as tile-level class distributions. ``natural_habitat.npy`` is ``uint8 (N, 4)``;
-# MALiBU3DDataset unpacks its columns into these ``nathab_*`` keys. Values are the
-# ``malibu3d_label_remap`` definition of each axis.
-MALIBU3D_TILE_DISTRIBUTION_TASKS: Dict[str, str] = {
-    "nathab_habitat_type": "by_habitat_type_ecological",
-    "nathab_moisture_regime": "by_moisture_regime",
-    "nathab_soil_chemistry": "by_soil_chemistry",
-    "nathab_bioclimatic_zone": "by_climatic_domain",
-}
+# MALiBU3DDataset unpacks its columns into these ``nathab_*`` keys.
+MALIBU3D_TILE_DISTRIBUTION_TASKS: Tuple[str, ...] = NATHAB_AXIS_KEYS
 
 MALIBU3D_SEMANTIC_TARGET_KEYS: Tuple[str, ...] = MALIBU3D_SEMANTIC_TASKS
 MALIBU3D_PIXEL_SEMANTIC_TARGET_KEYS: Tuple[str, ...] = tuple(
     MALIBU3D_PIXEL_SEMANTIC_TASKS.keys()
 )
-MALIBU3D_TILE_DISTRIBUTION_TARGET_KEYS: Tuple[str, ...] = tuple(
-    MALIBU3D_TILE_DISTRIBUTION_TASKS.keys()
-)
+MALIBU3D_TILE_DISTRIBUTION_TARGET_KEYS: Tuple[str, ...] = MALIBU3D_TILE_DISTRIBUTION_TASKS
 
 # index_valid_keys for GridSample & co. (superset of all MALiBU3D targets).
 # Only **per-point** arrays belong here. Scene-level arrays (``coord_translation`` (3,),
@@ -122,30 +120,12 @@ MALIBU3D_ELEVATION: Dict[str, Any] = {
 }
 
 
-def get_semantic_config(
-    target_key: str,
-    definition: Optional[str] = None,
-) -> Dict[str, Any]:
-    """Return a deep copy of the semantic task config for ``target_key``.
-
-    ``definition`` names a label definition of ``malibu3d_label_remap`` (default:
-    ``DEFAULT_LABEL_DEFINITION_NAMES``, i.e. ``v20`` for ``segment``). The config has
-    ``task_type="semantic"``.
-    """
+def get_semantic_config(target_key: str) -> Dict[str, Any]:
+    """Return the semantic task config of ``target_key`` (``task_type="semantic"``)."""
     if target_key not in MALIBU3D_SEMANTIC_TASKS:
         keys = ", ".join(sorted(MALIBU3D_SEMANTIC_TASKS))
         raise KeyError(f"Unknown semantic target_key '{target_key}'. Expected one of: {keys}")
-
-    from pointcept.datasets.preprocessing.malibu3d.malibu3d_label_remap import (
-        definition_to_task_config,
-        get_default_definition_name,
-        get_definition,
-    )
-
-    defn_name = definition if definition is not None else get_default_definition_name(
-        target_key
-    )
-    return deepcopy(definition_to_task_config(get_definition(target_key, defn_name)))
+    return semantic_task_config(SEGMENT_NAMES)
 
 
 def get_multitask_regression_task_config_elevation() -> Dict[str, Any]:
@@ -167,34 +147,20 @@ def get_pixel_semantic_config(target_key: str) -> Dict[str, Any]:
     return deepcopy(MALIBU3D_PIXEL_SEMANTIC_TASKS[target_key])
 
 
-def get_tile_distribution_config(
-    target_key: str,
-    definition: Optional[str] = None,
-) -> Dict[str, Any]:
-    """Return a deep copy of the config of one natural-habitat axis (``nathab_*``).
+def get_tile_distribution_config(target_key: str) -> Dict[str, Any]:
+    """Return the config of one natural-habitat axis (``nathab_*``).
 
-    Classes come from the ``natural_habitat`` definition named in
-    ``MALIBU3D_TILE_DISTRIBUTION_TASKS`` (or ``definition``). The config has
-    ``task_type="tile_distribution"``: by default the model is trained with a
-    weighted KL loss on the tile-level class distribution. Use
+    The config has ``task_type="tile_distribution"``: by default the model is trained
+    with a weighted KL loss on the tile-level class distribution. Use
     ``enable_nathab_pointwise_supervision`` to train with CE + Lovasz on the point
     labels instead; inference and the KL / TV metrics stay tile-level either way.
     """
     if target_key not in MALIBU3D_TILE_DISTRIBUTION_TASKS:
-        keys = ", ".join(sorted(MALIBU3D_TILE_DISTRIBUTION_TASKS.keys()))
+        keys = ", ".join(sorted(MALIBU3D_TILE_DISTRIBUTION_TASKS))
         raise KeyError(
             f"Unknown tile_distribution target_key '{target_key}'. Expected one of: {keys}"
         )
-
-    from pointcept.datasets.preprocessing.malibu3d.malibu3d_label_remap import (
-        definition_to_task_config,
-        get_definition,
-    )
-
-    defn_name = (
-        definition if definition is not None else MALIBU3D_TILE_DISTRIBUTION_TASKS[target_key]
-    )
-    cfg = deepcopy(definition_to_task_config(get_definition("natural_habitat", defn_name)))
+    cfg = semantic_task_config(NATHAB_AXES[target_key])
     cfg["task_type"] = "tile_distribution"
     cfg["pointwise_supervision"] = False
     return cfg
@@ -219,7 +185,7 @@ def _validate_target_keys(target_keys: Tuple[str, ...]) -> None:
     known = (
         set(MALIBU3D_SEMANTIC_TASKS)
         | set(MALIBU3D_PIXEL_SEMANTIC_TASKS.keys())
-        | set(MALIBU3D_TILE_DISTRIBUTION_TASKS.keys())
+        | set(MALIBU3D_TILE_DISTRIBUTION_TASKS)
         | {"elevation"}
     )
     for key in target_keys:
@@ -273,37 +239,22 @@ def init_multitask_collect_keys(
     return train_keys, val_keys, MALIBU3D_MULTITASK_INDEX_VALID_KEYS
 
 
-def init_task_configs(
-    target_keys: Tuple[str, ...],
-    definitions: Optional[Dict[str, str]] = None,
-) -> Dict[str, Any]:
-    """Return ``{task_name: task_config}`` for the given target_keys.
-
-    ``definitions`` optionally maps task names to label definition names of
-    ``malibu3d_label_remap``. For ``segment`` it must match the definition the data was
-    preprocessed with (``--segment_definition``), else labels and logits disagree.
-    """
-    definitions = definitions or {}
+def init_task_configs(target_keys: Tuple[str, ...]) -> Dict[str, Any]:
+    """Return ``{task_name: task_config}`` for the given target_keys."""
     out = {}
     for task_name in target_keys:
         if task_name in MALIBU3D_SEMANTIC_TASKS:
-            out[task_name] = get_semantic_config(
-                task_name,
-                definition=definitions.get(task_name),
-            )
+            out[task_name] = get_semantic_config(task_name)
         elif task_name == "elevation":
             out[task_name] = get_multitask_regression_task_config_elevation()
         elif task_name in MALIBU3D_PIXEL_SEMANTIC_TASKS:
             out[task_name] = get_pixel_semantic_config(task_name)
         elif task_name in MALIBU3D_TILE_DISTRIBUTION_TASKS:
-            out[task_name] = get_tile_distribution_config(
-                task_name,
-                definition=definitions.get(task_name),
-            )
+            out[task_name] = get_tile_distribution_config(task_name)
         else:
             raise KeyError(
                 f"Unknown task_name '{task_name}'. Expected one of: "
-                f"{sorted((*MALIBU3D_SEMANTIC_TASKS, *MALIBU3D_PIXEL_SEMANTIC_TASKS.keys(), *MALIBU3D_TILE_DISTRIBUTION_TASKS.keys(), 'elevation'))}"
+                f"{sorted((*MALIBU3D_SEMANTIC_TASKS, *MALIBU3D_PIXEL_SEMANTIC_TASKS.keys(), *MALIBU3D_TILE_DISTRIBUTION_TASKS, 'elevation'))}"
             )
     return out
 
@@ -313,7 +264,7 @@ def get_missing_target_fill_value(
 ) -> Any:
     """Return the fallback value used when a target file is missing.
 
-    - Semantic targets fall back to the on-disk storage definition's ignore_index.
+    - Semantic targets fall back to their ignore_index (Void).
     - Natural-habitat axes fall back to each axis' void id.
     - Elevation regression falls back to NaN so masked losses ignore it.
     - Pixel masks fall back to an all-zero ``(r, 1, 1)`` raster (no positive pixel).
@@ -324,25 +275,9 @@ def get_missing_target_fill_value(
     the same channel count.
     """
     if target_key in MALIBU3D_SEMANTIC_TASKS:
-        from pointcept.datasets.preprocessing.malibu3d.malibu3d_label_remap import (
-            get_definition,
-        )
-
-        storage_def = get_definition(target_key, "default")
-        return int(storage_def.ignore_index)
+        return get_semantic_config(target_key)["ignore_index"]
     if target_key in MALIBU3D_TILE_DISTRIBUTION_TASKS:
-        from pointcept.datasets.preprocessing.malibu3d.nathab_axes import (
-            NATHAB_AXIS_IGNORE_INDEX,
-            NATHAB_AXIS_KEYS,
-        )
-
-        try:
-            column = NATHAB_AXIS_KEYS.index(target_key)
-        except ValueError as exc:
-            raise KeyError(
-                f"Unknown tile_distribution target_key '{target_key}'"
-            ) from exc
-        return int(NATHAB_AXIS_IGNORE_INDEX[column])
+        return get_tile_distribution_config(target_key)["ignore_index"]
     if target_key in MALIBU3D_PIXEL_SEMANTIC_TASKS:
         cfg = pixel_semantic_config or get_pixel_semantic_config(target_key)
         r = int(cfg["num_networks"])
@@ -354,7 +289,7 @@ def get_missing_target_fill_value(
             (
                 *MALIBU3D_SEMANTIC_TASKS,
                 *MALIBU3D_PIXEL_SEMANTIC_TASKS.keys(),
-                *MALIBU3D_TILE_DISTRIBUTION_TASKS.keys(),
+                *MALIBU3D_TILE_DISTRIBUTION_TASKS,
                 "elevation",
             )
         )

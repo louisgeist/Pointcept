@@ -41,9 +41,9 @@ MODELS = {
 # Sonata SSL ckpt stores student/teacher; the probe config loads the student backbone.
 SSL_KEY_REPLACE = ("module.student.backbone", "module.backbone")
 MANIFESTS = {
-    "val": "data/malibu3d/raw/scene_split_manifest_D067.csv",
-    "test": "data/malibu3d/raw/scene_split_manifest_D075.csv",
-    "train": "data/malibu3d/raw/scene_split_manifest_D067.csv",
+    "val": "data/malibu3d/tiles_D067.csv",
+    "test": "data/malibu3d/tiles_D075.csv",
+    "train": "data/malibu3d/tiles_D067.csv",
 }
 
 

@@ -1,24 +1,4 @@
-"""Read the MALiBU3D tile list from either of its two CSV schemas.
-
-- ``tiles.csv`` -- the tile catalog of the MALiBU3D Hugging Face release: one row
-  per shipped tile (every row has LiDAR HD). This is the canonical file.
-- ``scene_split_manifest.csv`` -- an older split table: one row per FLAIR-HUB
-  patch, including ``LIDARHD=False`` rows, with upper-case flag columns.
-
-:func:`iter_tiles` normalizes both to the catalog column names, so callers can
-point ``csv_manifest`` / ``--split_manifest_csv`` at either file:
-
-=======================  ===================  ====================================
-catalog column           older column         notes
-=======================  ===================  ====================================
-``tile_id``              ``patch_id``         ``{dept_year}_{roi}_{scene_i_j}``
-``has_natural_habitat``  ``NATURAL_HABITAT``
-``has_elevation``        ``DEM_ELEV``
-``has_roads_graph``      ``ROADS``
-(implicit True)          ``LIDARHD``          rows with False are skipped
-=======================  ===================  ====================================
-
-Other columns of the older schema are ignored (modalities not in the release).
+"""Read the MALiBU3D tile table (``tiles.csv``: one row per LiDAR tile) into ``Tile`` records.
 
 Pure stdlib, so preprocessing scripts can import it without torch.
 """
@@ -30,13 +10,6 @@ import os
 from dataclasses import dataclass
 from typing import Iterator, List, Optional, Sequence
 
-LEGACY_COLUMN_ALIASES = {
-    "patch_id": "tile_id",
-    "NATURAL_HABITAT": "has_natural_habitat",
-    "DEM_ELEV": "has_elevation",
-    "ROADS": "has_roads_graph",
-}
-
 REQUIRED_COLUMNS = ("split", "dept_year", "roi", "tile_id")
 
 _TRUE_TOKENS = frozenset({"true", "1", "yes"})
@@ -46,10 +19,7 @@ _NA_TOKENS = frozenset({"", "<na>", "na", "none", "n/a", "nan", "null"})
 
 @dataclass(frozen=True)
 class Tile:
-    """One LiDAR tile, normalized from either CSV schema.
-
-    Flag / count fields are ``None`` when the source CSV lacks the column.
-    """
+    """One LiDAR tile. Flag / count fields are ``None`` when the CSV lacks the column."""
 
     split: str
     dept_year: str
@@ -103,11 +73,10 @@ def iter_tiles(
     csv_path: str,
     splits: Optional[Sequence[str]] = None,
 ) -> Iterator[Tile]:
-    """Yield LiDAR tiles from ``tiles.csv`` or an older split manifest.
+    """Yield the tiles of ``tiles.csv`` (or of a CSV with a subset of its rows).
 
-    ``splits`` filters on the (lower-cased) ``split`` column. Rows whose
-    ``LIDARHD`` column (older schema only) is not True are skipped; rows with an
-    empty id field are skipped silently. Invalid booleans raise ``ValueError``.
+    ``splits`` filters on the (lower-cased) ``split`` column. Rows with an empty id
+    field are skipped silently. Invalid booleans raise ``ValueError``.
     """
     csv_path = str(csv_path)
     if not os.path.isfile(csv_path):
@@ -118,20 +87,12 @@ def iter_tiles(
         reader = csv.DictReader(f)
         if reader.fieldnames is None:
             raise ValueError(f"Empty CSV or no header row: {csv_path}")
-        rename = {
-            name: LEGACY_COLUMN_ALIASES.get(name, name) for name in reader.fieldnames
-        }
-        columns = set(rename.values())
+        columns = set(reader.fieldnames)
         missing = [c for c in REQUIRED_COLUMNS if c not in columns]
         if missing:
-            raise ValueError(
-                f"Tile CSV {csv_path} is missing columns {missing} "
-                "(expected tiles.csv or scene_split_manifest.csv)"
-            )
-        has_lidarhd = "LIDARHD" in columns
+            raise ValueError(f"Tile CSV {csv_path} is missing columns {missing}")
 
-        for raw in reader:
-            row = {rename[k]: v for k, v in raw.items() if k in rename}
+        for row in reader:
             split = (row.get("split") or "").strip().lower()
             dept_year = (row.get("dept_year") or "").strip()
             roi = (row.get("roi") or "").strip()
@@ -139,10 +100,6 @@ def iter_tiles(
             if not split or not dept_year or not roi or not tile_id:
                 continue
             if splits_set is not None and split not in splits_set:
-                continue
-            if has_lidarhd and not _parse_bool(
-                row.get("LIDARHD"), "LIDARHD", tile_id, csv_path
-            ):
                 continue
 
             def flag(column: str) -> Optional[bool]:
@@ -174,7 +131,6 @@ def read_tiles(csv_path: str, splits: Optional[Sequence[str]] = None) -> List[Ti
 
 
 def tile_csv_columns(csv_path: str) -> set:
-    """Header of ``csv_path`` with legacy names mapped to catalog names."""
+    """Column names of ``csv_path``."""
     with open(str(csv_path), "r", encoding="utf-8", newline="") as f:
-        header = next(csv.reader(f), [])
-    return {LEGACY_COLUMN_ALIASES.get(name, name) for name in header}
+        return set(next(csv.reader(f), []))

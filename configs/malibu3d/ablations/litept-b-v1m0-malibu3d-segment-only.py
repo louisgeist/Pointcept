@@ -64,11 +64,7 @@ main_task = "segment"
 target_keys = (main_task,)
 origin_main_task = f"origin_{main_task}"
 
-label_definitions = dict(
-    segment="v20",
-)
-
-task_configs = init_task_configs(target_keys, definitions=label_definitions)
+task_configs = init_task_configs(target_keys)
 task_criteria = init_task_criteria(task_configs)
 task_weights = {main_task: 1.0}
 

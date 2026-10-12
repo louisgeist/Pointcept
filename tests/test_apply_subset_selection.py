@@ -29,10 +29,10 @@ scene_matches_include_name = _subset_utils.scene_matches_include_name
 
 def _write_sidecar(path: str, rows) -> None:
     with open(path, "w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=["split", "patch_id"])
+        writer = csv.DictWriter(handle, fieldnames=["split", "tile_id"])
         writer.writeheader()
-        for split, patch_id in rows:
-            writer.writerow({"split": split, "patch_id": patch_id})
+        for split, tile_id in rows:
+            writer.writerow({"split": split, "tile_id": tile_id})
 
 
 class TestApplySubsetSelection(unittest.TestCase):
@@ -88,7 +88,7 @@ class TestApplySubsetSelection(unittest.TestCase):
 
 
 class TestSceneMatchesIncludeName(unittest.TestCase):
-    def test_exact_patch_id(self):
+    def test_exact_tile_id(self):
         path = "/data/malibu3d/test/D075-2021_LIDARHD/AA/D075-2021_AA-S2-2"
         self.assertTrue(scene_matches_include_name(path, "D075-2021_AA-S2-2"))
 

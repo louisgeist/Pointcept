@@ -22,12 +22,7 @@ from .malibu3d_config_utils import (
     get_missing_target_fill_value,
 )
 from pointcept.datasets.preprocessing.malibu3d.tile_catalog import iter_tiles
-from pointcept.datasets.preprocessing.malibu3d.nathab_axes import (
-    NATHAB_AXIS_KEYS,
-    is_nathab_axes_array,
-    is_nathab_carhab_array,
-    unpack_nathab_axes,
-)
+from .malibu3d_labels import NATHAB_AXIS_KEYS, unpack_nathab_axes
 from pointcept.utils.logger import get_root_logger
 
 MALIBU3D_SPECIFIC_ASSETS = (
@@ -56,16 +51,14 @@ MALIBU3D_ALLOWED_TARGETS = (
 class MALiBU3DDataset(DefaultDataset):
     """MALiBU3D tiles with any subset of the benchmark targets.
 
-    :param csv_manifest: Tile list CSV: the MALiBU3D ``tiles.csv`` or an older
-        ``scene_split_manifest.csv``, read via ``preprocessing/malibu3d/tile_catalog.py``.
+    :param csv_manifest: Tile list CSV: the MALiBU3D ``tiles.csv`` (or a subset of its
+        rows), read via ``preprocessing/malibu3d/tile_catalog.py``.
         When None, scenes are globbed from ``data_root/<split>/`` like DefaultDataset.
 
     :param min_points: Optional dict mapping split name ("train"/"val") to a minimum
         point-count threshold. Tiles below the threshold are excluded, using the
-        "n_points" column of csv_manifest (filled in tiles.csv; for an older manifest
-        populate it via scripts/analyze_malibu3d_test_point_voxel_counts.py --write_manifest).
-        Raises if "n_points" is missing/empty for a row in a thresholded split, or if
-        "test" is given a threshold.
+        "n_points" column of csv_manifest. Raises if "n_points" is missing/empty for a row
+        in a thresholded split, or if "test" is given a threshold.
 
     :param target_keys: Target keys: "segment", the pixel targets "forest_2d" and "network",
         the natural-habitat axes "nathab_*" and "elevation". Targets are exposed in the batch
@@ -182,10 +175,7 @@ class MALiBU3DDataset(DefaultDataset):
                     raise ValueError(
                         f"min_points is configured for split {tile.split!r} but the "
                         f"'n_points' column is missing/empty for tile {tile.tile_id!r}. "
-                        "Use the MALiBU3D tiles.csv (n_points filled) or run "
-                        "scripts/analyze_malibu3d_test_point_voxel_counts.py "
-                        f"--write_manifest for split {tile.split!r} before enabling "
-                        "min_points on it."
+                        "Use the MALiBU3D tiles.csv, which has n_points for every tile."
                     )
                 if tile.n_points < self.min_points[tile.split]:
                     min_points_excluded += 1
@@ -227,38 +217,17 @@ class MALiBU3DDataset(DefaultDataset):
     def _unpack_natural_habitat_axes(self, data_dict, n, scene):
         """Unpack ``natural_habitat.npy`` ``(N, 4)`` ecological axes into ``nathab_*`` int32 vectors.
 
-        The packed array is removed so the point-wise label reshape cannot flatten it. A
-        ``natural_habitat.npy`` holding raw CarHab ids ``(N,)`` (not converted to axes) is
-        ignored, with a warning logged once.
+        The packed array is removed so the point-wise label reshape cannot flatten it.
         """
         if "natural_habitat" not in data_dict:
             return data_dict
-        nh = np.asarray(data_dict["natural_habitat"])
-        if is_nathab_axes_array(nh):
-            if nh.shape[0] != n:
-                raise ValueError(
-                    f"natural_habitat axes rows {nh.shape[0]} != coord rows {n} "
-                    f"under scene: {scene}"
-                )
-            for key, labels in unpack_nathab_axes(nh).items():
-                data_dict[key] = labels
-            data_dict.pop("natural_habitat")
-            return data_dict
-        if is_nathab_carhab_array(nh):
-            data_dict.pop("natural_habitat")
-            if not getattr(self, "_warned_carhab", False):
-                self._warned_carhab = True
-                get_root_logger().warning(
-                    "natural_habitat.npy under %s holds raw CarHab ids (N,), not the (N, 4) "
-                    "ecological axes: its natural-habitat labels are ignored. Re-run "
-                    "preprocess_malibu3d.py to bake the axes.",
-                    scene,
-                )
-            return data_dict
-        raise ValueError(
-            f"natural_habitat.npy expected shape (N, 4) ecological axes, "
-            f"got {nh.shape} under scene: {scene}"
-        )
+        nh = np.asarray(data_dict.pop("natural_habitat"))
+        if nh.shape[0] != n:
+            raise ValueError(
+                f"natural_habitat rows {nh.shape[0]} != coord rows {n} under scene: {scene}"
+            )
+        data_dict.update(unpack_nathab_axes(nh))
+        return data_dict
 
     def _load_pixel_semantic_label(self, data_dict, scene, target_key="network"):
         """Load ``{target_key}.npy`` and grid meta for a pixel semantic task.
