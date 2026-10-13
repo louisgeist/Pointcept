@@ -162,6 +162,7 @@ La release HF ne livre **ni** `meta.json`, **ni** `network.npy`, **ni** `forest.
 - [x] `CITATION.cff` : 10 auteurs (ordre de Louis), sans affiliations ; TODO : URL du repo, arXiv
 - [x] `environment.yml` : env `malibu3d` ; retirés open3d, peft, ocnn, CLIP, torch-sparse, torch-cluster, h5py, ftfy, einops, google-sparsehash, canaux pyg/bioconda ; ajoutés huggingface_hub, laspy + lazrs-python, gdal. **Non testé** : installation propre en Phase 8
 - [x] Workflow `formatter.yml` : black 26.10.1 épinglé, `pointcept/models/kpconvx` exclu
+- [x] Probes automatiques réintroduites, sans dépendance à Slurm : `PeriodicProbeHook` (`pointcept/engines/hooks/misc.py`) lance en tâche de fond une commande au choix (locale ou `sbatch`) après chaque `epoch_N.pth`, formatée avec `{weight}`, `{epoch}`, `{iter}`, `{probe_dir}`, `{save_path}` ; pas de relance après reprise (`probes/launched.json`) ; résumé `probes/summary.csv`. Ajouté aux deux configs de pré-entraînement Sonata (désactivé par défaut, `probe_command = None`) ; `--options` garde maintenant les espaces des chaînes simples (`DictAction`). Testé de bout en bout sur hecate (pré-entraînement court + 2 vraies probes locales)
 - [ ] Sonata pré-entraîné sur ECLAIR (Tab. 4, case TODO du papier) : relancé sur Jean Zay (job 48309, 6×4 H100, ~moitié faite au 2026-10-13, probe 1012572 en attente). Config du job = `configs/eclair/pretrain-sonata-v1m2-eclair.py` de `malibu3d` (au hook `LinProbeSbatchHook` près, retiré exprès) ; `ECLAIRDataset` identique (filtre `min_points={"train": 2000}` contre les vues dégénérées qui donnaient les NaN). Quand le run finit : probes grille → graines DALES/H3D/OpenGF/PureForest avec ce checkpoint, ajouter la ligne aux résultats si elle va dans le papier
 - [ ] TODO avant publication : URL du repo dans les cartes HF (dataset et checkpoints ; `CITATION.cff` fait), arXiv, affiliations éventuelles
 
@@ -171,6 +172,6 @@ La release HF ne livre **ni** `meta.json`, **ni** `network.npy`, **ni** `forest.
 - [ ] Installation propre dans un env neuf, puis lancer le harnais
 - [ ] Reproduire un ou deux chiffres du papier sur Jean Zay à partir des checkpoints HF
 - [ ] Sur Jean Zay, lancer l'étage forward du harnais sur les probes DALES et ECLAIR, au tag puis sur la version finale, et comparer
-- [ ] Louis renomme le repo du site `louisgeist/malibu3d` en `malibu` (site → `louisgeist.github.io/malibu/`)
+- [x] Louis a renommé le repo du site `louisgeist/malibu3d` en `malibu` (2026-10-13 ; site → `louisgeist.github.io/malibu/`)
 - [ ] Créer `louisgeist/malibu3d` (privé, pas un fork), y pousser la branche nettoyée (squash, pas de `--mirror` brut), supprimer ce fichier
 - [ ] Le jour de la publication : passer `louisgeist/malibu3d` en public, puis mettre à jour les deux liens des cartes HF (dataset et checkpoints, voir « À livrer sur Hugging Face »)

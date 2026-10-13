@@ -5,8 +5,10 @@ Author: Xiaoyang Wu (xiaoyang.wu.cs@gmail.com)
 Please cite our work if the code is helpful to you.
 """
 
+import csv
 import json
 import os
+import subprocess
 import math
 import shutil
 import time
@@ -1029,3 +1031,156 @@ class MetricsJsonWriter(HookBase):
             f.write("\n")
         os.replace(tmp_path, out_path)
         self.trainer.logger.info("Wrote metrics to: %s", out_path)
+
+
+@HOOKS.register_module()
+class PeriodicProbeHook(HookBase):
+    """Launch a probe of each periodic checkpoint in the background, without blocking
+    training (e.g. a short linear probe of a self-supervised pretraining).
+
+    After every ``save_freq``-th epoch, once ``CheckpointSaver`` has written
+    ``model/epoch_N.pth`` (place this hook after it, with a ``save_freq`` multiple of
+    the saver's), runs the shell command ``command`` formatted with:
+
+    - ``{weight}``: path of ``epoch_N.pth``;
+    - ``{epoch}``, ``{iter}``: trainer epoch N and the matching iteration count;
+    - ``{probe_dir}``: ``save_path/probes/epoch_N``, where the probe should write its
+      run (e.g. ``--options save_path={probe_dir}``);
+    - ``{save_path}``: the training run directory.
+
+    The command runs on the main process, from the working directory of the training,
+    with its output in ``{probe_dir}/launch.log``. It decides where the probe runs: in
+    a local process, or as a job submitted to a cluster scheduler. Launched checkpoints
+    are recorded in ``save_path/probes/launched.json``, so a resumed run does not launch
+    them again. ``save_path/probes/summary.csv`` gathers the ``metrics.json`` written by
+    the finished probes (``MetricsJsonWriter``); at the end of training, the hook waits for
+    the probes still running as local processes.
+
+    Unset arguments are read from the config entries ``probe_command``,
+    ``probe_save_freq`` (default 1) and ``iter_per_epoch`` (default: length of the train
+    loader), so that they can be set from the command line
+    (``--options probe_command="..."``). Without a command the hook does nothing.
+    """
+
+    def __init__(self, command=None, save_freq=None, iter_per_epoch=None):
+        self.command = command
+        self.save_freq = save_freq
+        self.iter_per_epoch = iter_per_epoch
+        self._processes = []
+
+    def _probe_root(self):
+        return os.path.join(self.trainer.cfg.save_path, "probes")
+
+    def _launched(self):
+        path = os.path.join(self._probe_root(), "launched.json")
+        if not os.path.isfile(path):
+            return {}
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+
+    def _write_launched(self, launched):
+        path = os.path.join(self._probe_root(), "launched.json")
+        with open(path + ".tmp", "w", encoding="utf-8") as f:
+            json.dump(launched, f, indent=2, sort_keys=True)
+        os.replace(path + ".tmp", path)
+
+    def _write_summary(self):
+        rows = []
+        for name in sorted(os.listdir(self._probe_root())):
+            path = os.path.join(self._probe_root(), name, "metrics.json")
+            if name.startswith("epoch_") and os.path.isfile(path):
+                with open(path, "r", encoding="utf-8") as f:
+                    metrics = json.load(f)
+                rows.append(
+                    dict(
+                        epoch=int(name[len("epoch_") :]),
+                        metric_name=metrics.get("metric_name"),
+                        best_metric_value=metrics.get("best_metric_value"),
+                    )
+                )
+        if rows:
+            rows.sort(key=lambda r: r["epoch"])
+            path = os.path.join(self._probe_root(), "summary.csv")
+            with open(path, "w", encoding="utf-8", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=list(rows[0]))
+                writer.writeheader()
+                writer.writerows(rows)
+
+    def before_train(self):
+        cfg = self.trainer.cfg
+        if self.command is None:
+            self.command = cfg.get("probe_command")
+        if self.save_freq is None:
+            self.save_freq = cfg.get("probe_save_freq") or 1
+        if self.iter_per_epoch is None:
+            self.iter_per_epoch = cfg.get("iter_per_epoch")
+
+    def after_epoch(self):
+        if not is_main_process() or self.command is None:
+            return
+        # Reap finished local probes.
+        self._processes = [p for p in self._processes if p.poll() is None]
+        os.makedirs(self._probe_root(), exist_ok=True)
+        self._write_summary()
+
+        epoch = self.trainer.epoch + 1
+        if int(self.save_freq) <= 0 or epoch % int(self.save_freq) != 0:
+            return
+        name = f"epoch_{epoch}"
+        weight = os.path.join(self.trainer.cfg.save_path, "model", f"{name}.pth")
+        launched = self._launched()
+        if name in launched:
+            return
+        if not os.path.isfile(weight):
+            self.trainer.logger.warning(
+                f"PeriodicProbeHook: {weight} not found (CheckpointSaver must run "
+                "before this hook, with a save_freq dividing this one)."
+            )
+            return
+
+        iter_per_epoch = self.iter_per_epoch or len(self.trainer.train_loader)
+        probe_dir = os.path.join(self._probe_root(), name)
+        os.makedirs(probe_dir, exist_ok=True)
+        command = self.command.format(
+            weight=os.path.abspath(weight),
+            epoch=epoch,
+            iter=epoch * iter_per_epoch,
+            probe_dir=os.path.abspath(probe_dir),
+            save_path=os.path.abspath(self.trainer.cfg.save_path),
+        )
+        env = os.environ.copy()
+        # The W&B service of the training process must not leak into the probe.
+        env.pop("WANDB_SERVICE", None)
+        try:
+            with open(os.path.join(probe_dir, "launch.log"), "w") as log:
+                process = subprocess.Popen(
+                    command,
+                    shell=True,
+                    stdout=log,
+                    stderr=subprocess.STDOUT,
+                    env=env,
+                    start_new_session=True,
+                )
+        except OSError as exc:
+            self.trainer.logger.warning(
+                f"PeriodicProbeHook: could not launch the probe of {name}: {exc}"
+            )
+            return
+        self._processes.append(process)
+        launched[name] = dict(command=command, weight=os.path.abspath(weight))
+        self._write_launched(launched)
+        self.trainer.logger.info(f"PeriodicProbeHook: launched {command}")
+
+    def after_train(self):
+        if not is_main_process() or self.command is None:
+            return
+        # Wait for the probes still running as local processes (a scheduler submission
+        # returns at once), so that the summary includes the last checkpoints.
+        running = [p for p in self._processes if p.poll() is None]
+        if running:
+            self.trainer.logger.info(
+                f"PeriodicProbeHook: waiting for {len(running)} probe(s) to finish"
+            )
+        for process in running:
+            process.wait()
+        self._write_summary()

@@ -664,8 +664,12 @@ class DictAction(Action):
                     break
             return end
 
-        # Strip ' and " characters and replace whitespace.
-        val = val.strip("'\"").replace(" ", "")
+        # Strip ' and " characters. Whitespace is removed from lists and tuples only,
+        # so that a plain string (e.g. a shell command) keeps its spaces.
+        val = val.strip("'\"")
+        if not (val.startswith(("(", "[")) or "," in val):
+            return DictAction._parse_int_float_bool(val.strip())
+        val = val.replace(" ", "")
         is_tuple = False
         if val.startswith("(") and val.endswith(")"):
             is_tuple = True

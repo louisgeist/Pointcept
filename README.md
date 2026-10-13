@@ -92,6 +92,21 @@ predictions). `scripts/test.sh -d malibu3d -n <name>` tests a finished run again
 The multitask runs use 200k iterations, a global batch of 12 tiles (24 for KPConvX) and AMP; the GPU count is the one
 of the paper (`num_gpu` in each config). The losses of the five tasks are balanced with GradNormLite.
 
+The Sonata pretraining has no online validation. To follow it, `PeriodicProbeHook` can launch a short linear probe
+of every `probe_save_freq`-th checkpoint in the background, locally or as a cluster job; results gather in
+`<run>/probes/summary.csv`:
+
+```bash
+# probe_job.sh: a Slurm script running tools/train.py with configs/malibu3d/probe/sonata-v1m2-malibu3d-lin.py
+# and --options weight=$1 save_path=$2
+# (plus the multi-GPU launch options: the config is set for 24 GPUs)
+python tools/train.py --config-file configs/malibu3d/pretrain-sonata-v1m2-malibu3d.py \
+    --options save_path=exp/malibu3d/sonata_pretrain probe_save_freq=10 \
+    probe_command="sbatch probe_job.sh {weight} {probe_dir}"
+```
+
+The placeholders and a local example are described in the config, next to `probe_command`.
+
 ## Pretrained checkpoints
 
 The six backbones of Tab. 2 (five multitask models with their heads, and the self-supervised Sonata) are on

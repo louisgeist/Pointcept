@@ -267,6 +267,22 @@ data = dict(
     )
 )
 
+# Optional probe of every probe_save_freq-th checkpoint, launched in the background without
+# blocking the pretraining (PeriodicProbeHook). The command decides where the probe runs; it
+# is formatted with {weight}, {epoch}, {iter}, {probe_dir} and {save_path}. Results:
+# save_path/probes/epoch_N/ and save_path/probes/summary.csv. For instance, as a local process
+# (prefix the command with CUDA_VISIBLE_DEVICES=<id> to put the probe on a GPU the pretraining
+# does not use):
+#   probe_command = (
+#       "python tools/train.py --config-file configs/malibu3d/probe/sonata-v1m2-malibu3d-lin.py "
+#       "--num-gpus 1 --options weight={weight} save_path={probe_dir}"
+#   )
+# or as a cluster job: probe_command = "sbatch probe_job.sh {weight} {probe_dir}".
+# Both can be set at launch: --options probe_command="..." probe_save_freq=5 (a command with
+# commas must be written here instead: --options reads them as list separators).
+probe_command = None
+probe_save_freq = 10
+
 hooks = [
     dict(type="CheckpointLoader"),
     dict(type="ModelHook"),
@@ -274,4 +290,6 @@ hooks = [
     dict(type="IterationTimer", warmup_iter=2),
     dict(type="InformationWriter", log_interval=1),
     dict(type="CheckpointSaver", save_freq=eval_every),
+    # Reads probe_command, probe_save_freq and iter_per_epoch from this config.
+    dict(type="PeriodicProbeHook"),
 ]
