@@ -3,8 +3,8 @@
 
 Each ``data/{split}/{dept}_LIDARHD/{roi}.zip`` is flat (``{tile_id}/coord.npy``,
 optional road graph at the zip root). Extract into
-``{output_root}/{split}/{dept}_LIDARHD/{roi}/`` and copy ``tiles.csv``,
-``labels.json`` and ``palettes.json`` to ``{output_root}``, the layout the configs expect
+``{output_root}/{split}/{dept}_LIDARHD/{roi}/`` and copy ``tiles.csv``, ``labels.json``,
+``palettes.json`` and ``val_subset_2000tiles.csv`` to ``{output_root}``, the layout the configs expect
 with ``data_root = "data/malibu3d"``.
 
 Resume: skip a zip when every member already exists with the same uncompressed

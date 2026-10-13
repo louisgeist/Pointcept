@@ -6,7 +6,7 @@ Backbone kpconvx_base in feature mode (num_classes=0, MultiTaskSegmentorV2 adds 
 heads), with the KPConvX data path: GridSample returns min_coord instead of grid_coord, and
 training crops are smaller (40k points). 200k iterations, batch 24 over 6 GPUs with SyncBN,
 lr 5e-3, AMP.
-Released checkpoint: ckpt/kpconvx/model.pth (see README_checkpoints.md).
+Released checkpoint: ckpt/kpconvx/model.pth (see docs/checkpoints.md).
 Self-contained: inherits only from _base_/default_runtime.py.
 """
 

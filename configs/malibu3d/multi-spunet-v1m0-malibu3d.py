@@ -4,7 +4,7 @@ MALiBU3D multitask benchmark, SpUNet trained from scratch (Tab. 2 of the MALiBU3
 Same five tasks, losses, GradNormLite balancing and data pipeline as
 multi-litept-b-v1m0-malibu3d.py. Backbone SpUNet-v1m1 with pooling stride 3.
 200k iterations, batch 12 on 1 GPU, lr 2e-3 (no reduced lr for the blocks), AMP.
-Released checkpoint: ckpt/spunet/model.pth (see README_checkpoints.md).
+Released checkpoint: ckpt/spunet/model.pth (see docs/checkpoints.md).
 Self-contained: inherits only from _base_/default_runtime.py.
 """
 

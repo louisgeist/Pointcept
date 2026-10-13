@@ -4,7 +4,7 @@ split, with coord + color + intensity inputs. 150k iterations (150 epochs of 100
 batch 96 (4 per GPU on 24 GPUs), bf16 AMP. The matching radius and mask sizes are rescaled from
 the upstream Sonata defaults to the coarser 0.1 m grid (see below). No online validation: saved
 checkpoints are evaluated with the linear probes in probe/.
-Released checkpoint (epoch 120): ckpt/sonata-pretrained/model.pth (see README_checkpoints.md).
+Released checkpoint (epoch 120): ckpt/sonata-pretrained/model.pth (see docs/checkpoints.md).
 """
 
 _base_ = ["../_base_/default_runtime.py"]

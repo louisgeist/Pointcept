@@ -8,7 +8,7 @@ and data pipeline as multi-litept-b-v1m0-malibu3d.py; the model block and the we
 differ. The encoder hyperparameters must match the pretraining config exactly (the checkpoint
 is loaded by shape); the decoder, with the dimensions of upstream Sonata's ScanNet full
 fine-tuning config, and the task heads are randomly initialized.
-Released checkpoint: ckpt/sonata-ft/model.pth (see README_checkpoints.md).
+Released checkpoint: ckpt/sonata-ft/model.pth (see docs/checkpoints.md).
 """
 
 # -----------------------------------------------------------------------------

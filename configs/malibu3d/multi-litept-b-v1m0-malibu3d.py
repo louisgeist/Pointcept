@@ -6,7 +6,7 @@ road-network prediction (`network`, roads only, 1 m raster, scored with APLS at 
 time), natural-habitat distribution on 4 ecological axes (`nathab_*`, tile-wise weighted KL),
 forest cover (`forest_2d` raster) and elevation regression (meters). GradNormLite balances the
 task losses. 200k iterations, batch 12 on 1 GPU, AMP, Mix3D.
-Released checkpoint: ckpt/litept-b/model.pth (see README_checkpoints.md).
+Released checkpoint: ckpt/litept-b/model.pth (see docs/checkpoints.md).
 Self-contained: inherits only from _base_/default_runtime.py.
 """
 

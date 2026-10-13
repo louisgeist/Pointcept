@@ -48,7 +48,7 @@ JOB_TO_CKPT = {
     "spunet_multitask": "spunet",
     "kpconvx_multitask": "kpconvx",
     "sonata_outdoor": "sonata-pretrained",
-    # release convention: ckpt/<name>/model.pth (README_checkpoints.md)
+    # release convention: ckpt/<name>/model.pth (docs/checkpoints.md)
     "litept-b": "litept-b",
     "ptv3": "ptv3",
     "spunet": "spunet",

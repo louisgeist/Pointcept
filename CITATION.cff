@@ -1,0 +1,53 @@
+cff-version: 1.2.0
+message: "If you use this code or the MALiBU3D dataset, please cite the paper below."
+title: "MALiBU3D"
+type: software
+license: MIT
+repository-code: "https://github.com/louisgeist/MALiBU3D"  # TODO: final repository URL
+authors:
+  - given-names: Louis
+    family-names: Geist
+  - given-names: Elliot
+    family-names: Vincent
+  - given-names: Mohamed Ali
+    family-names: Chebbi
+  - given-names: Anatol
+    family-names: Garioud
+  - given-names: Nicolas
+    family-names: Gonthier
+  - given-names: Sébastien
+    family-names: Giordano
+  - given-names: Nicolas
+    family-names: David
+  - given-names: Jan Dirk
+    family-names: Wegner
+  - given-names: Loic
+    family-names: Landrieu
+  - given-names: Damien
+    family-names: Robert
+preferred-citation:
+  type: article
+  title: "MALiBU3D: A Multitask Aerial LiDAR Benchmark for Large-Scale 3D Scene Understanding"
+  year: 2026
+  journal: "arXiv preprint"  # TODO: arXiv id / venue
+  authors:
+    - given-names: Louis
+      family-names: Geist
+    - given-names: Elliot
+      family-names: Vincent
+    - given-names: Mohamed Ali
+      family-names: Chebbi
+    - given-names: Anatol
+      family-names: Garioud
+    - given-names: Nicolas
+      family-names: Gonthier
+    - given-names: Sébastien
+      family-names: Giordano
+    - given-names: Nicolas
+      family-names: David
+    - given-names: Jan Dirk
+      family-names: Wegner
+    - given-names: Loic
+      family-names: Landrieu
+    - given-names: Damien
+      family-names: Robert

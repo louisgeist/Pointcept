@@ -18,3 +18,7 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - uses: psf/black@stable
+        with:
+          version: "26.10.1"
+          # Vendored KPConvX code keeps its upstream formatting.
+          options: "--check --diff --extend-exclude pointcept/models/kpconvx"

@@ -49,8 +49,8 @@ prefix; the repository's `CheckpointLoader` accepts both forms.
 
 ## 2. Forward pass on a tile
 
-Environment: see the *Environment setup* section of `CLAUDE.md` / `environment.yml` (spconv, and flash-attn for
-PTv3 and Sonata). A GPU is required; use `cuda:0`.
+Environment: see *Installation* in the [README](../README.md) (spconv, and flash-attn for PTv3 and Sonata). A GPU
+is required.
 
 `scripts/hf_release/forward_example.py` builds the model from its config, loads the weights (downloaded from the
 Hub unless `--weight` is given), runs the config's validation pipeline on one preprocessed tile and prints the
@@ -72,9 +72,8 @@ nathab_habitat_type        classes predicted: 4
 elevation                  mean=0.83 std=1.96 min=-0.30 max=10.67
 ```
 
-- `--tile` is the tile directory name as listed in the tile table (`tiles.csv`, or a regional manifest passed with
-  `--csv-manifest`); the tile must be preprocessed on disk under `data/malibu3d/` (see
-  `README_malibu3dplus.md` and the dataset card).
+- `--tile` is the tile directory name as listed in `tiles.csv` (or in a CSV with a subset of its rows, passed with
+  `--csv-manifest`); the tile must be on disk under `data/malibu3d/` (see *Data* in the [README](../README.md)).
 - `--model` is one of `sonata-ft litept-b ptv3 spunet kpconvx sonata-pretrained`. `sonata-pretrained` has no head:
   the script prints the backbone features (`(N, 1232)`).
 - `--max-points N` keeps the N voxels nearest the tile centre (fits any GPU); `0` runs the whole tile.
@@ -101,14 +100,15 @@ Regression test of the released weights (needs the local D067 tiles): `pytest te
 ## 3. Frozen-backbone probing (cross-domain)
 
 Use the file as the frozen backbone of a GridProbe config: only `weight=` changes. Example on H3D with
-Sonata, then the full grid → seed-ensemble pipeline (see `README_grid_then_seed.md`):
+Sonata, the grid alone, then the full grid → seed-ensemble protocol of the paper (see [probing.md](probing.md)):
 
 ```bash
 export PYTHONPATH=$PWD
 python tools/train.py --config-file configs/h3d/sonata-v1m2-h3d-lin-grid.py --num-gpus 1 \
     --options weight=ckpt/sonata-pretrained/model.pth
 
-./submit_grid_then_seeds_h100.sh configs/h3d/sonata-v1m2-h3d-lin-grid.py ckpt/sonata-pretrained/model.pth h3d_sonata
+python tools/grid_then_seeds.py --grid-config configs/h3d/sonata-v1m2-h3d-lin-grid.py \
+    --save-root exp/h3d/sonata_grid_then_seeds
 ```
 
 `sonata-pretrained` keeps its `backbone.*` keys, so the `CheckpointLoader(keywords="module.student.backbone",
@@ -126,4 +126,4 @@ sh scripts/train.sh -g 1 -d malibu3d -c malibu3d/multi-sonata-ft-v1m0-malibu3d -
 
 The other configs reproduce the supervised runs; use the GPU count of the table above, e.g.
 `sh scripts/train.sh -g 4 -d malibu3d -c malibu3d/multi-ptv3-v1m0-malibu3d -n ptv3_multi`. They read the
-full national tile table, so they only run where the whole dataset is preprocessed.
+full tile table, so they need the whole dataset on disk.

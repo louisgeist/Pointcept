@@ -1,10 +1,8 @@
-name: pointcept-torch2.5.0-cu12.4
+name: malibu3d
 channels:
-  - pyg
   - pytorch
   - nvidia/label/cuda-12.4.4
   - nvidia
-  - bioconda
   - conda-forge
   - defaults
 dependencies:
@@ -19,38 +17,31 @@ dependencies:
   - torchaudio=2.5.0
   - pytorch-cuda=12.4
   - ninja
-  - google-sparsehash
-  - h5py
   - pyyaml
   - tensorboard
   - tensorboardx
   - wandb
   - yapf
   - addict
-  - einops
   - scipy
-  - plyfile
   - termcolor
   - timm
-  - ftfy
   - regex
   - tqdm
   - matplotlib
   - black
-  - open3d
-  - geopandas  # MALiBU3D network masks (rasterize_network.py)
-  - scikit-image  # MALiBU3D network mask skeletonization (network_graph_pipeline.py)
+  - huggingface_hub  # dataset and checkpoint downloads
+  - plyfile  # DALES preprocessing
+  - laspy  # H3D / ECLAIR / OpenGF / PureForest preprocessing
+  - lazrs-python
+  - geopandas  # MALiBU3D road graphs (rasterize_network.py, APLS)
+  - gdal  # predicted road graphs written as GeoPackage
+  - scikit-image  # road mask skeletonization (network_graph_pipeline.py)
   - scikit-learn  # PureForest linear probe (tools/probe_pureforest.py)
-  - peft
   - pip:
-    - torch-cluster -f https://data.pyg.org/whl/torch-2.5.0+cu124.html
     - torch-scatter -f https://data.pyg.org/whl/torch-2.5.0+cu124.html
-    - torch-sparse -f https://data.pyg.org/whl/torch-2.5.0+cu124.html
-    - torch_geometric
+    - torch_geometric  # KPConvX
     - spconv-cu124
-    - peft #for lora finetune
-    - git+https://github.com/octree-nn/ocnn-pytorch.git
-    - git+https://github.com/openai/CLIP.git
     - git+https://github.com/Dao-AILab/flash-attention.git
-    - ./libs/pointops
-    - ./libs/pointrope
+    - ./libs/pointops  # KPConvX neighbor search
+    - ./libs/pointrope  # LitePT rotary embeddings

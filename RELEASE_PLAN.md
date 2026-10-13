@@ -152,9 +152,14 @@ La release HF ne livre **ni** `meta.json`, **ni** `network.npy`, **ni** `forest.
 
 ## Phase 7 — Documentation de release
 
-- [ ] Réécrire le README : installation, téléchargement depuis HF, preprocessing, entraînement, évaluation du benchmark, checkpoints, résultats, citation
-- [ ] Ajouter `CITATION.cff`, mettre à jour `LICENSE` (Pointcept + MALiBU3D), les crédits (Pointcept, PTv3, Sonata, LitePT, KPConvX)
-- [ ] Nettoyer `environment.yml`
+- [x] README réécrit (remplace celui de Pointcept amont) : présentation, installation, données (téléchargement HF, `unzip_malibu3d.py`, `rasterize_network.py`, sous-ensemble de val), entraînement et évaluation, table des configs, checkpoints, évaluation cross-domaine, résultats (Tab. 2 et 3, chiffres de la colonne « paper » de `paper_to_runs.md`), citation, licence et crédits
+- [x] `docs/checkpoints.md` (ex-`README_checkpoints.md`) et `docs/probing.md` (jeux de données en aval, prétraitement, protocole grille → graines, PureForest). `docs/val_subset.md` fondu dans le README
+- [x] README internes supprimés (`README_*_geist.md`, `README_grid_then_seed.md`, `README_flair3dplus.md`), ainsi que `scripts/build_image.sh` et `scripts/create_tars.sh` (Docker amont : OCNN/CLIP/Swin3D)
+- [x] `LICENSE` : MIT, copyright Pointcept + « The MALiBU3D authors » ; licence MIT d'Apple copiée dans `pointcept/models/kpconvx/LICENSE`
+- [x] `CITATION.cff` : 10 auteurs (ordre de Louis), sans affiliations ; TODO : URL du repo, arXiv
+- [x] `environment.yml` : env `malibu3d` ; retirés open3d, peft, ocnn, CLIP, torch-sparse, torch-cluster, h5py, ftfy, einops, google-sparsehash, canaux pyg/bioconda ; ajoutés huggingface_hub, laspy + lazrs-python, gdal. **Non testé** : installation propre en Phase 8
+- [x] Workflow `formatter.yml` : black 26.10.1 épinglé, `pointcept/models/kpconvx` exclu
+- [ ] TODO avant publication : URL du repo (README, CITATION.cff, carte HF, carte des checkpoints), arXiv, affiliations éventuelles
 
 ## Phase 8 — Hygiène et validation finale
 
