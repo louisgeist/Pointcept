@@ -1,6 +1,7 @@
 """
-Sonata-v1m2 self-supervised pretraining of a PT-v3m2 backbone on the ECLAIR train split (exploratory
-experiment, not used in the MALiBU3D paper).
+Sonata-v1m2 self-supervised pretraining of a PT-v3m2 backbone on the ECLAIR train split: the
+ECLAIR-pretrained Sonata of the pretraining-data ablation (Tab. 4 of the MALiBU3D paper), probed on
+the other datasets like the MALiBU3D one.
 
 Adapted from configs/malibu3d/pretrain-sonata-v1m2-malibu3d.py: coord + color + strength inputs
 (in_channels=7, raw intensity scaled by 1/60000), 0.1 m grid with stride 3, scene-level

@@ -159,6 +159,7 @@ La release HF ne livre **ni** `meta.json`, **ni** `network.npy`, **ni** `forest.
 - [x] `CITATION.cff` : 10 auteurs (ordre de Louis), sans affiliations ; TODO : URL du repo, arXiv
 - [x] `environment.yml` : env `malibu3d` ; retirés open3d, peft, ocnn, CLIP, torch-sparse, torch-cluster, h5py, ftfy, einops, google-sparsehash, canaux pyg/bioconda ; ajoutés huggingface_hub, laspy + lazrs-python, gdal. **Non testé** : installation propre en Phase 8
 - [x] Workflow `formatter.yml` : black 26.10.1 épinglé, `pointcept/models/kpconvx` exclu
+- [ ] Sonata pré-entraîné sur ECLAIR (Tab. 4, case TODO du papier) : relancé sur Jean Zay (job 48309, 6×4 H100, ~moitié faite au 2026-10-13, probe 1012572 en attente). Config du job = `configs/eclair/pretrain-sonata-v1m2-eclair.py` de `malibu3d` (au hook `LinProbeSbatchHook` près, retiré exprès) ; `ECLAIRDataset` identique (filtre `min_points={"train": 2000}` contre les vues dégénérées qui donnaient les NaN). Quand le run finit : probes grille → graines DALES/H3D/OpenGF/PureForest avec ce checkpoint, ajouter la ligne aux résultats si elle va dans le papier
 - [ ] TODO avant publication : URL du repo (README, CITATION.cff, carte HF, carte des checkpoints), arXiv, affiliations éventuelles
 
 ## Phase 8 — Hygiène et validation finale
