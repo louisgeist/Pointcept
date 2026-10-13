@@ -28,9 +28,7 @@ def _sample_iter_limited_indices(
     if not shuffle:
         return torch.arange(num_requested) % dataset_size
     if needs_replacement:
-        return torch.randint(
-            0, dataset_size, (num_requested,), generator=generator
-        )
+        return torch.randint(0, dataset_size, (num_requested,), generator=generator)
     return torch.randperm(dataset_size, generator=generator)[:num_requested]
 
 
@@ -201,5 +199,3 @@ class IterLimitedDistributedSampler(Sampler):
 
     def set_epoch(self, epoch):
         self.epoch = epoch
-
-

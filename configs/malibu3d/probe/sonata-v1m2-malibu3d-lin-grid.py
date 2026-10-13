@@ -78,11 +78,22 @@ names = [
 from pointcept.utils.grid_probe_utils import cartesian_probes
 
 _loss_axis = [
-    dict(criteria=[dict(type="CrossEntropyLoss", loss_weight=1.0, ignore_index=ignore_index)]),
-    dict(criteria=[dict(type="FocalLoss", gamma=2.0, loss_weight=1.0, ignore_index=ignore_index)]),
+    dict(
+        criteria=[
+            dict(type="CrossEntropyLoss", loss_weight=1.0, ignore_index=ignore_index)
+        ]
+    ),
+    dict(
+        criteria=[
+            dict(
+                type="FocalLoss", gamma=2.0, loss_weight=1.0, ignore_index=ignore_index
+            )
+        ]
+    ),
 ]
 _lr_axis = [
-    dict(optimizer=dict(type="AdamW", lr=lr, weight_decay=0.02)) for lr in (1e-4, 5e-4, 2e-3)
+    dict(optimizer=dict(type="AdamW", lr=lr, weight_decay=0.02))
+    for lr in (1e-4, 5e-4, 2e-3)
 ]
 probes = cartesian_probes(
     dict(
@@ -95,13 +106,19 @@ probes = cartesian_probes(
     _loss_axis,
     _lr_axis,
 )
-del cartesian_probes, _loss_axis, _lr_axis  # Config.dump (yapf) fails on function objects
+# Config.dump (yapf) fails on function objects.
+del cartesian_probes, _loss_axis, _lr_axis
 
 # Hand-written probes can be added next to the cross product:
 probes["ce_lovasz_adamw_lr1e-3_ln"] = dict(
     criteria=[
         dict(type="CrossEntropyLoss", loss_weight=1.0, ignore_index=ignore_index),
-        dict(type="LovaszLoss", mode="multiclass", loss_weight=0.5, ignore_index=ignore_index),
+        dict(
+            type="LovaszLoss",
+            mode="multiclass",
+            loss_weight=0.5,
+            ignore_index=ignore_index,
+        ),
     ],
     input_norm=None,
     feat_norm="layernorm",
@@ -111,7 +128,9 @@ probes["ce_lovasz_adamw_lr1e-3_ln"] = dict(
     grad_clip=3.0,
 )
 probes["focal_g2_sgd_lr1e-2"] = dict(
-    criteria=[dict(type="FocalLoss", gamma=2.0, loss_weight=1.0, ignore_index=ignore_index)],
+    criteria=[
+        dict(type="FocalLoss", gamma=2.0, loss_weight=1.0, ignore_index=ignore_index)
+    ],
     input_norm="l2",
     feat_norm="batchnorm",
     dropout=0.1,
@@ -202,7 +221,9 @@ data = dict(
             dict(type="CenterShift", apply_z=True),
             dict(type="Z_MinShift"),
             dict(type="Z_RandomOffset"),
-            dict(type="RandomDropout", dropout_ratio=0.2, dropout_application_ratio=0.2),
+            dict(
+                type="RandomDropout", dropout_ratio=0.2, dropout_application_ratio=0.2
+            ),
             dict(type="RandomRotate", angle=[-1, 1], axis="z", center=[0, 0, 0], p=0.5),
             dict(type="RandomScale", scale=[0.9, 1.1]),
             dict(type="RandomFlip", p=0.5),
@@ -297,7 +318,15 @@ data = dict(
                 ),
             ],
             aug_transform=[
-                [dict(type="RandomRotateTargetAngle", angle=[0], axis="z", center=[0, 0, 0], p=1)]
+                [
+                    dict(
+                        type="RandomRotateTargetAngle",
+                        angle=[0],
+                        axis="z",
+                        center=[0, 0, 0],
+                        p=1,
+                    )
+                ]
             ],
         ),
     ),

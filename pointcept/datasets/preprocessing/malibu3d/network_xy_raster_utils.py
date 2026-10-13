@@ -792,9 +792,7 @@ def drop_small_components(
 
     components = connected_components_nodes(graph)
     kept = [comp for comp in components if comp.shape[0] >= min_nodes]
-    keep_ids = (
-        np.sort(np.concatenate(kept)) if kept else np.empty((0,), dtype=np.int64)
-    )
+    keep_ids = np.sort(np.concatenate(kept)) if kept else np.empty((0,), dtype=np.int64)
     if keep_ids.shape[0] == n:
         return graph
 
@@ -826,9 +824,9 @@ def drop_small_components(
 
 _ISOLATED_DIAGONAL_OFFSETS: tuple[tuple[int, int], ...] = (
     (-1, -1),  # NW
-    (-1, 1),   # NE
-    (1, -1),   # SW
-    (1, 1),    # SE
+    (-1, 1),  # NE
+    (1, -1),  # SW
+    (1, 1),  # SE
 )
 
 
@@ -871,9 +869,7 @@ def repair_degree1_endpoints_diagonal_opposed(
         return graph, empty_stats
     weight_new = float(added_edge_weight)
     if weight_new <= 0.0:
-        raise ValueError(
-            f"added_edge_weight must be > 0, got {added_edge_weight}"
-        )
+        raise ValueError(f"added_edge_weight must be > 0, got {added_edge_weight}")
 
     edges_in = np.asarray(graph.edges, dtype=np.int64)
     weights_in = (
@@ -926,10 +922,10 @@ def repair_degree1_endpoints_diagonal_opposed(
     # Neighbor direction (dr, dc) from endpoint to its unique direct neighbor
     # maps to diagonal offsets to test around the endpoint.
     diag_lookup: dict[tuple[int, int], tuple[tuple[int, int], tuple[int, int]]] = {
-        (1, 0): ((-1, -1), (-1, 1)),   # neighbor at S -> NW, NE
-        (-1, 0): ((1, -1), (1, 1)),    # neighbor at N -> SW, SE
-        (0, 1): ((-1, -1), (1, -1)),   # neighbor at E -> NW, SW
-        (0, -1): ((-1, 1), (1, 1)),    # neighbor at W -> NE, SE
+        (1, 0): ((-1, -1), (-1, 1)),  # neighbor at S -> NW, NE
+        (-1, 0): ((1, -1), (1, 1)),  # neighbor at N -> SW, SE
+        (0, 1): ((-1, -1), (1, -1)),  # neighbor at E -> NW, SW
+        (0, -1): ((-1, 1), (1, 1)),  # neighbor at W -> NE, SE
     }
 
     endpoint_ids = np.flatnonzero(deg_before == 1).astype(np.int64)
@@ -1285,10 +1281,7 @@ def simplify_pixel_graph_rdp(
             keep_nodes[int(path[0])] = True
             continue
         # Drop duplicate closing vertex for RDP coords if present.
-        closed = (
-            path.shape[0] >= 3
-            and int(path[0]) == int(path[-1])
-        )
+        closed = path.shape[0] >= 3 and int(path[0]) == int(path[-1])
         idx = path[:-1] if closed else path
         pts = graph.node_xy[idx]
         mask = ramer_douglas_peucker(pts, epsilon_m=epsilon_m)
@@ -1449,5 +1442,3 @@ def rasterize_graph_edges(
             radius_px=node_radius_px,
         )
     return rgba
-
-

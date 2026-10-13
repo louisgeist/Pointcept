@@ -195,16 +195,16 @@ def default_config_parser(file_path, options):
         cfg.data.train = ConfigDict(cfg.data.train)
 
     total_iters = getattr(cfg, "total_iters", None)
-    if total_iters is not None: # iter-limited mode
+    if total_iters is not None:  # iter-limited mode
         if total_iters <= 0:
             raise ValueError("total_iters must be > 0")
-        
+
         # eval_every (number of train epochs between validations)
         if getattr(cfg, "eval_every", None) is None:
             cfg.eval_every = 5
         if cfg.eval_every <= 0:
             raise ValueError("eval_every must be > 0 when total_iters is set")
-        
+
         if getattr(cfg, "iter_per_epoch", None) is None:
             cfg.iter_per_epoch = 1000
         if cfg.iter_per_epoch <= 0:
@@ -220,7 +220,7 @@ def default_config_parser(file_path, options):
         # loop > 1 is kept (e.g. to overfit a single tile repeated in the dataset).
         if getattr(cfg.data.train, "loop", 1) <= 1:
             cfg.data.train.loop = 1
-    else: # classic mode
+    else:  # classic mode
         cfg.iter_per_epoch = None
         cfg.eval_every = None
         cfg.num_epochs = None

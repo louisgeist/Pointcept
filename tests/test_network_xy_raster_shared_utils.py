@@ -54,7 +54,11 @@ class TestLoadKnownMissingTiles(unittest.TestCase):
                 writer = csv.DictWriter(f, fieldnames=["split", "patch_id", "reason"])
                 writer.writeheader()
                 writer.writerow(
-                    {"split": "Train", "patch_id": "A-1", "reason": "missing_coord_file"}
+                    {
+                        "split": "Train",
+                        "patch_id": "A-1",
+                        "reason": "missing_coord_file",
+                    }
                 )
                 writer.writerow(
                     {"split": "Train", "patch_id": "B-2", "reason": "other_reason"}

@@ -35,8 +35,7 @@ feat_keys = ["coord", "color", "strength"]
 
 wandb_project = "eclair_sonata"
 wandb_run_name = (
-    f"Sonata-v1m2 lin probe ECLAIR | bs={batch_size} | "
-    f"epoch={epoch} | lr=1e-2"
+    f"Sonata-v1m2 lin probe ECLAIR | bs={batch_size} | " f"epoch={epoch} | lr=1e-2"
 )
 
 # -----------------------------------------------------------------------------
@@ -137,7 +136,9 @@ data = dict(
             dict(type="CenterShift", apply_z=True),
             dict(type="Z_MinShift"),
             dict(type="Z_RandomOffset"),
-            dict(type="RandomDropout", dropout_ratio=0.2, dropout_application_ratio=0.2),
+            dict(
+                type="RandomDropout", dropout_ratio=0.2, dropout_application_ratio=0.2
+            ),
             dict(type="RandomRotate", angle=[-1, 1], axis="z", center=[0, 0, 0], p=0.5),
             dict(type="RandomScale", scale=[0.9, 1.1]),
             dict(type="RandomFlip", p=0.5),

@@ -224,6 +224,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         from tqdm import tqdm
     except ImportError:
+
         def tqdm(iterable, **_kwargs):  # type: ignore[misc]
             return iterable
 

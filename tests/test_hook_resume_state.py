@@ -197,7 +197,9 @@ class TestCheckpointSaverHookStateCollection(unittest.TestCase):
                 hook_states[h.__class__.__name__] = s
 
         self.assertEqual(list(hook_states.keys()), ["MultiTaskEvaluator"])
-        self.assertEqual(hook_states["MultiTaskEvaluator"]["best_miou_by_task"], {"segment": 0.5})
+        self.assertEqual(
+            hook_states["MultiTaskEvaluator"]["best_miou_by_task"], {"segment": 0.5}
+        )
 
     def test_restore_loop_only_touches_matching_hook_classes(self):
         evaluator = MultiTaskEvaluator()

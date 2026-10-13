@@ -35,7 +35,9 @@ def _pooling_inverse(fine_indices, coarse_indices, stride):
     fine_key[:, 1:] = torch.div(fine_indices[:, 1:], stride, rounding_mode="floor")
     n_coarse = coarse_indices.shape[0]
     combined = torch.cat([coarse_indices, fine_key], dim=0)
-    unique_rows, inverse = torch.unique(combined, sorted=True, return_inverse=True, dim=0)
+    unique_rows, inverse = torch.unique(
+        combined, sorted=True, return_inverse=True, dim=0
+    )
     coarse_group = inverse[:n_coarse]
     fine_group = inverse[n_coarse:]
     assert unique_rows.shape[0] == n_coarse, (
@@ -426,5 +428,3 @@ class SpUNetBase(nn.Module):
                 x.indices, prev_x.indices, self.stride[s]
             )
         return point
-
-

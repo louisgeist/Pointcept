@@ -19,9 +19,7 @@ class _FrozenEvalBackbone(nn.Module):
     def __init__(self):
         super().__init__()
         self.bn = nn.BatchNorm1d(4)
-        self.blocks = nn.ModuleList(
-            [DropPath(0.3), DropPathPack(0.3), nn.Dropout(0.5)]
-        )
+        self.blocks = nn.ModuleList([DropPath(0.3), DropPathPack(0.3), nn.Dropout(0.5)])
 
     def forward(self, point):
         return point

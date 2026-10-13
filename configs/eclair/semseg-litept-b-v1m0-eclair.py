@@ -47,7 +47,9 @@ coord_feat_scale = 0.01
 strength_feat_scale = 1 / 60000  # raw uint16 intensity -> MALiBU3D [0,1] convention
 
 # Wandb parameters
-wandb_run_name = f"ECLAIR LitePT-B semseg from-scratch ({grp_exp}.{num_exp}) epoch={epoch}"
+wandb_run_name = (
+    f"ECLAIR LitePT-B semseg from-scratch ({grp_exp}.{num_exp}) epoch={epoch}"
+)
 wandb_project = "pointcept_eclair"
 
 # -----------------------------------------------------------------------------
@@ -83,7 +85,12 @@ task_configs = {
 task_criteria = {
     main_task: [
         dict(type="CrossEntropyLoss", loss_weight=1.0, ignore_index=ignore_index),
-        dict(type="LovaszLoss", mode="multiclass", loss_weight=1.0, ignore_index=ignore_index),
+        dict(
+            type="LovaszLoss",
+            mode="multiclass",
+            loss_weight=1.0,
+            ignore_index=ignore_index,
+        ),
     ],
 }
 task_weights = {main_task: 1.0}
@@ -185,7 +192,9 @@ data = dict(
             dict(type="CenterShift", apply_z=True),
             dict(type="Z_MinShift"),
             dict(type="Z_RandomOffset"),
-            dict(type="RandomDropout", dropout_ratio=0.2, dropout_application_ratio=0.2),
+            dict(
+                type="RandomDropout", dropout_ratio=0.2, dropout_application_ratio=0.2
+            ),
             dict(type="RandomRotate", angle=[-1, 1], axis="z", center=[0, 0, 0], p=0.5),
             dict(type="RandomScale", scale=[0.9, 1.1]),
             dict(type="RandomFlip", p=0.5),
@@ -203,10 +212,30 @@ data = dict(
             dict(type="SphereCrop", point_max=point_max, mode="random"),
             dict(type="CenterShift", apply_z=False),
             dict(type="NormalizeColor"),
-            dict(type="RandomDropColor", drop_ratio=1.0, drop_application_ratio=0.2, keep_mask=True),
-            dict(type="RandomDropColor", drop_ratio=0.1, drop_application_ratio=0.5, keep_mask=True),
-            dict(type="RandomDropStrength", drop_ratio=1.0, drop_application_ratio=0.2, keep_mask=True),
-            dict(type="RandomDropStrength", drop_ratio=0.1, drop_application_ratio=0.5, keep_mask=True),
+            dict(
+                type="RandomDropColor",
+                drop_ratio=1.0,
+                drop_application_ratio=0.2,
+                keep_mask=True,
+            ),
+            dict(
+                type="RandomDropColor",
+                drop_ratio=0.1,
+                drop_application_ratio=0.5,
+                keep_mask=True,
+            ),
+            dict(
+                type="RandomDropStrength",
+                drop_ratio=1.0,
+                drop_application_ratio=0.2,
+                keep_mask=True,
+            ),
+            dict(
+                type="RandomDropStrength",
+                drop_ratio=0.1,
+                drop_application_ratio=0.5,
+                keep_mask=True,
+            ),
             dict(type="ToTensor"),
             dict(type="Update", keys_dict={"grid_size": grid_size}),
             dict(
@@ -276,11 +305,21 @@ data = dict(
                     keys=("coord", "grid_coord", "index"),
                     optional_keys=("inverse",),
                     feat_keys=feat_keys,
-                    feat_scales=dict(coord=coord_feat_scale, strength=strength_feat_scale),
+                    feat_scales=dict(
+                        coord=coord_feat_scale, strength=strength_feat_scale
+                    ),
                 ),
             ],
             aug_transform=[
-                [dict(type="RandomRotateTargetAngle", angle=[0], axis="z", center=[0, 0, 0], p=1)]
+                [
+                    dict(
+                        type="RandomRotateTargetAngle",
+                        angle=[0],
+                        axis="z",
+                        center=[0, 0, 0],
+                        p=1,
+                    )
+                ]
             ],
         ),
     ),

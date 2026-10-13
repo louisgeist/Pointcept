@@ -124,7 +124,9 @@ def load_manifest_patches(
     """
     if not split_manifest_csv.is_file():
         raise FileNotFoundError(f"split_manifest_csv not found: {split_manifest_csv}")
-    missing_cols = sorted(REQUIRED_MANIFEST_COLUMNS - tile_csv_columns(split_manifest_csv))
+    missing_cols = sorted(
+        REQUIRED_MANIFEST_COLUMNS - tile_csv_columns(split_manifest_csv)
+    )
     if missing_cols:
         raise ValueError(
             f"split_manifest_csv missing columns {missing_cols} (expected tiles.csv)."
@@ -137,7 +139,9 @@ def load_manifest_patches(
         if (tile.split, tile.tile_id) in skip:
             n_skipped += 1
             continue
-        flags = (("ROADS", bool(tile.has_roads_graph)),) if "ROADS" in network_types else ()
+        flags = (
+            (("ROADS", bool(tile.has_roads_graph)),) if "ROADS" in network_types else ()
+        )
         patches.append(
             ManifestPatch(
                 split=tile.split,
@@ -271,9 +275,7 @@ def process_patch(
     masks = []
     positive_counts = {}
     for network_type in NETWORK_TYPES:
-        cells = cells_by_type.get(
-            network_type, np.empty((0, 2), dtype=np.int64)
-        )
+        cells = cells_by_type.get(network_type, np.empty((0, 2), dtype=np.int64))
         mask = mask_from_absolute_cells(cells, grid)
         masks.append(mask.astype(np.uint8, copy=False))
         positive_counts[network_type] = int(mask.sum())
@@ -405,9 +407,7 @@ def run(
         missing_tiles_file if missing_tiles_file.is_file() else None
     )
     if known_missing:
-        print(
-            f"Known missing tiles: {len(known_missing)} from {missing_tiles_file}"
-        )
+        print(f"Known missing tiles: {len(known_missing)} from {missing_tiles_file}")
     elif missing_tiles_file is not None:
         print(
             f"Warning: missing-tiles file not found ({missing_tiles_file}); "
@@ -516,9 +516,7 @@ def build_argparser() -> argparse.ArgumentParser:
         "--split_manifest_csv",
         type=str,
         required=True,
-        help=(
-            "tiles.csv (or a subset of its rows): drives which tiles to process"
-        ),
+        help=("tiles.csv (or a subset of its rows): drives which tiles to process"),
     )
     p.add_argument(
         "--splits",
@@ -575,9 +573,7 @@ def build_argparser() -> argparse.ArgumentParser:
 def main(argv: Optional[List[str]] = None) -> None:
     args = build_argparser().parse_args(argv)
     missing = (
-        Path(args.missing_tiles_file).resolve()
-        if args.missing_tiles_file
-        else None
+        Path(args.missing_tiles_file).resolve() if args.missing_tiles_file else None
     )
     run(
         Path(args.data_root).resolve(),

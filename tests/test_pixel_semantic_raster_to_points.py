@@ -35,8 +35,12 @@ class TestDefaultTargetKeyIsNetwork(unittest.TestCase):
         out = NetworkRasterToPointLabels()(data_dict)
 
         np.testing.assert_array_equal(out["network"], [[0], [1], [1], [0]])
-        np.testing.assert_array_equal(out["network_cell"], [[0, 0], [0, 1], [1, 0], [1, 1]])
-        np.testing.assert_array_equal(out["network_pix"], [[0, 0], [0, 1], [1, 0], [1, 1]])
+        np.testing.assert_array_equal(
+            out["network_cell"], [[0, 0], [0, 1], [1, 0], [1, 1]]
+        )
+        np.testing.assert_array_equal(
+            out["network_pix"], [[0, 0], [0, 1], [1, 0], [1, 1]]
+        )
         np.testing.assert_array_equal(out["network_height"], [2])
         np.testing.assert_array_equal(out["network_width"], [2])
         self.assertIn("network", out["index_valid_keys"])

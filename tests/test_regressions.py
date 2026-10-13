@@ -26,7 +26,9 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def _load_module(name, rel_path):
-    spec = importlib.util.spec_from_file_location(name, os.path.join(REPO_ROOT, rel_path))
+    spec = importlib.util.spec_from_file_location(
+        name, os.path.join(REPO_ROOT, rel_path)
+    )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -154,9 +156,7 @@ class TestGridProbePerProbeGradScaler(unittest.TestCase):
             with torch.no_grad():
                 head.weight.mul_(1e6)  # fp16 logits overflow
         opt = torch.optim.AdamW(head.parameters(), lr=1e-2, weight_decay=0.0)
-        sched = torch.optim.lr_scheduler.OneCycleLR(
-            opt, max_lr=1e-2, total_steps=300
-        )
+        sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=1e-2, total_steps=300)
         return head, opt, sched
 
     def _run(self, per_probe_scaler, bad_probe, steps=300):

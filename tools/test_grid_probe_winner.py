@@ -66,7 +66,9 @@ def main_worker(cfg):
             key = key[7:]  # module.xxx.xxx -> xxx.xxx
         weight[key] = value
     missing, unexpected = model.load_state_dict(weight, strict=False)
-    print(f"Backbone load from {cfg.weight} -- missing: {missing}, unexpected: {unexpected}")
+    print(
+        f"Backbone load from {cfg.weight} -- missing: {missing}, unexpected: {unexpected}"
+    )
 
     # Winning probe head (a few-KB standalone state_dict, saved by
     # GridProbeCheckpointSaver -- not nested under "heads.<name>.").
@@ -75,7 +77,9 @@ def main_worker(cfg):
     model.active_probe = probe_name
 
     model = create_ddp_model(
-        model.cuda(), broadcast_buffers=False, find_unused_parameters=cfg.find_unused_parameters
+        model.cuda(),
+        broadcast_buffers=False,
+        find_unused_parameters=cfg.find_unused_parameters,
     )
 
     test_cfg = dict(cfg=cfg, model=model, **cfg.test)

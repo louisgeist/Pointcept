@@ -42,7 +42,9 @@ eval_epoch = 100  # number of validation epochs
 
 # Iter-limited mode (set total_iters): each trainer epoch = iter_per_epoch random batch steps.
 total_iters = None  # total optimizer steps; enables iter-limited mode when set
-iter_per_epoch = None  # iteration steps per epoch (default 1000 when total_iters is set)
+iter_per_epoch = (
+    None  # iteration steps per epoch (default 1000 when total_iters is set)
+)
 eval_every = None  # validate every N epochs (default 5 when total_iters is set)
 
 clip_grad = None  # disable with None, enable with a float
@@ -90,7 +92,9 @@ empty_cache_per_epoch = False
 find_unused_parameters = False
 
 enable_wandb = True
-log_test_f1 = False  # if True, log per-class and macro F1 on test (console + wandb when enabled)
+log_test_f1 = (
+    False  # if True, log per-class and macro F1 on test (console + wandb when enabled)
+)
 wandb_project = "pointcept"  # custom your project name e.g. Sonata, PTv3
 wandb_key = None  # wandb token, default is None. If None, login with `wandb login` in your terminal
 

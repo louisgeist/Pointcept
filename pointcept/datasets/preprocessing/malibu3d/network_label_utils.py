@@ -78,7 +78,9 @@ def resolve_exported_graph_gpkg(
     stem = graph_output_stem(roi_dir)
     if stem is None:
         return None
-    path = _graph_dir(network_graphs_root, roi_dir) / f"{stem}_{network_type}_graph.gpkg"
+    path = (
+        _graph_dir(network_graphs_root, roi_dir) / f"{stem}_{network_type}_graph.gpkg"
+    )
     return path if path.is_file() else None
 
 
@@ -94,10 +96,10 @@ def expected_exported_graph_path(
         )
     stem = graph_output_stem(roi_dir)
     if stem is None:
-        raise ValueError(
-            f"Cannot derive graph stem from ROI directory: {roi_dir}"
-        )
-    return _graph_dir(network_graphs_root, roi_dir) / f"{stem}_{network_type}_graph.gpkg"
+        raise ValueError(f"Cannot derive graph stem from ROI directory: {roi_dir}")
+    return (
+        _graph_dir(network_graphs_root, roi_dir) / f"{stem}_{network_type}_graph.gpkg"
+    )
 
 
 def _iter_linestrings(geom: BaseGeometry) -> list[LineString]:
@@ -172,11 +174,13 @@ class LoadedNetworkGraph:
     lost), this keeps the shared nodes of the ``nodes`` / ``edges`` layers.
     """
 
-    node_xy: np.ndarray        # (N, 2) float64, row order of the `nodes` layer
-    node_id: np.ndarray        # (N,) int64 -- original gpkg node_id (debugging/export)
-    edges: np.ndarray          # (E, 2) int64 -- array-index pairs into node_xy, u < v
-    edge_length_m: np.ndarray  # (E,) float64 -- from the `distance` field (NOT `weight`,
-                                # which is a hop-count used only for the merge threshold)
+    node_xy: np.ndarray  # (N, 2) float64, row order of the `nodes` layer
+    node_id: np.ndarray  # (N,) int64 -- original gpkg node_id (debugging/export)
+    edges: np.ndarray  # (E, 2) int64 -- array-index pairs into node_xy, u < v
+    edge_length_m: (
+        np.ndarray
+    )  # (E,) float64 -- from the `distance` field (NOT `weight`,
+    # which is a hop-count used only for the merge threshold)
 
 
 def load_roi_exported_network_graph(gpkg_path: Path | str) -> LoadedNetworkGraph:
@@ -408,7 +412,9 @@ def _spatial_ref_epsg2154():
     return srs
 
 
-def _ogr_create_layer(ds, name: str, geom_type: int, fields: list[tuple[str, int]], *, srs):
+def _ogr_create_layer(
+    ds, name: str, geom_type: int, fields: list[tuple[str, int]], *, srs
+):
     from osgeo import ogr
 
     if geom_type == ogr.wkbNone:

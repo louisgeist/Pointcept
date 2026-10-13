@@ -49,6 +49,7 @@ class StageTimer:
                 time.perf_counter() - t0
             )
 
+
 # Prefer sibling imports so this module runs without the full Pointcept stack.
 _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
@@ -129,7 +130,9 @@ def _build_processed_network_graph_from_line_mask(
         )
 
     timer = StageTimer(enabled=collect_timings)
-    mask_stages: list[tuple[str, np.ndarray]] = [("binarized", np.array(line_mask, dtype=bool))]
+    mask_stages: list[tuple[str, np.ndarray]] = [
+        ("binarized", np.array(line_mask, dtype=bool))
+    ]
 
     n_line_raw = int(np.count_nonzero(line_mask))
 
@@ -159,9 +162,13 @@ def _build_processed_network_graph_from_line_mask(
         # would instead spread the artificial border inward).
         with timer.stage("close"):
             dilated = _dilate(line_mask, close_iterations)
-            padded = np.pad(dilated, close_iterations, mode="constant", constant_values=True)
+            padded = np.pad(
+                dilated, close_iterations, mode="constant", constant_values=True
+            )
             eroded = _erode(padded, close_iterations)
-            line_mask = eroded[close_iterations:-close_iterations, close_iterations:-close_iterations]
+            line_mask = eroded[
+                close_iterations:-close_iterations, close_iterations:-close_iterations
+            ]
         mask_stages.append(("close", line_mask.copy()))
 
     if remove_small_objects_enabled and remove_small_objects_min_size_px > 0:

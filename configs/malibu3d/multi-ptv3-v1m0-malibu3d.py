@@ -58,9 +58,7 @@ feat_keys = ["coord", "color", "strength"]
 coord_feat_scale = 0.01
 
 # Wandb parameters
-wandb_run_name = (
-    f"ptv3 multi {grp_exp}.{num_exp} iter={total_iters}"
-)
+wandb_run_name = f"ptv3 multi {grp_exp}.{num_exp} iter={total_iters}"
 wandb_project = "malibu3d_multi"
 
 # -----------------------------------------------------------------------------
@@ -272,7 +270,9 @@ data = dict(
             dict(type="CenterShift", apply_z=True),
             dict(type="Z_MinShift"),
             dict(type="Z_RandomOffset"),
-            dict(type="RandomDropout", dropout_ratio=0.2, dropout_application_ratio=0.2),
+            dict(
+                type="RandomDropout", dropout_ratio=0.2, dropout_application_ratio=0.2
+            ),
             dict(type="RandomRotate", angle=[-1, 1], axis="z", center=[0, 0, 0], p=0.5),
             dict(type="RandomScale", scale=[0.9, 1.1]),
             dict(type="RandomFlip", p=0.5),
@@ -290,10 +290,30 @@ data = dict(
             dict(type="SphereCrop", point_max=point_max, mode="random"),
             dict(type="CenterShift", apply_z=False),
             dict(type="NormalizeColor"),
-            dict(type="RandomDropColor", drop_ratio=1.0, drop_application_ratio=0.2, keep_mask=True),
-            dict(type="RandomDropColor", drop_ratio=0.1, drop_application_ratio=0.5, keep_mask=True),
-            dict(type="RandomDropStrength", drop_ratio=1.0, drop_application_ratio=0.2, keep_mask=True),
-            dict(type="RandomDropStrength", drop_ratio=0.1, drop_application_ratio=0.5, keep_mask=True),
+            dict(
+                type="RandomDropColor",
+                drop_ratio=1.0,
+                drop_application_ratio=0.2,
+                keep_mask=True,
+            ),
+            dict(
+                type="RandomDropColor",
+                drop_ratio=0.1,
+                drop_application_ratio=0.5,
+                keep_mask=True,
+            ),
+            dict(
+                type="RandomDropStrength",
+                drop_ratio=1.0,
+                drop_application_ratio=0.2,
+                keep_mask=True,
+            ),
+            dict(
+                type="RandomDropStrength",
+                drop_ratio=0.1,
+                drop_application_ratio=0.5,
+                keep_mask=True,
+            ),
             dict(type="NetworkRasterToPointLabels"),
             dict(type="NetworkRasterToPointLabels", target_key="forest_2d"),
             dict(type="ToTensor"),
@@ -416,7 +436,15 @@ data = dict(
                 ),
             ],
             aug_transform=[
-                [dict(type="RandomRotateTargetAngle", angle=[0], axis="z", center=[0, 0, 0], p=1)]
+                [
+                    dict(
+                        type="RandomRotateTargetAngle",
+                        angle=[0],
+                        axis="z",
+                        center=[0, 0, 0],
+                        p=1,
+                    )
+                ]
             ],
         ),
     ),

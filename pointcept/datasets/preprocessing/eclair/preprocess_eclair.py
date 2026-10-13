@@ -49,7 +49,9 @@ split_scene_xy_regular = _chunking_mod.split_scene_xy_regular
 try:
     import laspy
 except ImportError as error:
-    raise ImportError("Please install 'laspy' to preprocess ECLAIR LAZ files.") from error
+    raise ImportError(
+        "Please install 'laspy' to preprocess ECLAIR LAZ files."
+    ) from error
 
 # Raw LAS classification IDs 1..11 → contiguous train IDs 0..10.
 RAW_MIN, RAW_MAX = 1, 11
@@ -121,10 +123,15 @@ def save_scene(
     meta: Dict[str, Any],
 ) -> None:
     os.makedirs(output_scene_dir, exist_ok=True)
-    np.save(os.path.join(output_scene_dir, "coord.npy"), scene["coord"].astype(np.float32))
-    np.save(os.path.join(output_scene_dir, "color.npy"), scene["color"].astype(np.float32))
     np.save(
-        os.path.join(output_scene_dir, "strength.npy"), scene["strength"].astype(np.float32)
+        os.path.join(output_scene_dir, "coord.npy"), scene["coord"].astype(np.float32)
+    )
+    np.save(
+        os.path.join(output_scene_dir, "color.npy"), scene["color"].astype(np.float32)
+    )
+    np.save(
+        os.path.join(output_scene_dir, "strength.npy"),
+        scene["strength"].astype(np.float32),
     )
     np.save(
         os.path.join(output_scene_dir, "return_number.npy"),
@@ -185,7 +192,9 @@ def load_manifest(
 
 
 def main_process():
-    parser = argparse.ArgumentParser(description="Preprocess ECLAIR LAZ tiles for Pointcept.")
+    parser = argparse.ArgumentParser(
+        description="Preprocess ECLAIR LAZ tiles for Pointcept."
+    )
     parser.add_argument(
         "--dataset_root",
         required=True,

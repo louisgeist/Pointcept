@@ -84,6 +84,7 @@ class OneCycleLR(lr_scheduler.OneCycleLR):
             last_epoch=last_epoch,
         )
 
+
 @SCHEDULERS.register_module()
 class LinearLR(lr_scheduler.LinearLR):
     def __init__(
@@ -93,7 +94,7 @@ class LinearLR(lr_scheduler.LinearLR):
         end_factor=1.0,
         total_iters=5,
         last_epoch=-1,
-        total_steps=None, # ignored; the trainer sets total_steps on every scheduler
+        total_steps=None,  # ignored; the trainer sets total_steps on every scheduler
     ):
         super().__init__(
             optimizer=optimizer,
@@ -102,6 +103,7 @@ class LinearLR(lr_scheduler.LinearLR):
             total_iters=total_iters,
             last_epoch=last_epoch,
         )
+
 
 @SCHEDULERS.register_module()
 class CosineScheduler(object):

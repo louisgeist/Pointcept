@@ -90,7 +90,11 @@ def build_optimizer(cfg, model=None, param_dicts=None, params=None):
                 group["params"] = [p for _, p in kept]
                 cfg.params.append(
                     {
-                        **{k: v for k, v in group.items() if k not in ("names", "params")},
+                        **{
+                            k: v
+                            for k, v in group.items()
+                            if k not in ("names", "params")
+                        },
                         "weight_decay": 0.0,
                         "names": [n for n, _ in dropped],
                         "params": [p for _, p in dropped],

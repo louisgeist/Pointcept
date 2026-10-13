@@ -60,10 +60,17 @@ EXPECTED = [
 
 
 RASTER_GEOREF = [
-    dict(raster_origin_x=927440.0, raster_origin_y=6302945.0, raster_width=103, raster_height=103),
+    dict(
+        raster_origin_x=927440.0,
+        raster_origin_y=6302945.0,
+        raster_width=103,
+        raster_height=103,
+    ),
     dict(raster_origin_x=1.0, raster_origin_y=2.0, raster_width=3, raster_height=4),
 ]
-EXPECTED_TILES_CSV = [dataclasses.replace(t, **g) for t, g in zip(EXPECTED, RASTER_GEOREF)]
+EXPECTED_TILES_CSV = [
+    dataclasses.replace(t, **g) for t, g in zip(EXPECTED, RASTER_GEOREF)
+]
 
 
 class TestTileCatalog(unittest.TestCase):
@@ -106,7 +113,9 @@ class TestTileCatalog(unittest.TestCase):
     def test_invalid_bool_raises(self):
         path = os.path.join(self._tmp.name, "badbool.csv")
         with open(path, "w", encoding="utf-8") as f:
-            f.write("split,dept_year,roi,tile_id,has_elevation\ntrain,D,R,D_R_1-1,maybe\n")
+            f.write(
+                "split,dept_year,roi,tile_id,has_elevation\ntrain,D,R,D_R_1-1,maybe\n"
+            )
         with self.assertRaises(ValueError):
             read_tiles(path)
 

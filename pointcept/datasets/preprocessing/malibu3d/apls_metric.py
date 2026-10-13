@@ -71,7 +71,9 @@ except ImportError:  # pragma: no cover
 APLS_PROTOCOL_VERSION: Final = "1.0"
 APLS_DENSIFY_M: Final = 50.0  # max edge length after densification (m)
 APLS_SNAP_TO_EDGE_M: Final = 4.0  # control-point snap radius (m)
-APLS_MIN_PATH_LENGTH_M: Final = 5.0  # pairs with a shorter GT/source path are ignored (m)
+APLS_MIN_PATH_LENGTH_M: Final = (
+    5.0  # pairs with a shorter GT/source path are ignored (m)
+)
 APLS_PROTOCOL: Final = {
     "version": APLS_PROTOCOL_VERSION,
     "densify_m": APLS_DENSIFY_M,
@@ -91,14 +93,16 @@ _NODE_REUSE_EPS_M = 1e-6
 class AplsGraph:
     """Minimal graph representation APLS needs: XY positions + weighted edges."""
 
-    node_xy: np.ndarray        # (N, 2) float64
-    edges: np.ndarray          # (E, 2) int64, u < v
+    node_xy: np.ndarray  # (N, 2) float64
+    edges: np.ndarray  # (E, 2) int64, u < v
     edge_length_m: np.ndarray  # (E,) float64 >= 0 -- Dijkstra weight
 
 
 def apls_graph_from_pixel_graph(graph: "xy_rast.PixelGraph") -> AplsGraph:
     """Predicted-graph adapter: edge length from XY, NOT ``graph.edge_weights`` (hop count)."""
-    from network_graph_pipeline import edge_length_m as _edge_length_m  # local import: avoid cycle
+    from network_graph_pipeline import (
+        edge_length_m as _edge_length_m,
+    )  # local import: avoid cycle
 
     return AplsGraph(
         node_xy=np.asarray(graph.node_xy, dtype=np.float64),
@@ -137,9 +141,11 @@ def densify_apls_graph(graph: AplsGraph, max_edge_len_m: float = 50.0) -> AplsGr
     lengths = np.asarray(graph.edge_length_m, dtype=np.float64).reshape(-1)
     if edges.shape[0] == 0:
         return AplsGraph(
-            node_xy=np.asarray(node_xy, dtype=np.float64).reshape(-1, 2)
-            if node_xy
-            else np.empty((0, 2), dtype=np.float64),
+            node_xy=(
+                np.asarray(node_xy, dtype=np.float64).reshape(-1, 2)
+                if node_xy
+                else np.empty((0, 2), dtype=np.float64)
+            ),
             edges=np.empty((0, 2), dtype=np.int64),
             edge_length_m=np.empty((0,), dtype=np.float64),
         )
@@ -261,15 +267,21 @@ def _split_edge_at_point(
     """
     u, v = int(edges[edge_idx, 0]), int(edges[edge_idx, 1])
     new_idx = node_xy.shape[0]
-    node_xy = np.concatenate([node_xy, np.asarray(point, dtype=np.float64).reshape(1, 2)], axis=0)
+    node_xy = np.concatenate(
+        [node_xy, np.asarray(point, dtype=np.float64).reshape(1, 2)], axis=0
+    )
     len_u = max(float(edge_length) * float(t), 0.0)
     len_v = max(float(edge_length) * (1.0 - float(t)), 0.0)
     a1, b1 = (u, new_idx) if u < new_idx else (new_idx, u)
     a2, b2 = (new_idx, v) if new_idx < v else (v, new_idx)
     keep = np.ones(edges.shape[0], dtype=bool)
     keep[edge_idx] = False
-    edges = np.concatenate([edges[keep], np.array([[a1, b1], [a2, b2]], dtype=np.int64)], axis=0)
-    lengths = np.concatenate([lengths[keep], np.array([len_u, len_v], dtype=np.float64)])
+    edges = np.concatenate(
+        [edges[keep], np.array([[a1, b1], [a2, b2]], dtype=np.int64)], axis=0
+    )
+    lengths = np.concatenate(
+        [lengths[keep], np.array([len_u, len_v], dtype=np.float64)]
+    )
     return node_xy, edges, lengths, new_idx
 
 
@@ -308,7 +320,9 @@ def match_control_points(
         )
 
     for qi in range(n_q):
-        kind, dist, info = _closest_point_on_skeleton(node_xy, edges, lengths, query_xy[qi])
+        kind, dist, info = _closest_point_on_skeleton(
+            node_xy, edges, lengths, query_xy[qi]
+        )
         if kind == "none" or dist > max_snap_m:
             continue
         if kind == "node":
@@ -327,7 +341,6 @@ def match_control_points(
         match_idx[qi] = new_idx
 
     return AplsGraph(node_xy=node_xy, edges=edges, edge_length_m=lengths), match_idx
-
 
 
 def _adjacency_csr(graph: AplsGraph) -> csr_matrix:
@@ -364,12 +377,7 @@ def _reconstruct_path(predecessors: np.ndarray, src: int, dst: int) -> list[int]
 
 def _harmonic_mean(a: float, b: float) -> float:
     """CosmiQ-style: 0 if either side is non-positive or non-finite."""
-    if (
-        not np.isfinite(a)
-        or not np.isfinite(b)
-        or a <= 0.0
-        or b <= 0.0
-    ):
+    if not np.isfinite(a) or not np.isfinite(b) or a <= 0.0 or b <= 0.0:
         return 0.0
     return float(2.0 * a * b / (a + b))
 
@@ -412,10 +420,14 @@ class AplsDiagnostics:
     pair_v: np.ndarray
     pair_error: np.ndarray  # (P,) in [0, 1]; 1 = full miss / max relative error
     pair_L_gt: np.ndarray  # (P,) GT shortest-path length for each scored pair
-    pair_L_pred: np.ndarray  # (P,) matched predicted-graph shortest-path length; inf if unmatched
+    pair_L_pred: (
+        np.ndarray
+    )  # (P,) matched predicted-graph shortest-path length; inf if unmatched
     node_mean_error: np.ndarray  # (N_gt,) nan if node in no scored pair
     node_n_pairs: np.ndarray  # (N_gt,) int
-    gt_predecessors: np.ndarray  # for reconstructing GT shortest paths (indexes gt_used)
+    gt_predecessors: (
+        np.ndarray
+    )  # for reconstructing GT shortest paths (indexes gt_used)
 
 
 def _shortest_paths(graph: AplsGraph, *, return_predecessors: bool = False):
@@ -446,8 +458,12 @@ class _DirectedPairs:
     pair_u: np.ndarray  # (P,) source node indices, u < v
     pair_v: np.ndarray
     L_src: np.ndarray  # (P,) shortest-path length in the source graph
-    L_tgt: np.ndarray  # (P,) same pair's path length in the target graph; inf if unmatched/unreachable
-    not_error: np.ndarray  # (P,) clip(1 - |L_src - L_tgt| / L_src, 0, 1); 0 if unmatched
+    L_tgt: (
+        np.ndarray
+    )  # (P,) same pair's path length in the target graph; inf if unmatched/unreachable
+    not_error: (
+        np.ndarray
+    )  # (P,) clip(1 - |L_src - L_tgt| / L_src, 0, 1); 0 if unmatched
     predecessors: Optional[np.ndarray]  # source-graph predecessors (only if requested)
 
     @property
@@ -488,7 +504,9 @@ def _directed_pairs(
 
     match_idx = np.asarray(match_idx, dtype=np.int64).reshape(-1)
     if match_idx.shape[0] != n_src:
-        raise ValueError(f"match_idx length {match_idx.shape[0]} != source nodes {n_src}")
+        raise ValueError(
+            f"match_idx length {match_idx.shape[0]} != source nodes {n_src}"
+        )
     mu = match_idx[pair_u]
     mv = match_idx[pair_v]
     matched = (mu >= 0) & (mv >= 0)
@@ -540,7 +558,9 @@ def apls_pair_diagnostics(
     """
     gt = densify_apls_graph(gt, max_edge_len_m=APLS_DENSIFY_M)
     pred = densify_apls_graph(pred, max_edge_len_m=APLS_DENSIFY_M)
-    pred, match_idx = match_control_points(pred, gt.node_xy, max_snap_m=APLS_SNAP_TO_EDGE_M)
+    pred, match_idx = match_control_points(
+        pred, gt.node_xy, max_snap_m=APLS_SNAP_TO_EDGE_M
+    )
     n_gt = int(gt.node_xy.shape[0])
 
     pairs = _directed_pairs(gt, pred, match_idx, return_predecessors=True)
@@ -554,7 +574,9 @@ def apls_pair_diagnostics(
     valid = match_idx >= 0
     collapse = np.ones(n_gt, dtype=np.int64)
     if valid.any():
-        _, inv, counts = np.unique(match_idx[valid], return_inverse=True, return_counts=True)
+        _, inv, counts = np.unique(
+            match_idx[valid], return_inverse=True, return_counts=True
+        )
         collapse[valid] = counts[inv].astype(np.int64)
 
     node_sum = np.zeros(n_gt, dtype=np.float64)
@@ -627,10 +649,14 @@ def apls_symmetric_score(
     gt_d = densify_apls_graph(gt, max_edge_len_m=APLS_DENSIFY_M)
     pred_d = densify_apls_graph(pred, max_edge_len_m=APLS_DENSIFY_M)
 
-    pred_aug, match_gt = match_control_points(pred_d, gt_d.node_xy, max_snap_m=APLS_SNAP_TO_EDGE_M)
+    pred_aug, match_gt = match_control_points(
+        pred_d, gt_d.node_xy, max_snap_m=APLS_SNAP_TO_EDGE_M
+    )
     score_gp, num_gp, den_gp = _score_directed(gt_d, pred_aug, match_gt)
 
-    gt_aug, match_pred = match_control_points(gt_d, pred_d.node_xy, max_snap_m=APLS_SNAP_TO_EDGE_M)
+    gt_aug, match_pred = match_control_points(
+        gt_d, pred_d.node_xy, max_snap_m=APLS_SNAP_TO_EDGE_M
+    )
     score_pg, num_pg, den_pg = _score_directed(pred_d, gt_aug, match_pred)
 
     # If a direction has nothing to score (denom 0) but the other is finite, CosmiQ
@@ -686,7 +712,8 @@ def aggregate_dataset_apls(
             sum(r.numerator for r in rs), sum(r.denom for r in rs)
         )
         per_channel_pred_to_gt[network_type] = _ratio(
-            sum(r.numerator_pred_to_gt for r in rs_pg), sum(r.denom_pred_to_gt for r in rs_pg)
+            sum(r.numerator_pred_to_gt for r in rs_pg),
+            sum(r.denom_pred_to_gt for r in rs_pg),
         )
 
     finite_scores = [v for v in per_channel.values() if np.isfinite(v)]

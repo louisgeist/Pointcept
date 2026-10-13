@@ -440,9 +440,7 @@ def write_missing_laz_report(
             f.write("none\n")
         else:
             for item in missing_laz:
-                f.write(
-                    f"{item['split']},{item['patch_id']},{item['laz_path']}\n"
-                )
+                f.write(f"{item['split']},{item['patch_id']},{item['laz_path']}\n")
 
 
 def process_tile_task(
@@ -553,7 +551,9 @@ def main() -> None:
             f"(by split: {dict(missing_by_split)})."
         )
         print(f"  Examples: {[m['patch_id'] for m in missing_laz[:5]]}")
-    print(f"Wrote missing-LAZ pre-flight report ({len(missing_laz)} entries) to: {missing_report}")
+    print(
+        f"Wrote missing-LAZ pre-flight report ({len(missing_laz)} entries) to: {missing_report}"
+    )
 
     if already_done:
         print(
@@ -561,7 +561,9 @@ def main() -> None:
             f"{len(tasks_to_process)} remaining."
         )
     if args.overwrite:
-        print(f"--overwrite: reprocessing {len(tasks_to_process)} tile(s) with LAZ present.")
+        print(
+            f"--overwrite: reprocessing {len(tasks_to_process)} tile(s) with LAZ present."
+        )
 
     if not tasks_to_process:
         print("No tiles to process.")

@@ -34,7 +34,12 @@ WINNER_NAME = "ce_lovasz_lr2e-2_wd0_do0_none_fnnone_adamw_w05"
 WINNER_PROBE_CONFIG = {
     "criteria": [
         {"type": "CrossEntropyLoss", "loss_weight": 1.0, "ignore_index": 11},
-        {"type": "LovaszLoss", "mode": "multiclass", "loss_weight": 1.0, "ignore_index": 11},
+        {
+            "type": "LovaszLoss",
+            "mode": "multiclass",
+            "loss_weight": 1.0,
+            "ignore_index": 11,
+        },
     ],
     "input_norm": None,
     "feat_norm": None,
@@ -106,11 +111,23 @@ class TestBuildSeedEnsembleConfig(unittest.TestCase):
 
     def test_cartesian_config_roundtrips(self):
         focal_sgd = {
-            "criteria": [{"type": "FocalLoss", "gamma": 2.0, "loss_weight": 1.0, "ignore_index": 15}],
+            "criteria": [
+                {
+                    "type": "FocalLoss",
+                    "gamma": 2.0,
+                    "loss_weight": 1.0,
+                    "ignore_index": 15,
+                }
+            ],
             "input_norm": "l2",
             "feat_norm": "batchnorm",
             "dropout": 0.1,
-            "optimizer": {"type": "SGD", "lr": 0.01, "momentum": 0.9, "weight_decay": 1e-4},
+            "optimizer": {
+                "type": "SGD",
+                "lr": 0.01,
+                "momentum": 0.9,
+                "weight_decay": 1e-4,
+            },
             "scheduler": {"type": "CosineAnnealingLR", "eta_min": 0.0},
             "grad_clip": None,
         }
@@ -201,11 +218,17 @@ class TestAppendSummaryCsv(unittest.TestCase):
         csv_path = os.path.join(tmp, "summary.csv")
         import pathlib
 
-        self.assertTrue(append_summary_csv(pathlib.Path(csv_path), self._row("/x/seeds")))
+        self.assertTrue(
+            append_summary_csv(pathlib.Path(csv_path), self._row("/x/seeds"))
+        )
         # same seed_dir -> not written again
-        self.assertFalse(append_summary_csv(pathlib.Path(csv_path), self._row("/x/seeds")))
+        self.assertFalse(
+            append_summary_csv(pathlib.Path(csv_path), self._row("/x/seeds"))
+        )
         # different seed_dir -> written
-        self.assertTrue(append_summary_csv(pathlib.Path(csv_path), self._row("/y/seeds")))
+        self.assertTrue(
+            append_summary_csv(pathlib.Path(csv_path), self._row("/y/seeds"))
+        )
 
         with open(csv_path) as f:
             import csv as _csv

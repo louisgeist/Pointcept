@@ -281,8 +281,10 @@ def name_to_index(dataset):
     for i in range(len(dataset.data_list)):
         name = dataset.get_data_name(i)
         if name in mapping:
-            raise RuntimeError(f"duplicate data.test name {name!r} at indices "
-                               f"{mapping[name]} and {i}")
+            raise RuntimeError(
+                f"duplicate data.test name {name!r} at indices "
+                f"{mapping[name]} and {i}"
+            )
         mapping[name] = i
     return mapping
 
@@ -418,8 +420,12 @@ def benchmark_sequential(name, dataset, indices, tile_names, model, args):
             )
         except torch.cuda.OutOfMemoryError:
             torch.cuda.empty_cache()
-            print(f"[bench][{name}][sequential] OOM on tile {tile_idx} ({patch_id}) -- skipped")
-            records.append(_empty_record(name, "sequential", tile_idx, patch_id, is_warmup))
+            print(
+                f"[bench][{name}][sequential] OOM on tile {tile_idx} ({patch_id}) -- skipped"
+            )
+            records.append(
+                _empty_record(name, "sequential", tile_idx, patch_id, is_warmup)
+            )
     return records
 
 
@@ -590,7 +596,9 @@ def print_summary_table(summaries, mode):
     for name, modes in summaries.items():
         s = modes[mode]
         if s["n_measured"] == 0:
-            print(f"{name:10s} {0:5d} {s['n_failed']:6d}  -- all measured tiles failed --")
+            print(
+                f"{name:10s} {0:5d} {s['n_failed']:6d}  -- all measured tiles failed --"
+            )
             continue
         if mode == "sequential":
             print(

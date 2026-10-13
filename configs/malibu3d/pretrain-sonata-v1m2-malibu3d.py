@@ -46,18 +46,18 @@ match_max_r = match_max_r_factor * grid_size * stride[0] * stride[1]
 # are in meters. The upstream values (0.1 / 0.4 / 0.01, for a 0.02 m grid) would span
 # 5x fewer voxels on a 0.1 m grid and degenerate toward single-point masks: scale
 # them by grid_size / 0.02 so mask patches cover as many voxels as upstream.
-grid_size_factor = grid_size / 0.02 # 0.02 is the upstream Sonata grid_size
+grid_size_factor = grid_size / 0.02  # 0.02 is the upstream Sonata grid_size
 mask_size_start = 0.1 * grid_size_factor
 mask_size_base = 0.4 * grid_size_factor
 mask_jitter = 0.01 * grid_size_factor
 
 # Iter-limited schedule (1 trainer epoch = 1000 optimizer steps)
-total_iters = 150_000 
+total_iters = 150_000
 iter_per_epoch = 1000
 
 # No online validation (evaluate checkpoints with the probe/ configs); eval_every is
 # also the checkpoint save frequency in epochs (CheckpointSaver below).
-evaluate = False 
+evaluate = False
 eval_every = 1
 
 wandb_project = "malibu3d_sonata"

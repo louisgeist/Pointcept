@@ -297,9 +297,10 @@ def fit_logistic(x_train, y_train, num_classes, c_value, max_iter, seed):
 
     def closure():
         optimizer.zero_grad(set_to_none=True)
-        loss = c_value * F.cross_entropy(
-            linear(x_train), y_train, reduction="sum"
-        ) + 0.5 * linear.weight.pow(2).sum()
+        loss = (
+            c_value * F.cross_entropy(linear(x_train), y_train, reduction="sum")
+            + 0.5 * linear.weight.pow(2).sum()
+        )
         loss.backward()
         return loss
 
@@ -341,19 +342,28 @@ def run_probe(cfg, splits, device):
             )
             with torch.no_grad():
                 pred_val = linear(x_val).argmax(dim=1).cpu().numpy()
-            val = classification_metrics(splits["val"]["category"], pred_val, num_classes)
+            val = classification_metrics(
+                splits["val"]["category"], pred_val, num_classes
+            )
             grid.append(dict(agg=agg, C=float(c_value), val_mIoU=val["mIoU"]))
             print(f"[probe] agg={agg:<6} C={c_value:<8g} val mIoU={val['mIoU']:.4f}")
             if best is None or val["mIoU"] > best["val"]["mIoU"]:
-                best = dict(agg=agg, C=float(c_value), val=val, scaler=scaler,
-                            weight=linear.weight.detach().cpu().double().numpy(),
-                            bias=linear.bias.detach().cpu().double().numpy())
+                best = dict(
+                    agg=agg,
+                    C=float(c_value),
+                    val=val,
+                    scaler=scaler,
+                    weight=linear.weight.detach().cpu().double().numpy(),
+                    bias=linear.bias.detach().cpu().double().numpy(),
+                )
 
     x_test = best["scaler"].transform(pooled_features(splits["test"], best["agg"]))
     pred_test = np.argmax(x_test @ best["weight"].T + best["bias"], axis=1)
     test = classification_metrics(splits["test"]["category"], pred_test, num_classes)
-    print(f"[probe] best agg={best['agg']} C={best['C']:g}: val mIoU={best['val']['mIoU']:.4f}"
-          f"  test mIoU={test['mIoU']:.4f}")
+    print(
+        f"[probe] best agg={best['agg']} C={best['C']:g}: val mIoU={best['val']['mIoU']:.4f}"
+        f"  test mIoU={test['mIoU']:.4f}"
+    )
     metrics = dict(
         config=cfg.filename,
         weight=cfg.weight,

@@ -77,9 +77,7 @@ def _atomic_write_history_csv(path, rows):
     with open(tmp_path, "w", newline="", encoding="utf-8") as f:
         # restval="" lets rows without the f1_macro keys be written; unknown keys
         # still raise (extrasaction default).
-        writer = csv.DictWriter(
-            f, fieldnames=_HISTORY_CSV_FIELDNAMES, restval=""
-        )
+        writer = csv.DictWriter(f, fieldnames=_HISTORY_CSV_FIELDNAMES, restval="")
         writer.writeheader()
         writer.writerows(rows)
     os.replace(tmp_path, path)
@@ -103,9 +101,7 @@ def _metric_stats(metrics_by_probe, metric_key):
     )
 
 
-def _discover_class_metric_keys(
-    metrics_by_probe, prefix, names=None, exclude=()
-):
+def _discover_class_metric_keys(metrics_by_probe, prefix, names=None, exclude=()):
     """Per-class keys like ``test/iou_Ground``.
 
     Prefer ``names`` order (``cfg.data.names``); fall back to first-seen
@@ -245,9 +241,7 @@ class GridProbeEvaluator(HookBase):
         the probe weights.
         """
         selected_now = (
-            macro_f1_by_probe
-            if self.select_metric == "macro_f1"
-            else m_iou_by_probe
+            macro_f1_by_probe if self.select_metric == "macro_f1" else m_iou_by_probe
         )
         selected_best = self._selected_best_by_probe()
         for name in m_iou_by_probe:
@@ -526,8 +520,7 @@ class GridProbeEvaluator(HookBase):
             return
         winner = max(sel_best, key=sel_best.get)
         self.trainer.logger.info(
-            "Best val %s per probe: %s; overall best: %r "
-            "(mIoU=%.4f, macro_f1=%.4f)",
+            "Best val %s per probe: %s; overall best: %r " "(mIoU=%.4f, macro_f1=%.4f)",
             self.select_metric,
             {k: round(v, 4) for k, v in sel_best.items()},
             winner,
@@ -625,7 +618,9 @@ class GridProbeWinnerSelector(HookBase):
             model_dir = os.path.join(self.trainer.cfg.save_path, "model")
             best_head_path = os.path.join(model_dir, f"probe_best_{winner_name}.pth")
             if os.path.isfile(best_head_path):
-                state = torch.load(best_head_path, map_location="cpu", weights_only=False)
+                state = torch.load(
+                    best_head_path, map_location="cpu", weights_only=False
+                )
                 raw_model.heads[winner_name].load_state_dict(state)
             else:
                 self.trainer.logger.warning(
@@ -746,7 +741,9 @@ class GridProbeWinnerSelector(HookBase):
                 "winner/best_val_macro_f1": evaluator.best_macro_f1(winner_name),
             }
             summary.update(
-                _flatten_for_wandb(raw_model.probe_configs[winner_name], "winner/config")
+                _flatten_for_wandb(
+                    raw_model.probe_configs[winner_name], "winner/config"
+                )
             )
             # Per-class val IoU/accuracy/F1 at the winner's best select_metric
             # epoch. winner/best_val_{mIoU,macro_f1} above are running maxima over
@@ -801,7 +798,9 @@ class GridProbeSeedEnsembleTester(HookBase):
                     "last-epoch weights instead of its best-epoch weights.",
                     name,
                 )
-        raw_model.active_probe = None  # all-probes mode, required by GridProbeSemSegTester
+        raw_model.active_probe = (
+            None  # all-probes mode, required by GridProbeSemSegTester
+        )
 
         if getattr(self.trainer, "optimizer", None) is not None:
             del self.trainer.optimizer
@@ -836,15 +835,21 @@ class GridProbeSeedEnsembleTester(HookBase):
             return
 
         evaluator = _find_hook(self.trainer, GridProbeEvaluator)
-        best_val_by_probe = evaluator._best_miou_by_probe if evaluator is not None else {}
+        best_val_by_probe = (
+            evaluator._best_miou_by_probe if evaluator is not None else {}
+        )
         best_f1_by_probe = evaluator._best_f1_by_probe if evaluator is not None else {}
 
-        missing = [name for name in raw_model.probe_names if name not in metrics_by_probe]
+        missing = [
+            name for name in raw_model.probe_names if name not in metrics_by_probe
+        ]
         if missing:
             self.trainer.logger.warning(
                 "GridProbeSeedEnsembleTester: %d/%d probes have no test metrics "
                 "(missing: %s) -- mean/std/max/min computed over the rest only.",
-                len(missing), len(raw_model.probe_names), missing,
+                len(missing),
+                len(raw_model.probe_names),
+                missing,
             )
 
         miou_stats = _metric_stats(metrics_by_probe, "test/mIoU")
@@ -926,7 +931,8 @@ class GridProbeSeedEnsembleTester(HookBase):
             "Seed-ensemble test result (%d/%d probes with test metrics): "
             "mIoU=%.4f+/-%.4f [%.4f, %.4f], mAcc=%.4f+/-%.4f, "
             "allAcc=%.4f+/-%.4f, f1_macro=%.4f+/-%.4f [%.4f, %.4f]. Wrote %s",
-            summary["num_probes_with_test_metrics"], summary["num_probes"],
+            summary["num_probes_with_test_metrics"],
+            summary["num_probes"],
             summary["test_mIoU_mean"] or float("nan"),
             summary["test_mIoU_std"] or float("nan"),
             summary["test_mIoU_min"] or float("nan"),
@@ -957,7 +963,9 @@ class GridProbeSeedEnsembleTester(HookBase):
         if getattr(cfg, "enable_wandb", False) and wandb.run is not None:
             wandb_summary = {
                 "seed_ensemble/num_probes": summary["num_probes"],
-                "seed_ensemble/num_probes_with_test_metrics": summary["num_probes_with_test_metrics"],
+                "seed_ensemble/num_probes_with_test_metrics": summary[
+                    "num_probes_with_test_metrics"
+                ],
                 "seed_ensemble/test_mIoU_mean": summary["test_mIoU_mean"],
                 "seed_ensemble/test_mIoU_std": summary["test_mIoU_std"],
                 "seed_ensemble/test_mIoU_max": summary["test_mIoU_max"],
@@ -976,10 +984,10 @@ class GridProbeSeedEnsembleTester(HookBase):
                 "seed_ensemble/test_f1_macro_min": summary["test_f1_macro_min"],
             }
             for key, st in f1_cls_stats.items():
-                cls_name = key[len("test/f1_"):]
+                cls_name = key[len("test/f1_") :]
                 wandb_summary[f"seed_ensemble/test_f1_{cls_name}_mean"] = st["mean"]
             for key, st in iou_cls_stats.items():
-                cls_name = key[len("test/iou_"):]
+                cls_name = key[len("test/iou_") :]
                 wandb_summary[f"seed_ensemble/test_iou_{cls_name}_mean"] = st["mean"]
                 wandb_summary[f"seed_ensemble/test_iou_{cls_name}_std"] = st["std"]
             for key, value in wandb_summary.items():
@@ -990,8 +998,13 @@ class GridProbeSeedEnsembleTester(HookBase):
             # beyond the summary statistics.
             table = wandb.Table(
                 columns=[
-                    "probe_name", "test_mIoU", "test_mAcc", "test_allAcc",
-                    "test_f1_macro", "best_val_mIoU", "best_val_macro_f1",
+                    "probe_name",
+                    "test_mIoU",
+                    "test_mAcc",
+                    "test_allAcc",
+                    "test_f1_macro",
+                    "best_val_mIoU",
+                    "best_val_macro_f1",
                 ]
             )
             for name in raw_model.probe_names:
@@ -1010,13 +1023,11 @@ class GridProbeSeedEnsembleTester(HookBase):
             if f1_cls_stats:
                 cls_table = wandb.Table(columns=["class", "f1_mean"])
                 for key, st in f1_cls_stats.items():
-                    cls_table.add_data(key[len("test/f1_"):], st["mean"])
+                    cls_table.add_data(key[len("test/f1_") :], st["mean"])
                 wandb.log({"seed_ensemble/per_class_f1_table": cls_table})
 
             if iou_cls_stats:
                 iou_table = wandb.Table(columns=["class", "iou_mean", "iou_std"])
                 for key, st in iou_cls_stats.items():
-                    iou_table.add_data(
-                        key[len("test/iou_"):], st["mean"], st["std"]
-                    )
+                    iou_table.add_data(key[len("test/iou_") :], st["mean"], st["std"])
                 wandb.log({"seed_ensemble/per_class_iou_table": iou_table})

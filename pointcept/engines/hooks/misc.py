@@ -196,9 +196,7 @@ class InformationWriter(HookBase):
         return {"grid_probe_train_history": list(self._grid_probe_train_history)}
 
     def load_state_dict(self, state):
-        self._grid_probe_train_history = list(
-            state.get("grid_probe_train_history", [])
-        )
+        self._grid_probe_train_history = list(state.get("grid_probe_train_history", []))
 
     @staticmethod
     def _optimizer_lrs(trainer):
@@ -224,9 +222,7 @@ class InformationWriter(HookBase):
             return True
         return False
 
-    _GLOBAL_GRAD_STEP_KEYS = frozenset(
-        {"gradient/global", "gradient/weight_update"}
-    )
+    _GLOBAL_GRAD_STEP_KEYS = frozenset({"gradient/global", "gradient/weight_update"})
 
     @classmethod
     def _include_in_train_batch(cls, key, log_task_gradient_norms):
@@ -292,7 +288,7 @@ class InformationWriter(HookBase):
                     continue
                 self.trainer.storage.put_scalar(key, float(value))
                 scalar_keys.append(key)
-                
+
             loss_by_task = model_output_dict.get("loss_by_task")
             # Skip when only one task: scalar "loss" already summarizes training.
             if isinstance(loss_by_task, dict) and len(loss_by_task) > 1:
@@ -413,9 +409,16 @@ class InformationWriter(HookBase):
                 pred_by_task = model_output_dict.get("pred_by_task")
                 with torch.no_grad():
                     multitask_specs = self._semantic_task_specs(data_cfg)
-                    if isinstance(pred_by_task, dict) and pred_by_task and multitask_specs:
+                    if (
+                        isinstance(pred_by_task, dict)
+                        and pred_by_task
+                        and multitask_specs
+                    ):
                         for task_name, task_conf in multitask_specs:
-                            if task_name not in pred_by_task or task_name not in input_dict:
+                            if (
+                                task_name not in pred_by_task
+                                or task_name not in input_dict
+                            ):
                                 continue
                             self._accumulate_seg_batch(
                                 pred_by_task[task_name],
@@ -424,15 +427,10 @@ class InformationWriter(HookBase):
                                 int(task_conf["ignore_index"]),
                                 task_name,
                             )
-                    elif (
-                        "pred" in model_output_dict
-                        and "segment" in input_dict
-                    ):
+                    elif "pred" in model_output_dict and "segment" in input_dict:
                         pred = model_output_dict["pred"]
                         target = input_dict["segment"]
-                        num_classes = int(
-                            self._cfg_get(data_cfg, "num_classes")
-                        )
+                        num_classes = int(self._cfg_get(data_cfg, "num_classes"))
                         model = (
                             self.trainer.model.module
                             if hasattr(self.trainer.model, "module")
@@ -444,23 +442,23 @@ class InformationWriter(HookBase):
                             ignore_index = int(
                                 self._cfg_get(data_cfg, "ignore_index", -1)
                             )
-                        main_key = self._cfg_get(data_cfg, "main_task", None) or "segment"
+                        main_key = (
+                            self._cfg_get(data_cfg, "main_task", None) or "segment"
+                        )
                         self._accumulate_seg_batch(
                             pred, target, num_classes, ignore_index, main_key
                         )
                     elif (
                         "pred" in model_output_dict
-                        and "category" in input_dict # classification
+                        and "category" in input_dict  # classification
                     ):
                         pred = model_output_dict["pred"]
                         target = input_dict["category"].view(-1)
-                        num_classes = int(
-                            self._cfg_get(data_cfg, "num_classes")
+                        num_classes = int(self._cfg_get(data_cfg, "num_classes"))
+                        ignore_index = int(self._cfg_get(data_cfg, "ignore_index", -1))
+                        main_key = (
+                            self._cfg_get(data_cfg, "main_task", None) or "segment"
                         )
-                        ignore_index = int(
-                            self._cfg_get(data_cfg, "ignore_index", -1)
-                        )
-                        main_key = self._cfg_get(data_cfg, "main_task", None) or "segment"
                         self._accumulate_seg_batch(
                             pred, target, num_classes, ignore_index, main_key
                         )
@@ -479,9 +477,7 @@ class InformationWriter(HookBase):
             self.trainer.logger.info(self.trainer.comm_info["iter_info"])
         self.trainer.comm_info["iter_info"] = ""  # reset iter info
         if self.trainer.writer is not None:
-            log_task_grads = getattr(
-                self.trainer.cfg, "log_task_gradient_norms", False
-            )
+            log_task_grads = getattr(self.trainer.cfg, "log_task_gradient_norms", False)
             log_lite = getattr(self.trainer.cfg, "grad_norm_lite", False)
             log_gn = getattr(self.trainer.cfg, "grad_norm", False)
             for name, lr in lrs.items():
@@ -700,8 +696,7 @@ class CheckpointSaver(HookBase):
                 if isinstance(self.trainer.scaler, dict):
                     # GridProbeTrainer: one GradScaler per probe head.
                     scaler_state = {
-                        name: s.state_dict()
-                        for name, s in self.trainer.scaler.items()
+                        name: s.state_dict() for name, s in self.trainer.scaler.items()
                     }
                 else:
                     scaler_state = self.trainer.scaler.state_dict()
@@ -748,7 +743,10 @@ class CheckpointSaver(HookBase):
             from pointcept.utils.runtime_state import flush_runtime_segment
 
             flush_runtime_segment(self.trainer.cfg.save_path)
-            if getattr(self.trainer.cfg, "enable_wandb", False) and wandb.run is not None:
+            if (
+                getattr(self.trainer.cfg, "enable_wandb", False)
+                and wandb.run is not None
+            ):
                 write_local_last_step(self.trainer.cfg.save_path, wandb.run.step)
 
 
@@ -800,9 +798,7 @@ class CheckpointLoader(HookBase):
             if comm.get_world_size() == 1:
                 key = key[7:]  # module.xxx.xxx -> xxx.xxx
             weight[key] = value
-        load_state_info = self.trainer.model.load_state_dict(
-            weight, strict=self.strict
-        )
+        load_state_info = self.trainer.model.load_state_dict(weight, strict=self.strict)
         self.trainer.logger.info(f"Missing keys: {load_state_info[0]}")
         if self.trainer.cfg.resume:
             self.trainer.logger.info(
@@ -862,9 +858,7 @@ class CheckpointLoader(HookBase):
                 and getattr(self.trainer, "_grad_norm_lite_ema", None) is not None
             ):
                 self.trainer._grad_norm_lite_ema.load_state_dict(grad_norm_lite_state)
-                self.trainer.logger.info(
-                    "=> Restored GradNormLite EMA from checkpoint"
-                )
+                self.trainer.logger.info("=> Restored GradNormLite EMA from checkpoint")
 
 
 @HOOKS.register_module()
@@ -918,7 +912,9 @@ class NetworkAPLSEvaluator(HookBase):
 
     def after_train(self):
         t0 = time.time()
-        payload = run_network_apls_eval_if_configured(self.trainer.cfg, self.trainer.logger)
+        payload = run_network_apls_eval_if_configured(
+            self.trainer.cfg, self.trainer.logger
+        )
         elapsed_s = time.time() - t0
         self.trainer.logger.info(f"Network APLS eval took {elapsed_s:.1f}s")
 
@@ -960,9 +956,9 @@ class NetworkAPLSEvaluator(HookBase):
                     metric_tag("test", f"APLS_{direction}/{ch_slug}", task="network")
                 ] = value
             if finite_vals:
-                scalars[metric_tag("test", f"APLS_{direction}", task="network")] = (
-                    sum(finite_vals) / len(finite_vals)
-                )
+                scalars[metric_tag("test", f"APLS_{direction}", task="network")] = sum(
+                    finite_vals
+                ) / len(finite_vals)
 
         if self.trainer.writer is not None:
             for k, v in scalars.items():
@@ -1033,5 +1029,3 @@ class MetricsJsonWriter(HookBase):
             f.write("\n")
         os.replace(tmp_path, out_path)
         self.trainer.logger.info("Wrote metrics to: %s", out_path)
-
-

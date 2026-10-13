@@ -189,5 +189,3 @@ class FocalLoss(nn.Module):
         elif self.reduction == "sum":
             loss = loss.sum()
         return self.loss_weight * loss
-
-

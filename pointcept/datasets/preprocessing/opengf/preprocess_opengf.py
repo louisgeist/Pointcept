@@ -76,7 +76,9 @@ split_scene_xy_by_chunk_size = _chunking_mod.split_scene_xy_by_chunk_size
 try:
     import laspy
 except ImportError as error:
-    raise ImportError("Please install 'laspy' to preprocess OpenGF LAZ files.") from error
+    raise ImportError(
+        "Please install 'laspy' to preprocess OpenGF LAZ files."
+    ) from error
 
 # Raw LAS classification {0, 1, 2} -> stored segment {2, 1, 0}, indexed by raw id.
 RAW2SEGMENT = np.asarray([2, 1, 0], dtype=np.int32)
@@ -120,9 +122,16 @@ def save_scene(
     meta: Dict[str, Any],
 ) -> None:
     os.makedirs(output_scene_dir, exist_ok=True)
-    np.save(os.path.join(output_scene_dir, "coord.npy"), scene["coord"].astype(np.float32))
-    np.save(os.path.join(output_scene_dir, "strength.npy"), scene["strength"].astype(np.float32))
-    np.save(os.path.join(output_scene_dir, "segment.npy"), scene["segment"].astype(np.int32))
+    np.save(
+        os.path.join(output_scene_dir, "coord.npy"), scene["coord"].astype(np.float32)
+    )
+    np.save(
+        os.path.join(output_scene_dir, "strength.npy"),
+        scene["strength"].astype(np.float32),
+    )
+    np.save(
+        os.path.join(output_scene_dir, "segment.npy"), scene["segment"].astype(np.int32)
+    )
     with open(os.path.join(output_scene_dir, "meta.json"), "w", encoding="utf-8") as f:
         json.dump(meta, f, indent=2)
 
@@ -162,12 +171,16 @@ def collect_jobs(dataset_root: str) -> List[Tuple[str, str, str, Optional[str]]]
     """Return (laz_path, split, scene_name, terrain) for every raw file."""
     jobs: List[Tuple[str, str, str, Optional[str]]] = []
 
-    for laz_path in sorted(glob.glob(os.path.join(dataset_root, "Training", "*", "*", "*.laz"))):
+    for laz_path in sorted(
+        glob.glob(os.path.join(dataset_root, "Training", "*", "*", "*.laz"))
+    ):
         terrain = os.path.basename(os.path.dirname(os.path.dirname(laz_path)))
         scene_name = os.path.basename(os.path.dirname(laz_path))
         jobs.append((laz_path, "train", scene_name, terrain))
 
-    for laz_path in sorted(glob.glob(os.path.join(dataset_root, "Validation", "*.laz"))):
+    for laz_path in sorted(
+        glob.glob(os.path.join(dataset_root, "Validation", "*.laz"))
+    ):
         scene_name = os.path.splitext(os.path.basename(laz_path))[0]
         jobs.append((laz_path, "val", scene_name, None))
 
@@ -179,7 +192,9 @@ def collect_jobs(dataset_root: str) -> List[Tuple[str, str, str, Optional[str]]]
 
 
 def main_process():
-    parser = argparse.ArgumentParser(description="Preprocess OpenGF LAZ tiles for Pointcept.")
+    parser = argparse.ArgumentParser(
+        description="Preprocess OpenGF LAZ tiles for Pointcept."
+    )
     parser.add_argument(
         "--dataset_root",
         required=True,

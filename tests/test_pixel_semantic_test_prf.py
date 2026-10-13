@@ -53,9 +53,7 @@ def _dilated_counts_from_dense(prob, target, ignore_index, fg_idx, radius_px):
     valid = np.isfinite(prob) & (target != ignore_index)
     pred_fg = (prob > 0.5) & valid
     gt_fg = (target == fg_idx) & valid
-    return dilated_precision_recall_counts(
-        pred_fg, gt_fg, valid, radius_px=radius_px
-    )
+    return dilated_precision_recall_counts(pred_fg, gt_fg, valid, radius_px=radius_px)
 
 
 class TestDilatedPrfFromDense(unittest.TestCase):

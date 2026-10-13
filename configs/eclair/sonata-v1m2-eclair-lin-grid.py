@@ -87,7 +87,12 @@ backbone_out_channels = 1232  # enc_mode: 48+96+192+384+512
 _losses = {
     "ce_lovasz": [
         dict(type="CrossEntropyLoss", loss_weight=1.0, ignore_index=ignore_index),
-        dict(type="LovaszLoss", mode="multiclass", loss_weight=1.0, ignore_index=ignore_index),
+        dict(
+            type="LovaszLoss",
+            mode="multiclass",
+            loss_weight=1.0,
+            ignore_index=ignore_index,
+        ),
     ],
 }
 _lrs = {
@@ -212,7 +217,9 @@ data = dict(
             dict(type="CenterShift", apply_z=True),
             dict(type="Z_MinShift"),
             dict(type="Z_RandomOffset"),
-            dict(type="RandomDropout", dropout_ratio=0.2, dropout_application_ratio=0.2),
+            dict(
+                type="RandomDropout", dropout_ratio=0.2, dropout_application_ratio=0.2
+            ),
             dict(type="RandomRotate", angle=[-1, 1], axis="z", center=[0, 0, 0], p=0.5),
             dict(type="RandomScale", scale=[0.9, 1.1]),
             dict(type="RandomFlip", p=0.5),
@@ -299,7 +306,17 @@ data = dict(
                     feat_scales=dict(strength=strength_feat_scale),
                 ),
             ],
-            aug_transform=[[dict(type="RandomRotateTargetAngle", angle=[0], axis="z", center=[0, 0, 0], p=1)]],
+            aug_transform=[
+                [
+                    dict(
+                        type="RandomRotateTargetAngle",
+                        angle=[0],
+                        axis="z",
+                        center=[0, 0, 0],
+                        p=1,
+                    )
+                ]
+            ],
         ),
     ),
 )

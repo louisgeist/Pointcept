@@ -43,8 +43,13 @@ from typing import Dict, List, Tuple
 import numpy as np
 
 try:
-    from pointcept.datasets.preprocessing.h3d.h3d_class_map import CLASS_NAMES, NUM_CLASSES
-    from pointcept.datasets.preprocessing.xy_grid_chunking import split_scene_xy_by_chunk_size
+    from pointcept.datasets.preprocessing.h3d.h3d_class_map import (
+        CLASS_NAMES,
+        NUM_CLASSES,
+    )
+    from pointcept.datasets.preprocessing.xy_grid_chunking import (
+        split_scene_xy_by_chunk_size,
+    )
 except ModuleNotFoundError:
     THIS_DIR = os.path.dirname(os.path.abspath(__file__))
     if THIS_DIR not in sys.path:
@@ -82,18 +87,22 @@ def read_las_laz(filepath: str) -> Dict[str, np.ndarray]:
             np.asarray(las.z, dtype=np.float64),
         )
     )
-    
+
     coord = coord - coord.min(axis=0)
     coord = coord.astype(np.float32)
 
     segment = np.asarray(las.classification, dtype=np.int32)
 
     if not (hasattr(las, "red") and hasattr(las, "green") and hasattr(las, "blue")):
-        raise ValueError(f"LAS/LAZ file has no RGB; H3D preprocessing requires color: {filepath}")
+        raise ValueError(
+            f"LAS/LAZ file has no RGB; H3D preprocessing requires color: {filepath}"
+        )
 
     # Keep the native uint16 dtype from laspy: the bitwise diagnostic/descale below is
     # ~20x cheaper on uint16 than on a float64 cast of the same array.
-    rgb = np.stack([np.asarray(las.red), np.asarray(las.green), np.asarray(las.blue)], axis=1)
+    rgb = np.stack(
+        [np.asarray(las.red), np.asarray(las.green), np.asarray(las.blue)], axis=1
+    )
     # H3D's LAS RGB fields store the 8-bit source shifted left by 8 bits (LAStools/PDAL
     # convention; holds for every Mar18 file), not a continuous 16-bit range: descale
     # with a fixed right-shift, never a per-tile max stretch (that would invent a
@@ -104,16 +113,24 @@ def read_las_laz(filepath: str) -> Dict[str, np.ndarray]:
         f"{off_multiple} value(s) not a multiple of 256 "
         f"(expect max=65280, 0 non-multiples if the 16-bit-shifted convention holds)"
     )
-    color = (rgb >> 8).astype(np.float32)  # uint16 >> 8 is always in [0, 255], no clip needed
+    color = (rgb >> 8).astype(
+        np.float32
+    )  # uint16 >> 8 is always in [0, 255], no clip needed
 
     return {"coord": coord, "segment": segment, "color": color}
 
 
 def save_scene(output_scene_dir: str, scene: Dict[str, np.ndarray]) -> None:
     os.makedirs(output_scene_dir, exist_ok=True)
-    np.save(os.path.join(output_scene_dir, "coord.npy"), scene["coord"].astype(np.float32))
-    np.save(os.path.join(output_scene_dir, "segment.npy"), scene["segment"].astype(np.int32))
-    np.save(os.path.join(output_scene_dir, "color.npy"), scene["color"].astype(np.float32))
+    np.save(
+        os.path.join(output_scene_dir, "coord.npy"), scene["coord"].astype(np.float32)
+    )
+    np.save(
+        os.path.join(output_scene_dir, "segment.npy"), scene["segment"].astype(np.int32)
+    )
+    np.save(
+        os.path.join(output_scene_dir, "color.npy"), scene["color"].astype(np.float32)
+    )
 
 
 def process_one_file(args_tuple: Tuple[str, str, str, float]) -> Tuple[str, int]:
@@ -138,7 +155,9 @@ def process_one_file(args_tuple: Tuple[str, str, str, float]) -> Tuple[str, int]
 def _resolve_paths(lidar_dir: str, split: str) -> List[str]:
     basenames = MAR18_FILES_PER_SPLIT.get(split)
     if not basenames:
-        raise ValueError(f"Unknown split '{split}'. Expected one of: {list(MAR18_FILES_PER_SPLIT)}.")
+        raise ValueError(
+            f"Unknown split '{split}'. Expected one of: {list(MAR18_FILES_PER_SPLIT)}."
+        )
 
     out: List[str] = []
     for name in basenames:
@@ -224,7 +243,11 @@ def main() -> None:
             for i, fut in enumerate(as_completed(futures), start=1):
                 sid, n_written = fut.result()
                 scenes_after_chunking += n_written
-                print(f"\r  Progress: {i}/{total_sources} ({sid}, +{n_written})", end="", flush=True)
+                print(
+                    f"\r  Progress: {i}/{total_sources} ({sid}, +{n_written})",
+                    end="",
+                    flush=True,
+                )
         print()
 
     print(

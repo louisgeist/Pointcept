@@ -119,9 +119,7 @@ class MALiBU3DDataset(DefaultDataset):
         if primary_target_key is None:
             primary_target_key = self.target_keys[0]
         if primary_target_key not in self.target_keys:
-            raise ValueError(
-                "primary_target_key must be present in target_keys."
-            )
+            raise ValueError("primary_target_key must be present in target_keys.")
         self.primary_target_key = primary_target_key
         if "elevation" in self.target_keys and len(self.target_keys) > 1:
             if self.primary_target_key not in MALIBU3D_SEMANTIC_TARGETS:
@@ -182,7 +180,10 @@ class MALiBU3DDataset(DefaultDataset):
                     continue
             data_list.append(tile.tile_dir(self.data_root))
             if tile.raster_origin_x is not None and tile.raster_origin_y is not None:
-                self.raster_origins[tile.tile_id] = (tile.raster_origin_x, tile.raster_origin_y)
+                self.raster_origins[tile.tile_id] = (
+                    tile.raster_origin_x,
+                    tile.raster_origin_y,
+                )
 
         if self.min_points:
             logger.info(
@@ -254,9 +255,9 @@ class MALiBU3DDataset(DefaultDataset):
             get_pixel_semantic_config,
         )
 
-        cfg = getattr(self, "task_configs", {}).get(target_key) or get_pixel_semantic_config(
+        cfg = getattr(self, "task_configs", {}).get(
             target_key
-        )
+        ) or get_pixel_semantic_config(target_key)
         r = int(cfg["num_networks"])
         default_channel_names = (
             NETWORK_CHANNEL_NAMES if target_key == "network" else (target_key,)
@@ -308,7 +309,9 @@ class MALiBU3DDataset(DefaultDataset):
             w = int(raster_meta.get("width", 1))
             raster = np.zeros((r, max(h, 1), max(w, 1)), dtype=np.uint8)
         elif self._is_optional_target(target_key):
-            if target_key == "network" and not getattr(self, "_warned_missing_network", False):
+            if target_key == "network" and not getattr(
+                self, "_warned_missing_network", False
+            ):
                 self._warned_missing_network = True
                 get_root_logger().warning(
                     "network.npy missing under %s: its road labels are ignored. The released "
@@ -460,7 +463,9 @@ class MALiBU3DDataset(DefaultDataset):
                         f"target_keys contains 'elevation' but elevation.npy missing under scene: {scene}"
                     )
             else:
-                elev = np.asarray(data_dict.pop("elevation"), dtype=np.float64).reshape(-1)
+                elev = np.asarray(data_dict.pop("elevation"), dtype=np.float64).reshape(
+                    -1
+                )
                 if elev.shape[0] != n:
                     raise ValueError(
                         f"elevation length {elev.shape[0]} does not match coord rows {n}"
@@ -489,9 +494,7 @@ class MALiBU3DDataset(DefaultDataset):
                 result_dict[key] = deepcopy(data_dict[key])
             else:
                 result_dict[key] = data_dict.pop(key)
-        origin_keys = [
-            k for k in list(data_dict.keys()) if k.startswith("origin_")
-        ]
+        origin_keys = [k for k in list(data_dict.keys()) if k.startswith("origin_")]
         for k in origin_keys:
             result_dict[k] = data_dict.pop(k)
         if "inverse" in data_dict:

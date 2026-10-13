@@ -115,21 +115,29 @@ class LearnedMaskedFeatMixin:
 
             start_value = input_dict[start_key]
             end_value = input_dict[end_key]
-            start = int(start_value[0].item()) if torch.is_tensor(start_value) else int(start_value)
-            end = int(end_value[0].item()) if torch.is_tensor(end_value) else int(end_value)
+            start = (
+                int(start_value[0].item())
+                if torch.is_tensor(start_value)
+                else int(start_value)
+            )
+            end = (
+                int(end_value[0].item())
+                if torch.is_tensor(end_value)
+                else int(end_value)
+            )
             feat_dim = end - start
             if feat_dim <= 0:
                 continue
 
             expected_dim = expected_dims.get(feat_key, feat_dim)
-            assert feat_dim == expected_dim, (
-                f"Unexpected {feat_key} feature dim: expected {expected_dim}, got {feat_dim}."
-            )
+            assert (
+                feat_dim == expected_dim
+            ), f"Unexpected {feat_key} feature dim: expected {expected_dim}, got {feat_dim}."
 
             mask = input_dict[mask_key].bool().unsqueeze(-1)
-            assert hasattr(self, f"{feat_key}_mask_value"), (
-                f"Missing learned parameter '{feat_key}_mask_value'."
-            )
+            assert hasattr(
+                self, f"{feat_key}_mask_value"
+            ), f"Missing learned parameter '{feat_key}_mask_value'."
             learned_mask_value = getattr(self, f"{feat_key}_mask_value").to(feat.dtype)
             filled = torch.where(
                 mask,
@@ -141,7 +149,7 @@ class LearnedMaskedFeatMixin:
             if self.training:
                 filled = filled + learned_mask_value.sum() * 0.0
             feat[:, start:end] = filled
-            
+
     def _print_learned_masked_feat(self):
         """Print the learned fill values (called by the trainer at the end of training)."""
         if not self.enable_learned_masked_feat:
@@ -157,10 +165,7 @@ class LearnedMaskedFeatMixin:
                     .flatten()
                     .tolist()
                 )
-                print(
-                    f"{feat_key.capitalize()} mask value: "
-                    f"{value}"
-                )
+                print(f"{feat_key.capitalize()} mask value: " f"{value}")
 
 
 @MODELS.register_module()
@@ -195,7 +200,7 @@ class DefaultSegmentor(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeatMixi
         if self.freeze_backbone:
             # The backbone-owned output layer ("final" in SpUNet and KPConvX)
             # stays trainable.
-            keep_segmentation_head_prefixes = ("final.")
+            keep_segmentation_head_prefixes = "final."
             for name, param in self.backbone.named_parameters():
                 if name.startswith(keep_segmentation_head_prefixes):
                     continue
@@ -286,7 +291,7 @@ class DefaultSegmentorV2(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeatMi
             if hasattr(c, "ignore_index"):
                 self._ignore_index = int(getattr(c, "ignore_index"))
                 return self._ignore_index
-            
+
         logger.warning("No ignore_index found in criteria, using -1 as default.")
         self._ignore_index = -1
         return self._ignore_index
@@ -310,7 +315,9 @@ class DefaultSegmentorV2(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeatMi
             for i in reversed(range(1, len(point_list))):
                 child, parent = point_list[i], point_list[i - 1]
                 assert "pooling_inverse" in child.keys()
-                parent.feat = torch.cat([parent.feat, child.feat[child.pooling_inverse]], dim=-1)
+                parent.feat = torch.cat(
+                    [parent.feat, child.feat[child.pooling_inverse]], dim=-1
+                )
             point = point_list[0]
             # Encoder multi-scale features (enc_mode=True, or SpUNet
             # point_mode=True): the backbone returns the coarsest point; follow
@@ -490,7 +497,9 @@ class MultiTaskSegmentorV2(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeat
     ):
         super().__init__()
         if not isinstance(task_configs, Mapping) or len(task_configs) == 0:
-            raise ValueError("task_configs must be a non-empty mapping of task_name -> config.")
+            raise ValueError(
+                "task_configs must be a non-empty mapping of task_name -> config."
+            )
         self.task_configs = {str(k): dict(v) for k, v in task_configs.items()}
         self.tasks = tuple(self.task_configs.keys())
         self.main_task = str(main_task or self.tasks[0])
@@ -520,13 +529,19 @@ class MultiTaskSegmentorV2(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeat
             elif criteria is not None:
                 task_criteria_cfg = criteria
             self.criteria_by_task[task_name] = build_criteria(task_criteria_cfg)
-            self.task_weights[task_name] = float(task_weights.get(task_name, default_weight))
+            self.task_weights[task_name] = float(
+                task_weights.get(task_name, default_weight)
+            )
 
             if task_type in ("semantic", "tile_distribution"):
                 num_classes = int(task_config["num_classes"])
                 if num_classes <= 0:
-                    raise ValueError(f"num_classes must be > 0 for semantic task '{task_name}'.")
-                self.seg_heads[task_name] = nn.Linear(backbone_out_channels, num_classes)
+                    raise ValueError(
+                        f"num_classes must be > 0 for semantic task '{task_name}'."
+                    )
+                self.seg_heads[task_name] = nn.Linear(
+                    backbone_out_channels, num_classes
+                )
             elif task_type == "pixel_semantic":
                 num_classes = int(task_config["num_classes"])
                 num_networks = int(task_config.get("num_networks", 1))
@@ -860,7 +875,9 @@ class MultiTaskSegmentorV2(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeat
                 if task_name not in input_dict:
                     continue
                 logits = logits_by_task[task_name]
-                task_loss = self.criteria_by_task[task_name](logits, input_dict[task_name])
+                task_loss = self.criteria_by_task[task_name](
+                    logits, input_dict[task_name]
+                )
             elif tt == "tile_distribution":
                 if task_name not in logits_by_task:
                     continue
@@ -982,6 +999,8 @@ class MultiTaskSegmentorV2(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeat
                     return_dict["pred_by_task"][task_name] = logits.argmax(dim=-1)
 
         return return_dict
+
+
 class AttentiveScenePool(nn.Module):
     """Cross-attention pooling: one learnable query aggregates per-point K/V into a scene token."""
 
@@ -1008,7 +1027,9 @@ class AttentiveScenePool(nn.Module):
         sum_exp = torch_scatter.segment_csr(exp_scores, indptr, reduce="sum")
         weights = exp_scores / (sum_exp[batch] + 1e-8)
         weights = self.attn_drop(weights)
-        return torch_scatter.segment_csr(weights.unsqueeze(-1) * v, indptr, reduce="sum")
+        return torch_scatter.segment_csr(
+            weights.unsqueeze(-1) * v, indptr, reduce="sum"
+        )
 
 
 @MODELS.register_module()
@@ -1053,9 +1074,7 @@ class DefaultClassifier(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeatMix
         self.freeze_backbone = freeze_backbone
         self._init_learned_masked_feat(feature_mask_values=feature_mask_values)
         self.attn_pool = (
-            AttentiveScenePool(backbone_embed_dim)
-            if pooling == "attention"
-            else None
+            AttentiveScenePool(backbone_embed_dim) if pooling == "attention" else None
         )
         self.cls_head = nn.Linear(backbone_embed_dim, num_classes)
         if self.freeze_backbone:

@@ -26,7 +26,9 @@ ignore_index = 2  # unreachable after RemapSegment merges raw label 2 into 1
 grid_size = 0.1
 point_max = 102400
 coord_feat_scale = 0.01  # must match MALiBU3D multitask pretrain
-strength_feat_scale = 1 / 60000  # OpenGF raw intensity → MALiBU3D [0,1] convention (DALES-like range)
+strength_feat_scale = (
+    1 / 60000
+)  # OpenGF raw intensity → MALiBU3D [0,1] convention (DALES-like range)
 
 num_gpu = 1
 epoch = 50  # OpenGF has ~5x more train tiles than DALES (400 epochs): similar iteration count
@@ -61,7 +63,13 @@ wandb_project = f"pointcept_{dataset_type[:-7].lower()}"
 hooks = [
     dict(
         type="CheckpointLoader",
-        exclude_keys=("seg_heads", "reg_heads", "cls_heads", "pixel_seg_heads", "cls_attn_pools"),
+        exclude_keys=(
+            "seg_heads",
+            "reg_heads",
+            "cls_heads",
+            "pixel_seg_heads",
+            "cls_attn_pools",
+        ),
     ),
     dict(type="ModelHook"),
     dict(type="IterationTimer", warmup_iter=2),
@@ -86,7 +94,9 @@ backbone_out_channels = 96 + 96 + 128 + 256 + 256
 # Grid-search probes — ce_lovasz, AdamW/wd0/OneCycleLR warmup5%, lr sweep only (12 probes).
 _criteria = [
     dict(type="CrossEntropyLoss", loss_weight=1.0, ignore_index=ignore_index),
-    dict(type="LovaszLoss", mode="multiclass", loss_weight=1.0, ignore_index=ignore_index),
+    dict(
+        type="LovaszLoss", mode="multiclass", loss_weight=1.0, ignore_index=ignore_index
+    ),
 ]
 _lrs = {
     "1e-4": 1e-4,
@@ -176,11 +186,15 @@ data = dict(
         split="train",
         data_root=data_root,
         transform=[
-            dict(type="RemapSegment", mapping={2: 1}),  # Qin et al. CVPRW 2021 §4.4: merge outliers into NG (they participate in training)
+            dict(
+                type="RemapSegment", mapping={2: 1}
+            ),  # Qin et al. CVPRW 2021 §4.4: merge outliers into NG (they participate in training)
             dict(type="CenterShift", apply_z=True),
             dict(type="Z_MinShift"),
             dict(type="Z_RandomOffset"),
-            dict(type="RandomDropout", dropout_ratio=0.2, dropout_application_ratio=0.2),
+            dict(
+                type="RandomDropout", dropout_ratio=0.2, dropout_application_ratio=0.2
+            ),
             dict(type="RandomRotate", angle=[-1, 1], axis="z", center=[0, 0, 0], p=0.5),
             dict(type="RandomScale", scale=[0.9, 1.1]),
             dict(type="RandomFlip", p=0.5),
@@ -211,7 +225,9 @@ data = dict(
         split="val",
         data_root=data_root,
         transform=[
-            dict(type="RemapSegment", mapping={2: 1}),  # Qin et al. CVPRW 2021 §4.4: merge outliers into NG (they participate in training)
+            dict(
+                type="RemapSegment", mapping={2: 1}
+            ),  # Qin et al. CVPRW 2021 §4.4: merge outliers into NG (they participate in training)
             dict(type="CenterShift", apply_z=True),
             dict(type="Z_MinShift"),
             dict(type="Copy", keys_dict={"segment": "origin_segment"}),
@@ -241,7 +257,9 @@ data = dict(
         data_root=data_root,
         include_names="T2",  # Test II specifically (T1/T3 have no outlier points)
         transform=[
-            dict(type="DropSegmentClass", labels=[2]),  # Qin et al. CVPRW 2021 §4.5: Test II w/o outliers (physically deleted, not merged)
+            dict(
+                type="DropSegmentClass", labels=[2]
+            ),  # Qin et al. CVPRW 2021 §4.5: Test II w/o outliers (physically deleted, not merged)
             dict(type="CenterShift", apply_z=True),
             dict(type="Z_MinShift"),
             dict(type="FillMissingFeat", feat_key="color", feat_dim=3),
@@ -265,10 +283,22 @@ data = dict(
                     keys=("coord", "grid_coord", "index"),
                     optional_keys=("inverse",),  # for test_single_fragment broadcast
                     feat_keys=feat_keys,
-                    feat_scales=dict(coord=coord_feat_scale, strength=strength_feat_scale),
+                    feat_scales=dict(
+                        coord=coord_feat_scale, strength=strength_feat_scale
+                    ),
                 ),
             ],
-            aug_transform=[[dict(type="RandomRotateTargetAngle", angle=[0], axis="z", center=[0, 0, 0], p=1)]],
+            aug_transform=[
+                [
+                    dict(
+                        type="RandomRotateTargetAngle",
+                        angle=[0],
+                        axis="z",
+                        center=[0, 0, 0],
+                        p=1,
+                    )
+                ]
+            ],
         ),
     ),
 )

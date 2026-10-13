@@ -59,7 +59,7 @@ class HookBase:
         # so the validation cadence is set by eval_epoch.
         if getattr(cfg, "eval_every", None) is None:
             return True
-        
+
         # Iter-limited mode: every eval_every epochs, and after the last epoch.
         eval_every = getattr(cfg, "eval_every", 1)
         epoch = self.trainer.epoch + 1

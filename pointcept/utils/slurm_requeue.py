@@ -142,7 +142,9 @@ def _sigusr1_handler(signum, frame):
 
 
 def _poll_slurm_time_left():
-    margin = int(os.environ.get("POINTCEPT_SLURM_REQUEUE_MARGIN_SEC", _DEFAULT_MARGIN_SEC))
+    margin = int(
+        os.environ.get("POINTCEPT_SLURM_REQUEUE_MARGIN_SEC", _DEFAULT_MARGIN_SEC)
+    )
     poll = int(os.environ.get("POINTCEPT_SLURM_REQUEUE_POLL_SEC", _DEFAULT_POLL_SEC))
     job_id = os.environ.get("SLURM_JOB_ID")
     _log_requeue(

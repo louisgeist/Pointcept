@@ -20,7 +20,9 @@ num_exp = 1
 num_classes = 8
 ignore_index = 8
 grid_size = 0.02
-coord_scale = 1 / 10  # aerial coords scaled toward indoor scene size; grid_size stays the indoor 0.02
+coord_scale = (
+    1 / 10
+)  # aerial coords scaled toward indoor scene size; grid_size stays the indoor 0.02
 point_max = 102400
 
 num_gpu = 1
@@ -81,7 +83,12 @@ backbone_out_channels = 1232
 _losses = {
     "ce_lovasz": [
         dict(type="CrossEntropyLoss", loss_weight=1.0, ignore_index=ignore_index),
-        dict(type="LovaszLoss", mode="multiclass", loss_weight=1.0, ignore_index=ignore_index),
+        dict(
+            type="LovaszLoss",
+            mode="multiclass",
+            loss_weight=1.0,
+            ignore_index=ignore_index,
+        ),
     ],
 }
 _lrs = {
@@ -118,7 +125,9 @@ for _loss_name, _criteria in _losses.items():
                                     f"{_loss_name}_lr{_lr_name}_wd{_wd_name}_do{_do_name}_"
                                     f"{_norm_name}_fn{_fn_name}_{_opt_name}_{_wu_name}"
                                 )
-                                _optimizer = dict(type=_opt_type, lr=_lr, weight_decay=_wd)
+                                _optimizer = dict(
+                                    type=_opt_type, lr=_lr, weight_decay=_wd
+                                )
                                 if _opt_type == "SGD":
                                     _optimizer["momentum"] = 0.9
                                 probes[_name] = dict(
@@ -205,7 +214,9 @@ data = dict(
         data_root=data_root,
         transform=[
             dict(type="CenterShift", apply_z=True),
-            dict(type="RandomDropout", dropout_ratio=0.2, dropout_application_ratio=0.2),
+            dict(
+                type="RandomDropout", dropout_ratio=0.2, dropout_application_ratio=0.2
+            ),
             dict(type="RandomRotate", angle=[-1, 1], axis="z", center=[0, 0, 0], p=0.5),
             dict(type="RandomScale", scale=[0.9, 1.1]),
             dict(type="RandomFlip", p=0.5),
@@ -291,7 +302,17 @@ data = dict(
                     feat_keys=feat_keys,
                 ),
             ],
-            aug_transform=[[dict(type="RandomRotateTargetAngle", angle=[0], axis="z", center=[0, 0, 0], p=1)]],
+            aug_transform=[
+                [
+                    dict(
+                        type="RandomRotateTargetAngle",
+                        angle=[0],
+                        axis="z",
+                        center=[0, 0, 0],
+                        p=1,
+                    )
+                ]
+            ],
         ),
     ),
 )

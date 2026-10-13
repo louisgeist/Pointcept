@@ -20,6 +20,5 @@ CLASS_NAMES = [
     "Soil or Gravel",
     "Vertical Surface",
     "Chimney",
-    
     "Void",
 ]

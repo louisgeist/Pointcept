@@ -120,7 +120,9 @@ def multiscale_backbone_feat(backbone, input_dict):
         for i in reversed(range(1, len(point_list))):
             child, parent = point_list[i], point_list[i - 1]
             assert "pooling_inverse" in child.keys()
-            parent.feat = torch.cat([parent.feat, child.feat[child.pooling_inverse]], dim=-1)
+            parent.feat = torch.cat(
+                [parent.feat, child.feat[child.pooling_inverse]], dim=-1
+            )
         point = point_list[0]
         # Encoder multi-scale features (enc_mode / SpUNet point_mode).
         while "pooling_parent" in point.keys():
@@ -157,7 +159,9 @@ class ProbeHead(nn.Module):
                 f"input_norm must be one of None/l1/l2/linf/l1_block/l2_block/linf_block, got {input_norm!r}."
             )
         if feat_norm not in _FEAT_NORM_TYPES:
-            raise ValueError(f"feat_norm must be one of {sorted(str(x) for x in _FEAT_NORM_TYPES)}, got {feat_norm!r}.")
+            raise ValueError(
+                f"feat_norm must be one of {sorted(str(x) for x in _FEAT_NORM_TYPES)}, got {feat_norm!r}."
+            )
         self.input_norm = input_norm
         self.eps = eps
         self.channel_blocks = channel_blocks
@@ -231,7 +235,9 @@ class GridProbeSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
     ):
         super().__init__()
         if not isinstance(probes, Mapping) or len(probes) == 0:
-            raise ValueError("probes must be a non-empty mapping of probe_name -> config.")
+            raise ValueError(
+                "probes must be a non-empty mapping of probe_name -> config."
+            )
         self.probe_configs = {str(k): dict(v) for k, v in probes.items()}
         self.probe_names = tuple(self.probe_configs.keys())
         self.target_key = target_key
@@ -252,7 +258,9 @@ class GridProbeSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
         if channel_blocks is not None:
             channel_blocks = tuple(int(c) for c in channel_blocks)
             if any(c <= 0 for c in channel_blocks):
-                raise ValueError(f"channel_blocks entries must all be positive, got {channel_blocks}.")
+                raise ValueError(
+                    f"channel_blocks entries must all be positive, got {channel_blocks}."
+                )
             if sum(channel_blocks) != probe_in_channels:
                 raise ValueError(
                     f"sum(channel_blocks)={sum(channel_blocks)} must equal "
@@ -265,7 +273,9 @@ class GridProbeSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
             for probe_cfg in self.probe_configs.values()
         )
         if uses_block_norm and self.channel_blocks is None:
-            raise ValueError("channel_blocks must be set when any probe uses a '*_block' input_norm.")
+            raise ValueError(
+                "channel_blocks must be set when any probe uses a '*_block' input_norm."
+            )
 
         self.backbone = build_model(backbone)
         self.heads = nn.ModuleDict()
@@ -329,7 +339,7 @@ class GridProbeSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
         else:
             feat, point = self._forward_backbone(input_dict)
         if self.drop_leading_channels:
-            feat = feat[..., self.drop_leading_channels:]
+            feat = feat[..., self.drop_leading_channels :]
         active = self._active_probe_names()
         feat = _prepare_shared_feat(feat)
         feat_by_norm = _input_norm_cache(feat, self.heads, active, self.channel_blocks)
@@ -363,7 +373,9 @@ class GridProbeSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
             loss_by_task = {}
             total_loss = None
             for name in active:
-                task_loss = self.criteria_by_task[name](seg_logits_by_task[name], target)
+                task_loss = self.criteria_by_task[name](
+                    seg_logits_by_task[name], target
+                )
                 loss_by_task[name] = task_loss
                 total_loss = task_loss if total_loss is None else total_loss + task_loss
             return_dict["loss"] = total_loss
@@ -377,7 +389,8 @@ class GridProbeSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
                 input_dict.setdefault(name, target)
             with torch.no_grad():
                 return_dict["pred_by_task"] = {
-                    name: logits.argmax(dim=1) for name, logits in seg_logits_by_task.items()
+                    name: logits.argmax(dim=1)
+                    for name, logits in seg_logits_by_task.items()
                 }
 
         if self.active_probe is not None:

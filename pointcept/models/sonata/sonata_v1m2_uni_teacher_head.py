@@ -371,7 +371,7 @@ class Sonata(PointModel):
     def _dump_nan_debug_buffer(self):
         # print to stdout and stderr rather than log: the log file handler only
         # exists on rank 0, while any rank can hit the non-finite loss.
-        rank =dist.get_rank() if get_world_size() > 1 else 0
+        rank = dist.get_rank() if get_world_size() > 1 else 0
         header = (
             f"[Sonata NaN-dump] rank={rank} non-finite loss, "
             f"last {len(self._nan_debug_buffer)} iters:"

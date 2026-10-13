@@ -21,8 +21,10 @@ TRANSFORMS = Registry("transforms")
 
 def profile_data_regions_enabled():
     """True when POINTCEPT_PROFILE_DATA is 1/true/yes (Torch profiler spans for data pipeline)."""
-    return (
-        os.environ.get("POINTCEPT_PROFILE_DATA", "").strip().lower() in ("1", "true", "yes")
+    return os.environ.get("POINTCEPT_PROFILE_DATA", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
     )
 
 
@@ -110,7 +112,7 @@ class Collect(object):
             "color": "color_mask",
             "normal": "normal_mask",
             "strength": "strength_mask",
-        } # Remark: coord can also be used as features, but are never masked.
+        }  # Remark: coord can also be used as features, but are never masked.
         if isinstance(self.keys, str):
             self.keys = [self.keys]
         for key in self.keys:
@@ -127,7 +129,11 @@ class Collect(object):
             origin_key = None
             keys_to_scan = list(self.keys) + list(self.optional_keys)
             for key in keys_to_scan:
-                if isinstance(key, str) and key.startswith("origin_") and key in data_dict:
+                if (
+                    isinstance(key, str)
+                    and key.startswith("origin_")
+                    and key in data_dict
+                ):
                     origin_key = key
                     break
             if origin_key is None:
@@ -136,9 +142,7 @@ class Collect(object):
                         origin_key = key
                         break
             if origin_key is not None:
-                data["origin_offset"] = torch.tensor(
-                    [data_dict[origin_key].shape[0]]
-                )
+                data["origin_offset"] = torch.tensor([data_dict[origin_key].shape[0]])
         for name, keys in self.kwargs.items():
             name = name.replace("_keys", "")
             assert isinstance(keys, Sequence)
@@ -165,7 +169,7 @@ class Collect(object):
                         data[f"{key}_feat_end"] = feat_offset + t.shape[1]
                 feat_offset += t.shape[1]
             data[name] = torch.cat(tensors, dim=1)
-        
+
         return data
 
 
@@ -235,7 +239,9 @@ class DropSegmentClass(object):
 
     def __init__(self, labels):
         if not labels:
-            raise ValueError("labels must be a non-empty sequence of segment ids to drop")
+            raise ValueError(
+                "labels must be a non-empty sequence of segment ids to drop"
+            )
         self.labels = tuple(int(label) for label in labels)
 
     def __call__(self, data_dict):
@@ -297,6 +303,7 @@ class CenterShift(object):
                 shift = [(x_min + x_max) / 2, (y_min + y_max) / 2, 0]
             data_dict["coord"] -= shift
         return data_dict
+
 
 @TRANSFORMS.register_module()
 class ExtractAbsXY(object):
@@ -437,18 +444,20 @@ class Z_MinShift(object):
             data_dict["coord"][:, 2] -= z_min
         return data_dict
 
+
 @TRANSFORMS.register_module()
 class Z_RandomOffset(object):
     """Add one random z offset ~ N(0, std) to the whole cloud."""
 
     def __init__(self, std=0.1):
         self.std = std
-        
+
     def __call__(self, data_dict):
         if "coord" in data_dict.keys():
             z_offset = np.random.normal(0, self.std)
             data_dict["coord"][:, 2] += z_offset
         return data_dict
+
 
 @TRANSFORMS.register_module()
 class RandomDropout(object):
@@ -968,6 +977,7 @@ class HueSaturationTranslation(object):
             )
         return data_dict
 
+
 @TRANSFORMS.register_module()
 class FillMissingFeat(object):
     """Create ``feat_key`` as an ``(N, feat_dim)`` constant array when the scene lacks it.
@@ -990,7 +1000,7 @@ class FillMissingFeat(object):
 
     def __call__(self, data_dict):
         n = data_dict["coord"].shape[0]
-        
+
         if self.feat_key not in data_dict:
             data_dict[self.feat_key] = np.full(
                 (n, self.feat_dim), self.fill_value, dtype=np.float32
@@ -999,6 +1009,7 @@ class FillMissingFeat(object):
             return data_dict
 
         return data_dict
+
 
 @TRANSFORMS.register_module()
 class RandomDropStrength(object):
@@ -1034,7 +1045,6 @@ class RandomDropStrength(object):
             if self.keep_mask:
                 data_dict["strength_mask"] = drop_mask
         return data_dict
-
 
 
 @TRANSFORMS.register_module()
@@ -1193,8 +1203,7 @@ class GridSample(object):
                         ).astype(vals.dtype, copy=False)
                     else:
                         mean_feats[key] = (
-                            np.add.reduceat(vals, starts, axis=0)
-                            / count_f[:, None]
+                            np.add.reduceat(vals, starts, axis=0) / count_f[:, None]
                         ).astype(vals.dtype, copy=False)
             for i in range(num_fragments):
                 idx_select = starts + i % count
@@ -1580,5 +1589,3 @@ class Compose(object):
 
 IMAGENET_DEFAULT_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_DEFAULT_STD = (0.229, 0.224, 0.225)
-
-

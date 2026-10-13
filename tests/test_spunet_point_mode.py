@@ -44,7 +44,9 @@ def _walk_like_grid_probe(point):
     for i in reversed(range(1, len(point_list))):
         child, parent = point_list[i], point_list[i - 1]
         assert "pooling_inverse" in child.keys()
-        parent.feat = torch.cat([parent.feat, child.feat[child.pooling_inverse]], dim=-1)
+        parent.feat = torch.cat(
+            [parent.feat, child.feat[child.pooling_inverse]], dim=-1
+        )
     point = point_list[0]
     while "pooling_parent" in point.keys():
         assert "pooling_inverse" in point.keys()
@@ -128,9 +130,7 @@ class TestSpUNetPointMode(unittest.TestCase):
             # Every fine voxel's broadcast feature must equal its actual
             # coarse voxel's feature (not just a same-shaped row).
             self.assertTrue(
-                torch.equal(
-                    skips[s].features[got], skips[s].features[want]
-                )
+                torch.equal(skips[s].features[got], skips[s].features[want])
             )
 
     def test_forward_returns_point_chain_with_expected_shape(self):
@@ -197,9 +197,9 @@ class TestSpUNetPointMode(unittest.TestCase):
             finer, coarser = dec_tensors[k], dec_tensors[k - 1]
             stride = model.stride[model.num_stages - k]
             got = _pooling_inverse(finer.indices, coarser.indices, stride)
-            want = _reference_pooling_inverse(finer.indices, coarser.indices, stride).to(
-                got.device
-            )
+            want = _reference_pooling_inverse(
+                finer.indices, coarser.indices, stride
+            ).to(got.device)
             self.assertTrue(
                 torch.equal(got, want),
                 f"decoder level {k}: pooling_inverse mismatch vs independent reference",

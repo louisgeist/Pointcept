@@ -283,9 +283,7 @@ def compute_task_last_layer_grad_norms(
     norms = {}
     for group, losses in grouped_losses.items():
         group_loss = losses[0] if len(losses) == 1 else sum(losses)
-        norm = _grad_norm_with_amp_probe(
-            group_loss, params, probe_scale=probe_scale
-        )
+        norm = _grad_norm_with_amp_probe(group_loss, params, probe_scale=probe_scale)
         if math.isfinite(norm) and norm > 0.0:
             norms[group] = norm
     return norms
@@ -368,9 +366,9 @@ class GradNormLiteEMA:
             if task_name not in self.ema:
                 self.ema[task_name] = value
             else:
-                self.ema[task_name] = (
-                    (1.0 - self.alpha) * self.ema[task_name] + self.alpha * value
-                )
+                self.ema[task_name] = (1.0 - self.alpha) * self.ema[
+                    task_name
+                ] + self.alpha * value
 
     def scale(self, task_name):
         """Return 1 / max(ema, eps), or 1.0 before the first valid observation."""
@@ -590,9 +588,7 @@ def build_grad_norm_state(cfg, model, device=None):
             "(grad_norm needs MultiTaskSegmentorV2)."
         )
     task_groups = getattr(cfg, "grad_norm_task_groups", None)
-    groups = sorted(
-        set(task_groups.get(t, t) if task_groups else t for t in tasks)
-    )
+    groups = sorted(set(task_groups.get(t, t) if task_groups else t for t in tasks))
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
     return GradNormState(

@@ -58,9 +58,7 @@ def _offset_to_list(offset):
     return list(offset)
 
 
-def remap_pred_with_inverse(
-    pred_voxel, inverse, offset=None, origin_offset=None
-):
+def remap_pred_with_inverse(pred_voxel, inverse, offset=None, origin_offset=None):
     """Map voxel-level predictions back to full-resolution points.
 
     When multiple scenes are collated for validation, each scene's ``inverse`` indices
@@ -92,9 +90,9 @@ def remap_pred_with_inverse(
         voxel_start = voxel_end
         point_start = point_end
     pred_full = torch.cat(pred_full)
-    assert pred_full.shape[0] == inverse.shape[0], (
-        f"remapped pred length {pred_full.shape[0]} != inverse length {inverse.shape[0]}"
-    )
+    assert (
+        pred_full.shape[0] == inverse.shape[0]
+    ), f"remapped pred length {pred_full.shape[0]} != inverse length {inverse.shape[0]}"
     return pred_full
 
 
@@ -415,9 +413,7 @@ class SemSegEvaluator(HookBase):
                     )
                 )
         val_histories = self.trainer.storage.histories()
-        loss_avg = (
-            val_histories["val_loss"].avg if "val_loss" in val_histories else 0.0
-        )
+        loss_avg = val_histories["val_loss"].avg if "val_loss" in val_histories else 0.0
         intersection, union, target = local_semseg_confusion_hist_totals(
             self.trainer.storage, self.trainer.cfg.data.num_classes
         )
@@ -712,8 +708,8 @@ class MultiTaskEvaluator(HookBase):
         data_cfg = self.trainer.cfg.data
         main_task = self._cfg_get(data_cfg, "main_task", None)
         keys = list(task_configs.keys())
-        
-        if main_task is not None :
+
+        if main_task is not None:
             if str(main_task) in keys:
                 return str(main_task)
             else:
@@ -799,9 +795,7 @@ class MultiTaskEvaluator(HookBase):
             task_configs
         )
 
-        reg_sums = {
-            t: {"mae": 0.0, "mse": 0.0, "count": 0.0} for t in regression_tasks
-        }
+        reg_sums = {t: {"mae": 0.0, "mse": 0.0, "count": 0.0} for t in regression_tasks}
         td_sums = {
             t: {
                 "kl_weighted": 0.0,
@@ -919,7 +913,9 @@ class MultiTaskEvaluator(HookBase):
 
                 # --------- Evaluate Pixel-Semantic Tasks (2D rasters) ---------
                 pixel_logits_by_task = output_dict.get("pixel_seg_logits_by_task") or {}
-                pixel_targets_by_task = output_dict.get("pixel_seg_target_by_task") or {}
+                pixel_targets_by_task = (
+                    output_dict.get("pixel_seg_target_by_task") or {}
+                )
                 pixel_dense_by_task = (
                     output_dict.get("pixel_seg_logits_dense_by_task") or {}
                 )
@@ -969,7 +965,9 @@ class MultiTaskEvaluator(HookBase):
                             union_sum = union_sum + union
                             target_sum = target_sum + target
                         # Per-channel foreground confusion storage for logging.
-                        ch_name = channel_names[c] if c < len(channel_names) else f"ch{c}"
+                        ch_name = (
+                            channel_names[c] if c < len(channel_names) else f"ch{c}"
+                        )
                         self.trainer.storage.put_scalar(
                             f"val_intersection/{task_name}/{ch_name}", intersection
                         )
@@ -1007,7 +1005,9 @@ class MultiTaskEvaluator(HookBase):
                             dense_gt_np = dense_gt.detach().cpu().numpy()
                             for c in range(num_networks):
                                 ch_name = (
-                                    channel_names[c] if c < len(channel_names) else f"ch{c}"
+                                    channel_names[c]
+                                    if c < len(channel_names)
+                                    else f"ch{c}"
                                 )
                                 pred_prob = dense_pred_np[c]
                                 gt = dense_gt_np[c]
@@ -1025,9 +1025,13 @@ class MultiTaskEvaluator(HookBase):
                                 )
                                 base = f"val_dilated_prf/{task_name}/{ch_name}"
                                 self.trainer.storage.put_scalar(f"{base}/p_num", p_num)
-                                self.trainer.storage.put_scalar(f"{base}/p_denom", p_denom)
+                                self.trainer.storage.put_scalar(
+                                    f"{base}/p_denom", p_denom
+                                )
                                 self.trainer.storage.put_scalar(f"{base}/r_num", r_num)
-                                self.trainer.storage.put_scalar(f"{base}/r_denom", r_denom)
+                                self.trainer.storage.put_scalar(
+                                    f"{base}/r_denom", r_denom
+                                )
 
                 # ------ Evaluate Tile-Distribution Tasks (natural-habitat axes) ------
                 for task_name in tile_distribution_tasks:
@@ -1087,9 +1091,7 @@ class MultiTaskEvaluator(HookBase):
                         self.trainer.storage.put_scalar(
                             f"val_intersection/{task_name}", intersection
                         )
-                        self.trainer.storage.put_scalar(
-                            f"val_union/{task_name}", union
-                        )
+                        self.trainer.storage.put_scalar(f"val_union/{task_name}", union)
                         self.trainer.storage.put_scalar(
                             f"val_target/{task_name}", target
                         )
@@ -1145,9 +1147,7 @@ class MultiTaskEvaluator(HookBase):
                     postfix["interp"] = True
                 prog.step(**postfix)
         val_histories = self.trainer.storage.histories()
-        loss_avg = (
-            val_histories["val_loss"].avg if "val_loss" in val_histories else 0.0
-        )
+        loss_avg = val_histories["val_loss"].avg if "val_loss" in val_histories else 0.0
         if comm.get_world_size() > 1 and regression_tasks:
             flat = []
             for task_name in regression_tasks:
@@ -1255,9 +1255,7 @@ class MultiTaskEvaluator(HookBase):
             radius_px = int(task_config.get("buffer_radius_px", 3))
             per_task_channel_metrics[task_name] = {}
             for c in range(num_networks):
-                ch_name = (
-                    channel_names[c] if c < len(channel_names) else f"ch{c}"
-                )
+                ch_name = channel_names[c] if c < len(channel_names) else f"ch{c}"
                 intersection, union, target = local_task_confusion_hist_totals(
                     self.trainer.storage,
                     f"{task_name}/{ch_name}",
@@ -1327,7 +1325,11 @@ class MultiTaskEvaluator(HookBase):
 
         current_epoch = self.trainer.epoch + 1
         main_task_type = task_configs[main_task].get("task_type")
-        main_m_iou = per_task_metrics[main_task]["m_iou"] if main_task in per_task_metrics else None
+        main_m_iou = (
+            per_task_metrics[main_task]["m_iou"]
+            if main_task in per_task_metrics
+            else None
+        )
         miou_best_by_task = {}
         for task_name, metric in per_task_metrics.items():
             task_m_iou = metric["m_iou"]
@@ -1416,9 +1418,7 @@ class MultiTaskEvaluator(HookBase):
                         tag = iou_class_tag("val", slug, task=task_name)
                         value = float(metric["iou_class"][class_idx])
                         if self.trainer.writer is not None:
-                            self.trainer.writer.add_scalar(
-                                tag, value, current_epoch
-                            )
+                            self.trainer.writer.add_scalar(tag, value, current_epoch)
                         if wandb_log is not None:
                             wandb_log[tag] = value
                 for task_name, channel_metrics in per_task_channel_metrics.items():
@@ -1453,12 +1453,8 @@ class MultiTaskEvaluator(HookBase):
                     )
                 )
             if writer is not None:
-                writer.add_scalar(
-                    f"val/reg/{task_name}/mae", mae, current_epoch
-                )
-                writer.add_scalar(
-                    f"val/reg/{task_name}/rmse", rmse, current_epoch
-                )
+                writer.add_scalar(f"val/reg/{task_name}/mae", mae, current_epoch)
+                writer.add_scalar(f"val/reg/{task_name}/rmse", rmse, current_epoch)
             if wandb_log is not None:
                 wandb_log[f"val/reg/{task_name}/mae"] = float(mae)
                 wandb_log[f"val/reg/{task_name}/rmse"] = float(rmse)
@@ -1510,9 +1506,7 @@ class MultiTaskEvaluator(HookBase):
                     for class_idx in range(int(task_config["num_classes"])):
                         slug = class_name_slug(task_config["names"][class_idx])
                         writer.add_scalar(
-                            metric_tag(
-                                "val", f"mae/{task_name}/{slug}", task="nathab"
-                            ),
+                            metric_tag("val", f"mae/{task_name}/{slug}", task="nathab"),
                             float(mae[class_idx]),
                             current_epoch,
                         )
@@ -1520,15 +1514,13 @@ class MultiTaskEvaluator(HookBase):
                     wandb_log[
                         metric_tag("val", f"weighted_kl/{task_name}", task="nathab")
                     ] = float(kl)
-                    wandb_log[
-                        metric_tag("val", f"tv/{task_name}", task="nathab")
-                    ] = float(tv)
+                    wandb_log[metric_tag("val", f"tv/{task_name}", task="nathab")] = (
+                        float(tv)
+                    )
                     for class_idx in range(int(task_config["num_classes"])):
                         slug = class_name_slug(task_config["names"][class_idx])
                         wandb_log[
-                            metric_tag(
-                                "val", f"mae/{task_name}/{slug}", task="nathab"
-                            )
+                            metric_tag("val", f"mae/{task_name}/{slug}", task="nathab")
                         ] = float(mae[class_idx])
             if final_kl_by_task:
                 kl_sum = sum(final_kl_by_task.values())
@@ -1570,7 +1562,9 @@ class MultiTaskEvaluator(HookBase):
             main_kl = final_kl_by_task.get(main_task)
             if main_kl is not None:
                 self.trainer.comm_info["current_metric_value"] = -main_kl
-                self.trainer.comm_info["current_metric_name"] = f"-weighted_kl/{main_task}"
+                self.trainer.comm_info["current_metric_name"] = (
+                    f"-weighted_kl/{main_task}"
+                )
         else:
             self.trainer.comm_info["current_metric_value"] = main_m_iou
             self.trainer.comm_info["current_metric_name"] = f"mIoU/{main_task}"
@@ -1582,5 +1576,3 @@ class MultiTaskEvaluator(HookBase):
                 self.trainer.best_metric_value,
             )
         )
-
-

@@ -51,9 +51,6 @@ def finalize_epoch_wall_timing(
             )
         if wandb_dict is not None:
             wandb_dict.update(timing)
-        elif (
-            getattr(trainer.cfg, "enable_wandb", False)
-            and wandb.run is not None
-        ):
+        elif getattr(trainer.cfg, "enable_wandb", False) and wandb.run is not None:
             wandb.log({"Epoch": current_epoch, **timing})
     return total_s

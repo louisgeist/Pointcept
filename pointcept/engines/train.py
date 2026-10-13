@@ -159,14 +159,11 @@ class TrainerBase:
         comm.synchronize()
         for h in self.hooks:
             h.after_train()
-        if torch.cuda.is_available(): # synchronize GPU before measuring runtime
+        if torch.cuda.is_available():  # synchronize GPU before measuring runtime
             torch.cuda.synchronize()
         total_runtime_seconds = time.perf_counter() - self.total_runtime_start_time
         # On a resumed run, report the runtime accumulated over all run segments.
-        if (
-            comm.is_main_process()
-            and getattr(self, "cfg", None) is not None
-        ):
+        if comm.is_main_process() and getattr(self, "cfg", None) is not None:
             from pointcept.utils.runtime_state import (
                 get_total_runtime_s,
                 runtime_state_path,
@@ -318,9 +315,7 @@ class Trainer(TrainerBase):
                 output_dict["loss"] / self.cfg.gradient_accumulation_steps
             )  # scale loss
 
-        model = (
-            self.model.module if hasattr(self.model, "module") else self.model
-        )
+        model = self.model.module if hasattr(self.model, "module") else self.model
         loss_by_task = output_dict.get("loss_by_task")
 
         if getattr(self.cfg, "grad_norm_lite", False):
@@ -366,18 +361,13 @@ class Trainer(TrainerBase):
                     if getattr(self.cfg, "sync_bn", False):
                         if task_groups:
                             task_order = sorted(
-                                set(
-                                    task_groups.get(t, t)
-                                    for t in loss_by_task.keys()
-                                )
+                                set(task_groups.get(t, t) for t in loss_by_task.keys())
                             )
                         else:
                             task_order = getattr(model, "tasks", None) or sorted(
                                 loss_by_task.keys()
                             )
-                        norms = all_reduce_mean_task_norms(
-                            norms, task_names=task_order
-                        )
+                        norms = all_reduce_mean_task_norms(norms, task_names=task_order)
                     self._grad_norm_lite_ema.update(norms)
                     lite_info["last_layer_norms"] = norms
 
@@ -507,15 +497,11 @@ class Trainer(TrainerBase):
                 )
                 global_gradient_diag["gradient/global"] = float(grad_l2)
             else:
-                global_gradient_diag["gradient/global"] = l2_model_grad_norm(
-                    self.model
-                )
+                global_gradient_diag["gradient/global"] = l2_model_grad_norm(self.model)
 
             valid_gradients = True
             if getattr(self.cfg, "skip_nan_grad", False):
-                valid_gradients = math.isfinite(
-                    global_gradient_diag["gradient/global"]
-                )
+                valid_gradients = math.isfinite(global_gradient_diag["gradient/global"])
                 if comm.get_world_size() > 1:
                     # MIN so any rank with bad grads forces every rank to skip
                     # (avoids DDP desync).
@@ -772,11 +758,7 @@ class GridProbeTrainer(Trainer):
             "(one frozen-backbone forward per batch).",
             n_probes,
         )
-        if (
-            self.cfg.enable_wandb
-            and comm.is_main_process()
-            and wandb.run is not None
-        ):
+        if self.cfg.enable_wandb and comm.is_main_process() and wandb.run is not None:
             wandb.run.summary["grid_probe/num_probes"] = n_probes
             wandb.log({"grid_probe/num_probes": n_probes})
 
@@ -861,9 +843,7 @@ class GridProbeTrainer(Trainer):
                     input_dict.setdefault(name, target)
                     accum = self.cfg.gradient_accumulation_steps
                     if self.cfg.enable_amp:
-                        scaled_losses.append(
-                            self.scaler[name].scale(task_loss / accum)
-                        )
+                        scaled_losses.append(self.scaler[name].scale(task_loss / accum))
                     else:
                         scaled_losses.append(task_loss / accum)
                 del logits

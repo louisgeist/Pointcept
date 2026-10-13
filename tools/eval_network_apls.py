@@ -47,13 +47,7 @@ import numpy as np
 from tqdm import tqdm
 
 _HERE = Path(__file__).resolve().parent
-_PREPROC_DIR = (
-    _HERE.parent
-    / "pointcept"
-    / "datasets"
-    / "preprocessing"
-    / "malibu3d"
-)
+_PREPROC_DIR = _HERE.parent / "pointcept" / "datasets" / "preprocessing" / "malibu3d"
 if str(_PREPROC_DIR) not in sys.path:
     sys.path.insert(0, str(_PREPROC_DIR))
 
@@ -166,9 +160,7 @@ class _ProfileAggregator:
             )
 
 
-def _merge_timings(
-    dest: Dict[str, float], src: Optional[Dict[str, float]]
-) -> None:
+def _merge_timings(dest: Dict[str, float], src: Optional[Dict[str, float]]) -> None:
     if not src:
         return
     for name, seconds in src.items():
@@ -210,8 +202,6 @@ def _parse_optional_float(s: str) -> Optional[float]:
     if str(s).strip().lower() in ("none", "null", "false", ""):
         return None
     return float(s)
-
-
 
 
 def _parse_bool(s: str) -> bool:
@@ -326,9 +316,7 @@ def run(
         missing_tiles_file if missing_tiles_file.is_file() else None
     )
     if known_missing:
-        print(
-            f"Known missing tiles: {len(known_missing)} from {missing_tiles_file}"
-        )
+        print(f"Known missing tiles: {len(known_missing)} from {missing_tiles_file}")
     elif missing_tiles_file is not None and not missing_tiles_file.is_file():
         print(
             f"Warning: missing-tiles file not found ({missing_tiles_file}); "
@@ -529,7 +517,12 @@ def run(
                 if channel_timings is not None and roi_timings is not None:
                     # High-level buckets only for ROI totals (pipeline stages nest under
                     # build_pred_graph and must not be summed twice).
-                    for key in ("build_pred_graph", "load_gt", "apls", "save_pred_gpkg"):
+                    for key in (
+                        "build_pred_graph",
+                        "load_gt",
+                        "apls",
+                        "save_pred_gpkg",
+                    ):
                         if key in channel_timings:
                             roi_timings[key] = (
                                 roi_timings.get(key, 0.0) + channel_timings[key]
@@ -588,7 +581,9 @@ def run(
             "skeletonize_enabled": skeletonize_enabled,
             "min_component_nodes": min_component_nodes,
             "save_path": str(save_path),
-            "network_graphs_root": str(network_graphs_root) if network_graphs_root else None,
+            "network_graphs_root": (
+                str(network_graphs_root) if network_graphs_root else None
+            ),
             "split_manifest_csv": str(split_manifest_csv),
             "network_types": list(types),
             "max_rois": max_rois,
@@ -705,7 +700,9 @@ def build_argparser() -> argparse.ArgumentParser:
         default=d["overlap_combine"],
         choices=["nanmean", "max", "first"],
     )
-    p.add_argument("--connectivity", type=int, default=d["connectivity"], choices=[4, 8])
+    p.add_argument(
+        "--connectivity", type=int, default=d["connectivity"], choices=[4, 8]
+    )
     p.add_argument("--rdp_epsilon_m", type=float, default=d["rdp_epsilon_m"])
     p.add_argument(
         "--endpoint_fix_enabled",
@@ -722,7 +719,9 @@ def build_argparser() -> argparse.ArgumentParser:
         help="When to run endpoint-fix relative to RDP (ignored if "
         "--endpoint_fix_enabled=false).",
     )
-    p.add_argument("--merge_hop_threshold", type=float, default=d["merge_hop_threshold"])
+    p.add_argument(
+        "--merge_hop_threshold", type=float, default=d["merge_hop_threshold"]
+    )
     p.add_argument(
         "--min_component_nodes",
         type=int,
@@ -733,7 +732,10 @@ def build_argparser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
-        "--max_rois", type=int, default=None, help="Optional limit on number of ROIs (debug)"
+        "--max_rois",
+        type=int,
+        default=None,
+        help="Optional limit on number of ROIs (debug)",
     )
     p.add_argument(
         "--radius_fix_radius_m",
@@ -835,9 +837,7 @@ def build_argparser() -> argparse.ArgumentParser:
 def main(argv: Optional[List[str]] = None) -> None:
     args = build_argparser().parse_args(argv)
     missing = (
-        Path(args.missing_tiles_file).resolve()
-        if args.missing_tiles_file
-        else None
+        Path(args.missing_tiles_file).resolve() if args.missing_tiles_file else None
     )
     run(
         Path(args.data_root).resolve(),

@@ -74,7 +74,9 @@ MALIBU3D_SEMANTIC_TARGET_KEYS: Tuple[str, ...] = MALIBU3D_SEMANTIC_TASKS
 MALIBU3D_PIXEL_SEMANTIC_TARGET_KEYS: Tuple[str, ...] = tuple(
     MALIBU3D_PIXEL_SEMANTIC_TASKS.keys()
 )
-MALIBU3D_TILE_DISTRIBUTION_TARGET_KEYS: Tuple[str, ...] = MALIBU3D_TILE_DISTRIBUTION_TASKS
+MALIBU3D_TILE_DISTRIBUTION_TARGET_KEYS: Tuple[str, ...] = (
+    MALIBU3D_TILE_DISTRIBUTION_TASKS
+)
 
 # index_valid_keys for GridSample & co. (superset of all MALiBU3D targets).
 # Only **per-point** arrays belong here. Scene-level arrays (``coord_translation`` (3,),
@@ -124,7 +126,9 @@ def get_semantic_config(target_key: str) -> Dict[str, Any]:
     """Return the semantic task config of ``target_key`` (``task_type="semantic"``)."""
     if target_key not in MALIBU3D_SEMANTIC_TASKS:
         keys = ", ".join(sorted(MALIBU3D_SEMANTIC_TASKS))
-        raise KeyError(f"Unknown semantic target_key '{target_key}'. Expected one of: {keys}")
+        raise KeyError(
+            f"Unknown semantic target_key '{target_key}'. Expected one of: {keys}"
+        )
     return semantic_task_config(SEGMENT_NAMES)
 
 
@@ -137,6 +141,7 @@ def get_multitask_regression_task_config_elevation() -> Dict[str, Any]:
     out = deepcopy(MALIBU3D_ELEVATION)
     out["task_type"] = "regression"
     return out
+
 
 def get_pixel_semantic_config(target_key: str) -> Dict[str, Any]:
     if target_key not in MALIBU3D_PIXEL_SEMANTIC_TASKS:
@@ -258,6 +263,7 @@ def init_task_configs(target_keys: Tuple[str, ...]) -> Dict[str, Any]:
             )
     return out
 
+
 def get_missing_target_fill_value(
     target_key: str,
     pixel_semantic_config: Optional[Dict[str, Any]] = None,
@@ -295,6 +301,7 @@ def get_missing_target_fill_value(
         )
     )
     raise KeyError(f"Unknown target_key '{target_key}'. Expected one of: {keys}")
+
 
 def init_task_criteria(task_configs: Dict[str, Any]) -> Dict[str, Any]:
     """Return the default losses ``{task_name: [loss cfg, ...]}`` for ``task_configs``.
@@ -350,6 +357,8 @@ def init_task_criteria(task_configs: Dict[str, Any]) -> Dict[str, Any]:
                     ),
                 ]
         else:
-            raise KeyError(f"Unsupported task_type {task_type!r} for task '{task_name}'.")
-    
+            raise KeyError(
+                f"Unsupported task_type {task_type!r} for task '{task_name}'."
+            )
+
     return task_criteria

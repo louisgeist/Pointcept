@@ -14,6 +14,7 @@ from typing import List, Optional, Sequence, Set, Tuple
 
 from pointcept.utils.logger import get_root_logger
 
+
 def _normalize_split(split) -> str:
     if isinstance(split, str):
         return split
@@ -67,8 +68,11 @@ def scene_matches_include_name(path: str, name: str) -> bool:
             return True
     if "_" in n and "LIDARHD" not in n:
         dept, rest = n.split("_", 1)
-        if dept and rest and base.startswith(dept) and (
-            base.endswith("_" + rest) or base.endswith(rest)
+        if (
+            dept
+            and rest
+            and base.startswith(dept)
+            and (base.endswith("_" + rest) or base.endswith(rest))
         ):
             return True
     return False
@@ -112,9 +116,7 @@ def filter_paths_by_sidecar(
     """Keep the scenes whose ``(split, folder name)`` is in the sidecar, sorted by name."""
     split = _normalize_split(split)
     filtered = [
-        path
-        for path in data_list
-        if (split, os.path.basename(path)) in sidecar_keys
+        path for path in data_list if (split, os.path.basename(path)) in sidecar_keys
     ]
     filtered.sort(key=os.path.basename)
     return filtered

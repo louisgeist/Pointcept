@@ -92,7 +92,9 @@ def split_scene_xy_by_chunk_size(
     Tiles that contain no points are omitted from the returned list (no empty subtiles).
     """
     if chunk_size <= 0 or math.isnan(chunk_size):
-        raise ValueError("chunk_size must be positive and finite, or positive infinity.")
+        raise ValueError(
+            "chunk_size must be positive and finite, or positive infinity."
+        )
 
     coord = scene["coord"]
     if coord.shape[0] == 0:

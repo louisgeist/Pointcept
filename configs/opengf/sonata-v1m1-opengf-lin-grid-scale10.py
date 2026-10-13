@@ -21,7 +21,9 @@ num_exp = 1
 num_classes = 2
 ignore_index = 2  # unreachable after RemapSegment merges raw label 2 into 1
 grid_size = 0.02
-coord_scale = 1 / 10  # aerial coords scaled toward indoor scene size; grid_size stays the indoor 0.02
+coord_scale = (
+    1 / 10
+)  # aerial coords scaled toward indoor scene size; grid_size stays the indoor 0.02
 point_max = 102400
 
 num_gpu = 1
@@ -76,7 +78,9 @@ backbone_out_channels = 1232
 # Grid-search probes — ce_lovasz, AdamW/wd0/OneCycleLR warmup5%, lr sweep only (12 probes).
 _criteria = [
     dict(type="CrossEntropyLoss", loss_weight=1.0, ignore_index=ignore_index),
-    dict(type="LovaszLoss", mode="multiclass", loss_weight=1.0, ignore_index=ignore_index),
+    dict(
+        type="LovaszLoss", mode="multiclass", loss_weight=1.0, ignore_index=ignore_index
+    ),
 ]
 _lrs = {
     "1e-4": 1e-4,
@@ -175,11 +179,15 @@ data = dict(
         split="train",
         data_root=data_root,
         transform=[
-            dict(type="RemapSegment", mapping={2: 1}),  # Qin et al. CVPRW 2021 §4.4: merge outliers into NG
+            dict(
+                type="RemapSegment", mapping={2: 1}
+            ),  # Qin et al. CVPRW 2021 §4.4: merge outliers into NG
             dict(type="CenterShift", apply_z=True),
             dict(type="Z_MinShift"),
             dict(type="Z_RandomOffset"),
-            dict(type="RandomDropout", dropout_ratio=0.2, dropout_application_ratio=0.2),
+            dict(
+                type="RandomDropout", dropout_ratio=0.2, dropout_application_ratio=0.2
+            ),
             dict(type="RandomRotate", angle=[-1, 1], axis="z", center=[0, 0, 0], p=0.5),
             dict(type="RandomScale", scale=[0.9, 1.1]),
             dict(type="RandomFlip", p=0.5),
@@ -211,7 +219,9 @@ data = dict(
         split="val",
         data_root=data_root,
         transform=[
-            dict(type="RemapSegment", mapping={2: 1}),  # Qin et al. CVPRW 2021 §4.4: merge outliers into NG
+            dict(
+                type="RemapSegment", mapping={2: 1}
+            ),  # Qin et al. CVPRW 2021 §4.4: merge outliers into NG
             dict(type="CenterShift", apply_z=True),
             dict(type="Z_MinShift"),
             dict(type="Copy", keys_dict={"segment": "origin_segment"}),
@@ -242,7 +252,9 @@ data = dict(
         data_root=data_root,
         include_names="T2",  # Test II specifically (T1/T3 have no outlier points)
         transform=[
-            dict(type="DropSegmentClass", labels=[2]),  # Qin et al. CVPRW 2021 §4.5: Test II w/o outliers
+            dict(
+                type="DropSegmentClass", labels=[2]
+            ),  # Qin et al. CVPRW 2021 §4.5: Test II w/o outliers
             dict(type="CenterShift", apply_z=True),
             dict(type="Z_MinShift"),
             dict(type="FixedScaleCoord", scale=coord_scale),
@@ -270,7 +282,17 @@ data = dict(
                     feat_keys=feat_keys,
                 ),
             ],
-            aug_transform=[[dict(type="RandomRotateTargetAngle", angle=[0], axis="z", center=[0, 0, 0], p=1)]],
+            aug_transform=[
+                [
+                    dict(
+                        type="RandomRotateTargetAngle",
+                        angle=[0],
+                        axis="z",
+                        center=[0, 0, 0],
+                        p=1,
+                    )
+                ]
+            ],
         ),
     ),
 )

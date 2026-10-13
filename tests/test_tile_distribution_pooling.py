@@ -96,7 +96,9 @@ class TestAbsFreqErrorAndTv(unittest.TestCase):
         torch.testing.assert_close(tv, torch.tensor([0.3, 0.0]))
         # Set-level MAE (unweighted mean over rows) sums to 2x the set-level TV mean
         mae = abs_err.mean(dim=0)
-        self.assertAlmostEqual(float(mae.sum().item()), float(2 * tv.mean().item()), places=5)
+        self.assertAlmostEqual(
+            float(mae.sum().item()), float(2 * tv.mean().item()), places=5
+        )
 
 
 class TestWeightedKLDivLoss(unittest.TestCase):

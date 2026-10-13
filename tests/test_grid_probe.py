@@ -190,7 +190,8 @@ class TestGridProbeSelectMetric(unittest.TestCase):
             f1 = {k: v[1] for k, v in ep.items()}
             hook._last_miou_by_probe, hook._last_f1_by_probe = dict(m_iou), dict(f1)
             hook._update_bests(
-                m_iou, f1,
+                m_iou,
+                f1,
                 {k: np.array([v[1], v[1]]) for k, v in ep.items()},
                 {k: _cls_hist(v[2]) for k, v in ep.items()},
             )
@@ -199,7 +200,8 @@ class TestGridProbeSelectMetric(unittest.TestCase):
             last = hook._selected_last_by_probe()
             best = hook._selected_best_by_probe()
             saver_keys = {
-                name for name, val in last.items()
+                name
+                for name, val in last.items()
                 if best.get(name) is not None and not (val < best[name])
             }
             self.assertEqual(saver_keys, cls_snapshot_keys)
@@ -357,9 +359,7 @@ class TestSeedEnsembleClassIoUStats(unittest.TestCase):
         }
         keys = ["test/iou_Ground", "test/iou_Non-ground"]
         stats_by_key = {k: _metric_stats(metrics, k) for k in keys}
-        flat = _flatten_class_stats(
-            keys, stats_by_key, "test/iou_", with_spread=True
-        )
+        flat = _flatten_class_stats(keys, stats_by_key, "test/iou_", with_spread=True)
         self.assertAlmostEqual(flat["test_iou_Ground_mean"], 0.85)
         self.assertAlmostEqual(flat["test_iou_Ground_std"], 0.05)
         self.assertAlmostEqual(flat["test_iou_Non-ground_mean"], 0.65)
@@ -371,9 +371,7 @@ class TestSeedEnsembleClassIoUStats(unittest.TestCase):
         metrics = {"s0": {"test/f1_Ground": 0.4}, "s1": {"test/f1_Ground": 0.6}}
         keys = ["test/f1_Ground"]
         stats_by_key = {k: _metric_stats(metrics, k) for k in keys}
-        flat = _flatten_class_stats(
-            keys, stats_by_key, "test/f1_", with_spread=False
-        )
+        flat = _flatten_class_stats(keys, stats_by_key, "test/f1_", with_spread=False)
         self.assertEqual(set(flat), {"test_f1_Ground_mean"})
         self.assertAlmostEqual(flat["test_f1_Ground_mean"], 0.5)
 
@@ -385,9 +383,7 @@ class _StochasticBackbone(nn.Module):
     def __init__(self):
         super().__init__()
         self.bn = nn.BatchNorm1d(4)
-        self.blocks = nn.ModuleList(
-            [DropPath(0.3), DropPathPack(0.3), nn.Dropout(0.5)]
-        )
+        self.blocks = nn.ModuleList([DropPath(0.3), DropPathPack(0.3), nn.Dropout(0.5)])
 
     def forward(self, point):
         return point
@@ -413,7 +409,9 @@ class TestFrozenBackboneStaysEval(unittest.TestCase):
             self.assertFalse(m.training, f"{name} in train mode")
 
     def test_pooled_feature_extractor_always_eval_and_frozen(self):
-        model = PooledFeatureExtractor(backbone=dict(type="_TestStochasticBackbone")).train()
+        model = PooledFeatureExtractor(
+            backbone=dict(type="_TestStochasticBackbone")
+        ).train()
         for name, m in model.named_modules():
             self.assertFalse(m.training, f"{name} in train mode")
         self.assertFalse(any(p.requires_grad for p in model.parameters()))
@@ -441,8 +439,12 @@ class TestPooledFeatureExtractor(unittest.TestCase):
         model = PooledFeatureExtractor(backbone=dict(type="_TestStochasticBackbone"))
         feat = torch.arange(20, dtype=torch.float32).reshape(5, 4)
         offset = torch.tensor([2, 5])
-        mean_feat, max_feat = model(dict(coord=torch.zeros(5, 3), feat=feat, offset=offset))
-        self.assertTrue(torch.allclose(mean_feat, torch.stack([feat[:2].mean(0), feat[2:].mean(0)])))
+        mean_feat, max_feat = model(
+            dict(coord=torch.zeros(5, 3), feat=feat, offset=offset)
+        )
+        self.assertTrue(
+            torch.allclose(mean_feat, torch.stack([feat[:2].mean(0), feat[2:].mean(0)]))
+        )
         self.assertTrue(torch.equal(max_feat, torch.stack([feat[1], feat[4]])))
 
 

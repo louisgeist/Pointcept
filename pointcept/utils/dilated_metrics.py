@@ -50,7 +50,9 @@ def dilated_precision_recall_counts(
     if radius_px < 0:
         raise ValueError(f"radius_px must be >= 0, got {radius_px}")
 
-    gt_dilated = morph_dilate_mask(gt_fg, iterations=radius_px, connectivity=connectivity)
+    gt_dilated = morph_dilate_mask(
+        gt_fg, iterations=radius_px, connectivity=connectivity
+    )
     pred_dilated = morph_dilate_mask(
         pred_fg, iterations=radius_px, connectivity=connectivity
     )

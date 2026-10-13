@@ -62,7 +62,9 @@ def seed_all(seed=0):
 
 def jsonable(x):
     if isinstance(x, dict):
-        return {str(k): jsonable(v) for k, v in sorted(x.items(), key=lambda kv: str(kv[0]))}
+        return {
+            str(k): jsonable(v) for k, v in sorted(x.items(), key=lambda kv: str(kv[0]))
+        }
     if isinstance(x, (list, tuple)):
         return [jsonable(v) for v in x]
     if isinstance(x, (str, int, float, bool)) or x is None:
@@ -153,10 +155,21 @@ def capture_build(out, only=None):
                         ds = build_dataset(dcfg)
                         root = str(dcfg.get("data_root", ""))
                         # Relative to data_root, so moving the data directory does not change the hash.
-                        names = [os.path.relpath(str(n), root) if root and str(n).startswith(root) else str(n)
-                                 for n in getattr(ds, "data_list", [])]
-                        ds_cache[key] = dict(type=dcfg["type"], len=len(ds), n_list=len(names),
-                                             list_sha=sha("\n".join(names).encode()), head=names[:3])
+                        names = [
+                            (
+                                os.path.relpath(str(n), root)
+                                if root and str(n).startswith(root)
+                                else str(n)
+                            )
+                            for n in getattr(ds, "data_list", [])
+                        ]
+                        ds_cache[key] = dict(
+                            type=dcfg["type"],
+                            len=len(ds),
+                            n_list=len(names),
+                            list_sha=sha("\n".join(names).encode()),
+                            head=names[:3],
+                        )
                         del ds
                     except Exception as e:
                         ds_cache[key] = dict(error=f"{type(e).__name__}: {e}"[:500])
@@ -164,8 +177,11 @@ def capture_build(out, only=None):
         rec["seconds"] = round(time.time() - t0, 1)
         append_jsonl(path, rec)
         torch.cuda.empty_cache()
-        print(f"[build {i + 1}/{len(paths)}] {p} {rec['seconds']}s"
-              + (" MODEL_ERROR" if "model_error" in rec else ""), flush=True)
+        print(
+            f"[build {i + 1}/{len(paths)}] {p} {rec['seconds']}s"
+            + (" MODEL_ERROR" if "model_error" in rec else ""),
+            flush=True,
+        )
 
 
 # ----------------------------------------------------------------------------- stage forward
@@ -183,14 +199,19 @@ def load_ckpt(model, path, keywords="", replacement=None, exclude_keys=()):
             continue
         if keywords in k:
             k = k.replace(keywords, replacement, 1)
-        weight[k[len("module."):]] = v
+        weight[k[len("module.") :]] = v
     own = model.state_dict()
-    bad_shape = sorted(k for k, v in weight.items() if k in own and own[k].shape != v.shape)
+    bad_shape = sorted(
+        k for k, v in weight.items() if k in own and own[k].shape != v.shape
+    )
     for k in bad_shape:
         weight.pop(k)
     res = model.load_state_dict(weight, strict=False)
-    return dict(missing=sorted(res.missing_keys), unexpected=sorted(res.unexpected_keys),
-                shape_mismatch=bad_shape)
+    return dict(
+        missing=sorted(res.missing_keys),
+        unexpected=sorted(res.unexpected_keys),
+        shape_mismatch=bad_shape,
+    )
 
 
 def make_input(dcfg, pick, ds_cache):
@@ -205,7 +226,9 @@ def make_input(dcfg, pick, ds_cache):
         ds_cache[key] = build_dataset(dcfg)
     ds = ds_cache[key]
     if len(ds.data_list) == 0:
-        raise LookupError(f"no local data under {dcfg.get('data_root')} ({dcfg.get('split')})")
+        raise LookupError(
+            f"no local data under {dcfg.get('data_root')} ({dcfg.get('split')})"
+        )
     if isinstance(pick, str):
         names = [os.path.basename(str(p)) for p in ds.data_list]
         idx = names.index(pick)
@@ -226,8 +249,13 @@ def make_input(dcfg, pick, ds_cache):
                 item[k] = v[keep]
         item["offset"] = torch.tensor([keep.numel()])
     item = collate_fn([item])
-    hashes = {k: [list(v.shape), tensor_sha(v)] for k, v in item.items() if torch.is_tensor(v)}
-    item = {k: (v.cuda(non_blocking=True) if torch.is_tensor(v) else v) for k, v in item.items()}
+    hashes = {
+        k: [list(v.shape), tensor_sha(v)] for k, v in item.items() if torch.is_tensor(v)
+    }
+    item = {
+        k: (v.cuda(non_blocking=True) if torch.is_tensor(v) else v)
+        for k, v in item.items()
+    }
     return item, hashes, str(name)
 
 
@@ -247,7 +275,9 @@ def flair_dcfg(cfg, split):
     dcfg = dict(cfg.data.val)
     dcfg.pop("stratified_subset_manifest", None)
     dcfg.pop("max_sample", None)
-    dcfg.update(split=split, csv_manifest=cases.MALIBU3D_MANIFEST[split], min_points=None)
+    dcfg.update(
+        split=split, csv_manifest=cases.MALIBU3D_MANIFEST[split], min_points=None
+    )
     return dcfg
 
 
@@ -277,7 +307,9 @@ def capture_forward(out, only=None):
     jobs = [("multitask", n, v) for n, v in cases.MULTITASK.items()]
     jobs += [("probe", n, p) for n, p in cases.probe_cases().items()]
     for kind, name, spec in jobs:
-        if (only and not re.search(only, name)) or any(k.startswith(name + "@") or k == name for k in done):
+        if (only and not re.search(only, name)) or any(
+            k.startswith(name + "@") or k == name for k in done
+        ):
             continue
         t0 = time.time()
         try:
@@ -293,21 +325,49 @@ def capture_forward(out, only=None):
                         flat = flatten_out(model(inp))
                     key = f"{name}@{tile}"
                     np.savez_compressed(os.path.join(fdir, key + ".npz"), **flat)
-                    append_jsonl(path, dict(key=key, config=cfg_path, ckpt=cases.CKPT[ck], load=load,
-                                            inputs=hashes, outputs=sorted(flat)))
+                    append_jsonl(
+                        path,
+                        dict(
+                            key=key,
+                            config=cfg_path,
+                            ckpt=cases.CKPT[ck],
+                            load=load,
+                            inputs=hashes,
+                            outputs=sorted(flat),
+                        ),
+                    )
             else:
                 cfg = Config.fromfile(spec)
-                ckpt = (cases.CKPT[cases.PROBE_CKPT_OVERRIDE[name]] if name in cases.PROBE_CKPT_OVERRIDE
-                        else resolve_probe_ckpt(cfg.get("weight")))
+                ckpt = (
+                    cases.CKPT[cases.PROBE_CKPT_OVERRIDE[name]]
+                    if name in cases.PROBE_CKPT_OVERRIDE
+                    else resolve_probe_ckpt(cfg.get("weight"))
+                )
                 if ckpt is None:
-                    append_jsonl(path, dict(key=name, config=spec, skipped=f"no local ckpt for {cfg.get('weight')}"))
+                    append_jsonl(
+                        path,
+                        dict(
+                            key=name,
+                            config=spec,
+                            skipped=f"no local ckpt for {cfg.get('weight')}",
+                        ),
+                    )
                     continue
-                loader = next((h for h in cfg.hooks if h["type"] == "CheckpointLoader"), {})
+                loader = next(
+                    (h for h in cfg.hooks if h["type"] == "CheckpointLoader"), {}
+                )
                 seed_all(0)
                 model = build_model(cfg.model).cuda().eval()
-                load = load_ckpt(model, ckpt, loader.get("keywords", ""), loader.get("replacement"),
-                                 tuple(loader.get("exclude_keys") or ()))
-                load["missing"] = [k for k in load["missing"] if k.startswith("backbone.")]
+                load = load_ckpt(
+                    model,
+                    ckpt,
+                    loader.get("keywords", ""),
+                    loader.get("replacement"),
+                    tuple(loader.get("exclude_keys") or ()),
+                )
+                load["missing"] = [
+                    k for k in load["missing"] if k.startswith("backbone.")
+                ]
                 if cfg.data.val.get("type") == "MALiBU3DDataset":
                     dcfg, pick = flair_dcfg(cfg, "val"), cases.MALIBU3D_TILES[0][0]
                 else:
@@ -320,19 +380,45 @@ def capture_forward(out, only=None):
                 for norm, f in feat_by_norm.items():
                     f = f.float()
                     flat[f"{norm}/mean"] = f.mean(0).cpu().numpy()
-                    flat[f"{norm}/std"] = f.std(0).cpu().numpy() if f.shape[0] > 1 else f[0].cpu().numpy()
-                    rows = np.sort(rng.choice(f.shape[0], min(FEAT_ROWS, f.shape[0]), replace=False))
-                    flat[f"{norm}/rows"] = f[torch.from_numpy(rows).cuda()].cpu().numpy()
-                np.savez_compressed(os.path.join(fdir, name.replace("/", "__") + ".npz"), **flat)
-                append_jsonl(path, dict(key=name, config=spec, ckpt=ckpt, sample=sample, load=load,
-                                        inputs=hashes, outputs=sorted(flat)))
+                    flat[f"{norm}/std"] = (
+                        f.std(0).cpu().numpy() if f.shape[0] > 1 else f[0].cpu().numpy()
+                    )
+                    rows = np.sort(
+                        rng.choice(
+                            f.shape[0], min(FEAT_ROWS, f.shape[0]), replace=False
+                        )
+                    )
+                    flat[f"{norm}/rows"] = (
+                        f[torch.from_numpy(rows).cuda()].cpu().numpy()
+                    )
+                np.savez_compressed(
+                    os.path.join(fdir, name.replace("/", "__") + ".npz"), **flat
+                )
+                append_jsonl(
+                    path,
+                    dict(
+                        key=name,
+                        config=spec,
+                        ckpt=ckpt,
+                        sample=sample,
+                        load=load,
+                        inputs=hashes,
+                        outputs=sorted(flat),
+                    ),
+                )
             print(f"[forward] {name} {time.time() - t0:.1f}s", flush=True)
         except LookupError as e:
             append_jsonl(path, dict(key=name, skipped=str(e)))
             print(f"[forward] {name} skipped: {e}", flush=True)
         except Exception as e:
-            append_jsonl(path, dict(key=name, error=f"{type(e).__name__}: {e}"[:800],
-                                    tb=traceback.format_exc()[-2000:]))
+            append_jsonl(
+                path,
+                dict(
+                    key=name,
+                    error=f"{type(e).__name__}: {e}"[:800],
+                    tb=traceback.format_exc()[-2000:],
+                ),
+            )
             print(f"[forward] {name} ERROR {type(e).__name__}: {e}", flush=True)
         finally:
             model = None
@@ -350,8 +436,13 @@ def read_scalars(logdir):
 
 
 def eval_lines(text):
-    return [re.sub(r"^\[[^\]]*\]\s*", "", l).strip() for l in text.splitlines()
-            if re.search(r"(Val|Test) (result|regression)|precision/recall/f1|macro_apls", l)]
+    return [
+        re.sub(r"^\[[^\]]*\]\s*", "", l).strip()
+        for l in text.splitlines()
+        if re.search(
+            r"(Val|Test) (result|regression)|precision/recall/f1|macro_apls", l
+        )
+    ]
 
 
 def capture_train(out, only=None):
@@ -363,22 +454,68 @@ def capture_train(out, only=None):
             continue
         save = os.path.abspath(os.path.join(out, "train", name))
         os.makedirs(save, exist_ok=True)
-        cmd = [py, os.path.join(os.path.dirname(os.path.abspath(__file__)), "train_entry.py"), "--config-file", cfg_path, "--num-gpus", "1",
-               "--options", f"save_path={save}", *opts]
-        if os.environ.get("REGRESSION_COVERAGE_RC"):  # optional: measure which code the cases execute
-            cmd = [py, "-m", "coverage", "run", "--rcfile", os.environ["REGRESSION_COVERAGE_RC"]] + cmd[1:]
+        cmd = [
+            py,
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "train_entry.py"),
+            "--config-file",
+            cfg_path,
+            "--num-gpus",
+            "1",
+            "--options",
+            f"save_path={save}",
+            *opts,
+        ]
+        if os.environ.get(
+            "REGRESSION_COVERAGE_RC"
+        ):  # optional: measure which code the cases execute
+            cmd = [
+                py,
+                "-m",
+                "coverage",
+                "run",
+                "--rcfile",
+                os.environ["REGRESSION_COVERAGE_RC"],
+            ] + cmd[1:]
         t0 = time.time()
         with open(os.path.join(save, "stdout.log"), "w") as f:
-            rc = subprocess.run(cmd, stdout=f, stderr=subprocess.STDOUT,
-                                env=dict(os.environ, PYTHONPATH=os.pathsep.join(
-                                    p for p in (os.getcwd(), os.environ.get("PYTHONPATH")) if p))).returncode
-        shutil.rmtree(os.path.join(save, "model"), ignore_errors=True)  # checkpoints: 0.2-1.5 GB per case
-        scalars = read_scalars(save) if glob.glob(os.path.join(save, "events.out.tfevents*")) else {}
-        evals = eval_lines(open(os.path.join(save, "stdout.log"), errors="replace").read())
-        append_jsonl(path, dict(key=name, config=cfg_path, options=opts, returncode=rc,
-                                scalars=scalars, evals=evals, seconds=round(time.time() - t0)))
+            rc = subprocess.run(
+                cmd,
+                stdout=f,
+                stderr=subprocess.STDOUT,
+                env=dict(
+                    os.environ,
+                    PYTHONPATH=os.pathsep.join(
+                        p for p in (os.getcwd(), os.environ.get("PYTHONPATH")) if p
+                    ),
+                ),
+            ).returncode
+        shutil.rmtree(
+            os.path.join(save, "model"), ignore_errors=True
+        )  # checkpoints: 0.2-1.5 GB per case
+        scalars = (
+            read_scalars(save)
+            if glob.glob(os.path.join(save, "events.out.tfevents*"))
+            else {}
+        )
+        evals = eval_lines(
+            open(os.path.join(save, "stdout.log"), errors="replace").read()
+        )
+        append_jsonl(
+            path,
+            dict(
+                key=name,
+                config=cfg_path,
+                options=opts,
+                returncode=rc,
+                scalars=scalars,
+                evals=evals,
+                seconds=round(time.time() - t0),
+            ),
+        )
         n_it = len(scalars.get("train_batch/loss", []))
-        print(f"[train] {name} rc={rc} iters={n_it} {time.time() - t0:.0f}s", flush=True)
+        print(
+            f"[train] {name} rc={rc} iters={n_it} {time.time() - t0:.0f}s", flush=True
+        )
 
 
 # ----------------------------------------------------------------------------- compare
@@ -393,7 +530,9 @@ def compare(ref, new, mapping, rtol, atol):
     fails, notes = [], []
 
     # build
-    r, n = read_jsonl(os.path.join(ref, "build.jsonl")), read_jsonl(os.path.join(new, "build.jsonl"))
+    r, n = read_jsonl(os.path.join(ref, "build.jsonl")), read_jsonl(
+        os.path.join(new, "build.jsonl")
+    )
     if r and n:
         gone = []
         for p, rr in r.items():
@@ -404,8 +543,11 @@ def compare(ref, new, mapping, rtol, atol):
             nn = n[np_]
             rc = json.loads(apply_map(json.dumps(rr.get("cfg")), str_map))
             if rc != nn.get("cfg"):
-                diff = [k for k in set(rc or {}) | set(nn.get("cfg") or {})
-                        if (rc or {}).get(k) != (nn.get("cfg") or {}).get(k)]
+                diff = [
+                    k
+                    for k in set(rc or {}) | set(nn.get("cfg") or {})
+                    if (rc or {}).get(k) != (nn.get("cfg") or {}).get(k)
+                ]
                 fails.append(f"build {np_}: config differs at keys {sorted(diff)[:10]}")
             for k in ("cfg_error", "model_error"):
                 if rr.get(k) != nn.get(k) and nn.get(k):
@@ -414,20 +556,30 @@ def compare(ref, new, mapping, rtol, atol):
             if rm and nm:
                 rt = {apply_map(k, str_map): v for k, v in rm["tensors"].items()}
                 if rt != nm["tensors"]:
-                    ks = [k for k in set(rt) | set(nm["tensors"]) if rt.get(k) != nm["tensors"].get(k)]
-                    fails.append(f"build {np_}: model state differs ({len(ks)} tensors, e.g. {sorted(ks)[:3]})")
+                    ks = [
+                        k
+                        for k in set(rt) | set(nm["tensors"])
+                        if rt.get(k) != nm["tensors"].get(k)
+                    ]
+                    fails.append(
+                        f"build {np_}: model state differs ({len(ks)} tensors, e.g. {sorted(ks)[:3]})"
+                    )
             for split, rd in (rr.get("data") or {}).items():
                 nd = (nn.get("data") or {}).get(split)
                 rd = json.loads(apply_map(json.dumps(rd), str_map))
                 if rd != nd:
                     fails.append(f"build {np_}: dataset[{split}] {rd} -> {nd}")
-        notes.append(f"build: {len(r)} ref configs, {len(gone)} not present in new (removed/unmapped)")
+        notes.append(
+            f"build: {len(r)} ref configs, {len(gone)} not present in new (removed/unmapped)"
+        )
         if gone:
             with open(os.path.join(new, "removed_configs.txt"), "w") as f:
                 f.write("\n".join(gone) + "\n")
 
     # forward (skipped when the new capture did not run this stage)
-    r, n = read_jsonl(os.path.join(ref, "forward.jsonl")), read_jsonl(os.path.join(new, "forward.jsonl"))
+    r, n = read_jsonl(os.path.join(ref, "forward.jsonl")), read_jsonl(
+        os.path.join(new, "forward.jsonl")
+    )
     if not n:
         r = {}
     for key, rr in r.items():
@@ -435,16 +587,24 @@ def compare(ref, new, mapping, rtol, atol):
             continue
         nkey = apply_map(key, paths_map)
         nn = n.get(nkey)
-        if nn is None and not os.path.isfile(apply_map(rr.get("config", ""), paths_map)):
+        if nn is None and not os.path.isfile(
+            apply_map(rr.get("config", ""), paths_map)
+        ):
             notes.append(f"forward {key}: config removed")
             continue
         if nn is None or "error" in nn:
-            fails.append(f"forward {key}: " + ("missing" if nn is None else nn["error"][:200]))
+            fails.append(
+                f"forward {key}: " + ("missing" if nn is None else nn["error"][:200])
+            )
             continue
         if json.dumps(rr["load"]) != json.dumps(nn["load"]):
             fails.append(f"forward {key}: checkpoint load report differs {nn['load']}")
         if rr["inputs"] != nn["inputs"]:
-            ks = [k for k in set(rr["inputs"]) | set(nn["inputs"]) if rr["inputs"].get(k) != nn["inputs"].get(k)]
+            ks = [
+                k
+                for k in set(rr["inputs"]) | set(nn["inputs"])
+                if rr["inputs"].get(k) != nn["inputs"].get(k)
+            ]
             fails.append(f"forward {key}: input tensors differ {sorted(ks)}")
         a = np.load(os.path.join(ref, "forward", key.replace("/", "__") + ".npz"))
         b = np.load(os.path.join(new, "forward", nkey.replace("/", "__") + ".npz"))
@@ -455,7 +615,9 @@ def compare(ref, new, mapping, rtol, atol):
                 continue
             x, y = a[k], b[k]
             d = np.abs(x - y)
-            rel = float(d.mean() / max(float(np.abs(x).mean()), 1e-12)) if d.size else 0.0
+            rel = (
+                float(d.mean() / max(float(np.abs(x).mean()), 1e-12)) if d.size else 0.0
+            )
             worst, worst_rel = max(worst, float(d.max(initial=0))), max(worst_rel, rel)
             if float(np.max(d - (atol + rtol * np.abs(x)), initial=-np.inf)) <= 0:
                 continue
@@ -464,11 +626,15 @@ def compare(ref, new, mapping, rtol, atol):
             is_logits = "logits" in k and x.ndim == 2 and x.shape[1] > 1
             agree = float(np.mean(x.argmax(1) == y.argmax(1))) if is_logits else 1.0
             if rel > FORWARD_MEAN_RTOL or agree < FORWARD_MIN_AGREEMENT:
-                fails.append(f"forward {key}: {k} max|diff|={d.max():.3g} mean rel={rel:.2g} argmax agree={agree:.5f}")
+                fails.append(
+                    f"forward {key}: {k} max|diff|={d.max():.3g} mean rel={rel:.2g} argmax agree={agree:.5f}"
+                )
         notes.append(f"forward {key}: max|diff|={worst:.3g} mean rel={worst_rel:.2g}")
 
     # train (skipped when the new capture did not run this stage)
-    r, n = read_jsonl(os.path.join(ref, "train.jsonl")), read_jsonl(os.path.join(new, "train.jsonl"))
+    r, n = read_jsonl(os.path.join(ref, "train.jsonl")), read_jsonl(
+        os.path.join(new, "train.jsonl")
+    )
     if not n:
         r = {}
     for key, rr in r.items():
@@ -480,7 +646,9 @@ def compare(ref, new, mapping, rtol, atol):
             fails.append(f"train {key}: missing")
             continue
         if nn["returncode"] != rr["returncode"]:
-            fails.append(f"train {key}: returncode {rr['returncode']} -> {nn['returncode']}")
+            fails.append(
+                f"train {key}: returncode {rr['returncode']} -> {nn['returncode']}"
+            )
         worst, worst_tag = 0.0, None
         for tag, series in rr["scalars"].items():
             other = nn["scalars"].get(tag)
@@ -499,7 +667,9 @@ def compare(ref, new, mapping, rtol, atol):
                 if tag == "train_batch/loss" and step <= TRAIN_STRICT_STEPS and d > tol:
                     fails.append(f"train {key}: {tag} step {step}: {a:.5g} -> {b:.5g}")
         notes.append(f"train {key}: max relative scalar diff {worst:.3g} ({worst_tag})")
-        n_diff = sum(x != y for x, y in zip(rr["evals"], nn["evals"])) + abs(len(rr["evals"]) - len(nn["evals"]))
+        n_diff = sum(x != y for x, y in zip(rr["evals"], nn["evals"])) + abs(
+            len(rr["evals"]) - len(nn["evals"])
+        )
         if n_diff:
             # Val/test metrics after 40 noisy steps are informational only.
             notes.append(f"train {key}: {n_diff} eval line(s) differ (informational)")
@@ -516,7 +686,9 @@ def accept(ref, new, keys):
     Only for intended, verified changes. Build entries of configs that no longer exist are dropped.
     """
     for stage in ("build", "forward", "train"):
-        rpath, npath = os.path.join(ref, f"{stage}.jsonl"), os.path.join(new, f"{stage}.jsonl")
+        rpath, npath = os.path.join(ref, f"{stage}.jsonl"), os.path.join(
+            new, f"{stage}.jsonl"
+        )
         if not os.path.isfile(npath):
             continue
         r, n = read_jsonl(rpath), read_jsonl(npath)
@@ -525,7 +697,10 @@ def accept(ref, new, keys):
                 r[k] = n[k]
                 if stage == "forward":
                     fn = k.replace("/", "__") + ".npz"
-                    shutil.copy(os.path.join(new, "forward", fn), os.path.join(ref, "forward", fn))
+                    shutil.copy(
+                        os.path.join(new, "forward", fn),
+                        os.path.join(ref, "forward", fn),
+                    )
                 print(f"accepted {stage} {k}")
         if stage == "build":
             r = {k: v for k, v in r.items() if os.path.isfile(k)}
@@ -537,7 +712,9 @@ def main():
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
     c = sub.add_parser("capture")
-    c.add_argument("--stage", choices=["build", "forward", "train", "all"], required=True)
+    c.add_argument(
+        "--stage", choices=["build", "forward", "train", "all"], required=True
+    )
     c.add_argument("--out", required=True)
     c.add_argument("--only", default=None, help="regex on config path / case name")
     k = sub.add_parser("compare")
@@ -546,7 +723,10 @@ def main():
     k.add_argument("--map", default=None)
     k.add_argument("--rtol", type=float, default=1e-3)
     k.add_argument("--atol", type=float, default=1e-4)
-    a = sub.add_parser("accept", help="copy intended, verified changes from a capture into the rolling reference")
+    a = sub.add_parser(
+        "accept",
+        help="copy intended, verified changes from a capture into the rolling reference",
+    )
     a.add_argument("ref")
     a.add_argument("new")
     a.add_argument("keys", nargs="+")
@@ -557,10 +737,22 @@ def main():
             # One process per stage: building every config leaves global CUDA/spconv state behind that shifts
             # PT-v3m1 forwards by ~1e-3 relative when the forward stage runs in the same process.
             for stage in ("build", "forward", "train"):
-                cmd = [sys.executable, os.path.abspath(__file__), "capture", "--stage", stage, "--out", args.out]
-                subprocess.run(cmd + (["--only", args.only] if args.only else []), check=True)
+                cmd = [
+                    sys.executable,
+                    os.path.abspath(__file__),
+                    "capture",
+                    "--stage",
+                    stage,
+                    "--out",
+                    args.out,
+                ]
+                subprocess.run(
+                    cmd + (["--only", args.only] if args.only else []), check=True
+                )
         else:
-            dict(build=capture_build, forward=capture_forward, train=capture_train)[args.stage](args.out, args.only)
+            dict(build=capture_build, forward=capture_forward, train=capture_train)[
+                args.stage
+            ](args.out, args.only)
     elif args.cmd == "accept":
         accept(args.ref, args.new, args.keys)
     else:

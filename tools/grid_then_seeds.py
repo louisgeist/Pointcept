@@ -149,9 +149,7 @@ def split_info_from_cfg(cfg) -> dict:
     return {
         "val_split": val_split,
         "test_split": test_split,
-        "val_eq_test_split": bool(
-            val_split is not None and val_split == test_split
-        ),
+        "val_eq_test_split": bool(val_split is not None and val_split == test_split),
     }
 
 
@@ -391,10 +389,34 @@ def report(
             f"{seed_dir / SEED_RESULT}",
             flush=True,
         )
-    line("test mIoU", g("test_mIoU_mean"), g("test_mIoU_std"), g("test_mIoU_min"), g("test_mIoU_max"))
-    line("test mAcc", g("test_mAcc_mean"), g("test_mAcc_std"), g("test_mAcc_min"), g("test_mAcc_max"))
-    line("test allAcc", g("test_allAcc_mean"), g("test_allAcc_std"), g("test_allAcc_min"), g("test_allAcc_max"))
-    line("test F1-macro", g("test_f1_macro_mean"), g("test_f1_macro_std"), g("test_f1_macro_min"), g("test_f1_macro_max"))
+    line(
+        "test mIoU",
+        g("test_mIoU_mean"),
+        g("test_mIoU_std"),
+        g("test_mIoU_min"),
+        g("test_mIoU_max"),
+    )
+    line(
+        "test mAcc",
+        g("test_mAcc_mean"),
+        g("test_mAcc_std"),
+        g("test_mAcc_min"),
+        g("test_mAcc_max"),
+    )
+    line(
+        "test allAcc",
+        g("test_allAcc_mean"),
+        g("test_allAcc_std"),
+        g("test_allAcc_min"),
+        g("test_allAcc_max"),
+    )
+    line(
+        "test F1-macro",
+        g("test_f1_macro_mean"),
+        g("test_f1_macro_std"),
+        g("test_f1_macro_min"),
+        g("test_f1_macro_max"),
+    )
     iou_classes = []
     seen_iou_cls = set()
     for k in res:
@@ -444,24 +466,61 @@ def report(
         targets.append(Path(extra_csv).resolve())
     for target in targets:
         wrote = append_summary_csv(target, row)
-        log(("appended summary row -> " if wrote else "summary row already present in ") + str(target))
+        log(
+            ("appended summary row -> " if wrote else "summary row already present in ")
+            + str(target)
+        )
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    ap.add_argument("--grid-config", required=True, help="grid-probe config (path or configs/ name)")
-    ap.add_argument("--weight", default=None, help="frozen backbone checkpoint (overrides the config's weight=)")
-    ap.add_argument("--save-root", default=None, help="output root (default: $JOB_DIR or exp/grid_then_seeds/<ts>)")
+    ap.add_argument(
+        "--grid-config", required=True, help="grid-probe config (path or configs/ name)"
+    )
+    ap.add_argument(
+        "--weight",
+        default=None,
+        help="frozen backbone checkpoint (overrides the config's weight=)",
+    )
+    ap.add_argument(
+        "--save-root",
+        default=None,
+        help="output root (default: $JOB_DIR or exp/grid_then_seeds/<ts>)",
+    )
     ap.add_argument("--n-seeds", type=int, default=10)
     ap.add_argument("--num-gpus", type=int, default=1)
-    ap.add_argument("--extra-options", default=None, help='appended to --options of both phases, e.g. "epoch=2 eval_epoch=2"')
-    ap.add_argument("--wandb-group", default=None, help="W&B group for both runs (default: gts-<save-root basename>)")
-    ap.add_argument("--skip-grid", action="store_true", help="grid already ran; use --grid-dir and go straight to winner->seeds")
-    ap.add_argument("--grid-dir", default=None, help="existing grid save dir (required with --skip-grid / --make-config-only)")
-    ap.add_argument("--make-config-only", action="store_true", help="just write the seed-ensemble config from an existing grid dir, then exit")
-    ap.add_argument("--summary-csv", default=None, help="extra CSV to append the final mean+/-std row to")
+    ap.add_argument(
+        "--extra-options",
+        default=None,
+        help='appended to --options of both phases, e.g. "epoch=2 eval_epoch=2"',
+    )
+    ap.add_argument(
+        "--wandb-group",
+        default=None,
+        help="W&B group for both runs (default: gts-<save-root basename>)",
+    )
+    ap.add_argument(
+        "--skip-grid",
+        action="store_true",
+        help="grid already ran; use --grid-dir and go straight to winner->seeds",
+    )
+    ap.add_argument(
+        "--grid-dir",
+        default=None,
+        help="existing grid save dir (required with --skip-grid / --make-config-only)",
+    )
+    ap.add_argument(
+        "--make-config-only",
+        action="store_true",
+        help="just write the seed-ensemble config from an existing grid dir, then exit",
+    )
+    ap.add_argument(
+        "--summary-csv",
+        default=None,
+        help="extra CSV to append the final mean+/-std row to",
+    )
     args = ap.parse_args()
 
     grid_config = resolve_config_path(args.grid_config)
@@ -470,7 +529,12 @@ def main() -> int:
     save_root = Path(
         args.save_root
         or os.environ.get("JOB_DIR")
-        or (REPO_ROOT / "exp" / "grid_then_seeds" / datetime.now().strftime("%Y%m%d_%H%M%S"))
+        or (
+            REPO_ROOT
+            / "exp"
+            / "grid_then_seeds"
+            / datetime.now().strftime("%Y%m%d_%H%M%S")
+        )
     ).resolve()
     save_root.mkdir(parents=True, exist_ok=True)
 
@@ -487,7 +551,9 @@ def main() -> int:
     # ---------------- Phase 1: grid probe ----------------
     if args.skip_grid or args.make_config_only:
         if not result_exists(grid_dir, GRID_RESULT):
-            log(f"ERROR: --skip-grid/--make-config-only need an existing {grid_dir / GRID_RESULT}")
+            log(
+                f"ERROR: --skip-grid/--make-config-only need an existing {grid_dir / GRID_RESULT}"
+            )
             return 2
         log("phase 1 (grid): skipped (using existing results)")
     elif result_exists(grid_dir, GRID_RESULT):
@@ -525,7 +591,9 @@ def main() -> int:
         out, probe_names, split = build_seed_ensemble_config(
             grid_config, winner_name, winner_cfg, args.n_seeds, gen_cfg
         )
-        log(f"wrote {out}  ({len(probe_names)} probes: {probe_names[0]}..{probe_names[-1]})")
+        log(
+            f"wrote {out}  ({len(probe_names)} probes: {probe_names[0]}..{probe_names[-1]})"
+        )
 
     if args.make_config_only:
         return 0

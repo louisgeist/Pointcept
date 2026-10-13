@@ -219,5 +219,3 @@ class DefaultDataset(Dataset):
 
     def __len__(self):
         return len(self.data_list) * self.loop
-
-

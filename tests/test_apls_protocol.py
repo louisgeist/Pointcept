@@ -75,7 +75,9 @@ class TestPublicApiHasNoKnobs(unittest.TestCase):
         params = set(inspect.signature(eval_network_apls.run).parameters)
         self.assertFalse(params & set(_REMOVED_KEYS), params & set(_REMOVED_KEYS))
         parser_opts = {
-            o for a in eval_network_apls.build_argparser()._actions for o in a.option_strings
+            o
+            for a in eval_network_apls.build_argparser()._actions
+            for o in a.option_strings
         }
         for key in _REMOVED_KEYS:
             self.assertNotIn(f"--{key}", parser_opts)
@@ -95,10 +97,21 @@ class TestPredictionDefaultsMatchConfigs(unittest.TestCase):
     """eval_network_apls.run() defaults == the mask->graph recipe of the reference config."""
 
     KEYS = (
-        "threshold", "overlap_combine", "connectivity", "rdp_epsilon_m", "endpoint_fix_enabled",
-        "endpoint_fix_stage", "merge_hop_threshold", "radius_fix_radius_m",
-        "remove_small_objects_enabled", "remove_small_objects_min_size_px", "skeletonize_enabled",
-        "open_iterations", "close_iterations", "morph_connectivity", "min_component_nodes",
+        "threshold",
+        "overlap_combine",
+        "connectivity",
+        "rdp_epsilon_m",
+        "endpoint_fix_enabled",
+        "endpoint_fix_stage",
+        "merge_hop_threshold",
+        "radius_fix_radius_m",
+        "remove_small_objects_enabled",
+        "remove_small_objects_min_size_px",
+        "skeletonize_enabled",
+        "open_iterations",
+        "close_iterations",
+        "morph_connectivity",
+        "min_component_nodes",
     )
 
     def test_defaults_equal_reference_config(self):
@@ -109,9 +122,12 @@ class TestPredictionDefaultsMatchConfigs(unittest.TestCase):
             import eval_network_apls
         finally:
             sys.path.pop(0)
-        cfg = Config.fromfile(str(REPO_ROOT / "configs/malibu3d/multi-ptv3-v1m0-malibu3d.py"))
+        cfg = Config.fromfile(
+            str(REPO_ROOT / "configs/malibu3d/multi-ptv3-v1m0-malibu3d.py")
+        )
         defaults = {
-            k: v.default for k, v in inspect.signature(eval_network_apls.run).parameters.items()
+            k: v.default
+            for k, v in inspect.signature(eval_network_apls.run).parameters.items()
         }
         for key in self.KEYS:
             self.assertEqual(defaults[key], cfg.network_apls_eval[key], key)
@@ -144,7 +160,9 @@ class TestProtocolBehaviour(unittest.TestCase):
     def test_min_path_length_filters_short_pairs(self):
         # 4 m < 5 m: the only GT pair is ignored; 6 m >= 5 m: it is scored.
         self.assertEqual(_score(_line_graph(0.0, 4.0), _line_graph(0.0, 4.0)).denom, 0)
-        self.assertGreater(_score(_line_graph(0.0, 6.0), _line_graph(0.0, 6.0)).denom, 0)
+        self.assertGreater(
+            _score(_line_graph(0.0, 6.0), _line_graph(0.0, 6.0)).denom, 0
+        )
 
     def test_score_is_harmonic_mean_of_both_directions(self):
         # Pred covers only the first half of GT: pred->GT is perfect, GT->pred is not.
@@ -157,11 +175,14 @@ class TestProtocolBehaviour(unittest.TestCase):
 
     def test_empty_graph_conventions(self):
         empty = apls.AplsGraph(
-            node_xy=np.empty((0, 2)), edges=np.empty((0, 2), dtype=np.int64),
+            node_xy=np.empty((0, 2)),
+            edges=np.empty((0, 2), dtype=np.int64),
             edge_length_m=np.empty((0,)),
         )
         both = _score(empty, empty)
-        self.assertEqual((both.score, both.denom), (1.0, 0))  # nothing to score: zero weight
+        self.assertEqual(
+            (both.score, both.denom), (1.0, 0)
+        )  # nothing to score: zero weight
         missed = _score(_line_graph(0.0), empty)  # GT routes, empty prediction
         self.assertEqual(missed.score, 0.0)
         self.assertGreater(missed.denom, 0)  # weighted by the GT pairs, not dropped
@@ -169,14 +190,17 @@ class TestProtocolBehaviour(unittest.TestCase):
 
     def test_empty_prediction_roi_lowers_dataset_average(self):
         empty = apls.AplsGraph(
-            node_xy=np.empty((0, 2)), edges=np.empty((0, 2), dtype=np.int64),
+            node_xy=np.empty((0, 2)),
+            edges=np.empty((0, 2), dtype=np.int64),
             edge_length_m=np.empty((0,)),
         )
         good = _score(_line_graph(0.0, 1000.0), _line_graph(0.0, 1000.0))
         missed = _score(_line_graph(0.0, 1000.0), empty)
         self.assertEqual(good.denom, missed.denom)
         only_good = apls.aggregate_dataset_apls([good, good])["per_channel"]["ROADS"]
-        with_missed = apls.aggregate_dataset_apls([good, good, missed])["per_channel"]["ROADS"]
+        with_missed = apls.aggregate_dataset_apls([good, good, missed])["per_channel"][
+            "ROADS"
+        ]
         self.assertAlmostEqual(only_good, 1.0, places=9)
         self.assertAlmostEqual(with_missed, 2.0 / 3.0, places=9)
 

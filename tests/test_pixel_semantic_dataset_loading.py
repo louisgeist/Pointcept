@@ -40,7 +40,9 @@ class TestLoadPixelSemanticLabelForestTwoD(unittest.TestCase):
             raster = np.ones((1, 3, 4), dtype=np.uint8)
             data_dict = {"forest_2d": raster}
 
-            out = ds._load_pixel_semantic_label(data_dict, scene, target_key="forest_2d")
+            out = ds._load_pixel_semantic_label(
+                data_dict, scene, target_key="forest_2d"
+            )
 
             np.testing.assert_array_equal(out["forest_2d"], raster)
             self.assertEqual(out["forest_2d_origin_x"], [10.0])
@@ -63,7 +65,9 @@ class TestLoadPixelSemanticLabelForestTwoD(unittest.TestCase):
                 json.dump(meta, f)
             data_dict = {}
 
-            out = ds._load_pixel_semantic_label(data_dict, scene, target_key="forest_2d")
+            out = ds._load_pixel_semantic_label(
+                data_dict, scene, target_key="forest_2d"
+            )
 
             self.assertEqual(out["forest_2d"].shape, (1, 3, 4))
             self.assertTrue((out["forest_2d"] == 0).all())
@@ -79,7 +83,9 @@ class TestLoadPixelSemanticLabelForestTwoD(unittest.TestCase):
         ds = _bare_dataset(optional_target_keys=("forest_2d",))
         with tempfile.TemporaryDirectory() as scene:
             data_dict = {}
-            out = ds._load_pixel_semantic_label(data_dict, scene, target_key="forest_2d")
+            out = ds._load_pixel_semantic_label(
+                data_dict, scene, target_key="forest_2d"
+            )
             self.assertEqual(out["forest_2d"].shape[0], 1)
 
 
@@ -105,7 +111,9 @@ class TestNetworkStillWorksUnchanged(unittest.TestCase):
 
             out = ds._load_pixel_semantic_label(data_dict, scene)
 
-            self.assertEqual(out["network"].shape, (2, 2, 2))  # sliced to num_networks=2 channels
+            self.assertEqual(
+                out["network"].shape, (2, 2, 2)
+            )  # sliced to num_networks=2 channels
             np.testing.assert_array_equal(out["network"][0], np.ones((2, 2)))
 
 

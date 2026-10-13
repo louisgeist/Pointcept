@@ -41,9 +41,7 @@ MALIBU3D_LEAKAGE_EXCLUDE_FILE = os.path.join(
 def _load_malibu3d_leakage_excluded_tiles():
     with open(MALIBU3D_LEAKAGE_EXCLUDE_FILE) as f:
         return frozenset(
-            line.strip()
-            for line in f
-            if line.strip() and not line.startswith("#")
+            line.strip() for line in f if line.strip() and not line.startswith("#")
         )
 
 

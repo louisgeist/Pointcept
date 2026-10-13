@@ -34,7 +34,9 @@ from pointcept.datasets.preprocessing.xy_grid_chunking import split_scene_xy_reg
 try:
     from plyfile import PlyData
 except ImportError as error:
-    raise ImportError("Please install 'plyfile' to preprocess DALES PLY files.") from error
+    raise ImportError(
+        "Please install 'plyfile' to preprocess DALES PLY files."
+    ) from error
 
 # Raw sem_class -> train id, indexed by raw id: 0 (unknown) -> 8, k -> k - 1.
 ID2TRAINID = np.asarray([8, 0, 1, 2, 3, 4, 5, 6, 7], dtype=np.int32)
@@ -55,9 +57,9 @@ def build_scene(ply_path: str) -> Dict[str, np.ndarray]:
     for axis in ("x", "y", "z"):
         if axis not in attributes:
             raise KeyError(f"Missing '{axis}' in {ply_path}")
-    coord = np.stack([attributes["x"], attributes["y"], attributes["z"]], axis=1).astype(
-        np.float32
-    )
+    coord = np.stack(
+        [attributes["x"], attributes["y"], attributes["z"]], axis=1
+    ).astype(np.float32)
     if "sem_class" not in attributes:
         raise KeyError(f"Missing 'sem_class' label field in {ply_path}")
     segment_raw = attributes["sem_class"].astype(np.int32, copy=False)
@@ -75,9 +77,16 @@ def build_scene(ply_path: str) -> Dict[str, np.ndarray]:
 
 def save_scene(output_scene_dir: str, scene: Dict[str, np.ndarray]) -> None:
     os.makedirs(output_scene_dir, exist_ok=True)
-    np.save(os.path.join(output_scene_dir, "coord.npy"), scene["coord"].astype(np.float32))
-    np.save(os.path.join(output_scene_dir, "segment.npy"), scene["segment"].astype(np.int32))
-    np.save(os.path.join(output_scene_dir, "strength.npy"), scene["strength"].astype(np.float32))
+    np.save(
+        os.path.join(output_scene_dir, "coord.npy"), scene["coord"].astype(np.float32)
+    )
+    np.save(
+        os.path.join(output_scene_dir, "segment.npy"), scene["segment"].astype(np.int32)
+    )
+    np.save(
+        os.path.join(output_scene_dir, "strength.npy"),
+        scene["strength"].astype(np.float32),
+    )
 
 
 def process_one_file(

@@ -154,9 +154,7 @@ def pack_indices_by_voxel_budget(sizes, voxel_budget, max_batch_size):
         raise ValueError(f"max_batch_size must be > 0, got {max_batch_size}")
 
     # Descending size; ascending index tie-break for determinism.
-    indexed = sorted(
-        enumerate(sizes), key=lambda item: (-int(item[1]), item[0])
-    )
+    indexed = sorted(enumerate(sizes), key=lambda item: (-int(item[1]), item[0]))
     batches = []
     batch_sums = []
     for index, size in indexed:
@@ -227,9 +225,7 @@ class VoxelBudgetBatchSampler(torch.utils.data.Sampler):
                     "[VoxelBudgetBatchSampler] rank %d/%d | %s",
                     r,
                     self.world_size,
-                    _summarize_pack_batches(
-                        batches_r, self.sizes, self.voxel_budget
-                    ),
+                    _summarize_pack_batches(batches_r, self.sizes, self.voxel_budget),
                 )
 
     def __iter__(self):
@@ -307,9 +303,7 @@ def collate_fn(batch):
                 continue
             if "offset" in key:
                 out[key] = torch.cumsum(
-                    collate_fn(
-                        [d[key].diff(prepend=torch.tensor([0])) for d in batch]
-                    ),
+                    collate_fn([d[key].diff(prepend=torch.tensor([0])) for d in batch]),
                     dim=0,
                 )
                 continue

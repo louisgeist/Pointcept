@@ -28,7 +28,11 @@ class TestPixelPoolAndGather(unittest.TestCase):
 
     def test_default_pooling_is_max_unchanged(self):
         pooled, targets, _ = self.model._pixel_pool_and_gather(
-            self.feat, self.cell, self.pix, self.offset, self.point_labels,
+            self.feat,
+            self.cell,
+            self.pix,
+            self.offset,
+            self.point_labels,
             num_networks=1,
         )
         # Cell (0,0) max(1,3)=3; cell (1,1) is 10. Order follows torch.unique.
@@ -37,8 +41,13 @@ class TestPixelPoolAndGather(unittest.TestCase):
 
     def test_mean_pooling_averages_within_cell(self):
         pooled, targets, _ = self.model._pixel_pool_and_gather(
-            self.feat, self.cell, self.pix, self.offset, self.point_labels,
-            num_networks=1, pooling="mean",
+            self.feat,
+            self.cell,
+            self.pix,
+            self.offset,
+            self.point_labels,
+            num_networks=1,
+            pooling="mean",
         )
         pooled_sorted = sorted(pooled.flatten().tolist())
         # Cell (0,0) mean(1,3)=2; cell (1,1) is 10.
@@ -46,20 +55,34 @@ class TestPixelPoolAndGather(unittest.TestCase):
 
     def test_explicit_max_matches_default(self):
         pooled_default, _, _ = self.model._pixel_pool_and_gather(
-            self.feat, self.cell, self.pix, self.offset, self.point_labels,
+            self.feat,
+            self.cell,
+            self.pix,
+            self.offset,
+            self.point_labels,
             num_networks=1,
         )
         pooled_explicit, _, _ = self.model._pixel_pool_and_gather(
-            self.feat, self.cell, self.pix, self.offset, self.point_labels,
-            num_networks=1, pooling="max",
+            self.feat,
+            self.cell,
+            self.pix,
+            self.offset,
+            self.point_labels,
+            num_networks=1,
+            pooling="max",
         )
         torch.testing.assert_close(pooled_default, pooled_explicit)
 
     def test_invalid_pooling_raises(self):
         with self.assertRaises(ValueError):
             self.model._pixel_pool_and_gather(
-                self.feat, self.cell, self.pix, self.offset, self.point_labels,
-                num_networks=1, pooling="sum",
+                self.feat,
+                self.cell,
+                self.pix,
+                self.offset,
+                self.point_labels,
+                num_networks=1,
+                pooling="sum",
             )
 
 
