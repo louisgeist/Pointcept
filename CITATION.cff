@@ -3,7 +3,7 @@ message: "If you use this code or the MALiBU3D dataset, please cite the paper be
 title: "MALiBU3D"
 type: software
 license: MIT
-repository-code: "https://github.com/louisgeist/MALiBU3D"  # TODO: final repository URL
+repository-code: "https://github.com/louisgeist/malibu3d"
 authors:
   - given-names: Louis
     family-names: Geist
