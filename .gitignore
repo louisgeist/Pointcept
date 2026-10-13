@@ -15,17 +15,7 @@ outputs/
 **/*.out
 Dockerfile
 
-# Geist
-jz_utils/
-.cursor/
-local/
-.claude/
-.worktrees/
-.superpowers/
-CLAUDE.md
-
-scene_split_manifest_JZ_110826.csv
+# Checkpoints and analysis outputs
 ckpt/
-temp/
 stats/
-ckpt_cleaned/
+temp/

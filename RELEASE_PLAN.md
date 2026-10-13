@@ -168,7 +168,8 @@ La release HF ne livre **ni** `meta.json`, **ni** `network.npy`, **ni** `forest.
 
 ## Phase 8 — Hygiène et validation finale
 
-- [ ] Rechercher les chemins en dur, `usi32yh`, les comptes JZ, les emails, les tokens wandb/HF, les gros fichiers
+- [x] Recherche de traces personnelles (2026-10-13) sur tous les fichiers suivis : chemins (`/lustre`, `/data/geist`, `/home`), `usi32yh`, hecate/Jean Zay/IDRIS, emails, tokens wandb/HF, numéros de jobs, dossiers de semaine, français, TODO, gros fichiers. Propre, sauf `tests/regression/` (harnais : chemins et données de hecate) et la section « # Geist » de `.gitignore` (nettoyée ; entrées personnelles déplacées dans `.git/info/exclude`). Restent volontairement : les TODO arXiv, les repos HF `LouisGeist/...`
+- [ ] Au commit final : retirer `tests/regression/` (outil de travail lié à hecate et à `local/regression/ref`)
 - [ ] Installation propre dans un env neuf, puis lancer le harnais
 - [ ] Reproduire un ou deux chiffres du papier sur Jean Zay à partir des checkpoints HF
 - [ ] Sur Jean Zay, lancer l'étage forward du harnais sur les probes DALES et ECLAIR, au tag puis sur la version finale, et comparer
