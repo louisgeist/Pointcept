@@ -54,6 +54,8 @@ Suivi du nettoyage de la branche `malibu3d` avant la création du repo public.
 ## À livrer sur Hugging Face avec le dataset
 
 - [x] `val_subset_2000tiles.csv` (publié sur HF le 2026-10-12, commit 728b1b4, avec une phrase dans la carte) (renommé, sans « dev ») : les 2000 tuiles val de Jean Zay (`$WORK/Pointcept/data/flair3d_plus/manifests/val_dev_subset_2000.csv`, 9 juillet), réduites aux colonnes `split,tile_id`. À la racine du repo HF, à côté de `tiles.csv`. Fichier prêt : `local/release_inventory/hf_upload/val_subset_2000tiles.csv` (dossier de travail ; original JZ à côté) ; sur hecate, `data/malibu3d/val_subset_2000tiles.csv` (lien vers `data/flair3d_plus/manifests/`). Configs mises à jour, doc courte `docs/val_subset.md` (à intégrer au README / carte HF en Phase 7). La copie de hecate `val_dev_subset_2000.csv` (773 lignes = tout le val de D067) est obsolète. Sélection calculée sur les labels de juillet (land cover v18 + multilabel) : non reconstructible depuis la release, le CSV fait référence.
+- [ ] **Lien vers le code dans la carte du dataset HF** (`LouisGeist/MALiBU3D`, `README.md`, ligne « Training code (GitHub, TODO) ») : remplacer `https://github.com/louisgeist/MALiBU3D` par `https://github.com/louisgeist/malibu3d`, au moment où le repo de code devient public. Source de la carte : `$WORK/malibu3d_hf/README.md` sur Jean Zay (identique à la version en ligne).
+- [ ] **Lien vers le code dans la carte des checkpoints** (`LouisGeist/MALiBU3D-backbones`, encore privé ; source locale `ckpt_cleaned/README.md`, « `TODO: GitHub URL` ») : mettre `https://github.com/louisgeist/malibu3d`, en même temps.
 - [ ] Vérifier que le `tiles.csv` publié contient bien la colonne `n_voxels` (utilisée par les budgets de voxels en val/test). Elle est présente dans la copie locale.
 
 ## Phase 0 — Snapshot et harnais de non-régression
@@ -169,4 +171,6 @@ La release HF ne livre **ni** `meta.json`, **ni** `network.npy`, **ni** `forest.
 - [ ] Installation propre dans un env neuf, puis lancer le harnais
 - [ ] Reproduire un ou deux chiffres du papier sur Jean Zay à partir des checkpoints HF
 - [ ] Sur Jean Zay, lancer l'étage forward du harnais sur les probes DALES et ECLAIR, au tag puis sur la version finale, et comparer
-- [ ] Créer le repo public (squash), supprimer ce fichier
+- [ ] Louis renomme le repo du site `louisgeist/malibu3d` en `malibu` (site → `louisgeist.github.io/malibu/`)
+- [ ] Créer `louisgeist/malibu3d` (privé, pas un fork), y pousser la branche nettoyée (squash, pas de `--mirror` brut), supprimer ce fichier
+- [ ] Le jour de la publication : passer `louisgeist/malibu3d` en public, puis mettre à jour les deux liens des cartes HF (dataset et checkpoints, voir « À livrer sur Hugging Face »)
