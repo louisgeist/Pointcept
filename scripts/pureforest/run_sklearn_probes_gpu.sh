@@ -32,6 +32,7 @@ EXTRA_ARGS="${EXTRA_ARGS:-}"
 TAGS=(
   sonata_outdoor_ms
   sonata_indoor_ms
+  sonata_eclair_ms
   litept_b_malibu3d_ms
   litept_b_malibu3d_norgb_ms
   litept_b_preECLAIR_ms

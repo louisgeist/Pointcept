@@ -9,6 +9,7 @@
 #   - LitePT-B / PTv3 / SpUNet / KPConvX Malibu3D multitask
 #   - LitePT-B supervised ECLAIR from-scratch + GradNorm/mono-task ablations
 #   - LitePT-B noRGB ablation
+#   - Sonata SSL pretrained on ECLAIR only (job 48309, epoch_60)
 #
 # Usage (preferably inside tmux -- a full train+val+test pass over all 11
 # tags is several hours):
@@ -202,6 +203,15 @@ extract_one litept_b_realGN_ms \
 extract_one litept_b_malibu3d_norgb_ms \
     configs/pureforest/cls-litept-b-v1m0-pureforest-lin-grid-enc-norgb.py \
     "${REPO_ROOT}/ckpt/malibu3d/litept_b_multitask/model_best.pth" || FAILS=$((FAILS + 1))
+
+# Sonata SSL pretrained on ECLAIR only (Tab. 4 "eclairSonata"): Jean Zay job 48309,
+# epoch_60 = best ECLAIR val lin-probe mIoU. Same archi/features as sonata_outdoor_ms,
+# so it reuses that config unchanged.
+SONATA_ECLAIR_WEIGHT="${SONATA_ECLAIR_WEIGHT:-${REPO_ROOT}/ckpt/48309/epoch_60.pth}"
+
+extract_one sonata_eclair_ms \
+    configs/pureforest/cls-sonata-v1m2-pureforest-lin-grid-enc.py \
+    "${SONATA_ECLAIR_WEIGHT}" || FAILS=$((FAILS + 1))
 
 END_TIME=$(date +%s)
 ELAPSED=$((END_TIME - START_TIME))
