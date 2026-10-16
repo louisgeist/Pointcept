@@ -29,13 +29,21 @@ models and datasets the benchmark does not use removed.
 ## Installation
 
 ```bash
-conda env create -f environment.yml   # CUDA 12.4, PyTorch 2.5.0
+conda env create -f environment.yml   # PyTorch 2.5.0, CUDA 12.4 (toolkit included)
 conda activate malibu3d
+
+# CUDA extensions, built against the installed PyTorch
+pip install --no-build-isolation ./libs/pointops ./libs/pointrope   # KPConvX, LitePT
+pip install --no-build-isolation flash-attn==2.7.3                  # PTv3, Sonata, LitePT
+
+# KPConvX C++ helpers (in place)
+(cd pointcept/models/kpconvx/cpp_wrappers/cpp_subsampling && python setup.py build_ext --inplace)
+(cd pointcept/models/kpconvx/cpp_wrappers/cpp_neighbors && python setup.py build_ext --inplace)
 ```
 
-The environment builds the two CUDA extensions of `libs/` (`pointops` for KPConvX, `pointrope` for LitePT) and
-[flash-attention](https://github.com/Dao-AILab/flash-attention) (PTv3, Sonata, LitePT). Run every command below
-from the repository root with `export PYTHONPATH=./`.
+flash-attention downloads a prebuilt wheel when one matches PyTorch and CUDA, and otherwise compiles (long; limit
+the parallel jobs with `MAX_JOBS=8`). Run every command below from the repository root with `export PYTHONPATH=./`;
+`pytest tests/` checks the installation.
 
 ## Data
 

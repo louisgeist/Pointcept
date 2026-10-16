@@ -1,21 +1,14 @@
 name: malibu3d
 channels:
-  - pytorch
-  - nvidia/label/cuda-12.4.4
-  - nvidia
+  - nvidia/label/cuda-12.4.1
   - conda-forge
-  - defaults
 dependencies:
   - python=3.10
   - pip
-  - cuda
-  - conda-forge::cudnn
-  - gcc=13.2
-  - gxx=13.2
-  - pytorch=2.5.0
-  - torchvision=0.20.0
-  - torchaudio=2.5.0
-  - pytorch-cuda=12.4
+  - numpy<2  # KPConvX C++ wrappers use the numpy 1.x C API
+  - cuda-toolkit=12.4  # nvcc and headers to build the CUDA extensions (README, Installation)
+  - gcc=13
+  - gxx=13
   - ninja
   - pyyaml
   - tensorboard
@@ -23,13 +16,14 @@ dependencies:
   - wandb
   - yapf
   - addict
+  - easydict  # KPConvX
   - scipy
   - termcolor
-  - timm
   - regex
   - tqdm
   - matplotlib
   - black
+  - pytest
   - huggingface_hub  # dataset and checkpoint downloads
   - plyfile  # DALES preprocessing
   - laspy  # H3D / ECLAIR / OpenGF / PureForest preprocessing
@@ -39,9 +33,12 @@ dependencies:
   - scikit-image  # road mask skeletonization (network_graph_pipeline.py)
   - scikit-learn  # PureForest linear probe (tools/probe_pureforest.py)
   - pip:
-    - torch-scatter -f https://data.pyg.org/whl/torch-2.5.0+cu124.html
-    - torch_geometric  # KPConvX
+    - --extra-index-url https://download.pytorch.org/whl/cu124
+    - --find-links https://data.pyg.org/whl/torch-2.5.0+cu124.html
+    - torch==2.5.0
+    - torchvision==0.20.0
+    - timm
+    - torch-scatter
+    - torch-cluster  # used by torch_geometric's voxel_grid (KPConvX)
+    - torch_geometric==2.7.0  # KPConvX; 2.8 needs pyg-lib for voxel_grid
     - spconv-cu124
-    - git+https://github.com/Dao-AILab/flash-attention.git
-    - ./libs/pointops  # KPConvX neighbor search
-    - ./libs/pointrope  # LitePT rotary embeddings
