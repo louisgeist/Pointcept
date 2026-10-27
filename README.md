@@ -47,7 +47,7 @@ the parallel jobs with `MAX_JOBS=8`). Run every command below from the repositor
 
 ## Data
 
-Download the dataset from Hugging Face (650 GB of zipped regions) and extract it into `data/malibu3d`, the path read by the configs:
+Download the dataset from Hugging Face (790 GB of zipped regions) and extract it into `data/malibu3d`, the path read by the configs:
 
 ```bash
 hf download LouisGeist/MALiBU3D --repo-type dataset --local-dir data/malibu3d_zip
