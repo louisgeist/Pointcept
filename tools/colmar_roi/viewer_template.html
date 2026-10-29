@@ -1,0 +1,643 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>__TITLE__</title>
+<style>
+  :root {
+    --bg: #eef0f3; --panel: rgba(255,255,255,.92); --text: #1d232b; --muted: #66707c;
+    --line: rgba(0,0,0,.12); --accent: #2a62d6; --accent-soft: rgba(42,98,214,.12);
+  }
+  :root[data-theme="dark"] {
+    --bg: #14171c; --panel: rgba(28,32,39,.92); --text: #e7eaee; --muted: #98a2ae;
+    --line: rgba(255,255,255,.14); --accent: #6d9cff; --accent-soft: rgba(109,156,255,.16);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 13px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; overflow: hidden; }
+  canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; cursor: grab; }
+  canvas.dragging { cursor: grabbing; }
+  #panel { position: fixed; top: 12px; left: 12px; width: 258px; max-height: calc(100% - 24px);
+    display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; backdrop-filter: blur(8px); box-shadow: 0 2px 14px rgba(0,0,0,.12); }
+  #panel header { display: flex; align-items: center; gap: 8px; padding: 10px 12px; cursor: pointer; user-select: none; }
+  #panel header h1 { font-size: 14px; margin: 0; font-weight: 650; flex: 1; }
+  #panel header .chev { color: var(--muted); transition: transform .15s; }
+  #panel.collapsed header .chev { transform: rotate(-90deg); }
+  #panel.collapsed .body { display: none; }
+  .body { overflow-y: auto; padding: 0 12px 12px; }
+  .sect { margin-top: 10px; }
+  .sect > .label, #layers .grp { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-bottom: 4px; }
+  #layers { display: flex; flex-direction: column; gap: 2px; }
+  #layers .grp { margin-top: 8px; } #layers .grp:first-child { margin-top: 0; }
+  #layers button, #spots button, #zones button { display: flex; align-items: center; gap: 8px; text-align: left; width: 100%;
+    border: 1px solid transparent; background: transparent; color: var(--text); padding: 4px 8px;
+    border-radius: 6px; font: inherit; cursor: pointer; }
+  #layers button:hover, #spots button:hover, #zones button:hover { background: var(--accent-soft); }
+  #layers button.active { background: var(--accent-soft); border-color: var(--accent); font-weight: 600; }
+  #layers button:disabled { opacity: .4; cursor: not-allowed; background: transparent; }
+  /* "Natural habitat" is a task like Forest: same row style and alignment; only its four axes are indented */
+  #layers .subgrp { padding: 4px 8px; border: 1px solid transparent; }
+  #layers button.indent { padding-left: 24px; }
+  #layers kbd { margin-left: auto; font: 11px ui-monospace, monospace; color: var(--muted); }
+  #spots, #zones { display: flex; flex-direction: column; gap: 2px; }
+  #spots button, #zones button { border-color: var(--line); }
+  #spots button.active, #zones button.active { border-color: var(--accent); background: var(--accent-soft); font-weight: 600; }
+  #spots small, #zones small { margin-left: auto; color: var(--muted); white-space: nowrap; font-size: 11px; font-weight: 400; }
+  #spots button.loaded small { color: var(--accent); }
+  #legend { display: flex; flex-direction: column; gap: 2px; }
+  .item { display: flex; align-items: flex-start; gap: 8px; padding: 3px 4px; border-radius: 5px; cursor: pointer; user-select: none; }
+  .item:hover { background: var(--accent-soft); }
+  .item .sw { flex: none; width: 13px; height: 13px; margin-top: 2px; border-radius: 3px; border: 1px solid var(--line); }
+  .item .sw.ball { border-radius: 50%; }
+  .item .nm { flex: 1; }
+  .item .pc { flex: none; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .item.off { opacity: .4; } .item.off .nm { text-decoration: line-through; }
+  .note { color: var(--muted); margin: 8px 0 3px; font-size: 12px; }
+  .link { color: var(--accent); cursor: pointer; font-size: 12px; background: none; border: 0; padding: 0; font: inherit; }
+  .bar { height: 12px; border-radius: 3px; border: 1px solid var(--line); }
+  .barlab { display: flex; justify-content: space-between; color: var(--muted); font-size: 12px; margin-top: 3px; }
+  .row { display: flex; align-items: center; gap: 8px; }
+  .row input[type=range] { flex: 1; accent-color: var(--accent); }
+  .btns { display: flex; gap: 6px; flex-wrap: wrap; }
+  .btns button { border: 1px solid var(--line); background: transparent; color: var(--text); border-radius: 6px;
+    padding: 4px 9px; font: inherit; cursor: pointer; }
+  .btns button:hover { background: var(--accent-soft); }
+  #hint { position: fixed; right: 12px; bottom: 10px; color: var(--muted); font-size: 12px; text-align: right;
+    pointer-events: none; text-shadow: 0 0 6px var(--bg), 0 0 6px var(--bg); }
+  #loading { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+    background: var(--bg); color: var(--muted); font-size: 14px; z-index: 5; text-align: center; padding: 24px; }
+  @media (max-width: 640px) { #hint { display: none; } #panel { width: min(258px, calc(100% - 24px)); } }
+</style>
+</head>
+<body>
+<canvas id="gl"></canvas>
+<div id="panel">
+  <header id="phead"><h1 id="title"></h1><span class="chev">&#9662;</span></header>
+  <div class="body">
+    <div class="sect" id="zonesect" hidden><div class="label">Zone</div><div id="zones"></div></div>
+    <div class="sect" id="spotsect" hidden><div class="label">Views</div><div id="spots"></div></div>
+    <div class="sect"><div id="layers"></div></div>
+    <div class="sect"><div class="label" id="legtitle"></div><div id="legend"></div></div>
+    <div class="sect"><div class="label">Point size</div>
+      <div class="row"><input id="size" type="range" min="0.3" max="3" step="0.05" value="1"><span id="sizev" style="width:42px;text-align:right"></span></div></div>
+    <div class="sect" id="stats" style="color:var(--muted);font-size:12px"></div>
+    <div class="sect btns"><button id="reset">Reset view</button><button id="theme">Dark / light</button><button id="shot">Screenshot</button></div>
+    <div class="sect" id="credit" style="color:var(--muted);font-size:12px"></div>
+  </div>
+</div>
+<div id="hint">drag: rotate &middot; right-drag / shift-drag: pan &middot; wheel: zoom &middot; keys 1&ndash;9, 0: layer &middot; O: overview</div>
+<div id="loading">Loading point cloud&hellip;</div>
+
+<script type="application/json" id="meta">__META__</script>
+<script type="application/octet-stream" id="data">__DATA__</script>
+<script>
+"use strict";
+const META = JSON.parse(document.getElementById("meta").textContent);
+const $ = (id) => document.getElementById(id);
+
+// ---------------------------------------------------------------- data
+// META.levels[l] = {voxel, size, n, url?}; level 0 is always loaded (embedded or levels[0].url).
+// Levels >= 1 (optional LOD) are streamed per tile; META.spots[i] are zoom cylinders loaded on demand.
+async function fetchBin(url) {
+  // files are gzip; some hosts serve *.gz with "Content-Encoding: gzip" (the browser then already inflated them),
+  // so only decompress when the gzip magic number is still there
+  let blob;
+  if (url) {
+    const r = await fetch(url);
+    if (!r.ok) throw new Error("cannot fetch " + url);
+    const buf = await r.arrayBuffer(), u8 = new Uint8Array(buf);
+    if (!(u8[0] === 0x1f && u8[1] === 0x8b)) return buf;
+    blob = new Blob([buf]);
+  } else {
+    const s = atob(document.getElementById("data").textContent.trim());
+    const u8 = new Uint8Array(s.length);
+    for (let i = 0; i < s.length; i++) u8[i] = s.charCodeAt(i);
+    blob = new Blob([u8]);
+  }
+  if (typeof DecompressionStream === "undefined") throw new Error("This browser lacks DecompressionStream; please update it.");
+  return new Response(blob.stream().pipeThrough(new DecompressionStream("gzip"))).arrayBuffer();
+}
+const b64f32 = (s) => { const b = atob(s), u = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return new Float32Array(u.buffer); };
+
+// ---------------------------------------------------------------- layers
+let dirty = true, ready = false;   // render-on-demand flag, set once the first level is uploaded
+const LAYERS = META.layers;
+const NCOL = META.columns.length;
+let layer = 0;
+const hidden = META.columns.map(() => new Set());
+const hiddenNet = new Set();           // network overlay parts: "edge", "k0", "k1"
+const lutData = new Uint8Array(256 * NCOL * 4);
+const MODE = { rgb: 0, intensity: 1, categorical: 2, elevation: 3, network: 4 };
+
+function hex(c) { return [1, 3, 5].map((i) => parseInt(c.slice(i, i + 2), 16)); }
+function updateLut() {
+  META.columns.forEach((c, row) => {
+    for (let k = 0; k < 256; k++) {
+      const o = (row * 256 + k) * 4;
+      const col = k < c.colors.length ? hex(c.colors[k]) : [128, 128, 128];
+      lutData[o] = col[0]; lutData[o + 1] = col[1]; lutData[o + 2] = col[2];
+      lutData[o + 3] = hidden[row].has(k) ? 0 : 255;
+    }
+  });
+}
+// class filter row: the layer's own column when categorical, else the semantic one (column 0)
+const filterRow = () => (LAYERS[layer].kind === "categorical" ? LAYERS[layer].column : 0);
+
+// ---------------------------------------------------------------- UI
+$("title").textContent = META.title;
+$("credit").textContent = META.credit || "";
+let sizeMul = 1;
+$("sizev").textContent = "×" + sizeMul.toFixed(2);
+
+// layer kinds with no data in this zone (META.disabled, e.g. no road network): greyed out, not selectable
+const off = (i) => (META.disabled || []).includes(LAYERS[i].kind);
+let lastGroup = null, lastSub = null;
+LAYERS.forEach((l, i) => {
+  if (l.group !== lastGroup) { const h = document.createElement("div"); h.className = "grp"; h.textContent = l.group; $("layers").appendChild(h); lastGroup = l.group; lastSub = null; }
+  if ((l.sub || null) !== lastSub) {
+    lastSub = l.sub || null;
+    if (lastSub) { const h = document.createElement("div"); h.className = "subgrp"; h.textContent = lastSub; $("layers").appendChild(h); }
+  }
+  const b = document.createElement("button");
+  if (l.sub) b.className = "indent";
+  b.innerHTML = `<span>${l.label}</span><kbd>${(i + 1) % 10}</kbd>`;
+  b.onclick = () => setLayer(i);
+  if (off(i)) { b.disabled = true; b.title = "Not available in this zone"; }
+  b.dataset.i = i;
+  $("layers").appendChild(b);
+});
+
+function setLayer(i) {
+  if (off(i)) i = 0;
+  layer = i;
+  [...$("layers").querySelectorAll("button")].forEach((b) => b.classList.toggle("active", +b.dataset.i === i));
+  buildLegend();
+  dirty = true;
+}
+
+function gradient(ramp) { return "linear-gradient(90deg," + ramp.map((c) => `rgb(${c.map((v) => Math.round(v * 255))})`).join(",") + ")"; }
+function bar(box, ramp, lo, hi) {
+  const b = document.createElement("div"); b.className = "bar"; b.style.background = gradient(ramp); box.append(b);
+  const lab = document.createElement("div"); lab.className = "barlab"; lab.innerHTML = `<span>${lo}</span><span>${hi}</span>`; box.append(lab);
+}
+function toggleItem(box, color, name, pct, off, onclick, ball) {
+  const d = document.createElement("div"); d.className = "item" + (off ? " off" : "");
+  d.innerHTML = `<span class="sw${ball ? " ball" : ""}" style="background:${color}"></span><span class="nm">${name}</span><span class="pc">${pct}</span>`;
+  d.onclick = () => { onclick(); d.classList.toggle("off"); dirty = true; };
+  box.append(d);
+}
+
+function buildLegend() {
+  const box = $("legend"), L = LAYERS[layer]; box.innerHTML = "";
+  $("legtitle").textContent = L.label;
+  let filter = true;
+  if (L.kind === "intensity") bar(box, META.intensity_ramp, "low", "high");
+  else if (L.kind === "elevation") {
+    $("legtitle").textContent = "Elevation (m above DTM)";
+    bar(box, META.elevation_ramp, META.elevation_range[0].toFixed(0) + " m", "≥ " + META.elevation_range[1].toFixed(0) + " m");
+  } else if (L.kind === "network") {
+    const N = META.network;
+    toggleItem(box, N.edge.color, "Road edge", N.edge.count, hiddenNet.has("edge"), () => toggle(hiddenNet, "edge"), false);
+    toggleItem(box, N.node.color, "Node", N.node.count, hiddenNet.has("node"), () => toggle(hiddenNet, "node"), true);
+    const n = document.createElement("div"); n.className = "note"; n.textContent = "Points: RGB, darkened so the graph stands out."; box.append(n);
+  } else if (L.kind === "categorical") { addClasses(box, L.column); filter = false; }
+  if (filter) {
+    const t = document.createElement("div"); t.className = "note"; t.textContent = "Show / hide semantic classes:"; box.append(t);
+    addClasses(box, 0);
+  }
+}
+const toggle = (set, k) => (set.has(k) ? set.delete(k) : set.add(k));
+
+function addClasses(box, row) {
+  const c = META.columns[row];
+  const ids = Object.keys(c.shares).map(Number).sort((a, b) => c.shares[b] - c.shares[a]);
+  ids.forEach((k) => {
+    const s = c.shares[k];
+    toggleItem(box, c.colors[k] || "#808080", c.names[k] || "Unknown (" + k + ")", (s * 100).toFixed(s < 0.01 ? 1 : 0) + "%",
+      hidden[row].has(k), () => { toggle(hidden[row], k); updateLut(); uploadLut(); }, false);
+  });
+  if (hidden[row].size) {
+    const a = document.createElement("button"); a.className = "link"; a.textContent = "show all";
+    a.onclick = () => { hidden[row].clear(); updateLut(); uploadLut(); buildLegend(); dirty = true; };
+    box.append(a);
+  }
+}
+
+$("phead").onclick = () => $("panel").classList.toggle("collapsed");
+if (innerWidth < 640) $("panel").classList.add("collapsed");
+$("size").oninput = (e) => { sizeMul = parseFloat(e.target.value); $("sizev").textContent = "×" + sizeMul.toFixed(2); dirty = true; };
+$("theme").onclick = () => {
+  document.documentElement.dataset.theme = document.documentElement.dataset.theme !== "dark" ? "dark" : "light"; applyBg(); dirty = true;
+};
+$("reset").onclick = () => { flyTo(defaultCam()); };
+$("shot").onclick = () => {
+  render();
+  $("gl").toBlob((b) => { const a = document.createElement("a"); a.href = URL.createObjectURL(b);
+    a.download = (META.zone || "colmar") + "_" + LAYERS[layer].label.replace(/\W+/g, "_") + ".png"; a.click(); });
+};
+addEventListener("keydown", (e) => {
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.key === "o" || e.key === "O" || e.key === "Escape") { flyTo(defaultCam()); focusSpot = null; if (spots.length) setActive(ovBtn); return; }
+  const k = e.key === "0" ? 10 : parseInt(e.key, 10);
+  if (k >= 1 && k <= LAYERS.length) setLayer(k - 1);
+});
+
+// ---------------------------------------------------------------- GL
+const canvas = $("gl");
+const gl = canvas.getContext("webgl2", { antialias: false, powerPreference: "high-performance" });
+if (!gl) { $("loading").textContent = "WebGL2 is not available in this browser."; throw new Error("no webgl2"); }
+
+const VS = `#version 300 es
+precision highp float;
+in vec3 aPos; in vec3 aRgb; in vec4 aCls0; in vec4 aCls1; in vec2 aCont;
+uniform mat4 uMVP; uniform vec3 uScale; uniform vec3 uOffset;
+uniform int uMode; uniform int uCol; uniform int uRow;
+uniform sampler2D uLut;
+uniform sampler2D uRamp;   // 64x2, row 0 = elevation, row 1 = intensity
+uniform vec3 uVoid;
+uniform float uSize; uniform float uFocal;
+uniform vec4 uClip[4]; uniform int uNClip;
+uniform float uFade; uniform vec3 uBg;   // uFade > 0: context points, mixed toward the background colour
+out vec3 vColor;
+float cls(int c) { return c < 4 ? aCls0[c] : aCls1[c - 4]; }
+vec3 rampAt(float t, float row) { return textureLod(uRamp, vec2((t * 63.0 + 0.5) / 64.0, row), 0.0).rgb; }
+void main() {
+  vec3 p = aPos * uScale + uOffset;
+  for (int i = 0; i < 4; i++) {            // zoom cylinders replace the overview points inside them
+    if (i >= uNClip) break;
+    vec2 d = p.xy - uClip[i].xy;
+    if (dot(d, d) < uClip[i].z) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
+  }
+  vec4 clip = uMVP * vec4(p, 1.0);
+  gl_Position = clip;
+  gl_PointSize = clamp(uSize * uFocal / clip.w, 1.5, 64.0);
+  if (texelFetch(uLut, ivec2(int(cls(uRow) + 0.5), uRow), 0).a < 0.5) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
+  vec3 c;
+  if (uMode == 0) c = aRgb / 255.0;
+  else if (uMode == 4) c = 0.55 * aRgb / 255.0;
+  else if (uMode == 1) c = rampAt(aCont.y / 255.0, 0.75);
+  else if (uMode == 3) c = aCont.x > 254.5 ? uVoid : rampAt(aCont.x / 254.0, 0.25);
+  else c = texelFetch(uLut, ivec2(int(cls(uCol) + 0.5), uCol), 0).rgb;
+  vColor = mix(c, uBg, uFade);
+}`;
+const FS = `#version 300 es
+precision mediump float; in vec3 vColor; out vec4 o;
+void main() { o = vec4(vColor, 1.0); }`;
+// road graph: instanced meshes. Cylinder: one instance per edge piece (aA -> aB); sphere: centred on aA.
+const VS2 = `#version 300 es
+precision highp float;
+in vec3 aPos; in vec3 aA; in vec3 aB;
+uniform mat4 uMVP; uniform float uRadius; uniform int uSphere;
+out vec3 vN;
+void main() {
+  vec3 n, p;
+  if (uSphere == 1) { n = aPos; p = aA + n * uRadius; }
+  else {
+    vec3 ax = aB - aA; float L = length(ax); vec3 w = ax / L;
+    vec3 t = abs(w.z) < 0.99 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
+    vec3 u = normalize(cross(t, w)); vec3 v = cross(w, u);
+    n = aPos.x * u + aPos.y * v; p = aA + w * (aPos.z * L) + n * uRadius;
+  }
+  gl_Position = uMVP * vec4(p, 1.0); vN = n;
+}`;
+const FS2 = `#version 300 es
+precision mediump float; in vec3 vN; uniform vec3 uColor; out vec4 o;
+void main() {
+  float l = 0.42 + 0.58 * max(dot(normalize(vN), normalize(vec3(-0.35, 0.45, 0.82))), 0.0);
+  o = vec4(uColor * l, 1.0);
+}`;
+
+function compile(type, src) {
+  const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+  return s;
+}
+function program(vs, fs) {
+  const p = gl.createProgram();
+  gl.attachShader(p, compile(gl.VERTEX_SHADER, vs)); gl.attachShader(p, compile(gl.FRAGMENT_SHADER, fs));
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+  return p;
+}
+const prog = program(VS, FS), prog2 = program(VS2, FS2);
+const U = (p, n) => gl.getUniformLocation(p, n);
+const loc = Object.fromEntries(["uMVP", "uScale", "uOffset", "uMode", "uCol", "uRow", "uLut", "uRamp", "uVoid", "uSize", "uFocal", "uClip", "uNClip", "uFade", "uBg"].map((n) => [n, U(prog, n)]));
+const loc2 = Object.fromEntries(["uMVP", "uRadius", "uSphere", "uColor"].map((n) => [n, U(prog2, n)]));
+
+const lutTex = gl.createTexture();
+function uploadLut() {
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, lutTex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 256, NCOL, 0, gl.RGBA, gl.UNSIGNED_BYTE, lutData);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+}
+function attrib(p, name, buf, size, stride, type) {
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  const a = gl.getAttribLocation(p, name);
+  gl.enableVertexAttribArray(a);
+  gl.vertexAttribPointer(a, size, type, false, stride, 0);
+}
+// payload layout per N points: pos u16x3 | rgb u8x3 | cls0 u8x4 | cls1 u8x4 | cont u8x2
+function uploadPoints(payload, N) {
+  const off = [0, N * 6, N * 9, N * 13, N * 17];
+  const sizes = [N * 6, N * 3, N * 4, N * 4, N * 2];
+  const vao = gl.createVertexArray(); gl.bindVertexArray(vao);
+  const bufs = [];
+  [["aPos", 3, 6, gl.UNSIGNED_SHORT], ["aRgb", 3, 3, gl.UNSIGNED_BYTE], ["aCls0", 4, 4, gl.UNSIGNED_BYTE],
+   ["aCls1", 4, 4, gl.UNSIGNED_BYTE], ["aCont", 2, 2, gl.UNSIGNED_BYTE]].forEach(([name, size, stride, type], i) => {
+    const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Uint8Array(payload, off[i], sizes[i]), gl.STATIC_DRAW);
+    attrib(prog, name, buf, size, stride, type); bufs.push(buf);
+  });
+  return { vao, bufs };
+}
+
+// ---- road graph overlay: tubes along the edges, one ball per node (centred coordinates, lifted by the exporter)
+const net = { parts: [] };
+function unitMeshes() {
+  const cyl = [], sph = [], S = 20, R = 14;
+  for (let i = 0; i < S; i++) {                                  // open unit cylinder: x,y on the circle, z in [0,1]
+    const a0 = 2 * Math.PI * i / S, a1 = 2 * Math.PI * (i + 1) / S;
+    const q = [[Math.cos(a0), Math.sin(a0), 0], [Math.cos(a1), Math.sin(a1), 0], [Math.cos(a1), Math.sin(a1), 1], [Math.cos(a0), Math.sin(a0), 1]];
+    [0, 1, 2, 0, 2, 3].forEach((k) => cyl.push(...q[k]));
+  }
+  const P = (th, ph) => [Math.sin(th) * Math.cos(ph), Math.sin(th) * Math.sin(ph), Math.cos(th)];
+  for (let i = 0; i < R; i++) for (let j = 0; j < S; j++) {       // unit sphere
+    const t0 = Math.PI * i / R, t1 = Math.PI * (i + 1) / R, p0 = 2 * Math.PI * j / S, p1 = 2 * Math.PI * (j + 1) / S;
+    const q = [P(t0, p0), P(t0, p1), P(t1, p1), P(t1, p0)];
+    [0, 1, 2, 0, 2, 3].forEach((k) => sph.push(...q[k]));
+  }
+  return { cyl: new Float32Array(cyl), sph: new Float32Array(sph) };
+}
+function buildNetwork() {
+  const N = META.network, nodes = b64f32(N.nodes_b64), segs = b64f32(N.segs_b64), m = unitMeshes();
+  const part = (mesh, a, b, sphere, color, diam, key) => {
+    const vao = gl.createVertexArray(); gl.bindVertexArray(vao);
+    const bm = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, bm); gl.bufferData(gl.ARRAY_BUFFER, mesh, gl.STATIC_DRAW);
+    attrib(prog2, "aPos", bm, 3, 12, gl.FLOAT);
+    const inst = (name, arr, stride, offset) => {
+      const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf); gl.bufferData(gl.ARRAY_BUFFER, arr, gl.STATIC_DRAW);
+      const l = gl.getAttribLocation(prog2, name); gl.enableVertexAttribArray(l);
+      gl.vertexAttribPointer(l, 3, gl.FLOAT, false, stride, offset); gl.vertexAttribDivisor(l, 1);
+    };
+    inst("aA", a, 12, 0); inst("aB", b, 12, 0);
+    net.parts.push({ vao, verts: mesh.length / 3, inst: a.length / 3, sphere, color: hex(color).map((v) => v / 255), r: diam / 2, key });
+  };
+  // edge pieces: one cylinder each (x0,y0,z0 -> x1,y1,z1); the 6-float rows are split into two instance streams
+  const k = segs.length / 6, A = new Float32Array(k * 3), B = new Float32Array(k * 3);
+  for (let i = 0; i < k; i++) { A.set(segs.subarray(6 * i, 6 * i + 3), 3 * i); B.set(segs.subarray(6 * i + 3, 6 * i + 6), 3 * i); }
+  part(m.cyl, A, B, false, N.edge.color, N.edge.diam, "edge");
+  part(m.sph, B, B, true, N.edge.color, N.edge.diam, "edge");   // joints between pieces hide the gaps at the bends
+  part(m.sph, nodes, nodes, true, N.node.color, N.node.diam, "node");
+}
+
+// ---------------------------------------------------------------- LOD tiles + zoom spots
+const NL = META.levels.length;
+const tiles = META.tiles.map((t) => ({ ...t, chunks: new Array(NL).fill(null), pending: new Array(NL).fill(false), d: 0, want: 0 }));
+const aabbDist = (p, t) => Math.hypot(...[0, 1, 2].map((i) => Math.max(t.bmin[i] - p[i], 0, p[i] - t.bmax[i])));
+let detailPts = 0, lastSched = 0, inflight = 0, schedPending = false;
+function wantLevel(d) { let l = 0; for (let k = 1; k < NL; k++) if (d < META.lod_dist[k - 1]) l = k; return l; }
+function bestChunk(t) {
+  for (let l = Math.min(t.want, NL - 1); l >= 0; l--) if (t.chunks[l]) return [l, t.chunks[l]];
+  return null;
+}
+function evictFor(need, maxD) {
+  while (detailPts + need > META.budget) {
+    let far = null;
+    for (const t of tiles) for (let l = 1; l < NL; l++) if (t.chunks[l] && t.d > maxD && (!far || t.d > far[0].d)) far = [t, l];
+    if (!far) return false;
+    const [t, l] = far; t.chunks[l].bufs.forEach((b) => gl.deleteBuffer(b)); gl.deleteVertexArray(t.chunks[l].vao);
+    detailPts -= t.chunks[l].count; t.chunks[l] = null;
+  }
+  return true;
+}
+async function loadTile(t, l) {
+  t.pending[l] = true; inflight++;
+  try {
+    const buf = await fetchBin(META.tile_url.replace("{l}", l).replace("{i}", t.id));
+    const n = t.n[l];
+    if (evictFor(n, t.d)) { const c = uploadPoints(buf, n); t.chunks[l] = { ...c, first: 0, count: n }; detailPts += n; }
+  } catch (e) { console.warn("tile", t.id, l, e); }
+  t.pending[l] = false; inflight--; dirty = true; schedule(true);
+}
+function schedule(force) {
+  if (NL < 2) return;
+  const now = performance.now();
+  if (!force && now - lastSched < 150) { schedPending = true; return; }
+  lastSched = now; schedPending = false;
+  const eye = camBasis().eye;
+  for (const t of tiles) { t.d = aabbDist(eye, t); t.want = wantLevel(t.d); }
+  const todo = tiles.filter((t) => t.want > 0 && !t.chunks[t.want] && !t.pending[t.want] && t.n[t.want] > 0).sort((a, b) => a.d - b.d);
+  for (const t of todo) { if (inflight >= 6) break; loadTile(t, t.want); }
+}
+
+const spots = META.spots.map((s) => ({ ...s, chunk: null, loading: false, btn: null }));
+async function loadSpot(s) {
+  if (s.chunk || s.loading) return;
+  s.loading = true; s.btn.querySelector("small").textContent = "loading…";
+  try {
+    const buf = await fetchBin(s.url);
+    s.chunk = { ...uploadPoints(buf, s.n), first: 0, count: s.n };
+    s.btn.classList.add("loaded"); s.btn.querySelector("small").textContent = META.voxel + " m resolution";
+  } catch (e) { console.warn("spot", s.id, e); s.btn.querySelector("small").textContent = "error"; }
+  s.loading = false; dirty = true;
+}
+// Zoom focus: while a spot is the selected view, everything else (overview points, other loaded spots) is "context"
+// and is always drawn faded toward the background colour.
+let focusSpot = null;
+const FADE = 0.8;
+function setActive(btn) { [...$("spots").children].forEach((b) => b.classList.toggle("active", b === btn)); }
+// "Overview": fly back to the whole-ROI view (also bound to the O / Escape keys)
+const ovBtn = document.createElement("button");
+ovBtn.innerHTML = `<span>Overview</span><small>${Math.round(META.n_full / META.levels[0].n)}× downsampled</small>`;
+ovBtn.onclick = () => { flyTo(defaultCam()); setActive(ovBtn); focusSpot = null; };
+$("spots").appendChild(ovBtn);
+spots.forEach((s) => {
+  const b = document.createElement("button");
+  b.innerHTML = `<span>${s.label}</span><small>${META.voxel} m resolution</small>`;
+  b.onclick = () => { flyTo({ yaw: s.yaw ?? cam.yaw, pitch: s.pitch ?? 0.7, dist: s.dist || Math.max(60, s.radius * 1.05), target: s.centre }); loadSpot(s); setActive(b); focusSpot = s; };
+  s.btn = b; $("spots").appendChild(b);
+});
+// zone switcher: one page per zone (META.zones); switching keeps the layer, the theme and the panel state
+if ((META.zones || []).length > 1) {
+  META.zones.forEach((z) => {
+    const b = document.createElement("button");
+    b.innerHTML = `<span>${z.label}</span>`;
+    b.title = z.roi || "";
+    if (z.page === META.page) b.classList.add("active");
+    else b.onclick = () => {
+      const q = new URLSearchParams({ layer: layer + 1 });
+      if (document.documentElement.dataset.theme === "dark") q.set("theme", "dark");
+      if ($("panel").classList.contains("collapsed")) q.set("collapsed", "1");
+      location.href = z.page + "#" + q;
+    };
+    $("zones").appendChild(b);
+  });
+  $("zonesect").hidden = false;
+}
+if (spots.length) { $("spotsect").hidden = false; $("reset").hidden = true; setActive(ovBtn); }
+
+// ---------------------------------------------------------------- camera
+const FOV = 45 * Math.PI / 180;
+// META.cam (per zone, optional): yaw (rad), pitch, dist_mul, target_z (centred m)
+const defaultCam = () => { const c = META.cam || {};
+  return { yaw: c.yaw ?? Math.PI / 2, pitch: c.pitch ?? 0.85, dist: META.radius * 1.5 * (c.dist_mul ?? 1), target: [0, 0, c.target_z ?? -META.extent[2] * 0.25] }; };
+const cam = defaultCam();
+let anim = null;
+function flyTo(to) { anim = { from: { ...cam, target: [...cam.target] }, to, t0: performance.now(), dur: 900 }; dirty = true; }
+function stepAnim() {
+  if (!anim) return;
+  const k = Math.min(1, (performance.now() - anim.t0) / anim.dur), e = k < .5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
+  const { from, to } = anim, mix = (a, b) => a + (b - a) * e;
+  cam.yaw = mix(from.yaw, to.yaw); cam.pitch = mix(from.pitch, to.pitch); cam.dist = mix(from.dist, to.dist);
+  cam.target = from.target.map((v, i) => mix(v, to.target[i]));
+  if (k >= 1) anim = null;
+  dirty = true;
+}
+const sub = (a, b) => a.map((v, i) => v - b[i]);
+const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+const norm = (a) => { const l = Math.hypot(...a); return a.map((v) => v / l); };
+function camBasis() {
+  const d = [Math.cos(cam.pitch) * Math.cos(cam.yaw), Math.cos(cam.pitch) * Math.sin(cam.yaw), Math.sin(cam.pitch)];
+  const eye = cam.target.map((t, i) => t + d[i] * cam.dist);
+  const f = norm(sub(cam.target, eye)), r = norm(cross(f, [0, 0, 1])), u = cross(r, f);
+  return { eye, f, r, u };
+}
+function mvp() {
+  const { eye, f, r, u } = camBasis();
+  const near = Math.max(0.05, cam.dist * 0.01), far = cam.dist + META.radius * 4;
+  const asp = canvas.width / canvas.height, t = 1 / Math.tan(FOV / 2);
+  const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  const V = [r[0], u[0], -f[0], 0, r[1], u[1], -f[1], 0, r[2], u[2], -f[2], 0, -dot(r, eye), -dot(u, eye), dot(f, eye), 1];
+  const P = [t / asp, 0, 0, 0, 0, t, 0, 0, 0, 0, (far + near) / (near - far), -1, 0, 0, 2 * far * near / (near - far), 0];
+  const M = new Float32Array(16);
+  for (let c = 0; c < 4; c++) for (let rr = 0; rr < 4; rr++)
+    M[c * 4 + rr] = P[rr] * V[c * 4] + P[4 + rr] * V[c * 4 + 1] + P[8 + rr] * V[c * 4 + 2] + P[12 + rr] * V[c * 4 + 3];
+  return M;
+}
+
+function applyBg() {
+  const bg = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim();
+  const c = hex(bg.length === 7 ? bg : "#eef0f3"); gl.clearColor(c[0] / 255, c[1] / 255, c[2] / 255, 1);
+}
+function resize() {
+  const dpr = Math.min(devicePixelRatio || 1, 2);
+  const w = Math.round(innerWidth * dpr), h = Math.round(innerHeight * dpr);
+  if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; dirty = true; }
+}
+function render() {
+  resize();
+  gl.viewport(0, 0, canvas.width, canvas.height);
+  gl.enable(gl.DEPTH_TEST); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+  if (!ready) return;
+  const M = mvp(), focal = canvas.height / 2 / Math.tan(FOV / 2), L = LAYERS[layer];
+  gl.useProgram(prog);
+  gl.uniformMatrix4fv(loc.uMVP, false, M);
+  gl.uniform3fv(loc.uScale, META.pos_scale); gl.uniform3fv(loc.uOffset, META.pos_offset);
+  gl.uniform1i(loc.uMode, L.kind === "categorical" ? 2 : MODE[L.kind]);
+  gl.uniform1i(loc.uCol, L.column || 0); gl.uniform1i(loc.uRow, filterRow()); gl.uniform1f(loc.uFocal, focal);
+  schedule(false);
+  const clips = spots.filter((s) => s.chunk).slice(0, 4);
+  const clipData = new Float32Array(16);
+  clips.forEach((s, i) => clipData.set([s.centre[0], s.centre[1], s.radius * s.radius, 0], i * 4));
+  gl.uniform4fv(loc.uClip, clipData); gl.uniform1i(loc.uNClip, clips.length);
+  let shown = 0;
+  const bg = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim();
+  gl.uniform3fv(loc.uBg, hex(bg.length === 7 ? bg : "#eef0f3").map((v) => v / 255));
+  const ctxFade = focusSpot ? FADE : 0;
+  gl.uniform1f(loc.uFade, ctxFade);
+  for (const t of tiles) {
+    const b = bestChunk(t); if (!b) continue;
+    gl.uniform1f(loc.uSize, sizeMul * META.levels[b[0]].size);
+    gl.bindVertexArray(b[1].vao); gl.drawArrays(gl.POINTS, b[1].first, b[1].count); shown += b[1].count;
+  }
+  gl.uniform1i(loc.uNClip, 0); gl.uniform1f(loc.uSize, sizeMul * META.spot_size);
+  for (const s of clips) {
+    const ctx = focusSpot && s !== focusSpot;                       // another loaded spot is context too
+    gl.uniform1f(loc.uFade, ctx ? ctxFade : 0);
+    gl.bindVertexArray(s.chunk.vao); gl.drawArrays(gl.POINTS, 0, s.chunk.count); shown += s.chunk.count;
+  }
+  gl.uniform1f(loc.uFade, 0);
+  if (L.kind === "network") {
+    gl.useProgram(prog2); gl.uniformMatrix4fv(loc2.uMVP, false, M);
+    for (const p of net.parts) {
+      if (hiddenNet.has(p.key)) continue;
+      gl.uniform3fv(loc2.uColor, p.color); gl.uniform1f(loc2.uRadius, p.r); gl.uniform1i(loc2.uSphere, p.sphere ? 1 : 0);
+      gl.bindVertexArray(p.vao); gl.drawArraysInstanced(gl.TRIANGLES, 0, p.verts, p.inst);
+    }
+  }
+  $("stats").textContent = (shown / 1e6).toFixed(2) + " M points loaded" + (inflight ? " · loading detail…" : "");
+}
+function frame() {
+  stepAnim();
+  if (schedPending && performance.now() - lastSched >= 150) schedule(true);
+  if (dirty) { dirty = false; render(); }
+  requestAnimationFrame(frame);
+}
+
+// ---------------------------------------------------------------- input
+const ptrs = new Map();
+canvas.addEventListener("pointerdown", (e) => {
+  canvas.setPointerCapture(e.pointerId); ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  canvas.classList.add("dragging"); anim = null; setActive(null);
+});
+canvas.addEventListener("pointerup", (e) => { ptrs.delete(e.pointerId); if (!ptrs.size) canvas.classList.remove("dragging"); });
+canvas.addEventListener("pointercancel", (e) => ptrs.delete(e.pointerId));
+canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+function pan(dx, dy) {
+  const k = 2 * Math.tan(FOV / 2) * cam.dist / innerHeight, { r, u } = camBasis();
+  cam.target = cam.target.map((t, i) => t - r[i] * dx * k + u[i] * dy * k);
+}
+canvas.addEventListener("pointermove", (e) => {
+  const p = ptrs.get(e.pointerId); if (!p) return;
+  const dx = e.clientX - p.x, dy = e.clientY - p.y;
+  if (ptrs.size === 1) {
+    if (e.buttons & 2 || e.shiftKey || e.ctrlKey || e.metaKey) pan(dx, dy);
+    else { cam.yaw -= dx * 0.006; cam.pitch = Math.min(1.55, Math.max(-0.2, cam.pitch + dy * 0.006)); }
+  } else if (ptrs.size === 2) {
+    const other = [...ptrs.entries()].find(([id]) => id !== e.pointerId)[1];
+    const before = Math.hypot(p.x - other.x, p.y - other.y), after = Math.hypot(e.clientX - other.x, e.clientY - other.y);
+    cam.dist = Math.min(META.radius * 6, Math.max(2, cam.dist * before / Math.max(after, 1)));
+    pan(dx / 2, dy / 2);
+  }
+  p.x = e.clientX; p.y = e.clientY; dirty = true;
+});
+canvas.addEventListener("wheel", (e) => {
+  e.preventDefault(); anim = null; setActive(null);
+  cam.dist = Math.min(META.radius * 6, Math.max(2, cam.dist * Math.exp(e.deltaY * 0.0012))); dirty = true;
+}, { passive: false });
+addEventListener("resize", () => { dirty = true; });
+
+// ---------------------------------------------------------------- boot
+(async () => {
+  try {
+    applyBg(); updateLut(); uploadLut(); buildNetwork();
+    gl.useProgram(prog);
+    // elevation (row 0) and intensity (row 1) ramps as a 64x2 texture on unit 1, linearly filtered
+    const rt = new Uint8Array(64 * 2 * 4);
+    [META.elevation_ramp, META.intensity_ramp].forEach((r, row) => r.forEach((c, i) => rt.set([...c.map((v) => Math.round(v * 255)), 255], (row * 64 + i) * 4)));
+    gl.activeTexture(gl.TEXTURE1); const rampTex = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, rampTex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 64, 2, 0, gl.RGBA, gl.UNSIGNED_BYTE, rt);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.uniform1i(loc.uLut, 0); gl.uniform1i(loc.uRamp, 1); gl.uniform3fv(loc.uVoid, hex(META.void).map((v) => v / 255));
+    const L0 = META.levels[0], c0 = uploadPoints(await fetchBin(L0.url), L0.n);
+    tiles.forEach((t) => { t.chunks[0] = { ...c0, first: t.first0, count: t.n[0] }; });
+    ready = true; $("loading").remove();
+    // #layer=3&theme=dark&collapsed=1&cam=yaw,pitch,dist,x,y,z&spot=church preselect the view (handy for <iframe>)
+    const q = new URLSearchParams(location.hash.slice(1));
+    if (q.get("theme")) { document.documentElement.dataset.theme = q.get("theme"); applyBg(); }
+    if (q.get("collapsed")) $("panel").classList.toggle("collapsed", q.get("collapsed") === "1");
+    setLayer(Math.min(LAYERS.length, Math.max(1, +(q.get("layer") || q.get("mode")) || 1)) - 1);
+    const sp = spots.find((s) => s.id === q.get("spot"));
+    if (sp) { Object.assign(cam, { yaw: sp.yaw ?? cam.yaw, pitch: sp.pitch ?? 0.7, dist: sp.dist || Math.max(60, sp.radius * 1.05), target: [...sp.centre] }); loadSpot(sp); focusSpot = sp; setActive(sp.btn); }
+    if (q.get("cam")) { const v = q.get("cam").split(",").map(Number); [cam.yaw, cam.pitch, cam.dist] = v; cam.target = v.slice(3, 6); }
+    frame();
+  } catch (err) { $("loading").textContent = "Error: " + err.message; console.error(err); }
+})();
+</script>
+</body>
+</html>

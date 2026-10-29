@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Embedding the Colmar viewer</title>
+<style>
+  body { font: 16px/1.5 system-ui, sans-serif; max-width: 860px; margin: 2rem auto; padding: 0 1rem; }
+  /* the viewer fills its frame: give the frame a size (here 16:10), nothing else is needed */
+  .viewer { position: relative; aspect-ratio: 16 / 10; border: 1px solid #ccd; border-radius: 10px; overflow: hidden; background: #eef0f3; }
+  .viewer iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+  .viewer button { position: absolute; inset: 0; width: 100%; border: 0; background: none; font: inherit; cursor: pointer; color: #1d232b; }
+</style>
+</head>
+<body>
+<h1>Colmar city centre</h1>
+<p>The viewer below only downloads its ~5 MB overview once you click (so the page stays light).</p>
+
+<!-- "src" is relative to this page: keep this file next to the viewer folder, or point it anywhere (https://...). -->
+<div class="viewer" id="colmar" data-src="./index.html#layer=1&collapsed=0">
+  <button type="button">&#9654; Load the interactive 3D viewer</button>
+</div>
+
+<script>
+  const box = document.getElementById("colmar");
+  box.querySelector("button").onclick = () => {
+    const f = document.createElement("iframe");
+    f.src = box.dataset.src; f.allow = "fullscreen"; f.title = "Colmar city centre, 3D viewer";
+    box.replaceChildren(f);
+  };
+</script>
+
+<!-- Variants (hash options of the viewer):
+       ./index.html#layer=5            start on the road network (layers are numbered 1..10, as in the panel)
+       ./index.html#spot=church        fly to a zoom spot and load it (ids: bridge, church)
+       ./index.html#theme=dark&collapsed=1   dark theme, side panel folded
+       ./index.html#layer=3&spot=bridge&cam=-1.57,1.2,200,-408,20,-14   explicit camera: yaw,pitch,dist,x,y,z
+     Plain version without click-to-load:
+       <iframe src="./index.html" style="width:100%;aspect-ratio:16/10;border:0" allow="fullscreen" loading="lazy"></iframe> -->
+</body>
+</html>
