@@ -185,10 +185,6 @@ class MALiBU3DDataset(DefaultDataset):
             )
         return data_list
 
-    def get_data_name(self, idx):
-        """Return scene id (folder name) for logging and saving."""
-        return os.path.basename(self.data_list[idx % len(self.data_list)])
-
     def _is_optional_target(self, target_key):
         return target_key in self.optional_target_keys
 
