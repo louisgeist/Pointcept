@@ -17,7 +17,7 @@ from pointcept.utils.misc import (
 )
 from pointcept.models.losses import build_criteria
 from pointcept.models.default import MultiTaskSegmentorV2
-from pointcept.datasets.malibu3d_config_utils import (
+from pointcept.datasets.malibu3d_tasks import (
     enable_nathab_pointwise_supervision,
     get_task_config,
     init_task_criteria,

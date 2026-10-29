@@ -16,14 +16,15 @@ import numpy as np
 from .defaults import DefaultDataset
 from .builder import DATASETS
 from .transform import record_data_pipeline
-from .malibu3d_config_utils import (
+from .malibu3d_tasks import (
+    NATHAB_AXIS_KEYS,
     MALIBU3D_PIXEL_SEMANTIC_TASKS,
     MALIBU3D_TILE_DISTRIBUTION_TASKS,
     get_missing_target_fill_value,
     get_task_config,
+    unpack_nathab_axes,
 )
 from pointcept.datasets.preprocessing.malibu3d.tile_catalog import iter_tiles
-from .malibu3d_labels import NATHAB_AXIS_KEYS, unpack_nathab_axes
 from pointcept.utils.logger import get_root_logger
 
 MALIBU3D_SPECIFIC_ASSETS = (

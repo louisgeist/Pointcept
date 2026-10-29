@@ -6,7 +6,7 @@ Run with: PYTHONPATH=. pytest tests/test_dilated_prf_opt_out.py
 
 import unittest
 
-from pointcept.datasets.malibu3d_config_utils import get_task_config
+from pointcept.datasets.malibu3d_tasks import get_task_config
 from pointcept.utils.dilated_metrics import dilated_prf_enabled
 
 

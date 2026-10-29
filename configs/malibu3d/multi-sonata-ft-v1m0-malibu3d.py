@@ -71,11 +71,11 @@ weight = "ckpt/sonata-pretrained/model.pth"
 # -----------------------------------------------------------------------------
 # Multitask configuration: targets, losses, task weights
 # -----------------------------------------------------------------------------
-# The five tasks and their losses (see malibu3d_config_utils.init_task_criteria):
+# The five tasks and their losses (see malibu3d_tasks.init_task_criteria):
 # segment (CE + Lovasz), forest_2d (CE + Lovasz), elevation in meters (SmoothL1),
 # the 4 nathab_* axes (tile-wise weighted KL) and network (ROADS, CE with a 5x weight
 # on road pixels).
-from pointcept.datasets.malibu3d_config_utils import (
+from pointcept.datasets.malibu3d_tasks import (
     MALIBU3D_TARGET_KEYS,
     MALIBU3D_TILE_DISTRIBUTION_TASKS,
     MALIBU3D_COLLECT_PREFIX_LITEPT,

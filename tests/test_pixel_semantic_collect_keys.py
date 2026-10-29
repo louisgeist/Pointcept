@@ -6,7 +6,7 @@ Run with: PYTHONPATH=. pytest tests/test_pixel_semantic_collect_keys.py
 
 import unittest
 
-from pointcept.datasets.malibu3d_config_utils import (
+from pointcept.datasets.malibu3d_tasks import (
     MALIBU3D_PIXEL_SEMANTIC_TASKS,
     MALIBU3D_TARGET_KEYS,
     get_task_config,

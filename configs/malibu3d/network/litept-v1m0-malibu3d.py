@@ -55,7 +55,7 @@ wandb_project = "malibu3d_network"
 # -----------------------------------------------------------------------------
 # Single-task configuration
 # -----------------------------------------------------------------------------
-from pointcept.datasets.malibu3d_config_utils import (
+from pointcept.datasets.malibu3d_tasks import (
     init_task_configs,
     init_task_criteria,
     MALIBU3D_COLLECT_PREFIX_LITEPT,

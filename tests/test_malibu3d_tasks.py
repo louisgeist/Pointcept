@@ -1,21 +1,19 @@
-"""malibu3d_labels: class names and task configs of the released MALiBU3D labels, and the
+"""malibu3d_tasks: class names and task configs of the released MALiBU3D labels, and the
 unpacking of natural_habitat.npy (N, 4) into the four nathab_* axes.
 
-Run with: PYTHONPATH=. pytest tests/test_malibu3d_labels.py
+Run with: PYTHONPATH=. pytest tests/test_malibu3d_tasks.py
 """
 
 import unittest
 
 import numpy as np
 
-from pointcept.datasets.malibu3d_config_utils import (
-    get_missing_target_fill_value,
-    init_task_configs,
-)
-from pointcept.datasets.malibu3d_labels import (
+from pointcept.datasets.malibu3d_tasks import (
     NATHAB_AXES,
     NATHAB_AXIS_KEYS,
     SEGMENT_NAMES,
+    get_missing_target_fill_value,
+    init_task_configs,
     unpack_nathab_axes,
 )
 

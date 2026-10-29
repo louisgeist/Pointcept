@@ -53,7 +53,7 @@ wandb_project = "malibu3d_elevation"
 # -----------------------------------------------------------------------------
 # Single-task regression configuration
 # -----------------------------------------------------------------------------
-from pointcept.datasets.malibu3d_config_utils import (
+from pointcept.datasets.malibu3d_tasks import (
     MALIBU3D_COLLECT_PREFIX_LITEPT,
     init_multitask_collect_keys,
 )

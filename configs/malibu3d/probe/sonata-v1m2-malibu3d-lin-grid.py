@@ -44,7 +44,7 @@ wandb_run_name = (
 )
 
 # -----------------------------------------------------------------------------
-# Labels (land cover: 15 classes + Void), as in pointcept/datasets/malibu3d_labels.py.
+# Labels (land cover: 15 classes + Void), as in pointcept/datasets/malibu3d_tasks.py.
 # -----------------------------------------------------------------------------
 num_classes = 15
 ignore_index = 15

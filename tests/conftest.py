@@ -85,8 +85,8 @@ def _install_fallback_stubs():
         str(_REPO_ROOT / "pointcept" / "datasets" / "transform.py"),
     )
     _load_real(
-        "pointcept.datasets.malibu3d_config_utils",
-        str(_REPO_ROOT / "pointcept" / "datasets" / "malibu3d_config_utils.py"),
+        "pointcept.datasets.malibu3d_tasks",
+        str(_REPO_ROOT / "pointcept" / "datasets" / "malibu3d_tasks.py"),
     )
     datasets_malibu3d = _load_real(
         "pointcept.datasets.malibu3d",

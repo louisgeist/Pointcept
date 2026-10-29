@@ -17,7 +17,7 @@ grid_size = 0.1
 feat_keys = ["coord", "color", "strength"]
 coord_feat_scale = 0.01
 
-from pointcept.datasets.malibu3d_config_utils import (
+from pointcept.datasets.malibu3d_tasks import (
     MALIBU3D_COLLECT_PREFIX_LITEPT,
     MALIBU3D_TARGET_KEYS,
     init_multitask_collect_keys,

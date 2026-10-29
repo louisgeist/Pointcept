@@ -8,7 +8,7 @@ _base_ = ["../multi-litept-b-v1m0-malibu3d.py"]
 
 wandb_run_name = "LPT-B multi nathab-pointwise 1.1 iter=200000"
 
-from pointcept.datasets.malibu3d_config_utils import (
+from pointcept.datasets.malibu3d_tasks import (
     MALIBU3D_TARGET_KEYS,
     enable_nathab_pointwise_supervision,
     init_task_configs,

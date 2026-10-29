@@ -1,14 +1,22 @@
 """
-Per-task configuration of the MALiBU3D targets, used by configs and by MALiBU3DDataset.
+The MALiBU3D tasks: label layout, per-task configuration, losses and pipeline keys.
+Used by the configs and by MALiBU3DDataset.
 
 MALiBU3D has five tasks, all trained jointly by the benchmark configs
 (``MALIBU3D_TARGET_KEYS``):
 
-- ``segment``: point-wise land cover (classes in ``malibu3d_labels``).
+- ``segment``: point-wise land cover, 15 classes (``SEGMENT_NAMES``).
 - ``forest_2d``: binary 1 m forest raster (``pixel_semantic``).
 - ``elevation``: point-wise height above the DTM, in meters (``regression``).
-- ``nathab_*``: the four natural-habitat ecological axes (``tile_distribution``).
+- ``nathab_*``: the four natural-habitat ecological axes (``NATHAB_AXES``,
+  ``tile_distribution``).
 - ``network``: binary 1 m road raster (``pixel_semantic``), scored with APLS at test time.
+
+Label layout, as in ``labels.json`` of the Hugging Face release:
+
+- ``segment.npy``: uint8 ``(N,)`` land cover, Void = 15.
+- ``natural_habitat.npy``: uint8 ``(N, 4)``, one column per ecological axis in
+  ``NATHAB_AXES`` order; the last class of each axis is Void.
 
 For every target key this module provides the task config read by the multitask model,
 evaluator and tester (``init_task_configs``), the losses (``init_task_criteria``) and the
@@ -22,12 +30,62 @@ from typing import Any, Dict, Tuple
 
 import numpy as np
 
-from pointcept.datasets.malibu3d_labels import (
-    NATHAB_AXES,
-    NATHAB_AXIS_KEYS,
-    SEGMENT_NAMES,
-    semantic_task_config,
+SEGMENT_NAMES: Tuple[str, ...] = (
+    "Building",
+    "Greenhouse",
+    "Impervious surface",
+    "Other soil",
+    "Herbaceous",
+    "Vineyard",
+    "Brushwood",
+    "Infrastructure",
+    "Swimming pool",
+    "Water",
+    "Deciduous",
+    "Coniferous",
+    "Bridge",
+    "Agricultural soil",
+    "Soil under vegetation",
+    "Void",
 )
+
+# Column order of natural_habitat.npy -> class names (Void last).
+NATHAB_AXES: Dict[str, Tuple[str, ...]] = {
+    "nathab_habitat_type": ("Open", "Forest", "Mineral", "Aquatic", "Void"),
+    "nathab_moisture_regime": ("Humid", "Mesic", "Dry", "Void"),
+    "nathab_soil_chemistry": ("Acidic", "Alkaline", "Void"),
+    "nathab_bioclimatic_zone": ("Temperate", "Mediterranean", "Alpine", "Void"),
+}
+NATHAB_AXIS_KEYS: Tuple[str, ...] = tuple(NATHAB_AXES)
+
+
+def semantic_task_config(names: Tuple[str, ...]) -> Dict[str, object]:
+    """Task config of a label set whose last class is Void (the ignore index)."""
+    return {
+        "num_classes": len(names) - 1,
+        "ignore_index": len(names) - 1,
+        "names": list(names),
+        "task_type": "semantic",
+    }
+
+
+def unpack_nathab_axes(axes: np.ndarray) -> Dict[str, np.ndarray]:
+    """Split ``natural_habitat.npy`` ``(N, 4)`` into one int32 ``(N,)`` vector per axis."""
+    axes = np.asarray(axes)
+    if axes.ndim != 2 or axes.shape[1] != len(NATHAB_AXES):
+        raise ValueError(
+            f"natural_habitat.npy: expected shape (N, {len(NATHAB_AXES)}), got {axes.shape}"
+        )
+    out = {}
+    for column, (key, names) in enumerate(NATHAB_AXES.items()):
+        labels = axes[:, column].astype(np.int32)
+        if labels.size and (labels.min() < 0 or labels.max() > len(names) - 1):
+            raise ValueError(
+                f"natural_habitat.npy column {column} ({key}): ids outside [0, {len(names) - 1}]"
+            )
+        out[key] = labels
+    return out
+
 
 # Binary 2D pixel semantic tasks (1 m Lambert-93 masks), not point-wise. ``network`` is the
 # ROADS mask (the only network graph shipped with the dataset); MALiBU3DDataset keeps that
