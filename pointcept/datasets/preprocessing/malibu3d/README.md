@@ -24,9 +24,9 @@ The road masks of the `network` target are not shipped: they are rasterized from
 
 ## `rasterize_network.py`: road graphs -> `network.npy`
 
-The `network` target is stored as graphs (`<DEPT>_<ROI>_<NETWORK>_graph.gpkg`, layers `nodes` / `edges` /
-`metadata`, EPSG:2154), one per ROI and network type. This script turns them into the `(3, H, W)` binary masks
-used for training, channels `ROADS, RAILROADS, TRANSMISSION_LINES`. Each ROI graph is densified once
+The `network` target is stored as road graphs (`<DEPT>_<ROI>_ROADS_graph.gpkg`, layers `nodes` / `edges` /
+`metadata`, EPSG:2154), one per ROI. This script turns them into the `(1, H, W)` binary road masks used for
+training. Each ROI graph is densified once
 (`--sample_step_m`, 0.25 m, along each edge; with `--line_width_m` 0.2 > 0, two samples at ± 0.1 m across the
 edge instead of the centerline), the touched 1 m cells are collected, then sliced to each tile's grid.
 
@@ -39,8 +39,7 @@ python pointcept/datasets/preprocessing/malibu3d/rasterize_network.py \
 
 - Graphs are read from each ROI directory (layout of the Hugging Face release), or from `--network_graphs_root`
   when given.
-- A tile with `has_roads_graph` (`ROADS`) = True whose ROADS graph is missing is an error. RAILROADS and
-  TRANSMISSION_LINES have no flag and are rasterized when their graph exists.
+- A tile with `has_roads_graph` (`ROADS`) = True whose ROADS graph is missing is an error.
 - A tile without any positive pixel gets no `network.npy`, only its grid in `meta.json["network"]` with
   `"empty": true`; `MALiBU3DDataset` then uses an all-zero mask.
 - A tile without `coord.npy` is an error, unless it is listed in `--missing_tiles_file`. Other options:

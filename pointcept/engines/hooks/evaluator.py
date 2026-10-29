@@ -1225,7 +1225,7 @@ class MultiTaskEvaluator(HookBase):
                     )
 
         # Per-channel precision/recall/F1 for pixel-semantic tasks (e.g. network
-        # ROADS / RAILROADS). IoU is a poor diagnostic for thin curvilinear masks
+        # ROADS). IoU is a poor diagnostic for thin curvilinear masks
         # (a 1 px lateral offset destroys IoU on a 1 px line), so exact P/R/F1 (from
         # the confusion histograms) are reported with buffered P/R/F1 (pixel
         # tolerance buffer_radius_px). The totals are all_reduced here, so this

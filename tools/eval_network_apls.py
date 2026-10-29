@@ -291,7 +291,6 @@ def run(
     remove_small_objects_min_size_px: int = 8,
     skeletonize_enabled: bool = True,
     min_component_nodes: int = 5,
-    network_types: Optional[List[str]] = None,
     missing_tiles_file: Optional[Path] = None,
     show_progress: bool = True,
     profile: bool = False,
@@ -304,7 +303,7 @@ def run(
     per-ROI scores, excluded/partial ROIs) and ``network_apls_per_roi.csv``, plus the
     per-ROI predicted graphs when ``save_pred_gpkg``. Returns the JSON payload.
     """
-    types = tuple(network_types) if network_types else NETWORK_TYPES
+    types = NETWORK_TYPES
     profiler = _ProfileAggregator() if profile else None
 
     # Same known-missing exclusions as rasterize_network / MALiBU3DDataset hardcoded set.
@@ -326,7 +325,6 @@ def run(
     patches, n_skipped_known_missing = nps.load_manifest_patches(
         split_manifest_csv,
         splits=[split],
-        network_types=types,
         known_missing=known_missing,
     )
     if n_skipped_known_missing:
@@ -788,17 +786,6 @@ def build_argparser() -> argparse.ArgumentParser:
         help="Zhang-Suen skeletonize wide masks to 1px centerlines (default: true)",
     )
     p.add_argument(
-        "--network_types",
-        type=str,
-        nargs="+",
-        default=None,
-        help=(
-            "Channel names / order matching logits_network.npy channels "
-            f"(default: {' '.join(NETWORK_TYPES)}). Pass e.g. ROADS RAILROADS "
-            "when training dropped TRANSMISSION_LINES."
-        ),
-    )
-    p.add_argument(
         "--missing_tiles_file",
         type=str,
         default=None,
@@ -862,7 +849,6 @@ def main(argv: Optional[List[str]] = None) -> None:
         remove_small_objects_min_size_px=args.remove_small_objects_min_size_px,
         skeletonize_enabled=args.skeletonize_enabled,
         min_component_nodes=args.min_component_nodes,
-        network_types=args.network_types,
         missing_tiles_file=missing,
         show_progress=not args.no_progress,
         profile=bool(args.profile),

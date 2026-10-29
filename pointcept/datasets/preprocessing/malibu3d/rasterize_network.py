@@ -1,21 +1,19 @@
-"""Write the ``network.npy`` (3, H, W) binary masks of every MALiBU3D tile from the road graphs.
+"""Write the ``network.npy`` (1, H, W) road masks of every MALiBU3D tile from the road graphs.
 
 Driven by the tile CSV (``tiles.csv`` or an older split manifest, read via
 ``tile_catalog.py``): each tile must already exist under ``data_root`` with
 ``coord.npy`` (missing tiles are errors, except those listed in the known-missing file,
 default ``data/malibu3d/missing_coord_tiles.details.csv``).
 
-Ground-truth networks are graphs (``{dept}_{roi}_{NETWORK}_graph.gpkg``, one per ROI
-and network type, read from each ROI directory, which is the Hugging Face layout, or
-from ``--network_graphs_root``). Each ROI graph is densified once into unique 1 m
-Lambert-93 cells (longitudinal step plus optional lateral ``± line_width_m / 2``
-offsets), which are then sliced into each tile's grid. Channels follow
-``NETWORK_TYPES`` (ROADS, RAILROADS, TRANSMISSION_LINES). Tiles without any positive
-pixel only get ``meta.json["network"]`` (``empty: true``), no ``network.npy``.
+Ground-truth roads are graphs (``{dept}_{roi}_ROADS_graph.gpkg``, one per ROI, read from
+each ROI directory, which is the Hugging Face layout, or from ``--network_graphs_root``).
+Each ROI graph is densified once into unique 1 m Lambert-93 cells (longitudinal step plus
+optional lateral ``± line_width_m / 2`` offsets), which are then sliced into each tile's
+grid. The single channel is ``NETWORK_TYPES`` (ROADS). Tiles without any positive pixel
+only get ``meta.json["network"]`` (``empty: true``), no ``network.npy``.
 
-Only ROADS has a catalog flag (``has_roads_graph``, older ``ROADS``): a ``True`` flag
-with a missing ROADS graph is an error. RAILROADS / TRANSMISSION_LINES have no flag and
-are rasterized whenever their graph exists.
+A tile whose catalog flag ``has_roads_graph`` (older ``ROADS``) is ``True`` but whose ROI
+has no ROADS graph is an error.
 
 Example::
 
@@ -113,14 +111,12 @@ def load_manifest_patches(
     split_manifest_csv: Path,
     *,
     splits: Optional[Sequence[str]] = None,
-    network_types: Sequence[str] = NETWORK_TYPES,
     known_missing: Optional[set[Tuple[str, str]]] = None,
 ) -> Tuple[List[ManifestPatch], int]:
     """Load the tiles of ``tiles.csv`` / an older manifest (optionally filtered by split).
 
     Skips ``(split, patch_id)`` in ``known_missing``. Returns
-    ``(patches, n_skipped_known_missing)``. Only ROADS carries a catalog flag; it is
-    recorded when ``"ROADS"`` is in ``network_types``.
+    ``(patches, n_skipped_known_missing)``, each patch with its ROADS catalog flag.
     """
     if not split_manifest_csv.is_file():
         raise FileNotFoundError(f"split_manifest_csv not found: {split_manifest_csv}")
@@ -139,9 +135,7 @@ def load_manifest_patches(
         if (tile.split, tile.tile_id) in skip:
             n_skipped += 1
             continue
-        flags = (
-            (("ROADS", bool(tile.has_roads_graph)),) if "ROADS" in network_types else ()
-        )
+        flags = (("ROADS", bool(tile.has_roads_graph)),)
         patches.append(
             ManifestPatch(
                 split=tile.split,
@@ -280,7 +274,7 @@ def process_patch(
         masks.append(mask.astype(np.uint8, copy=False))
         positive_counts[network_type] = int(mask.sum())
 
-    network = np.stack(masks, axis=0)  # (3, H, W)
+    network = np.stack(masks, axis=0)  # (1, H, W)
     is_empty = all(c == 0 for c in positive_counts.values())
     npy_path = patch_dir / "network.npy"
     if is_empty:
@@ -417,7 +411,6 @@ def run(
     patches, n_skipped = load_manifest_patches(
         split_manifest_csv,
         splits=splits,
-        network_types=NETWORK_TYPES,
         known_missing=known_missing,
     )
     roi_items = group_by_roi(patches, data_root)

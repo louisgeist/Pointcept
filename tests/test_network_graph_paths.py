@@ -23,9 +23,8 @@ class TestGraphPaths(unittest.TestCase):
             self.assertEqual(
                 nlu.expected_exported_graph_path(None, roi_dir, "ROADS"), gpkg
             )
-            self.assertIsNone(
+            with self.assertRaises(ValueError):
                 nlu.resolve_exported_graph_gpkg(None, roi_dir, "RAILROADS")
-            )
 
     def test_graph_under_explicit_root(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -223,8 +223,8 @@ class MALiBU3DDataset(DefaultDataset):
         """Load ``{target_key}.npy`` and grid meta for a pixel semantic task.
 
         The task trains on the ``channel_names`` of its task config (ROADS for
-        ``network``). On-disk rasters may have more channels (``rasterize_network.py``
-        writes ROADS, RAILROADS, TRANSMISSION_LINES); the trained ones are selected by
+        ``network``). Rasters written by an older ``rasterize_network.py`` may have more
+        channels (ROADS, RAILROADS, TRANSMISSION_LINES); the trained ones are selected by
         name via ``meta.{target_key}.channel_order`` when present, else the first
         channels are kept.
 

@@ -28,8 +28,9 @@ if TYPE_CHECKING:
 CRS_EPSG = "EPSG:2154"
 _OGR_EPSG = 2154
 
-NETWORK_TYPES = ("ROADS", "RAILROADS", "TRANSMISSION_LINES")
-NETWORK_FLAG_COLUMNS = NETWORK_TYPES
+# Network types of the ``network`` target (and of ``network.npy`` channels): the
+# released dataset ships road graphs only.
+NETWORK_TYPES = ("ROADS",)
 
 
 def dept_code_from_lidarhd_dirname(dirname: str) -> Optional[str]:
