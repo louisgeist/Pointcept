@@ -1,32 +1,59 @@
-# MALiBU3D
+<div align="center">
+
+# <img src="./media/palm.png" height="40" alt="🌴"> MALiBU3D
 
 **A Multitask Aerial LiDAR Benchmark for Large-Scale 3D Scene Understanding**
 
-[Paper (TODO)](https://arxiv.org/abs/XXXX.XXXXX) ·
-[Dataset](https://huggingface.co/datasets/LouisGeist/MALiBU3D) ·
-[Checkpoints](https://huggingface.co/LouisGeist/MALiBU3D-backbones)
+[![python](https://img.shields.io/badge/Python_3.10-3776ab?logo=python&logoColor=white)](https://www.python.org/)
+[![pytorch](https://img.shields.io/badge/PyTorch_2.5-ee4c2c?logo=pytorch&logoColor=white)](https://pytorch.org/get-started/locally/)
+[![pointcept](https://img.shields.io/badge/Built_on-Pointcept-0a7bbb)](https://github.com/Pointcept/Pointcept)
+[![license](https://img.shields.io/badge/License-MIT-green.svg?labelColor=gray)](LICENSE)
 
-MALiBU3D is a large-scale multitask aerial LiDAR benchmark: 59 billion points over 2,221 km² of metropolitan France,
-at the overlap of the national [LiDAR HD](https://geoservices.ign.fr/lidarhd) programme and
-[FLAIR-HUB](https://huggingface.co/datasets/IGNF/FLAIR-HUB). Every point has its intensity and aerial RGB, and the
-supervision covers five tasks:
+[![arXiv](https://img.shields.io/badge/arXiv-TODO-b31b1b.svg)](https://arxiv.org/abs/XXXX.XXXXX)
+[![Project page](https://img.shields.io/badge/Project_page-8A2BE2)](https://louisgeist.github.io/malibu/)
+[![Dataset](https://img.shields.io/badge/%F0%9F%A4%97_Dataset-MALiBU3D-FFD21E)](https://huggingface.co/datasets/LouisGeist/MALiBU3D)
+[![Checkpoints](https://img.shields.io/badge/%F0%9F%A4%97_Checkpoints-MALiBU3D--backbones-FFD21E)](https://huggingface.co/LouisGeist/MALiBU3D-backbones)
 
-| Task | Target | Metric |
-|---|---|---|
-| Land cover | 15 classes per point | mIoU |
-| Road network | 1 m road raster, evaluated as a graph | APLS |
-| Natural habitat | distribution per 100 m tile on 4 ecological axes | total variation (TV) |
-| Forest cover | 1 m forest raster | IoU of the forest class |
-| Elevation | height above the terrain per point | MAE (m) |
+</div>
 
-This repository holds the code of the paper: data loading, the five baselines (Sonata, LitePT-B, PTv3, SpUNet,
-KPConvX) trained on all tasks at once, their evaluation, and the cross-domain linear probing of the frozen
-backbones on DALES, H3D, ECLAIR, OpenGF and PureForest. It is built on
-[Pointcept](https://github.com/Pointcept/Pointcept) (forked at commit
-[`81ab8f5`](https://github.com/Pointcept/Pointcept/commit/81ab8f5c4781bf63ed76d6e97e2d7241e4ceffc8)), with the
-models and datasets the benchmark does not use removed.
+## 📌 Description
 
-## Installation
+**MALiBU3D** is a large-scale multitask aerial LiDAR benchmark 🛩️ over metropolitan France, at the overlap of the
+national [LiDAR HD](https://geoservices.ign.fr/lidarhd) programme and [FLAIR-HUB](https://huggingface.co/datasets/IGNF/FLAIR-HUB).
+Every point has its intensity and aerial RGB, and the supervision covers five tasks, from the point to the landscape:
+
+<table>
+  <tr>
+    <td align="center" width="50%"><img src="./media/landcover.jpg" alt="Land cover"><br><b>🏘️ Land cover</b>: 15 classes per point (mIoU)</td>
+    <td align="center" width="50%"><img src="./media/road.jpg" alt="Road network"><br><b>🛣️ Road network</b>: 1 m raster, evaluated as a graph (APLS)</td>
+  </tr>
+  <tr>
+    <td align="center"><img src="./media/forest.jpg" alt="Forest cover"><br><b>🌲 Forest cover</b>: 1 m raster (IoU of the forest class)</td>
+    <td align="center"><img src="./media/elevation.jpg" alt="Elevation"><br><b>⛰️ Elevation</b>: height above the terrain per point (MAE)</td>
+  </tr>
+  <tr>
+    <td align="center" colspan="2"><b>🦋 Natural habitat</b>: distribution per 100 m tile on 4 ecological axes (total variation)</td>
+  </tr>
+</table>
+
+<div align="center">
+
+| ✨ MALiBU3D in numbers ✨ |
+|:---:|
+| 🌍 **2,213 km²** over 2,499 regions of metropolitan France |
+| ☁️ **59.5 billion** points, with intensity and aerial RGB |
+| 🎯 **5 tasks**: point, raster, graph and tile-level targets |
+| 🤖 **5 baselines** trained on all tasks at once (Sonata, LitePT-B, PTv3, SpUNet, KPConvX) |
+| 🔁 **5 downstream datasets** to probe the frozen backbones (DALES, H3D, ECLAIR, OpenGF, PureForest) |
+
+</div>
+
+This repository holds the code of the paper: data loading, the five multitask baselines, their evaluation, and the
+linear probing of the frozen backbones on downstream datasets. It is built on [Pointcept](https://github.com/Pointcept/Pointcept)
+(forked at commit [`81ab8f5`](https://github.com/Pointcept/Pointcept/commit/81ab8f5c4781bf63ed76d6e97e2d7241e4ceffc8)),
+with the models and datasets the benchmark does not use removed.
+
+## 🧱 Installation
 
 ```bash
 conda env create -f environment.yml   # PyTorch 2.5.0, CUDA 12.4 (toolkit included)
@@ -45,9 +72,9 @@ flash-attention downloads a prebuilt wheel when one matches PyTorch and CUDA, an
 the parallel jobs with `MAX_JOBS=8`). Run every command below from the repository root with `export PYTHONPATH=./`;
 `pytest tests/` checks the installation.
 
-## Data
+## 📦 Data
 
-Download the dataset from Hugging Face (790 GB of zipped regions) and extract it into `data/malibu3d`, the path read by the configs:
+Download the dataset from Hugging Face (790 GB of zipped regions, 1.6 TB once extracted) and extract it into `data/malibu3d`, the path read by the configs:
 
 ```bash
 hf download LouisGeist/MALiBU3D --repo-type dataset --local-dir data/malibu3d_zip
@@ -70,7 +97,7 @@ fixed subset of 2,000 validation tiles, representative of the label distribution
 Test metrics always use the full test split. To validate on the whole validation split, add
 `--options data.val.stratified_subset_manifest=False`.
 
-## Training and evaluation on MALiBU3D
+## 🚀 Training and evaluation on MALiBU3D
 
 Configs live in `configs/malibu3d/`. Train with `scripts/train.sh` (runs in `exp/malibu3d/<name>`), or with
 `tools/train.py` to override config entries with `--options key=value`:
@@ -115,41 +142,43 @@ python tools/train.py --config-file configs/malibu3d/pretrain-sonata-v1m2-malibu
 
 The placeholders and a local example are described in the config, next to `probe_command`.
 
-## Pretrained checkpoints
+## 💾 Pretrained checkpoints
 
 The six backbones of Tab. 2 (five multitask models with their heads, and the self-supervised Sonata) are on
 [Hugging Face](https://huggingface.co/LouisGeist/MALiBU3D-backbones). See [docs/checkpoints.md](docs/checkpoints.md)
 to download them, run them on a tile, probe or fine-tune them.
 
-## Cross-domain evaluation
+## 🔁 Downstream evaluation
 
 The frozen backbones are probed on DALES, H3D, ECLAIR, OpenGF and PureForest, next to a LitePT-B trained from
 scratch on each dataset (Tab. 3). Preprocessing, configs and the probing protocol: [docs/probing.md](docs/probing.md).
 
-## Results
+## 📊 Results
 
-MALiBU3D test split (Tab. 2):
+### MALiBU3D test split (Tab. 2):
 
 | Model | Land cover mIoU ↑ | APLS ↑ | Natural habitat TV ↓ | Forest IoU ↑ | Elevation MAE (m) ↓ |
 |---|---|---|---|---|---|
-| Sonata (SSL + fine-tuning) | 71.8 | 45.7 | 25.1 | 87.2 | 0.97 |
-| LitePT-B | 70.9 | 43.0 | 25.4 | 86.7 | 1.06 |
-| PTv3 | 67.9 | 43.0 | 27.2 | 86.5 | 0.99 |
-| SpUNet | 67.5 | 39.6 | 27.3 | 86.6 | 0.96 |
-| KPConvX | 67.4 | 39.8 | 29.2 | 84.7 | 1.03 |
+| Sonata (SSL + fine-tuning) | TODO | TODO | TODO | TODO | TODO |
+| LitePT-B | TODO | TODO | TODO | TODO | TODO |
+| PTv3 | TODO | TODO | TODO | TODO | TODO |
+| SpUNet | TODO | TODO | TODO | TODO | TODO |
+| KPConvX | TODO | TODO | TODO | TODO | TODO |
 
-Linear probes of the frozen backbones (Tab. 3; macro-F1 on H3D, ground IoU on OpenGF, mIoU elsewhere):
+
+### Placeholder
+Linear probes of the frozen backbones (Tab. 3; macro-F1 on H3D, ground IoU on OpenGF, mIoU elsewhere; best probe in bold):
 
 | Backbone | DALES | H3D | ECLAIR | OpenGF | PureForest |
 |---|---|---|---|---|---|
-| Sonata (MALiBU3D SSL) | 76.0 | 71.4 | 75.8 | 90.6 | 75.3 |
-| KPConvX | 74.7 | 75.1 | 75.7 | 86.9 | 71.7 |
+| Sonata (MALiBU3D SSL) | **76.0** | 71.4 | **75.8** | **90.6** | **75.3** |
+| KPConvX | 74.7 | **75.1** | 75.7 | 86.9 | 71.7 |
 | LitePT-B | 74.6 | 75.0 | 73.0 | 87.3 | 68.6 |
 | PTv3 | 70.2 | 69.9 | 69.4 | 87.1 | 67.6 |
 | SpUNet | 66.0 | 61.6 | 67.8 | 82.5 | 63.5 |
 | *LitePT-B from scratch* | *83.7* | *81.5* | *78.7* | *87.1* | *78.3* |
 
-## Citation
+## 💳 Citation
 
 ```bibtex
 @article{geist2026malibu3d,
@@ -161,7 +190,7 @@ Linear probes of the frozen backbones (Tab. 3; macro-F1 on H3D, ground IoU on Op
 }
 ```
 
-## License and acknowledgements
+## 📄 License and acknowledgements
 
 The code is released under the [MIT license](LICENSE), as Pointcept. `pointcept/models/kpconvx/` comes from
 [ml-kpconvx](https://github.com/apple-aiml-research/ml-kpconvx/tree/main/Pointcept-wrapper) (MIT, © Apple Inc.,
@@ -173,3 +202,11 @@ This work builds on [Pointcept](https://github.com/Pointcept/Pointcept) and on t
 [LitePT](https://github.com/prs-eth/LitePT) and [KPConvX](https://github.com/apple-aiml-research/ml-kpconvx); please cite
 them as well when you use them. The LiDAR HD point clouds and the FLAIR-HUB annotations are produced by
 [IGN](https://www.ign.fr).
+
+The APLS evaluation of the road network follows the protocol of [SpaceNet](https://arxiv.org/abs/1807.01232)
+and of the [CosmiQ Works implementation](https://github.com/CosmiQ/apls) (graph densification, snapping of the
+control points, symmetric score). The GradNorm ablation implements [Chen et al., 2018](https://arxiv.org/abs/1711.02257).
+The downstream evaluation uses [DALES](https://arxiv.org/abs/2004.11985), [H3D](https://arxiv.org/abs/2102.05346),
+[ECLAIR](https://arxiv.org/abs/2404.10699), [OpenGF](https://github.com/Nathan-UW/OpenGF) and
+[PureForest](https://arxiv.org/abs/2404.12064), each under the license of its authors (sources in
+[docs/probing.md](docs/probing.md)).

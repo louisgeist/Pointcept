@@ -97,7 +97,7 @@ out = model(inp)                   # out["seg_logits"], out["seg_logits_by_task"
 
 Regression test of the released weights (needs the local D067 tiles): `pytest tests/test_checkpoint_forward.py`.
 
-## 3. Frozen-backbone probing (cross-domain)
+## 3. Frozen-backbone probing (downstream datasets)
 
 Use the file as the frozen backbone of a GridProbe config: only `weight=` changes. Example on H3D with
 Sonata, the grid alone, then the full grid → seed-ensemble protocol of the paper (see [probing.md](probing.md)):

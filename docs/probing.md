@@ -1,4 +1,4 @@
-# Cross-domain evaluation of frozen backbones
+# Downstream evaluation of frozen backbones
 
 The backbones trained on MALiBU3D are evaluated on five other aerial LiDAR datasets by linear probing of their
 frozen features (Tab. 3 of the paper), next to a LitePT-B trained from scratch on each dataset. Commands are run
