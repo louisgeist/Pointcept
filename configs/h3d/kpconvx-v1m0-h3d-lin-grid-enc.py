@@ -7,7 +7,7 @@ the input points through the pooling indices and concatenated (928 channels). De
 protocol (Tab. 3 of the MALiBU3D paper).
 
 GridProbe: 12 linear probes (CE + Lovasz, AdamW, wd=0, OneCycleLR, lr from 1e-4 to 5e-1) share one
-frozen-backbone forward; tools/grid_then_seeds.py then re-trains the probe with the best validation
+frozen-backbone forward; tools/sweep_then_seeds.py then re-trains the probe with the best validation
 macro-F1 with 10 seeds. point_max=100000 exceeds the KPConvX pretraining crop (40000) to match the
 input size of the other backbones; drop_path_rate=0 removes the (parameter-free) stochastic-depth
 layers.

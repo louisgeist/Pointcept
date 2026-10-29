@@ -48,10 +48,10 @@ The paper probes the encoder multi-scale features of the frozen backbone:
 ECLAIR, `sonata-v1m2-<dataset>-lin-grid.py` for Sonata). Each config trains 12 linear heads (CE + Lovasz, one per
 learning rate from 1e-4 to 5e-1) on one shared backbone forward pass. The head with the best validation
 metric (macro-F1 on H3D, mIoU elsewhere) is then retrained with 10 seeds, and the test metric is reported as mean
-± std. `tools/grid_then_seeds.py` runs both steps:
+± std. `tools/sweep_then_seeds.py` runs both steps (sweep, then seeds):
 
 ```bash
-python tools/grid_then_seeds.py \
+python tools/sweep_then_seeds.py \
     --grid-config configs/h3d/litept-b-v1m0-h3d-lin_enc.py \
     --weight ckpt/litept-b/model.pth \
     --save-root exp/h3d/litept-b_probe

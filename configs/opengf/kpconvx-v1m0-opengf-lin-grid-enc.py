@@ -7,7 +7,7 @@ the input points through the pooling indices and concatenated (928 channels). De
 protocol (Tab. 3 of the MALiBU3D paper).
 
 GridProbe: 12 linear probes (CE + Lovasz, AdamW, wd=0, OneCycleLR, lr from 1e-4 to 5e-1) share one
-frozen-backbone forward; tools/grid_then_seeds.py then re-trains the probe with the best validation
+frozen-backbone forward; tools/sweep_then_seeds.py then re-trains the probe with the best validation
 mIoU with 10 seeds. drop_path_rate=0 removes the (parameter-free) stochastic-depth layers.
 point_max=60000 (100000 for KPConvX on the other datasets): OpenGF is sparser than DALES after the
 0.1 m grid, and a 60000-point crop gives about as many points as a 102400-point DALES crop after the

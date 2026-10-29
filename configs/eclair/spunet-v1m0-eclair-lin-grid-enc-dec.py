@@ -7,7 +7,7 @@ decoder + 256 encoder channels, the bottleneck counted once (1088 channels). Pro
 (Tab. A.11 of the MALiBU3D paper).
 
 GridProbe: 12 linear probes (CE + Lovasz, AdamW, wd=0, OneCycleLR, lr from 1e-4 to 5e-1) share one
-frozen-backbone forward; tools/grid_then_seeds.py then re-trains the probe with the best validation
+frozen-backbone forward; tools/sweep_then_seeds.py then re-trains the probe with the best validation
 mIoU with 10 seeds.
 
 ECLAIR has RGB and intensity: color is normalized (color augmentations at train time) and raw

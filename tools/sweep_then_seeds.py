@@ -2,10 +2,10 @@
 """
 Chain a GridProbe hyperparameter sweep into a seed-ensemble robustness run.
 
-This is the linear-probing protocol of the MALiBU3D paper (Tab. 3): a grid
+This is the linear-probing protocol of the MALiBU3D paper (Tab. 3): a sweep
 over probe hyperparameters, then 10 seeds of the winner.
 
-Phase 1 -- grid probe: run the given GridProbeSegmentorV2 / GridProbeTrainer
+Phase 1 -- sweep: run the given GridProbeSegmentorV2 / GridProbeTrainer
 config (any semantic-segmentation ``*-lin*`` grid config: DALES / H3D / ECLAIR /
 OpenGF / MALiBU3D, any frozen backbone). ``GridProbeWinnerSelector`` writes
 ``<grid_dir>/grid_search_results.json`` with the probe that had the best
@@ -26,14 +26,14 @@ just re-runs this script.
 
 Typical use (``--save-root`` defaults to ``$JOB_DIR`` under Slurm)::
 
-    python tools/grid_then_seeds.py \\
+    python tools/sweep_then_seeds.py \\
       --grid-config configs/h3d/sonata-v1m2-h3d-lin-grid.py \\
       --weight ckpt/sonata-pretrained/model.pth \\
       --save-root exp/h3d/sonata_gts --n-seeds 10
 
 Grid already run separately::
 
-    python tools/grid_then_seeds.py --grid-config <same cfg> --weight <ckpt> \\
+    python tools/sweep_then_seeds.py --grid-config <same cfg> --weight <ckpt> \\
       --skip-grid --grid-dir exp/h3d/<grid_run> --save-root exp/h3d/<seed_run>
 """
 
@@ -57,7 +57,7 @@ if str(REPO_ROOT) not in sys.path:
 GRID_RESULT = "grid_search_results.json"
 SEED_RESULT = "seed_ensemble_results.json"
 GEN_CONFIG_NAME = "seed_ensemble_config.py"
-SUMMARY_CSV_NAME = "grid_then_seeds_summary.csv"
+SUMMARY_CSV_NAME = "sweep_then_seeds_summary.csv"
 
 SUMMARY_FIELDS = [
     "timestamp",
@@ -86,7 +86,7 @@ SUMMARY_FIELDS = [
 
 
 def log(msg: str) -> None:
-    print(f"[grid_then_seeds] {msg}", flush=True)
+    print(f"[sweep_then_seeds] {msg}", flush=True)
 
 
 def _utc_now() -> str:
@@ -487,7 +487,7 @@ def main() -> int:
     ap.add_argument(
         "--save-root",
         default=None,
-        help="output root (default: $JOB_DIR or exp/grid_then_seeds/<ts>)",
+        help="output root (default: $JOB_DIR or exp/sweep_then_seeds/<ts>)",
     )
     ap.add_argument("--n-seeds", type=int, default=10)
     ap.add_argument("--num-gpus", type=int, default=1)
@@ -499,7 +499,7 @@ def main() -> int:
     ap.add_argument(
         "--wandb-group",
         default=None,
-        help="W&B group for both runs (default: gts-<save-root basename>)",
+        help="W&B group for both runs (default: sts-<save-root basename>)",
     )
     ap.add_argument(
         "--skip-grid",
@@ -532,7 +532,7 @@ def main() -> int:
         or (
             REPO_ROOT
             / "exp"
-            / "grid_then_seeds"
+            / "sweep_then_seeds"
             / datetime.now().strftime("%Y%m%d_%H%M%S")
         )
     ).resolve()
@@ -541,7 +541,7 @@ def main() -> int:
     grid_dir = Path(args.grid_dir).resolve() if args.grid_dir else (save_root / "grid")
     seed_dir = save_root / "seeds"
     gen_cfg = save_root / GEN_CONFIG_NAME
-    wandb_group = args.wandb_group or f"gts-{save_root.name}"
+    wandb_group = args.wandb_group or f"sts-{save_root.name}"
 
     log(f"grid config : {grid_config}")
     log(f"weight      : {weight or '(from config)'}")

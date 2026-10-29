@@ -7,7 +7,7 @@ the input points and concatenated (1386 channels). Default probing protocol (Tab
 paper).
 
 GridProbe: 12 linear probes (CE + Lovasz, AdamW, wd=0, OneCycleLR, lr from 1e-4 to 5e-1) share one
-frozen-backbone forward; tools/grid_then_seeds.py then re-trains the probe with the best validation
+frozen-backbone forward; tools/sweep_then_seeds.py then re-trains the probe with the best validation
 mIoU with 10 seeds.
 
 DALES has no RGB: color is replaced by the checkpoint's learned mask value; raw intensity is scaled

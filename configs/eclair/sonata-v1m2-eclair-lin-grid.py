@@ -7,7 +7,7 @@ the input points and concatenated (1232 channels). Default probing protocol (Tab
 paper).
 
 GridProbe: 12 linear probes (CE + Lovasz, AdamW, wd=0, OneCycleLR, lr from 1e-4 to 5e-1) share one
-frozen-backbone forward; tools/grid_then_seeds.py then re-trains the probe with the best validation
+frozen-backbone forward; tools/sweep_then_seeds.py then re-trains the probe with the best validation
 mIoU with 10 seeds.
 
 ECLAIR has RGB and intensity: color is normalized (color augmentations at train time) and raw

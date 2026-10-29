@@ -107,8 +107,8 @@ export PYTHONPATH=$PWD
 python tools/train.py --config-file configs/h3d/sonata-v1m2-h3d-lin-grid.py --num-gpus 1 \
     --options weight=ckpt/sonata-pretrained/model.pth
 
-python tools/grid_then_seeds.py --grid-config configs/h3d/sonata-v1m2-h3d-lin-grid.py \
-    --save-root exp/h3d/sonata_grid_then_seeds
+python tools/sweep_then_seeds.py --grid-config configs/h3d/sonata-v1m2-h3d-lin-grid.py \
+    --save-root exp/h3d/sonata_sweep_then_seeds
 ```
 
 `sonata-pretrained` keeps its `backbone.*` keys, so the `CheckpointLoader(keywords="module.student.backbone",

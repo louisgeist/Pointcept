@@ -1,7 +1,7 @@
-"""tools/grid_then_seeds.py: seed-ensemble config generation from a grid-probe config and winner, and summary
+"""tools/sweep_then_seeds.py: seed-ensemble config generation from a grid-probe config and winner, and summary
 CSV aggregation. Config paths are repo-relative: run from the repository root.
 
-Run with: PYTHONPATH=. pytest tests/test_grid_then_seeds_config.py
+Run with: PYTHONPATH=. pytest tests/test_sweep_then_seeds_config.py
 """
 
 import json
@@ -10,7 +10,7 @@ import tempfile
 import unittest
 
 from pointcept.utils.config import Config
-from tools.grid_then_seeds import (
+from tools.sweep_then_seeds import (
     SUMMARY_FIELDS,
     append_summary_csv,
     build_seed_ensemble_config,
