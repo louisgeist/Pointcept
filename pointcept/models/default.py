@@ -3,7 +3,6 @@ Generic task wrappers around a backbone.
 
 - DefaultSegmentor: the backbone owns its output classifier (e.g. SpUNet, KPConvX).
 - DefaultSegmentorV2: backbone + linear point-wise ``seg_head``.
-- DefaultRegressorV2: backbone + linear point-wise scalar head (e.g. elevation).
 - MultiTaskSegmentorV2: one shared backbone and one head per MALiBU3D task
   (point-wise semantics, tile-level class distributions, 2D raster masks, regression).
 - DefaultClassifier: backbone + scene pooling + linear ``cls_head`` (e.g. PureForest).
@@ -353,79 +352,6 @@ class DefaultSegmentorV2(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeatMi
         # test
         else:
             return_dict["seg_logits"] = seg_logits
-        return return_dict
-
-
-@MODELS.register_module()
-class DefaultRegressorV2(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeatMixin):
-    """Point-wise scalar regression (mirror of DefaultSegmentorV2).
-
-    Reads float targets from input_dict[target_key] (default ``elevation``) and
-    writes predictions to ``reg_pred``. The loss is returned whenever the target
-    is in the batch (train and val).
-
-    freeze_backbone=True means ALL of the following (there is no separate flag):
-      * every backbone parameter has requires_grad=False (no gradient, never
-        updated by the optimizer);
-      * the backbone is kept in eval() mode *permanently*: every .train() call
-        (the trainer issues one per epoch) re-pins it. BatchNorm therefore
-        uses its stored running statistics and does NOT update them, and
-        DropPath / Dropout are inactive. The backbone is a fixed, deterministic
-        feature extractor; only the heads are in train mode.
-    """
-
-    def __init__(
-        self,
-        backbone_out_channels,
-        target_key="elevation",
-        backbone=None,
-        criteria=None,
-        freeze_backbone=False,
-        feature_mask_values=None,
-    ):
-        super().__init__()
-        self.target_key = str(target_key)
-        self.reg_head = nn.Linear(backbone_out_channels, 1)
-        self.backbone = build_model(backbone)
-        self.criteria = build_criteria(criteria)
-        self._init_learned_masked_feat(feature_mask_values=feature_mask_values)
-        self.freeze_backbone = freeze_backbone
-        if self.freeze_backbone:
-            for p in self.backbone.parameters():
-                p.requires_grad = False
-            self._pin_frozen_backbone_eval()
-
-    def _forward_backbone(self, input_dict):
-        """Per-point backbone features; encoder multi-scale features (enc_mode)
-        are concatenated as in DefaultSegmentorV2 (no decoder hypercolumn)."""
-        point = Point(input_dict)
-        point = self.backbone(point)
-        if isinstance(point, Point):
-            while "pooling_parent" in point.keys():
-                assert "pooling_inverse" in point.keys()
-                parent = point.pop("pooling_parent")
-                inverse = point.pop("pooling_inverse")
-                parent.feat = torch.cat([parent.feat, point.feat[inverse]], dim=-1)
-                point = parent
-            feat = point.feat
-        else:
-            feat = point
-        return feat, point
-
-    def forward(self, input_dict, return_point=False):
-        self._fill_masked_feat_with_learned_value(input_dict)
-        feat, point = self._forward_backbone(input_dict)
-        reg_pred = self.reg_head(feat).squeeze(-1)
-        return_dict = dict(reg_pred=reg_pred)
-        if return_point:
-            return_dict["point"] = point
-
-        has_target = self.target_key in input_dict
-        if self.training or has_target:
-            target = input_dict[self.target_key].float().reshape(-1)
-            loss = self.criteria(reg_pred.reshape(-1), target)
-            return_dict["loss"] = loss
-
         return return_dict
 
 
@@ -818,7 +744,8 @@ class MultiTaskSegmentorV2(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeat
         return logits_by_task, targets_by_task, dense_by_task, dense_target_by_task
 
     def _forward_backbone(self, input_dict):
-        """Same as DefaultRegressorV2._forward_backbone."""
+        """Per-point backbone features; encoder multi-scale features (enc_mode)
+        are concatenated as in DefaultSegmentorV2 (no decoder hypercolumn)."""
         point = Point(input_dict)
         point = self.backbone(point)
         if isinstance(point, Point):

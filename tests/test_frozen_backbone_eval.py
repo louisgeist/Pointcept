@@ -33,8 +33,6 @@ def _cfg(model_type, **kwargs):
     )
     if model_type == "DefaultSegmentorV2":
         base.update(num_classes=2, backbone_out_channels=4)
-    elif model_type == "DefaultRegressorV2":
-        base.update(backbone_out_channels=4)
     elif model_type == "DefaultClassifier":
         base.update(num_classes=2, backbone_embed_dim=4)
     elif model_type == "MultiTaskSegmentorV2":
@@ -49,7 +47,6 @@ def _cfg(model_type, **kwargs):
 MODEL_TYPES = (
     "DefaultSegmentor",
     "DefaultSegmentorV2",
-    "DefaultRegressorV2",
     "MultiTaskSegmentorV2",
     "DefaultClassifier",
 )

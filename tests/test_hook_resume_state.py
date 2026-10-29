@@ -10,7 +10,6 @@ from pointcept.engines.hooks.default import HookBase
 from pointcept.engines.hooks.evaluator import (
     ClsEvaluator,
     MultiTaskEvaluator,
-    RegressionEvaluator,
 )
 from pointcept.engines.hooks.grid_probe import GridProbeEvaluator
 
@@ -58,25 +57,6 @@ class TestClsEvaluatorResumeState(unittest.TestCase):
         hook.trainer.cfg.resume = True
         hook.before_train()
         self.assertEqual(hook._best_m_iou, 0.9)
-
-
-class TestRegressionEvaluatorResumeState(unittest.TestCase):
-    def test_round_trips_best_neg_rmse(self):
-        hook = RegressionEvaluator()
-        hook._best_neg_rmse = -0.15
-
-        state = hook.state_dict()
-        self.assertEqual(state, {"best_neg_rmse": -0.15})
-
-        fresh = RegressionEvaluator()
-        fresh.load_state_dict(state)
-        self.assertEqual(fresh._best_neg_rmse, -0.15)
-
-    def test_load_state_dict_ignores_missing_key(self):
-        hook = RegressionEvaluator()
-        hook._best_neg_rmse = -0.15
-        hook.load_state_dict({})
-        self.assertEqual(hook._best_neg_rmse, -0.15)
 
 
 class TestMultiTaskEvaluatorResumeState(unittest.TestCase):

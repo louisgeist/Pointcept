@@ -65,8 +65,8 @@ class MALiBU3DDataset(DefaultDataset):
     :param target_keys: Target keys: "segment", the pixel targets "forest_2d" and "network",
         the natural-habitat axes "nathab_*" and "elevation". Targets are exposed in the batch
         under their task name.
-    :param primary_target_key: Primary semantic target. Must be included in target_keys when
-        provided.
+    :param primary_target_key: Primary semantic target (not "elevation"). Must be included in
+        target_keys when provided; defaults to the first target key.
     :param **kwargs: Additional arguments passed to :class:`DefaultDataset`.
     """
 
@@ -114,13 +114,13 @@ class MALiBU3DDataset(DefaultDataset):
         if primary_target_key not in self.target_keys:
             raise ValueError("primary_target_key must be present in target_keys.")
         self.primary_target_key = primary_target_key
-        if "elevation" in self.target_keys and len(self.target_keys) > 1:
-            if self.primary_target_key not in MALIBU3D_SEMANTIC_TARGETS:
-                raise ValueError(
-                    "When target_keys mixes elevation with semantic targets, "
-                    "primary_target_key must be one of "
-                    f"{MALIBU3D_SEMANTIC_TARGETS} (got {self.primary_target_key!r})."
-                )
+        # Elevation is only trained as an auxiliary task of a multi-task run.
+        if self.primary_target_key in MALIBU3D_REGRESSION_TARGETS:
+            raise ValueError(
+                "primary_target_key cannot be a regression target "
+                f"({self.primary_target_key!r}): elevation is only supported alongside "
+                f"a semantic target, one of {MALIBU3D_SEMANTIC_TARGETS}."
+            )
 
         if min_points is not None:
             if not isinstance(min_points, dict):
@@ -343,30 +343,11 @@ class MALiBU3DDataset(DefaultDataset):
         Point-wise labels become int32 ``(N,)`` (nathab axes are unpacked from
         natural_habitat.npy), pixel rasters keep ``(C, H, W)`` plus their grid
         origin / pixel size, elevation becomes float32 ``(N,)``. Missing optional
-        targets get their fill value. For an elevation-only run, ``segment`` is set
-        to -1 so the generic pipeline still finds a label array.
+        targets get their fill value.
         """
         data_dict = super().get_data(idx)
         n = int(data_dict["coord"].shape[0])
         scene = self.data_list[idx % len(self.data_list)]
-
-        if self.target_keys == ("elevation",):
-            if "elevation" not in data_dict:
-                if self._is_optional_target("elevation"):
-                    data_dict["elevation"] = self._missing_target_array("elevation", n)
-                    data_dict["segment"] = np.full(n, -1, dtype=np.int32)
-                    return data_dict
-                raise FileNotFoundError(
-                    f"target_keys contains 'elevation' but elevation.npy missing under scene: {scene}"
-                )
-            elev = np.asarray(data_dict.pop("elevation"), dtype=np.float64).reshape(-1)
-            if elev.shape[0] != n:
-                raise ValueError(
-                    f"elevation length {elev.shape[0]} does not match coord rows {n}"
-                )
-            data_dict["elevation"] = elev.astype(np.float32)
-            data_dict["segment"] = np.full(n, -1, dtype=np.int32)
-            return data_dict
 
         data_dict = self._unpack_natural_habitat_axes(data_dict, n, scene)
 

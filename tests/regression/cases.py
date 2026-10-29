@@ -172,10 +172,6 @@ TRAIN = {
         "configs/malibu3d/segment/litept-b-v1m0-malibu3d.py",
         _FLAIR_SMALL,
     ),
-    "train-elevation-litept-b": (
-        "configs/malibu3d/elevation/litept-b-v1m0-malibu3d.py",
-        _FLAIR_SMALL,
-    ),
     "train-network-litept": (
         "configs/malibu3d/network/litept-v1m0-malibu3d.py",
         _FLAIR_SMALL,

@@ -121,7 +121,7 @@ predictions). `scripts/test.sh -d malibu3d -n <name>` tests a finished run again
 | `multi-kpconvx-v1m0-malibu3d.py` | KPConvX (6 GPUs) | Tab. 2 |
 | `pretrain-sonata-v1m2-malibu3d.py` | Sonata self-supervised pretraining (24 GPUs), the starting point of Sonata-FT | Tab. 2 |
 | `ablations/*.py` | LitePT-B without loss balancing, with GradNorm, natural habitat trained per point, land cover only, tested without RGB | Tab. 4 |
-| `segment/`, `elevation/`, `network/` | single-task baselines | |
+| `segment/`, `network/` | single-task baselines | |
 | `probe/sonata-v1m2-malibu3d-lin*.py` | linear probes of a frozen Sonata on land cover | |
 
 The multitask runs use 200k iterations, a global batch of 12 tiles (24 for KPConvX) and AMP; the GPU count is the one
@@ -182,7 +182,7 @@ Linear probes of the frozen backbones (Tab. 3; macro-F1 on H3D, ground IoU on Op
 
 ```bibtex
 @article{geist2026malibu3d,
-  title   = {{MALiBU3D}: A Multitask Aerial {LiDAR} Benchmark for Large-Scale {3D} Scene Understanding},
+  title   = {{MALiBU3D}: {A} Multitask Aerial {LiDAR} Benchmark for Large-Scale {3D} Scene Understanding},
   author  = {Geist, Louis and Vincent, Elliot and Chebbi, Mohamed Ali and Garioud, Anatol and Gonthier, Nicolas
              and Giordano, S{\'e}bastien and David, Nicolas and Wegner, Jan Dirk and Landrieu, Loic and Robert, Damien},
   journal = {arXiv preprint arXiv:XXXX.XXXXX},
