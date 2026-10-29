@@ -19,7 +19,7 @@ import re
 from pathlib import Path
 
 LOGS = Path("logs/slurm")
-FLOAT = r"([-+0-9.eE]+|nan)"
+FLOAT = r"(nan|[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)"
 PATTERNS = [
     (re.compile(rf"\[task=(\S+)\] Test result: mIoU/mAcc/allAcc {FLOAT}/{FLOAT}/{FLOAT}"),
      ["mIoU", "mAcc", "allAcc"]),
