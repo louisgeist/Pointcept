@@ -21,10 +21,6 @@ from pointcept.utils.misc import (
     pool_axis_distribution_from_probs,
     tv_from_abs_errors,
 )
-from pointcept.utils.regression import (
-    denorm_regression_prediction,
-    get_regression_target_scale,
-)
 from pointcept.utils.epoch_timing import (
     begin_epoch_wall_timing,
     finalize_epoch_wall_timing,
@@ -543,7 +539,6 @@ class RegressionEvaluator(HookBase):
         self.trainer.model.eval()
         target_key = self._target_key()
         origin_key = self._origin_target_key(target_key)
-        target_scales = self._cfg_get(self.trainer.cfg.data, "target_scales", {}) or {}
         reg_sums = {"mae": 0.0, "mse": 0.0, "count": 0.0}
 
         loader = self.trainer.val_loader
@@ -570,8 +565,6 @@ class RegressionEvaluator(HookBase):
                             input_dict.get("origin_offset"),
                         )
                         target = input_dict[origin_key].reshape(-1).float()
-                        scale = get_regression_target_scale(target_scales, target_key)
-                        pred = denorm_regression_prediction(pred, scale)
                 p, t = self._gather_masked(pred, target)
                 if p is not None:
                     mae_b, mse_b, cnt_b = accumulate_regression_errors(p, t)
@@ -806,7 +799,6 @@ class MultiTaskEvaluator(HookBase):
             }
             for t in tile_distribution_tasks
         }
-        target_scales = self._cfg_get(self.trainer.cfg.data, "target_scales", {}) or {}
 
         loader = self.trainer.val_loader
         n_batches = len(loader)
@@ -1131,10 +1123,6 @@ class MultiTaskEvaluator(HookBase):
                                 input_dict.get("origin_offset"),
                             )
                             target = input_dict[origin_key].reshape(-1).float()
-                            scale = get_regression_target_scale(
-                                target_scales, task_name
-                            )
-                            pred = denorm_regression_prediction(pred, scale)
                     p, t = self._gather_masked(pred, target)
                     if p is not None:
                         mae_b, mse_b, cnt_b = accumulate_regression_errors(p, t)

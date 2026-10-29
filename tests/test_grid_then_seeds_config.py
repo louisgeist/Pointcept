@@ -21,8 +21,8 @@ from tools.grid_then_seeds import (
 # class names, PT-v3m2 enc_mode backbone.
 GRID_CONFIG = "configs/h3d/sonata-v1m2-h3d-lin-grid.py"
 
-# ...and a cartesian_probes one (import inside the config file).
-GRID_CONFIG_CARTESIAN = "configs/malibu3d/probe/sonata-v1m2-malibu3d-lin-grid-wide.py"
+# ...and a MALiBU3D one (dict-comprehension `probes`, iter-limited schedule).
+GRID_CONFIG_MALIBU3D = "configs/malibu3d/probe/sonata-v1m2-malibu3d-lin-grid.py"
 
 # DALES: no held-out val, so every config points data.val and data.test at split="test"
 GRID_CONFIG_DALES = "configs/dales/spunet-v1m0-dales-lin-grid-enc.py"
@@ -109,7 +109,7 @@ class TestBuildSeedEnsembleConfig(unittest.TestCase):
         self.assertEqual(cfg.model.backbone["type"], "PT-v3m2")
         self.assertIs(cfg.model.freeze_backbone, True)
 
-    def test_cartesian_config_roundtrips(self):
+    def test_malibu3d_config_roundtrips(self):
         focal_sgd = {
             "criteria": [
                 {
@@ -131,7 +131,7 @@ class TestBuildSeedEnsembleConfig(unittest.TestCase):
             "scheduler": {"type": "CosineAnnealingLR", "eta_min": 0.0},
             "grad_clip": None,
         }
-        cfg, _ = self._generate(GRID_CONFIG_CARTESIAN, n_seeds=6, winner_pc=focal_sgd)
+        cfg, _ = self._generate(GRID_CONFIG_MALIBU3D, n_seeds=6, winner_pc=focal_sgd)
 
         self.assertEqual(len(cfg.model.probes), 6)
         probe = cfg.model.probes["seed3"]

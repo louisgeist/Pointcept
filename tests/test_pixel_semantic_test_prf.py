@@ -8,7 +8,7 @@ import unittest
 
 import numpy as np
 
-from pointcept.datasets.malibu3d_config_utils import get_pixel_semantic_config
+from pointcept.datasets.malibu3d_config_utils import get_task_config
 from pointcept.utils.dilated_metrics import (
     dilated_prf_enabled,
     dilated_precision_recall_counts,
@@ -95,8 +95,8 @@ class TestDilatedPrfFromDense(unittest.TestCase):
         self.assertEqual(p_denom, 2.0)
 
     def test_network_enables_dilated_prf_forest_2d_opts_out(self):
-        self.assertTrue(dilated_prf_enabled(get_pixel_semantic_config("network")))
-        self.assertFalse(dilated_prf_enabled(get_pixel_semantic_config("forest_2d")))
+        self.assertTrue(dilated_prf_enabled(get_task_config("network")))
+        self.assertFalse(dilated_prf_enabled(get_task_config("forest_2d")))
 
 
 if __name__ == "__main__":

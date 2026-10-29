@@ -2,7 +2,7 @@
 Linear-probe grid search on a frozen Sonata encoder (PT-v3m2, enc_mode, 1232-d multi-scale
 encoder features) for MALiBU3D land-cover segmentation (`segment`).
 
-8 independent linear heads (2 losses x 3 learning rates, plus 2 hand-written probes) are
+12 independent linear heads (CE + Lovasz, one per learning rate from 1e-4 to 5e-1) are
 trained on one shared backbone forward pass per batch (GridProbeTrainer,
 pointcept/models/grid_probe.py). After training, GridProbeWinnerSelector reloads the probe
 with the best val mIoU, runs it on the test split and writes save_path/grid_search_results.json.
@@ -68,76 +68,50 @@ names = [
 ]
 
 # -----------------------------------------------------------------------------
-# Grid-search probes
+# Grid-search probes: ce_lovasz, AdamW/wd0/OneCycleLR warmup 5%, lr sweep only (12 probes),
+# as the Sonata probes of the downstream benchmarks (e.g. configs/dales/sonata-v1m2-dales-lin-grid.py).
 # -----------------------------------------------------------------------------
-# Each probe is fully independent: its own loss(es), input/feature normalization,
-# dropout, optimizer, scheduler and grad clipping (GridProbeTrainer steps each one
-# separately). cartesian_probes deep-merges every combination of the given axes onto
-# the shared base dict (here loss x lr); the grid grows multiplicatively, so cross
-# only the axes worth sweeping.
-from pointcept.utils.grid_probe_utils import cartesian_probes
+_criteria = [
+    dict(type="CrossEntropyLoss", loss_weight=1.0, ignore_index=ignore_index),
+    dict(
+        type="LovaszLoss", mode="multiclass", loss_weight=1.0, ignore_index=ignore_index
+    ),
+]
+_lrs = {
+    "1e-4": 1e-4,
+    "2e-4": 2e-4,
+    "5e-4": 5e-4,
+    "1e-3": 1e-3,
+    "2e-3": 2e-3,
+    "5e-3": 5e-3,
+    "1e-2": 1e-2,
+    "2e-2": 2e-2,
+    "5e-2": 5e-2,
+    "1e-1": 1e-1,
+    "2e-1": 2e-1,
+    "5e-1": 5e-1,
+}
 
-_loss_axis = [
-    dict(
-        criteria=[
-            dict(type="CrossEntropyLoss", loss_weight=1.0, ignore_index=ignore_index)
-        ]
-    ),
-    dict(
-        criteria=[
-            dict(
-                type="FocalLoss", gamma=2.0, loss_weight=1.0, ignore_index=ignore_index
-            )
-        ]
-    ),
-]
-_lr_axis = [
-    dict(optimizer=dict(type="AdamW", lr=lr, weight_decay=0.02))
-    for lr in (1e-4, 5e-4, 2e-3)
-]
-probes = cartesian_probes(
-    dict(
+probes = {
+    f"ce_lovasz_lr{lr_name}": dict(
+        criteria=_criteria,
         input_norm=None,
         feat_norm=None,
         dropout=0.0,
-        scheduler=dict(type="CosineAnnealingLR", eta_min=0.0),
-        grad_clip=3.0,
-    ),
-    _loss_axis,
-    _lr_axis,
-)
-# Config.dump (yapf) fails on function objects.
-del cartesian_probes, _loss_axis, _lr_axis
-
-# Hand-written probes can be added next to the cross product:
-probes["ce_lovasz_adamw_lr1e-3_ln"] = dict(
-    criteria=[
-        dict(type="CrossEntropyLoss", loss_weight=1.0, ignore_index=ignore_index),
-        dict(
-            type="LovaszLoss",
-            mode="multiclass",
-            loss_weight=0.5,
-            ignore_index=ignore_index,
+        optimizer=dict(type="AdamW", lr=lr, weight_decay=0.0),
+        scheduler=dict(
+            type="OneCycleLR",
+            max_lr=lr,
+            pct_start=0.05,
+            anneal_strategy="cos",
+            div_factor=10.0,
+            final_div_factor=1000.0,
         ),
-    ],
-    input_norm=None,
-    feat_norm="layernorm",
-    dropout=0.2,
-    optimizer=dict(type="AdamW", lr=0.001, weight_decay=0.05),
-    scheduler=dict(type="OneCycleLR", max_lr=0.001, pct_start=0.1),
-    grad_clip=3.0,
-)
-probes["focal_g2_sgd_lr1e-2"] = dict(
-    criteria=[
-        dict(type="FocalLoss", gamma=2.0, loss_weight=1.0, ignore_index=ignore_index)
-    ],
-    input_norm="l2",
-    feat_norm="batchnorm",
-    dropout=0.1,
-    optimizer=dict(type="SGD", lr=0.01, momentum=0.9, weight_decay=1e-4),
-    scheduler=dict(type="MultiStepLR", milestones=[0.6, 0.9], gamma=0.1),
-    grad_clip=None,
-)
+        grad_clip=3.0,
+    )
+    for lr_name, lr in _lrs.items()
+}
+del _criteria, _lrs
 
 # -----------------------------------------------------------------------------
 # Model

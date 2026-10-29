@@ -162,10 +162,13 @@ csv_manifest = "data/malibu3d/tiles.csv"
 min_points = {"train": 1000}
 val_stratified_subset_manifest = "data/malibu3d/val_subset_2000tiles.csv"
 
-train_multitask_keys, val_multitask_keys, multitask_index_valid_keys = (
-    init_multitask_collect_keys(
-        target_keys, collect_prefix_keys=MALIBU3D_COLLECT_PREFIX_LITEPT
-    )
+(
+    train_multitask_keys,
+    val_multitask_keys,
+    test_multitask_keys,
+    multitask_index_valid_keys,
+) = init_multitask_collect_keys(
+    target_keys, collect_prefix_keys=MALIBU3D_COLLECT_PREFIX_LITEPT
 )
 
 del MALIBU3D_COLLECT_PREFIX_LITEPT, init_multitask_collect_keys
@@ -184,7 +187,6 @@ data = dict(
         min_points=min_points,
         target_keys=list(target_keys),
         primary_target_key=main_task,
-        task_configs=task_configs,
         transform=[
             dict(
                 type="Update",
@@ -257,7 +259,6 @@ data = dict(
         stratified_subset_manifest=val_stratified_subset_manifest,
         target_keys=list(target_keys),
         primary_target_key=main_task,
-        task_configs=task_configs,
         transform=[
             dict(
                 type="Update",
@@ -298,7 +299,6 @@ data = dict(
         min_points=min_points,
         target_keys=list(target_keys),
         primary_target_key=main_task,
-        task_configs=task_configs,
         transform=[
             dict(type="CenterShift", apply_z=True),
             dict(type="Z_MinShift"),
@@ -320,7 +320,7 @@ data = dict(
                 dict(type="ToTensor"),
                 dict(
                     type="Collect",
-                    keys=("coord", "grid_coord", "index"),
+                    keys=test_multitask_keys,
                     optional_keys=("inverse",),
                     feat_keys=feat_keys,
                     feat_scales=dict(coord=coord_feat_scale),

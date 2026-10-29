@@ -111,9 +111,8 @@ class TestNetworkStillWorksUnchanged(unittest.TestCase):
 
             out = ds._load_pixel_semantic_label(data_dict, scene)
 
-            self.assertEqual(
-                out["network"].shape, (2, 2, 2)
-            )  # sliced to num_networks=2 channels
+            # Only the ROADS channel is kept.
+            self.assertEqual(out["network"].shape, (1, 2, 2))
             np.testing.assert_array_equal(out["network"][0], np.ones((2, 2)))
 
 

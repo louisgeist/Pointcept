@@ -17,9 +17,10 @@ from .defaults import DefaultDataset
 from .builder import DATASETS
 from .transform import record_data_pipeline
 from .malibu3d_config_utils import (
-    MALIBU3D_PIXEL_SEMANTIC_TARGET_KEYS,
-    MALIBU3D_TILE_DISTRIBUTION_TARGET_KEYS,
+    MALIBU3D_PIXEL_SEMANTIC_TASKS,
+    MALIBU3D_TILE_DISTRIBUTION_TASKS,
     get_missing_target_fill_value,
+    get_task_config,
 )
 from pointcept.datasets.preprocessing.malibu3d.tile_catalog import iter_tiles
 from .malibu3d_labels import NATHAB_AXIS_KEYS, unpack_nathab_axes
@@ -33,8 +34,8 @@ MALIBU3D_SPECIFIC_ASSETS = (
     "forest_2d",
 )
 MALIBU3D_SEMANTIC_TARGETS = ("segment",)
-MALIBU3D_PIXEL_SEMANTIC_TARGETS = MALIBU3D_PIXEL_SEMANTIC_TARGET_KEYS
-MALIBU3D_TILE_DISTRIBUTION_TARGETS = MALIBU3D_TILE_DISTRIBUTION_TARGET_KEYS
+MALIBU3D_PIXEL_SEMANTIC_TARGETS = tuple(MALIBU3D_PIXEL_SEMANTIC_TASKS)
+MALIBU3D_TILE_DISTRIBUTION_TARGETS = MALIBU3D_TILE_DISTRIBUTION_TASKS
 MALIBU3D_REGRESSION_TARGETS = ("elevation",)
 # Pixel size of the released forest_2d / network rasters (labels.json: forest_2d.pixel_m).
 RELEASE_RASTER_PIXEL_M = 1.0
@@ -65,11 +66,6 @@ class MALiBU3DDataset(DefaultDataset):
         under their task name.
     :param primary_target_key: Primary semantic target. Must be included in target_keys when
         provided.
-    :param task_configs: Optional dict of task_name -> task config, mirroring the
-        model/eval-side ``data.task_configs``. Only pixel_semantic entries are used, to
-        override the registry's per-target ``num_networks``/``channel_names`` (e.g. a
-        config that trains ``network`` on ROADS only, dropping RAILROADS). Absent or
-        missing entries fall back to ``MALIBU3D_PIXEL_SEMANTIC_TASKS`` defaults.
     :param **kwargs: Additional arguments passed to :class:`DefaultDataset`.
     """
 
@@ -89,13 +85,9 @@ class MALiBU3DDataset(DefaultDataset):
         min_points=None,
         target_keys=("segment",),
         primary_target_key=None,
-        task_configs=None,
         **kwargs,
     ):
         self.csv_manifest = csv_manifest
-        # Only pixel_semantic entries are consulted (num_networks / channel_names);
-        # other targets always use the registry defaults.
-        self.task_configs = dict(task_configs) if task_configs else {}
         if isinstance(target_keys, str):
             target_keys = [target_keys]
         elif not isinstance(target_keys, Sequence):
@@ -201,10 +193,7 @@ class MALiBU3DDataset(DefaultDataset):
         return target_key in self.optional_target_keys
 
     def _missing_target_array(self, target_key, n):
-        fill_value = get_missing_target_fill_value(
-            target_key,
-            pixel_semantic_config=getattr(self, "task_configs", {}).get(target_key),
-        )
+        fill_value = get_missing_target_fill_value(target_key)
         if target_key in MALIBU3D_PIXEL_SEMANTIC_TARGETS:
             return np.asarray(fill_value, dtype=np.uint8)
         if target_key in MALIBU3D_SEMANTIC_TARGETS:
@@ -233,36 +222,22 @@ class MALiBU3DDataset(DefaultDataset):
     def _load_pixel_semantic_label(self, data_dict, scene, target_key="network"):
         """Load ``{target_key}.npy`` and grid meta for a pixel semantic task.
 
-        Training heads use ``num_networks`` channels from
-        ``get_pixel_semantic_config(target_key)``. On-disk rasters may have more
-        channels than the task trains on (``rasterize_network.py`` writes ROADS,
-        RAILROADS, TRANSMISSION_LINES); the trained ones are selected by name via
-        ``meta.{target_key}.channel_order`` when present, else the first ``r``
+        The task trains on the ``channel_names`` of its task config (ROADS for
+        ``network``). On-disk rasters may have more channels (``rasterize_network.py``
+        writes ROADS, RAILROADS, TRANSMISSION_LINES); the trained ones are selected by
+        name via ``meta.{target_key}.channel_order`` when present, else the first
         channels are kept.
 
         Tiles without any positive pixel have no ``{target_key}.npy``, only
         ``meta.{target_key}`` (``empty: true`` + width/height); they get an all-zero
         raster. Grid origin and pixel size come from meta.json, or from tiles.csv
         (``raster_origins``) when there is no meta.json.
-
-        ``self.task_configs[target_key]``, when set, overrides the registry's
-        ``num_networks``/``channel_names`` (e.g. to drop RAILROADS from ``network``).
         """
         import json
 
-        from pointcept.datasets.malibu3d_config_utils import (
-            NETWORK_CHANNEL_NAMES,
-            get_pixel_semantic_config,
-        )
-
-        cfg = getattr(self, "task_configs", {}).get(
-            target_key
-        ) or get_pixel_semantic_config(target_key)
+        cfg = get_task_config(target_key)
         r = int(cfg["num_networks"])
-        default_channel_names = (
-            NETWORK_CHANNEL_NAMES if target_key == "network" else (target_key,)
-        )
-        channel_names = list(cfg.get("channel_names") or default_channel_names)
+        channel_names = list(cfg["channel_names"])
 
         origin_x = 0.0
         origin_y = 0.0

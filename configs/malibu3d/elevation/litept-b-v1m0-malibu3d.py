@@ -62,10 +62,6 @@ target_key = "elevation"
 target_keys = (target_key,)
 origin_target_key = f"origin_{target_key}"
 
-# Elevation is regressed in meters: no target rescaling, hence no denormalization
-# in the metrics.
-target_scales = {}
-
 # -----------------------------------------------------------------------------
 # Hooks
 # -----------------------------------------------------------------------------
@@ -150,14 +146,18 @@ csv_manifest = "data/malibu3d/tiles.csv"
 min_points = {"train": 1000}
 val_stratified_subset_manifest = "data/malibu3d/val_subset_2000tiles.csv"
 
-train_collect_keys, val_collect_keys, index_valid_keys = init_multitask_collect_keys(
+(
+    train_collect_keys,
+    val_collect_keys,
+    test_collect_keys,
+    index_valid_keys,
+) = init_multitask_collect_keys(
     target_keys, collect_prefix_keys=MALIBU3D_COLLECT_PREFIX_LITEPT
 )
 
 del MALIBU3D_COLLECT_PREFIX_LITEPT, init_multitask_collect_keys
 
 data = dict(
-    target_scales=target_scales,
     target_key=target_key,
     train=dict(
         type=dataset_type,
@@ -300,7 +300,7 @@ data = dict(
                 dict(type="ToTensor"),
                 dict(
                     type="Collect",
-                    keys=("coord", "grid_coord", "index"),
+                    keys=test_collect_keys,
                     optional_keys=("inverse",),
                     feat_keys=feat_keys,
                     feat_scales=dict(coord=coord_feat_scale),

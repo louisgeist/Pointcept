@@ -45,10 +45,6 @@ from pointcept.utils.dilated_metrics import (
     precision_recall_f1,
 )
 from pointcept.utils.progress import EvaluationProgressBar
-from pointcept.utils.regression import (
-    denorm_regression_prediction,
-    get_regression_target_scale,
-)
 from pointcept.utils.wandb_metrics import class_name_slug, iou_class_tag, metric_tag
 
 TESTERS = Registry("testers")
@@ -897,13 +893,6 @@ class RegressionTester(TesterBase):
             return np.asarray(scene_extra[origin_key]).reshape(-1)
         return np.asarray(target_np).reshape(-1)
 
-    def _denorm_regression_pred_np(self, pred_np, target_key):
-        target_scales = self._cfg_get(self.cfg.data, "target_scales", {}) or {}
-        scale = get_regression_target_scale(target_scales, target_key)
-        return denorm_regression_prediction(
-            np.asarray(pred_np, dtype=np.float64), scale
-        )
-
     def test(self):
         if self._uses_multi_scene_batches():
             logger = get_root_logger()
@@ -1009,7 +998,7 @@ class RegressionTester(TesterBase):
                     pred_np = self._apply_inverse_origin_np(
                         pred_np, batch_scene_extra[b_idx], target_key
                     )
-                    pred_np = self._denorm_regression_pred_np(pred_np, target_key)
+                    pred_np = np.asarray(pred_np, dtype=np.float64)
                     np.save(batch_pred_paths[b_idx], pred_np)
                     batch_pred_np.append(pred_np)
             else:
@@ -1083,7 +1072,7 @@ class RegressionTester(TesterBase):
                         pred_np = self._apply_inverse_origin_np(
                             pred_np, scene_extra, target_key
                         )
-                        pred_np = self._denorm_regression_pred_np(pred_np, target_key)
+                        pred_np = np.asarray(pred_np, dtype=np.float64)
                         np.save(pred_save_path, pred_np)
 
                     batch_pred_np.append(pred_np)
@@ -1384,13 +1373,6 @@ class MultiTaskTester(TesterBase):
         if origin_key in scene_extra:
             return np.asarray(scene_extra[origin_key]).reshape(-1)
         return np.asarray(targets_by_task[task_name]).reshape(-1)
-
-    def _denorm_regression_pred_np(self, pred_np, task_name):
-        target_scales = self._cfg_get(self.cfg.data, "target_scales", {}) or {}
-        scale = get_regression_target_scale(target_scales, task_name)
-        return denorm_regression_prediction(
-            np.asarray(pred_np, dtype=np.float64), scale
-        )
 
     def test(self):
         if self._uses_multi_scene_batches():
@@ -1787,7 +1769,7 @@ class MultiTaskTester(TesterBase):
                             batch_scene_extra[b_idx],
                             task_name,
                         )
-                        pred_np = self._denorm_regression_pred_np(pred_np, task_name)
+                        pred_np = np.asarray(pred_np, dtype=np.float64)
                         pred_reg_np[task_name] = pred_np
                         np.save(batch_reg_cache_paths[b_idx][task_name], pred_np)
 

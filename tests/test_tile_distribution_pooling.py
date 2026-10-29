@@ -19,7 +19,7 @@ from pointcept.models.losses import build_criteria
 from pointcept.models.default import MultiTaskSegmentorV2
 from pointcept.datasets.malibu3d_config_utils import (
     enable_nathab_pointwise_supervision,
-    get_tile_distribution_config,
+    get_task_config,
     init_task_criteria,
 )
 
@@ -115,14 +115,14 @@ class TestWeightedKLDivLoss(unittest.TestCase):
 
 class TestInitTaskCriteriaPointwiseSupervision(unittest.TestCase):
     def test_default_tile_distribution_uses_weighted_kl(self):
-        cfg = get_tile_distribution_config("nathab_moisture_regime")
+        cfg = get_task_config("nathab_moisture_regime")
         self.assertFalse(cfg.get("pointwise_supervision"))
         criteria = init_task_criteria({"nathab_moisture_regime": cfg})
         types = [c["type"] for c in criteria["nathab_moisture_regime"]]
         self.assertEqual(types, ["WeightedKLDivLoss"])
 
     def test_pointwise_supervision_uses_ce_and_lovasz(self):
-        cfg = get_tile_distribution_config("nathab_moisture_regime")
+        cfg = get_task_config("nathab_moisture_regime")
         task_configs = {"nathab_moisture_regime": cfg}
         enable_nathab_pointwise_supervision(task_configs)
         self.assertTrue(task_configs["nathab_moisture_regime"]["pointwise_supervision"])

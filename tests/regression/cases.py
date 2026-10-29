@@ -58,7 +58,6 @@ JOB_TO_CKPT = {
 # Probe configs whose `weight` is unset (filled in at launch time).
 PROBE_CKPT_OVERRIDE = {
     "malibu3d/probe/sonata-v1m2-malibu3d-lin-grid": "sonata-pretrained",
-    "malibu3d/probe/sonata-v1m2-malibu3d-lin-grid-wide": "sonata-pretrained",
     "malibu3d/probe/sonata-v1m2-malibu3d-lin": "sonata-pretrained",
 }
 

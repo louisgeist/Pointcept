@@ -8,14 +8,15 @@ import unittest
 
 from pointcept.datasets.malibu3d_config_utils import (
     MALIBU3D_PIXEL_SEMANTIC_TASKS,
-    get_pixel_semantic_config,
+    MALIBU3D_TARGET_KEYS,
+    get_task_config,
     init_multitask_collect_keys,
 )
 
 
 class TestForestTwoDRegistration(unittest.TestCase):
     def test_forest_2d_registered_with_expected_fields(self):
-        cfg = get_pixel_semantic_config("forest_2d")
+        cfg = get_task_config("forest_2d")
         self.assertEqual(cfg["task_type"], "pixel_semantic")
         self.assertEqual(cfg["num_networks"], 1)
         self.assertEqual(cfg["num_classes"], 2)
@@ -25,9 +26,9 @@ class TestForestTwoDRegistration(unittest.TestCase):
         self.assertEqual(cfg["pooling"], "mean")
         self.assertFalse(cfg["enable_dilated_prf"])
 
-    def test_get_pixel_semantic_config_returns_independent_copies(self):
-        a = get_pixel_semantic_config("forest_2d")
-        b = get_pixel_semantic_config("forest_2d")
+    def test_get_task_config_returns_independent_copies(self):
+        a = get_task_config("forest_2d")
+        b = get_task_config("forest_2d")
         a["num_classes"] = 999
         self.assertEqual(b["num_classes"], 2)
 
@@ -39,7 +40,7 @@ class TestForestTwoDRegistration(unittest.TestCase):
 
 class TestInitMultitaskCollectKeys(unittest.TestCase):
     def test_network_only_matches_historical_key_set(self):
-        train_keys, val_keys, _ = init_multitask_collect_keys(("network",))
+        train_keys, val_keys, _, _ = init_multitask_collect_keys(("network",))
         expected_extra = (
             "network_cell",
             "network_pix",
@@ -55,7 +56,7 @@ class TestInitMultitaskCollectKeys(unittest.TestCase):
         self.assertIn("network", train_keys)
 
     def test_forest_2d_only_gets_its_own_keys_not_network(self):
-        train_keys, val_keys, _ = init_multitask_collect_keys(("forest_2d",))
+        train_keys, val_keys, _, _ = init_multitask_collect_keys(("forest_2d",))
         self.assertIn("forest_2d_cell", train_keys)
         self.assertIn("forest_2d_pix", train_keys)
         self.assertIn("forest_2d_origin_x", train_keys)
@@ -67,7 +68,9 @@ class TestInitMultitaskCollectKeys(unittest.TestCase):
         self.assertNotIn("network_pix", train_keys)
 
     def test_network_and_forest_2d_coexist_without_collision(self):
-        train_keys, val_keys, _ = init_multitask_collect_keys(("network", "forest_2d"))
+        train_keys, val_keys, _, _ = init_multitask_collect_keys(
+            ("network", "forest_2d")
+        )
         for prefix in ("network", "forest_2d"):
             for suffix in (
                 "cell",
@@ -86,9 +89,23 @@ class TestInitMultitaskCollectKeys(unittest.TestCase):
     def test_forest_2d_is_scene_level_in_val_keys(self):
         # pixel_semantic targets are "scene-level": val Collect keys must NOT
         # include an origin_forest_2d entry (unlike point-wise targets).
-        _, val_keys, _ = init_multitask_collect_keys(("forest_2d",))
+        _, val_keys, _, _ = init_multitask_collect_keys(("forest_2d",))
         self.assertIn("forest_2d", val_keys)
         self.assertNotIn("origin_forest_2d", val_keys)
+
+    def test_test_keys_of_the_benchmark(self):
+        # Fragment Collect of the multitask test pipeline: grid_coord but not grid_size,
+        # no point-wise target, pixel targets in registry order (network, forest_2d).
+        grid = ("cell", "pix", "origin_x", "origin_y", "pixel_m", "height", "width")
+        _, _, test_keys, _ = init_multitask_collect_keys(
+            MALIBU3D_TARGET_KEYS, collect_prefix_keys=("grid_coord", "grid_size")
+        )
+        expected = ("coord", "grid_coord", "index")
+        for key in ("network", "forest_2d"):
+            expected += (key,) + tuple(f"{key}_{s}" for s in grid)
+        self.assertEqual(test_keys, expected)
+        _, _, test_keys, _ = init_multitask_collect_keys(("segment",))
+        self.assertEqual(test_keys, ("coord", "index"))
 
 
 if __name__ == "__main__":

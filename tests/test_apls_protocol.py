@@ -94,43 +94,51 @@ class TestPublicApiHasNoKnobs(unittest.TestCase):
 
 
 class TestPredictionDefaultsMatchConfigs(unittest.TestCase):
-    """eval_network_apls.run() defaults == the mask->graph recipe of the reference config."""
+    """eval_network_apls.run() defaults == the mask->graph recipe of the paper.
 
-    KEYS = (
-        "threshold",
-        "overlap_combine",
-        "connectivity",
-        "rdp_epsilon_m",
-        "endpoint_fix_enabled",
-        "endpoint_fix_stage",
-        "merge_hop_threshold",
-        "radius_fix_radius_m",
-        "remove_small_objects_enabled",
-        "remove_small_objects_min_size_px",
-        "skeletonize_enabled",
-        "open_iterations",
-        "close_iterations",
-        "morph_connectivity",
-        "min_component_nodes",
+    The MALiBU3D configs only set ``network_apls_eval = dict(split="test")`` and rely on
+    these defaults, so changing one changes the APLS reported by every config.
+    """
+
+    PAPER_RECIPE = dict(
+        threshold=0.2,
+        overlap_combine="nanmean",
+        connectivity=8,
+        rdp_epsilon_m=2.0,
+        endpoint_fix_enabled=False,
+        endpoint_fix_stage="pre_rdp",
+        merge_hop_threshold=2.5,
+        radius_fix_radius_m=5,
+        remove_small_objects_enabled=False,
+        remove_small_objects_min_size_px=8,
+        skeletonize_enabled=True,
+        open_iterations=0,
+        close_iterations=5,
+        morph_connectivity=8,
+        min_component_nodes=5,
     )
 
-    def test_defaults_equal_reference_config(self):
-        from pointcept.utils.config import Config
-
+    def test_defaults_equal_paper_recipe(self):
         sys.path.insert(0, str(REPO_ROOT / "tools"))
         try:
             import eval_network_apls
         finally:
             sys.path.pop(0)
-        cfg = Config.fromfile(
-            str(REPO_ROOT / "configs/malibu3d/multi-ptv3-v1m0-malibu3d.py")
-        )
         defaults = {
             k: v.default
             for k, v in inspect.signature(eval_network_apls.run).parameters.items()
         }
-        for key in self.KEYS:
-            self.assertEqual(defaults[key], cfg.network_apls_eval[key], key)
+        for key, value in self.PAPER_RECIPE.items():
+            self.assertEqual(defaults[key], value, key)
+
+    def test_configs_do_not_override_recipe(self):
+        from pointcept.utils.config import Config
+
+        for path in sorted((REPO_ROOT / "configs/malibu3d").rglob("*.py")):
+            cfg = Config.fromfile(str(path))
+            opts = cfg.get("network_apls_eval", None)
+            if opts:
+                self.assertEqual(dict(opts), {"split": "test"}, str(path))
 
 
 class TestConfigValidation(unittest.TestCase):

@@ -1,8 +1,8 @@
 """
 LitePT-S trained from scratch on MALiBU3D road-network prediction alone: point features are
-max-pooled into 1 m Lambert pixels and each pixel is classified for the ROADS and RAILROADS
-masks (rasterized from the network graphs, CE + Lovasz). APLS is computed on the test split
-after training. Short schedule: 10k iterations, 500-iteration linear lr warmup, then constant lr.
+max-pooled into 1 m Lambert pixels and each pixel is classified for the ROADS mask (rasterized
+from the road graphs; CE with a 5x weight on road pixels, as in the multitask configs). APLS is
+computed on the test split after training. Short schedule: 10k iterations, 500-iteration linear lr warmup, then constant lr.
 Self-contained: inherits only from _base_/default_runtime.py.
 """
 
@@ -100,7 +100,7 @@ test = dict(type="MultiTaskTester", verbose=True, write_cls_iou=True)
 # -----------------------------------------------------------------------------
 # Model
 # -----------------------------------------------------------------------------
-# MultiTaskSegmentorV2: max-pool points into 1 m pixels, then Linear(C -> 2 classes x r channels).
+# MultiTaskSegmentorV2: max-pool points into 1 m pixels, then Linear(C -> 2 classes).
 model = dict(
     type="MultiTaskSegmentorV2",
     backbone_out_channels=72,
@@ -162,38 +162,19 @@ data_root = "data/malibu3d"
 csv_manifest = "data/malibu3d/tiles.csv"
 min_points = {"train": 1000}
 
-# Opt-in APLS scoring of PreciseEvaluator test logits (see NetworkAPLSEvaluator /
-# tools/test.py). ``split`` must match ``data.test.split`` so stitched ROIs find
-# ``{patch_id}_logits_network.npy``. ``network_graphs_root=None`` reads each ground-truth
-# road graph from its ROI directory (Hugging Face layout of the dataset).
-network_apls_eval = dict(
-    network_graphs_root=None,
-    split="test",
-    threshold=0.2,
-    overlap_combine="nanmean",
-    connectivity=8,
-    rdp_epsilon_m=2.0,
-    endpoint_fix_enabled=False,
-    endpoint_fix_stage="pre_rdp",
-    merge_hop_threshold=2.5,
-    max_rois=None,
-    radius_fix_radius_m=5,
-    # Mask -> graph (from-mask path): drop noise blobs, then skeletonize to 1px.
-    remove_small_objects_enabled=False,
-    remove_small_objects_min_size_px=8,
-    skeletonize_enabled=True,
-    open_iterations=0,
-    close_iterations=5,
-    morph_connectivity=8,
-    min_component_nodes=5,
-    # APLS metric parameters are fixed (apls_metric.APLS_PROTOCOL), not configurable;
-    # everything in this dict builds the predicted graph. See tools/eval_network_apls.py.
-)
+# Opt-in APLS scoring of the PreciseEvaluator test logits (NetworkAPLSEvaluator /
+# tools/test.py). The mask -> graph parameters keep the defaults of
+# tools/eval_network_apls.py::run; ground-truth road graphs are read from each ROI
+# directory (Hugging Face layout of the dataset).
+network_apls_eval = dict(split="test")
 
-train_multitask_keys, val_multitask_keys, multitask_index_valid_keys = (
-    init_multitask_collect_keys(
-        target_keys, collect_prefix_keys=MALIBU3D_COLLECT_PREFIX_LITEPT
-    )
+(
+    train_multitask_keys,
+    val_multitask_keys,
+    test_multitask_keys,
+    multitask_index_valid_keys,
+) = init_multitask_collect_keys(
+    target_keys, collect_prefix_keys=MALIBU3D_COLLECT_PREFIX_LITEPT
 )
 
 del MALIBU3D_COLLECT_PREFIX_LITEPT, init_multitask_collect_keys
@@ -352,19 +333,7 @@ data = dict(
                 dict(type="ToTensor"),
                 dict(
                     type="Collect",
-                    keys=(
-                        "coord",
-                        "grid_coord",
-                        "index",
-                        "network",
-                        "network_cell",
-                        "network_pix",
-                        "network_origin_x",
-                        "network_origin_y",
-                        "network_pixel_m",
-                        "network_height",
-                        "network_width",
-                    ),
+                    keys=test_multitask_keys,
                     optional_keys=("inverse",),
                     feat_keys=feat_keys,
                     feat_scales=dict(coord=coord_feat_scale),
