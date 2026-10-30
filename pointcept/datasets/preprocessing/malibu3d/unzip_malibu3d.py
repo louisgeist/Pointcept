@@ -14,7 +14,8 @@ replace it and continue.
 Example::
 
     hf download LouisGeist/MALiBU3D --repo-type dataset --local-dir data/malibu3d_zip
-    python scripts/unzip_malibu3d.py --zip-root data/malibu3d_zip --output-root data/malibu3d --workers 8
+    python pointcept/datasets/preprocessing/malibu3d/unzip_malibu3d.py \
+        --zip-root data/malibu3d_zip --output-root data/malibu3d --workers 8
 """
 
 from __future__ import annotations
@@ -25,10 +26,6 @@ import sys
 import zipfile
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
-
-_HERE = Path(__file__).resolve().parent
-if str(_HERE) not in sys.path:
-    sys.path.insert(0, str(_HERE))
 
 META_NAMES = (
     "labels.json",

@@ -78,7 +78,8 @@ Download the dataset from Hugging Face (790 GB of zipped regions, 1.6 TB once ex
 
 ```bash
 hf download LouisGeist/MALiBU3D --repo-type dataset --local-dir data/malibu3d_zip
-python scripts/unzip_malibu3d.py --zip-root data/malibu3d_zip --output-root data/malibu3d --workers 8
+python pointcept/datasets/preprocessing/malibu3d/unzip_malibu3d.py \
+    --zip-root data/malibu3d_zip --output-root data/malibu3d --workers 8
 ```
 
 The [dataset card](https://huggingface.co/datasets/LouisGeist/MALiBU3D) describes the files of each tile and

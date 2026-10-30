@@ -51,12 +51,12 @@ Examples::
 
   # Quick dry run.
   export PYTHONPATH=$PWD
-  python scripts/bench_inference_speed.py \\
+  python tools/bench_inference_speed.py \\
     --csv-manifest data/malibu3d/tiles.csv --split val \\
     --num-tiles 15 --num-warmup 5 --device cuda:0
 
   # Full benchmark (test split; the paper numbers were measured on one A100).
-  python scripts/bench_inference_speed.py \\
+  python tools/bench_inference_speed.py \\
     --csv-manifest data/malibu3d/tiles.csv --split test \\
     --num-tiles 200 --num-warmup 10 --device cuda:0
 """
@@ -67,7 +67,6 @@ import argparse
 import copy
 import csv
 import json
-import sys
 import time
 from datetime import datetime
 from pathlib import Path
@@ -76,8 +75,6 @@ import numpy as np
 import torch
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
 
 DEFAULT_CONFIGS = {
     "litept_b": "configs/malibu3d/multi-litept-b-v1m0-malibu3d.py",

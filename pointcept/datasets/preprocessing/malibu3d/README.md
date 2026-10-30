@@ -1,6 +1,6 @@
 # MALiBU3D road network tools
 
-The Hugging Face release ships the MALiBU3D tiles ready for training (see `scripts/unzip_malibu3d.py`), with the
+The Hugging Face release ships the MALiBU3D tiles ready for training (see `unzip_malibu3d.py`), with the
 layout read by `MALiBU3DDataset`:
 
 ```text

@@ -52,13 +52,13 @@ prefix; the repository's `CheckpointLoader` accepts both forms.
 Environment: see *Installation* in the [README](../README.md) (spconv, and flash-attn for PTv3 and Sonata). A GPU
 is required.
 
-`scripts/hf_release/forward_example.py` builds the model from its config, loads the weights (downloaded from the
+`tools/forward_example.py` builds the model from its config, loads the weights (downloaded from the
 Hub unless `--weight` is given), runs the config's validation pipeline on one preprocessed tile and prints the
 result per task:
 
 ```bash
 export PYTHONPATH=$PWD
-python scripts/hf_release/forward_example.py --model litept-b \
+python tools/forward_example.py --model litept-b \
     --tile D067-2021_AU-S1-21_3-6 --split val \
     --csv-manifest data/malibu3d/tiles.csv --max-points 30000 \
     --save out_litept_b.npz

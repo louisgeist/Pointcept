@@ -3,9 +3,9 @@
 Weights come from the Hugging Face repo (``hf auth login`` first while it is private) or from a local file:
 
     export PYTHONPATH=$PWD
-    python scripts/hf_release/forward_example.py --model litept-b --tile <tile_name> --split val
-    python scripts/hf_release/forward_example.py --model ptv3 --weight ckpt/ptv3/model.pth --tile <tile_name>
-    python scripts/hf_release/forward_example.py --model sonata-pretrained --tile <tile_name>   # features only
+    python tools/forward_example.py --model litept-b --tile <tile_name> --split val
+    python tools/forward_example.py --model ptv3 --weight ckpt/ptv3/model.pth --tile <tile_name>
+    python tools/forward_example.py --model sonata-pretrained --tile <tile_name>   # features only
 
 Multitask models (sonata-ft, litept-b, ptv3, spunet, kpconvx) print, per task, the predicted classes /
 regression statistics, and the accuracy / mIoU against the tile's labels for ``segment``. ``sonata-pretrained``
@@ -26,7 +26,7 @@ from pointcept.datasets.utils import collate_fn
 from pointcept.models import build_model
 from pointcept.utils.config import Config
 
-REPO = Path(__file__).resolve().parents[2]
+REPO = Path(__file__).resolve().parents[1]
 HF_REPO = "LouisGeist/MALiBU3D-backbones"
 CONFIGS = {  # released folder -> default config of this repository
     "sonata-ft": "configs/malibu3d/multi-sonata-ft-v1m0-malibu3d.py",
