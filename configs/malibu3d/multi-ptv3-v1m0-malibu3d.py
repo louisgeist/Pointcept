@@ -2,8 +2,9 @@
 MALiBU3D multitask benchmark, PTv3 trained from scratch (Tab. 2 of the MALiBU3D paper).
 
 Same five tasks, losses, GradNormLite balancing and data pipeline as
-multi-litept-b-v1m0-malibu3d.py. Backbone `PT-v3-malibu`: PTv3 (default PT-v3m1 widths, with
-decoder) using PT-v3m2 grid pooling, which allows stride 3, and the PT-v3m1 sparse-conv stem.
+multi-litept-b-v1m0-malibu3d.py. Backbone `PT-v3-malibu`: PTv3 (default widths of the upstream
+Pointcept PT-v3m1, with decoder) using PT-v3m2 grid pooling, which allows stride 3, and the
+upstream PT-v3m1 sparse-conv stem.
 200k iterations, batch 12 over 4 GPUs with SyncBN, lr 2e-3, AMP.
 Released checkpoint: ckpt/ptv3/model.pth (see docs/checkpoints.md).
 Self-contained: inherits only from _base_/default_runtime.py.

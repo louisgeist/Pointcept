@@ -12,7 +12,6 @@ from typing import Optional, Union
 class KeyLUT:
     def __init__(self):
         r256 = torch.arange(256, dtype=torch.int64)
-        r512 = torch.arange(512, dtype=torch.int64)
         zero = torch.zeros(256, dtype=torch.int64)
         device = torch.device("cpu")
 
@@ -23,19 +22,12 @@ class KeyLUT:
                 self.xyz2key(zero, zero, r256, 8),
             )
         }
-        self._decode = {device: self.key2xyz(r512, 9)}
 
     def encode_lut(self, device=torch.device("cpu")):
         if device not in self._encode:
             cpu = torch.device("cpu")
             self._encode[device] = tuple(e.to(device) for e in self._encode[cpu])
         return self._encode[device]
-
-    def decode_lut(self, device=torch.device("cpu")):
-        if device not in self._decode:
-            cpu = torch.device("cpu")
-            self._decode[device] = tuple(e.to(device) for e in self._decode[cpu])
-        return self._decode[device]
 
     def xyz2key(self, x, y, z, depth):
         key = torch.zeros_like(x)
@@ -48,16 +40,6 @@ class KeyLUT:
                 | ((z & mask) << (2 * i + 0))
             )
         return key
-
-    def key2xyz(self, key, depth):
-        x = torch.zeros_like(key)
-        y = torch.zeros_like(key)
-        z = torch.zeros_like(key)
-        for i in range(depth):
-            x = x | ((key & (1 << (3 * i + 2))) >> (2 * i + 2))
-            y = y | ((key & (1 << (3 * i + 1))) >> (2 * i + 1))
-            z = z | ((key & (1 << (3 * i + 0))) >> (2 * i + 0))
-        return x, y, z
 
 
 _key_lut = KeyLUT()
@@ -99,28 +81,3 @@ def xyz2key(
         key = b << 48 | key
 
     return key
-
-
-def key2xyz(key: torch.Tensor, depth: int = 16):
-    r"""Decodes the shuffled key to :attr:`x`, :attr:`y`, :attr:`z` coordinates
-    and the batch index based on pre-computed look up tables.
-
-    Args:
-      key (torch.Tensor): The shuffled key.
-      depth (int): The depth of the shuffled key, and must be smaller than 17 (< 17).
-    """
-
-    DX, DY, DZ = _key_lut.decode_lut(key.device)
-    x, y, z = torch.zeros_like(key), torch.zeros_like(key), torch.zeros_like(key)
-
-    b = key >> 48
-    key = key & ((1 << 48) - 1)
-
-    n = (depth + 2) // 3
-    for i in range(n):
-        k = key >> (i * 9) & 511
-        x = x | (DX[k] << (i * 3))
-        y = y | (DY[k] << (i * 3))
-        z = z | (DZ[k] << (i * 3))
-
-    return x, y, z, b

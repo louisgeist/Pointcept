@@ -1,7 +1,6 @@
 """
 Generic task wrappers around a backbone.
 
-- DefaultSegmentor: the backbone owns its output classifier (e.g. SpUNet, KPConvX).
 - DefaultSegmentorV2: backbone + linear point-wise ``seg_head``.
 - MultiTaskSegmentorV2: one shared backbone and one head per MALiBU3D task
   (point-wise semantics, tile-level class distributions, 2D raster masks, regression).
@@ -23,9 +22,6 @@ from pointcept.models.utils import offset2batch
 from .builder import MODELS, build_model
 
 logger = get_root_logger()
-
-_POOLING_MODES = frozenset(("mean", "max", "attention"))
-
 
 def _safe_segment_csr_mean(feat, indptr):
     """Per-scene mean pool in float32 (AMP-safe); empty segments -> 0."""
@@ -165,70 +161,6 @@ class LearnedMaskedFeatMixin:
                     .tolist()
                 )
                 print(f"{feat_key.capitalize()} mask value: " f"{value}")
-
-
-@MODELS.register_module()
-class DefaultSegmentor(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeatMixin):
-    """Segmentor whose backbone owns the output classifier (the backbone returns logits).
-
-    freeze_backbone=True means ALL of the following (there is no separate flag):
-      * every backbone parameter has requires_grad=False (no gradient, never
-        updated by the optimizer);
-      * the backbone is kept in eval() mode *permanently*: every .train() call
-        (the trainer issues one per epoch) re-pins it. BatchNorm therefore
-        uses its stored running statistics and does NOT update them, and
-        DropPath / Dropout are inactive. The backbone is a fixed, deterministic
-        feature extractor; only the heads are in train mode.
-      * exception: parameters under ``final.`` (the backbone-owned output
-        classifier of e.g. SpUNet / KPConvX) stay trainable; the module is
-        nevertheless in eval(), which is harmless for a linear classifier.
-    """
-
-    def __init__(
-        self,
-        backbone=None,
-        criteria=None,
-        freeze_backbone=False,
-        feature_mask_values=None,
-    ):
-        super().__init__()
-        self.backbone = build_model(backbone)
-        self.criteria = build_criteria(criteria)
-        self.freeze_backbone = freeze_backbone
-        self._init_learned_masked_feat(feature_mask_values=feature_mask_values)
-        if self.freeze_backbone:
-            # The backbone-owned output layer ("final" in SpUNet and KPConvX)
-            # stays trainable.
-            keep_segmentation_head_prefixes = "final."
-            for name, param in self.backbone.named_parameters():
-                if name.startswith(keep_segmentation_head_prefixes):
-                    continue
-                param.requires_grad = False
-            self._pin_frozen_backbone_eval()
-
-    def forward(self, input_dict):
-        self._fill_masked_feat_with_learned_value(input_dict)
-        if "condition" in input_dict.keys():
-            # Dataset condition for PDNorm (PPT, https://arxiv.org/abs/2308.09718);
-            # only one condition per batch is supported.
-            input_dict["condition"] = input_dict["condition"][0]
-        seg_logits = self.backbone(input_dict)
-        # train
-        if self.training:
-            loss = self.criteria(seg_logits, input_dict["segment"])
-            return_dict = dict(loss=loss)
-            with torch.no_grad():
-                # Used by the hooks to accumulate the train confusion matrix
-                # (train mIoU); the writer only logs scalars.
-                return_dict["pred"] = seg_logits.argmax(dim=1)
-            return return_dict
-        # eval
-        elif "segment" in input_dict.keys():
-            loss = self.criteria(seg_logits, input_dict["segment"])
-            return dict(loss=loss, seg_logits=seg_logits)
-        # test
-        else:
-            return dict(seg_logits=seg_logits)
 
 
 @MODELS.register_module()
@@ -928,43 +860,11 @@ class MultiTaskSegmentorV2(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeat
         return return_dict
 
 
-class AttentiveScenePool(nn.Module):
-    """Cross-attention pooling: one learnable query aggregates per-point K/V into a scene token."""
-
-    def __init__(self, embed_dim, attn_drop=0.0):
-        super().__init__()
-        self.query = nn.Parameter(torch.empty(1, embed_dim))
-        nn.init.trunc_normal_(self.query, std=0.02)
-        self.key_proj = nn.Linear(embed_dim, embed_dim)
-        self.value_proj = nn.Linear(embed_dim, embed_dim)
-        self.scale = embed_dim**-0.5
-        self.attn_drop = nn.Dropout(attn_drop) if attn_drop > 0.0 else nn.Identity()
-
-    def forward(self, feat, offset):
-        """feat: (N, C) per-point features; offset: (B,) cumulative point counts
-        per scene. Returns (B, C) attention-weighted scene features."""
-        indptr = nn.functional.pad(offset, (1, 0))
-        k = self.key_proj(feat)
-        v = self.value_proj(feat)
-        scores = (k @ self.query.T).squeeze(-1) * self.scale
-        batch = offset2batch(offset)
-        max_scores = torch_scatter.segment_csr(scores, indptr, reduce="max")
-        scores = scores - max_scores[batch]
-        exp_scores = torch.exp(scores)
-        sum_exp = torch_scatter.segment_csr(exp_scores, indptr, reduce="sum")
-        weights = exp_scores / (sum_exp[batch] + 1e-8)
-        weights = self.attn_drop(weights)
-        return torch_scatter.segment_csr(
-            weights.unsqueeze(-1) * v, indptr, reduce="sum"
-        )
-
-
 @MODELS.register_module()
 class DefaultClassifier(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeatMixin):
-    """Backbone + scene pooling + linear ``cls_head`` classifier.
+    """Backbone + per-scene mean pooling + linear ``cls_head`` classifier.
 
-    ``pooling``: ``mean``, ``max`` or ``attention`` (AttentiveScenePool) over the
-    per-point backbone features of each scene; target key ``category``.
+    Target key ``category``.
 
     freeze_backbone=True means ALL of the following (there is no separate flag):
       * every backbone parameter has requires_grad=False (no gradient, never
@@ -985,37 +885,19 @@ class DefaultClassifier(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeatMix
         backbone_embed_dim=256,
         freeze_backbone=False,
         feature_mask_values=None,
-        pooling="mean",
     ):
         super().__init__()
-        pooling = str(pooling)
-        if pooling not in _POOLING_MODES:
-            raise ValueError(
-                f"pooling must be one of {sorted(_POOLING_MODES)}, got {pooling!r}."
-            )
-        self.pooling = pooling
         self.backbone = build_model(backbone)
         self.criteria = build_criteria(criteria)
         self.num_classes = num_classes
         self.backbone_embed_dim = backbone_embed_dim
         self.freeze_backbone = freeze_backbone
         self._init_learned_masked_feat(feature_mask_values=feature_mask_values)
-        self.attn_pool = (
-            AttentiveScenePool(backbone_embed_dim) if pooling == "attention" else None
-        )
         self.cls_head = nn.Linear(backbone_embed_dim, num_classes)
         if self.freeze_backbone:
             for p in self.backbone.parameters():
                 p.requires_grad = False
             self._pin_frozen_backbone_eval()
-
-    def _pool_scene_feat(self, feat, offset):
-        indptr = nn.functional.pad(offset, (1, 0))
-        if self.pooling == "mean":
-            return _safe_segment_csr_mean(feat, indptr)
-        if self.pooling == "max":
-            return torch_scatter.segment_csr(feat, indptr, reduce="max")
-        return self.attn_pool(feat, offset)
 
     def forward(self, input_dict):
         self._fill_masked_feat_with_learned_value(input_dict)
@@ -1026,35 +908,11 @@ class DefaultClassifier(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeatMix
                 backbone_out = self.backbone(point)
         else:
             backbone_out = self.backbone(point)
-        # Point-based backbones return a Point (pooled here, on its own offset,
-        # i.e. at the coarsest level for enc_mode); the others return a tensor,
-        # either per point or already scene-pooled (e.g. SpUNet enc_mode=True).
         if isinstance(backbone_out, Point):
-            feat = self._pool_scene_feat(backbone_out.feat, backbone_out.offset)
-        elif isinstance(backbone_out, torch.Tensor):
-            # Per-point features
-            if backbone_out.shape[0] == offset[-1]:
-                feat = self._pool_scene_feat(backbone_out, offset)
-
-            # Already mean-pooled by the backbone
-            elif backbone_out.shape[0] == offset.numel():
-                if self.pooling != "mean":
-                    raise ValueError(
-                        "Backbone returned a pre-pooled tensor (B, C), but "
-                        f"pooling={self.pooling!r} requires per-point features. "
-                        "Use enc_mode=False on the backbone or set pooling='mean'."
-                    )
-                feat = backbone_out
-            else:
-                raise ValueError(
-                    "Unexpected backbone output shape "
-                    f"{tuple(backbone_out.shape)} for offset with "
-                    f"{offset.numel()} scenes and {offset[-1].item()} points."
-                )
+            feat, offset = backbone_out.feat, backbone_out.offset
         else:
-            raise TypeError(
-                f"Backbone must return Point or torch.Tensor, got {type(backbone_out)!r}."
-            )
+            feat = backbone_out
+        feat = _safe_segment_csr_mean(feat, nn.functional.pad(offset, (1, 0)))
         cls_logits = self.cls_head(feat)
         if self.training:
             loss = self.criteria(cls_logits.float(), input_dict["category"])

@@ -14,24 +14,6 @@ SCHEDULERS = Registry("schedulers")
 
 
 @SCHEDULERS.register_module()
-class MultiStepLR(lr_scheduler.MultiStepLR):
-    def __init__(
-        self,
-        optimizer,
-        milestones,
-        total_steps,
-        gamma=0.1,
-        last_epoch=-1,
-    ):
-        super().__init__(
-            optimizer=optimizer,
-            milestones=[int(rate * total_steps) for rate in milestones],
-            gamma=gamma,
-            last_epoch=last_epoch,
-        )
-
-
-@SCHEDULERS.register_module()
 class CosineAnnealingLR(lr_scheduler.CosineAnnealingLR):
     def __init__(
         self,

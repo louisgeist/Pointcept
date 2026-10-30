@@ -227,18 +227,6 @@ def make_dirs(dir_name):
         os.makedirs(dir_name, exist_ok=True)
 
 
-def find_free_port():
-    import socket
-
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    # Binding to port 0 will cause the OS to find an available port for us
-    sock.bind(("", 0))
-    port = sock.getsockname()[1]
-    sock.close()
-    # NOTE: there is still a chance the port could be taken by other processes.
-    return port
-
-
 def is_seq_of(seq, expected_type, seq_type=None):
     """Check whether it is a sequence of some type.
 
@@ -261,14 +249,6 @@ def is_seq_of(seq, expected_type, seq_type=None):
         if not isinstance(item, expected_type):
             return False
     return True
-
-
-def is_str(x):
-    """Whether the input is an string instance.
-
-    Note: This method is deprecated since python 2 is no longer supported.
-    """
-    return isinstance(x, str)
 
 
 def import_modules_from_strings(imports, allow_failed_imports=False):
@@ -314,8 +294,3 @@ def import_modules_from_strings(imports, allow_failed_imports=False):
     if single_import:
         imported = imported[0]
     return imported
-
-
-class DummyClass:
-    def __init__(self):
-        pass

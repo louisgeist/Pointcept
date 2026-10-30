@@ -6,7 +6,6 @@ Please cite our work if the code is helpful to you.
 """
 
 import torch
-from itertools import chain
 
 
 @torch.no_grad()
@@ -32,10 +31,3 @@ def offset2batch(offset):
 @torch.no_grad()
 def batch2offset(batch):
     return torch.cumsum(batch.bincount(), dim=0).long()
-
-
-def off_diagonal(x):
-    # return a flattened view of the off-diagonal elements of a square matrix
-    n, m = x.shape
-    assert n == m
-    return x.flatten()[:-1].view(n - 1, n + 1)[:, 1:].flatten()

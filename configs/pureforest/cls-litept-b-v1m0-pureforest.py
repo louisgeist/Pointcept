@@ -74,7 +74,6 @@ test = dict(type="ClsTester")
 model = dict(
     type="DefaultClassifier",
     num_classes=13,
-    pooling="mean",
     backbone_embed_dim=72,
     backbone=dict(
         type="LitePT-v1",

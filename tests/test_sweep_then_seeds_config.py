@@ -110,11 +110,11 @@ class TestBuildSeedEnsembleConfig(unittest.TestCase):
         self.assertIs(cfg.model.freeze_backbone, True)
 
     def test_malibu3d_config_roundtrips(self):
-        focal_sgd = {
+        smoothed_ce_sgd = {
             "criteria": [
                 {
-                    "type": "FocalLoss",
-                    "gamma": 2.0,
+                    "type": "CrossEntropyLoss",
+                    "label_smoothing": 0.1,
                     "loss_weight": 1.0,
                     "ignore_index": 15,
                 }
@@ -131,7 +131,7 @@ class TestBuildSeedEnsembleConfig(unittest.TestCase):
             "scheduler": {"type": "CosineAnnealingLR", "eta_min": 0.0},
             "grad_clip": None,
         }
-        cfg, _ = self._generate(GRID_CONFIG_MALIBU3D, n_seeds=6, winner_pc=focal_sgd)
+        cfg, _ = self._generate(GRID_CONFIG_MALIBU3D, n_seeds=6, winner_pc=smoothed_ce_sgd)
 
         self.assertEqual(len(cfg.model.probes), 6)
         probe = cfg.model.probes["seed3"]

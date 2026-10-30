@@ -477,8 +477,6 @@ class GridPooling(PointModule):
             point_dict["origin_coord"] = torch_scatter.segment_csr(
                 point.origin_coord[indices], idx_ptr, reduce="mean"
             )
-        if "condition" in point.keys():
-            point_dict["condition"] = point.condition
         if "context" in point.keys():
             point_dict["context"] = point.context
         if "name" in point.keys():

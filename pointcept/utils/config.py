@@ -9,8 +9,7 @@ import sys
 import tempfile
 import uuid
 import warnings
-from argparse import Action, ArgumentParser
-from collections import abc
+from argparse import Action
 from importlib import import_module
 
 from addict import Dict
@@ -46,25 +45,6 @@ class ConfigDict(Dict):
         else:
             return value
         raise ex
-
-
-def add_args(parser, cfg, prefix=""):
-    for k, v in cfg.items():
-        if isinstance(v, str):
-            parser.add_argument("--" + prefix + k)
-        elif isinstance(v, int):
-            parser.add_argument("--" + prefix + k, type=int)
-        elif isinstance(v, float):
-            parser.add_argument("--" + prefix + k, type=float)
-        elif isinstance(v, bool):
-            parser.add_argument("--" + prefix + k, action="store_true")
-        elif isinstance(v, dict):
-            add_args(parser, v, prefix + k + ".")
-        elif isinstance(v, abc.Iterable):
-            parser.add_argument("--" + prefix + k, type=type(v[0]), nargs="+")
-        else:
-            print(f"cannot parse key {prefix + k} of type {type(v)}")
-    return parser
 
 
 class Config:
@@ -336,45 +316,6 @@ class Config:
         if import_custom_modules and cfg_dict.get("custom_imports", None):
             import_modules_from_strings(**cfg_dict["custom_imports"])
         return Config(cfg_dict, cfg_text=cfg_text, filename=filename)
-
-    @staticmethod
-    def fromstring(cfg_str, file_format):
-        """Generate config from config str.
-
-        Args:
-            cfg_str (str): Config str.
-            file_format (str): Config file format corresponding to the
-               config str. Only py/yml/yaml/json type are supported now!
-
-        Returns:
-            obj:`Config`: Config obj.
-        """
-        if file_format not in [".py", ".json", ".yaml", ".yml"]:
-            raise IOError("Only py/yml/yaml/json type are supported now!")
-        if file_format != ".py" and "dict(" in cfg_str:
-            # check if users specify a wrong suffix for python
-            warnings.warn('Please check "file_format", the file format may be .py')
-        with tempfile.NamedTemporaryFile(
-            "w", encoding="utf-8", suffix=file_format, delete=False
-        ) as temp_file:
-            temp_file.write(cfg_str)
-            # on windows, previous implementation cause error
-            # see PR 1077 for details
-        cfg = Config.fromfile(temp_file.name)
-        os.remove(temp_file.name)
-        return cfg
-
-    @staticmethod
-    def auto_argparser(description=None):
-        """Generate argparser from config file automatically (experimental)"""
-        partial_parser = ArgumentParser(description=description)
-        partial_parser.add_argument("config", help="config file path")
-        cfg_file = partial_parser.parse_known_args()[0].config
-        cfg = Config.fromfile(cfg_file)
-        parser = ArgumentParser(description=description)
-        parser.add_argument("config", help="config file path")
-        add_args(parser, cfg)
-        return parser, cfg
 
     def __init__(self, cfg_dict=None, cfg_text=None, filename=None):
         if cfg_dict is None:

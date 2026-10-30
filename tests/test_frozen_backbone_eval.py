@@ -45,7 +45,6 @@ def _cfg(model_type, **kwargs):
 
 
 MODEL_TYPES = (
-    "DefaultSegmentor",
     "DefaultSegmentorV2",
     "MultiTaskSegmentorV2",
     "DefaultClassifier",

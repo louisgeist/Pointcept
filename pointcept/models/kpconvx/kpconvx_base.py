@@ -256,10 +256,9 @@ class KPConvXBase(nn.Module):
 
             # New head
             self.head = nn.Sequential(self.get_unary_block(layer_C[0], layer_C[0]))
-            # MALiBU3D change: the output Linear is a separate `final` module
-            # (DefaultSegmentor keeps `final.` trainable when the backbone is
-            # frozen). num_classes <= 0: no output layer, the model returns
-            # features for external heads (e.g. MultiTaskSegmentorV2).
+            # MALiBU3D change: the output Linear is a separate `final` module.
+            # num_classes <= 0: no output layer, the model returns features
+            # for external heads (e.g. MultiTaskSegmentorV2).
             self.final = (
                 None
                 if self.num_logits <= 0

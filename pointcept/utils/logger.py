@@ -8,7 +8,6 @@ Please cite our work if the code is helpful to you.
 """
 
 import logging
-import torch
 import torch.distributed as dist
 
 from termcolor import colored
@@ -111,35 +110,6 @@ def get_logger(name, log_file=None, log_level=logging.INFO, file_mode="a", color
     return logger
 
 
-def print_log(msg, logger=None, level=logging.INFO):
-    """Print a log message.
-
-    Args:
-        msg (str): The message to be logged.
-        logger (logging.Logger | str | None): The logger to be used.
-            Some special loggers are:
-            - "silent": no message will be printed.
-            - other str: the logger obtained with `get_root_logger(logger)`.
-            - None: The `print()` method will be used to print log messages.
-        level (int): Logging level. Only available when `logger` is a Logger
-            object or "root".
-    """
-    if logger is None:
-        print(msg)
-    elif isinstance(logger, logging.Logger):
-        logger.log(level, msg)
-    elif logger == "silent":
-        pass
-    elif isinstance(logger, str):
-        _logger = get_logger(logger)
-        _logger.log(level, msg)
-    else:
-        raise TypeError(
-            "logger should be either a logging.Logger object, str, "
-            f'"silent" or None, but got {type(logger)}'
-        )
-
-
 def get_root_logger(log_file=None, log_level=logging.INFO, file_mode="a"):
     """Get the root logger.
 
@@ -162,11 +132,3 @@ def get_root_logger(log_file=None, log_level=logging.INFO, file_mode="a"):
         name="pointcept", log_file=log_file, log_level=log_level, file_mode=file_mode
     )
     return logger
-
-
-def _log_api_usage(identifier: str):
-    """
-    Internal function used to log the usage of different detectron2 components
-    inside facebook's infra.
-    """
-    torch._C._log_api_usage_once("pointcept." + identifier)

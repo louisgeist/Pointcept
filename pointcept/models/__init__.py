@@ -1,5 +1,5 @@
 from .builder import build_model
-from .default import DefaultSegmentor, DefaultClassifier
+from .default import DefaultSegmentorV2, MultiTaskSegmentorV2, DefaultClassifier
 from .grid_probe import GridProbeSegmentorV2, PooledFeatureExtractor
 from .modules import PointModule, PointModel
 

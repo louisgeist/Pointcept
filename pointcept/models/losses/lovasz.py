@@ -9,14 +9,11 @@ Please cite our work if the code is helpful to you.
 from typing import Optional
 from itertools import filterfalse
 import torch
-import torch.nn.functional as F
 from torch.nn.modules.loss import _Loss
 
 from .builder import LOSSES
 
-BINARY_MODE: str = "binary"
 MULTICLASS_MODE: str = "multiclass"
-MULTILABEL_MODE: str = "multilabel"
 
 
 def _lovasz_grad(gt_sorted):
@@ -33,135 +30,28 @@ def _lovasz_grad(gt_sorted):
     return jaccard
 
 
-def _lovasz_hinge(logits, labels, per_image=True, ignore=None):
-    """
-    Binary Lovasz hinge loss
-        logits: [B, H, W] Logits at each pixel (between -infinity and +infinity)
-        labels: [B, H, W] Tensor, binary ground truth masks (0 or 1)
-        per_image: compute the loss per image instead of per batch
-        ignore: void class id
-    """
-    if per_image:
-        loss = mean(
-            _lovasz_hinge_flat(
-                *_flatten_binary_scores(log.unsqueeze(0), lab.unsqueeze(0), ignore)
-            )
-            for log, lab in zip(logits, labels)
-        )
-    else:
-        loss = _lovasz_hinge_flat(*_flatten_binary_scores(logits, labels, ignore))
-    return loss
-
-
-def _lovasz_hinge_flat(logits, labels):
-    """Binary Lovasz hinge loss
-    Args:
-        logits: [P] Logits at each prediction (between -infinity and +infinity)
-        labels: [P] Tensor, binary ground truth labels (0 or 1)
-    """
-    if len(labels) == 0:
-        # only void pixels, the gradients should be 0
-        return logits.sum() * 0.0
-    signs = 2.0 * labels.float() - 1.0
-    errors = 1.0 - logits * signs
-    errors_sorted, perm = torch.sort(errors, dim=0, descending=True)
-    perm = perm.data
-    gt_sorted = labels[perm]
-    grad = _lovasz_grad(gt_sorted)
-    loss = torch.dot(F.relu(errors_sorted), grad)
-    return loss
-
-
-def _flatten_binary_scores(scores, labels, ignore=None):
-    """Flattens predictions in the batch (binary case)
-    Remove labels equal to 'ignore'
-    """
-    scores = scores.view(-1)
-    labels = labels.view(-1)
-    if ignore is None:
-        return scores, labels
-    valid = labels != ignore
-    vscores = scores[valid]
-    vlabels = labels[valid]
-    return vscores, vlabels
-
-
-def _lovasz_softmax(
-    probas, labels, classes="present", class_seen=None, per_image=False, ignore=None
-):
-    """Multi-class Lovasz-Softmax loss
-    Args:
-        @param probas: [B, C, H, W] Class probabilities at each prediction (between 0 and 1).
-        Interpreted as binary (sigmoid) output with outputs of size [B, H, W].
-        @param labels: [B, H, W] Tensor, ground truth labels (between 0 and C - 1)
-        @param classes: 'all' for all, 'present' for classes present in labels, or a list of classes to average.
-        @param per_image: compute the loss per image instead of per batch
-        @param ignore: void class labels
-    """
-    if per_image:
-        loss = mean(
-            _lovasz_softmax_flat(
-                *_flatten_probas(prob.unsqueeze(0), lab.unsqueeze(0), ignore),
-                classes=classes
-            )
-            for prob, lab in zip(probas, labels)
-        )
-    else:
-        loss = _lovasz_softmax_flat(
-            *_flatten_probas(probas, labels, ignore),
-            classes=classes,
-            class_seen=class_seen
-        )
-    return loss
-
-
-def _lovasz_softmax_flat(probas, labels, classes="present", class_seen=None):
-    """Multi-class Lovasz-Softmax loss
+def _lovasz_softmax_flat(probas, labels):
+    """Multi-class Lovasz-Softmax loss, averaged over the classes present in labels.
     Args:
         @param probas: [P, C] Class probabilities at each prediction (between 0 and 1)
         @param labels: [P] Tensor, ground truth labels (between 0 and C - 1)
-        @param classes: 'all' for all, 'present' for classes present in labels, or a list of classes to average.
     """
     if probas.numel() == 0:
         # only void pixels: return a 0-dim zero that stays in the graph
         # (zero gradient), so it can be summed with the other losses
         return probas.sum()
-    C = probas.size(1)
+    if probas.size(1) == 1:
+        raise ValueError("Sigmoid output possible only with 1 class")
     losses = []
-    class_to_sum = list(range(C)) if classes in ["all", "present"] else classes
-    # for c in class_to_sum:
     for c in labels.unique():
-        if class_seen is None:
-            fg = (labels == c).type_as(probas)  # foreground for class c
-            if classes == "present" and fg.sum() == 0:
-                continue
-            if C == 1:
-                if len(classes) > 1:
-                    raise ValueError("Sigmoid output possible only with 1 class")
-                class_pred = probas[:, 0]
-            else:
-                class_pred = probas[:, c]
-            errors = (fg - class_pred).abs()
-            errors_sorted, perm = torch.sort(errors, 0, descending=True)
-            perm = perm.data
-            fg_sorted = fg[perm]
-            losses.append(torch.dot(errors_sorted, _lovasz_grad(fg_sorted)))
-        else:
-            if c in class_seen:
-                fg = (labels == c).type_as(probas)  # foreground for class c
-                if classes == "present" and fg.sum() == 0:
-                    continue
-                if C == 1:
-                    if len(classes) > 1:
-                        raise ValueError("Sigmoid output possible only with 1 class")
-                    class_pred = probas[:, 0]
-                else:
-                    class_pred = probas[:, c]
-                errors = (fg - class_pred).abs()
-                errors_sorted, perm = torch.sort(errors, 0, descending=True)
-                perm = perm.data
-                fg_sorted = fg[perm]
-                losses.append(torch.dot(errors_sorted, _lovasz_grad(fg_sorted)))
+        fg = (labels == c).type_as(probas)  # foreground for class c
+        if fg.sum() == 0:
+            continue
+        errors = (fg - probas[:, c]).abs()
+        errors_sorted, perm = torch.sort(errors, 0, descending=True)
+        perm = perm.data
+        fg_sorted = fg[perm]
+        losses.append(torch.dot(errors_sorted, _lovasz_grad(fg_sorted)))
     return mean(losses)
 
 
@@ -213,46 +103,27 @@ class LovaszLoss(_Loss):
     def __init__(
         self,
         mode: str,
-        class_seen: Optional[int] = None,
-        per_image: bool = False,
         ignore_index: Optional[int] = None,
         loss_weight: float = 1.0,
     ):
-        """Lovasz loss for segmentation task.
-        It supports binary, multiclass and multilabel cases
+        """Multi-class Lovasz-Softmax loss for segmentation, computed over the whole batch.
         Args:
-            mode: Loss mode 'binary', 'multiclass' or 'multilabel'
-            ignore_index: Label that indicates ignored pixels (does not contribute to loss)
-            per_image: If True loss computed per each image and then averaged, else computed per whole batch
+            mode: 'multiclass' (the only mode supported)
+            ignore_index: Label that indicates ignored points (does not contribute to loss)
         Shape
-             - **y_pred** - torch.Tensor of shape (N, C, H, W)
-             - **y_true** - torch.Tensor of shape (N, H, W) or (N, C, H, W)
+             - **y_pred** - torch.Tensor of shape (N, C)
+             - **y_true** - torch.Tensor of shape (N,)
         Reference
             https://github.com/BloodAxe/pytorch-toolbelt
         """
-        assert mode in {BINARY_MODE, MULTILABEL_MODE, MULTICLASS_MODE}
+        assert mode == MULTICLASS_MODE, f"Unsupported Lovasz mode {mode!r}."
         super().__init__()
 
         self.mode = mode
         self.ignore_index = ignore_index
-        self.per_image = per_image
-        self.class_seen = class_seen
         self.loss_weight = loss_weight
 
     def forward(self, y_pred, y_true):
-        if self.mode in {BINARY_MODE, MULTILABEL_MODE}:
-            loss = _lovasz_hinge(
-                y_pred, y_true, per_image=self.per_image, ignore=self.ignore_index
-            )
-        elif self.mode == MULTICLASS_MODE:
-            y_pred = y_pred.softmax(dim=1)
-            loss = _lovasz_softmax(
-                y_pred,
-                y_true,
-                class_seen=self.class_seen,
-                per_image=self.per_image,
-                ignore=self.ignore_index,
-            )
-        else:
-            raise ValueError("Wrong mode {}.".format(self.mode))
+        y_pred = y_pred.softmax(dim=1)
+        loss = _lovasz_softmax_flat(*_flatten_probas(y_pred, y_true, self.ignore_index))
         return loss * self.loss_weight

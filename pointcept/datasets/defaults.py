@@ -12,21 +12,12 @@ import numpy as np
 from copy import deepcopy
 from torch.utils.data import Dataset
 from collections.abc import Sequence
-from torchvision.transforms import InterpolationMode
 
 from pointcept.utils.logger import get_root_logger
-from pointcept.utils.cache import shared_dict
 
 from .builder import DATASETS
 from .transform import Compose, TRANSFORMS, record_data_pipeline
 from .subset_utils import apply_subset_selection
-
-INTERPOLATION_MODE = {
-    "bilinear": InterpolationMode.BILINEAR,
-    "bicubic": InterpolationMode.BICUBIC,
-    "nearest": InterpolationMode.NEAREST,
-}
-
 
 @DATASETS.register_module()
 class DefaultDataset(Dataset):
@@ -55,7 +46,6 @@ class DefaultDataset(Dataset):
         transform=None,
         test_mode=False,
         test_cfg=None,
-        cache=False,
         ignore_index=-1,
         loop=1,
         max_sample=None,
@@ -66,7 +56,6 @@ class DefaultDataset(Dataset):
         self.data_root = data_root
         self.split = split
         self.transform = Compose(transform)
-        self.cache = cache
         self.ignore_index = ignore_index
         self.loop = (
             loop if not test_mode else 1
@@ -123,10 +112,6 @@ class DefaultDataset(Dataset):
         data_path = self.data_list[idx % len(self.data_list)]
         name = self.get_data_name(idx)
         split = self.get_split_name(idx)
-        if self.cache:
-            cache_name = f"pointcept-{name}"
-            return shared_dict(cache_name)
-
         data_dict = {}
         assets = os.listdir(data_path)
         for asset in assets:
