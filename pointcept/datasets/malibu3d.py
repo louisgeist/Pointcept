@@ -24,7 +24,7 @@ from .malibu3d_tasks import (
     get_task_config,
     unpack_nathab_axes,
 )
-from pointcept.datasets.preprocessing.malibu3d.tile_catalog import iter_tiles
+from pointcept.datasets.tile_catalog import iter_tiles
 from pointcept.utils.logger import get_root_logger
 
 MALIBU3D_SPECIFIC_ASSETS = (
@@ -54,7 +54,7 @@ class MALiBU3DDataset(DefaultDataset):
     """MALiBU3D tiles with any subset of the benchmark targets.
 
     :param csv_manifest: Tile list CSV: the MALiBU3D ``tiles.csv`` (or a subset of its
-        rows), read via ``preprocessing/malibu3d/tile_catalog.py``.
+        rows), read via ``tile_catalog.py``.
         When None, scenes are globbed from ``data_root/<split>/`` like DefaultDataset.
 
     :param min_points: Optional dict mapping split name ("train"/"val") to a minimum

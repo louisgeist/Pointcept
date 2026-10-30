@@ -1,14 +1,12 @@
-"""Read the MALiBU3D tile table (``tiles.csv``: one row per LiDAR tile) into ``Tile`` records.
-
-Pure stdlib, so preprocessing scripts can import it without torch.
-"""
+"""Read the MALiBU3D tile table (``tiles.csv``: one row per LiDAR tile) into ``Tile`` records."""
 
 from __future__ import annotations
 
 import csv
 import os
 from dataclasses import dataclass
-from typing import Iterator, List, Optional, Sequence
+from pathlib import Path
+from typing import Dict, Iterator, List, Optional, Sequence, Tuple
 
 REQUIRED_COLUMNS = ("split", "dept_year", "roi", "tile_id")
 
@@ -134,3 +132,67 @@ def tile_csv_columns(csv_path: str) -> set:
     """Column names of ``csv_path``."""
     with open(str(csv_path), "r", encoding="utf-8", newline="") as f:
         return set(next(csv.reader(f), []))
+
+
+NETWORK_MANIFEST_COLUMNS = frozenset(
+    {"split", "dept_year", "roi", "tile_id", "has_roads_graph"}
+)
+
+
+@dataclass(frozen=True)
+class ManifestPatch:
+    """One LiDAR tile listed in the tile CSV."""
+
+    split: str
+    dept_year: str
+    roi: str
+    patch_id: str
+    flags: Tuple[Tuple[str, bool], ...]  # frozen catalog flags (ROADS only)
+
+    @property
+    def flags_dict(self) -> Dict[str, bool]:
+        return dict(self.flags)
+
+    def patch_dir(self, data_root: Path) -> Path:
+        return (
+            data_root
+            / self.split
+            / f"{self.dept_year}_LIDARHD"
+            / self.roi
+            / self.patch_id
+        )
+
+    def roi_dir(self, data_root: Path) -> Path:
+        return data_root / self.split / f"{self.dept_year}_LIDARHD" / self.roi
+
+
+def load_manifest_patches(
+    split_manifest_csv: Path,
+    *,
+    splits: Optional[Sequence[str]] = None,
+) -> List[ManifestPatch]:
+    """Load the tiles of ``tiles.csv`` / an older manifest (optionally filtered by split),
+    each with its ROADS catalog flag."""
+    if not split_manifest_csv.is_file():
+        raise FileNotFoundError(f"split_manifest_csv not found: {split_manifest_csv}")
+    missing_cols = sorted(
+        NETWORK_MANIFEST_COLUMNS - tile_csv_columns(split_manifest_csv)
+    )
+    if missing_cols:
+        raise ValueError(
+            f"split_manifest_csv missing columns {missing_cols} (expected tiles.csv)."
+        )
+
+    patches: List[ManifestPatch] = []
+    for tile in iter_tiles(split_manifest_csv, splits):
+        flags = (("ROADS", bool(tile.has_roads_graph)),)
+        patches.append(
+            ManifestPatch(
+                split=tile.split,
+                dept_year=tile.dept_year,
+                roi=tile.roi,
+                patch_id=tile.tile_id,
+                flags=flags,
+            )
+        )
+    return patches

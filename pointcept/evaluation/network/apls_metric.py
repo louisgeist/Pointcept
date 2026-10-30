@@ -35,40 +35,25 @@ Dataset-level aggregation is a pair-count-weighted average across ROIs (using th
 GT->pred denom), then an unweighted macro-average across network channels.
 
 The metric itself uses numpy and scipy; ``NETWORK_TYPES`` / ``LoadedNetworkGraph`` are
-imported from ``network_label_utils`` (which imports geopandas).
+imported from ``label_utils`` (which imports geopandas).
 """
 
 from __future__ import annotations
 
 import math
-import sys
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Dict, Final, Optional, Sequence, Tuple
 
 import numpy as np
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import shortest_path
 
-_HERE = Path(__file__).resolve().parent
-if str(_HERE) not in sys.path:
-    sys.path.insert(0, str(_HERE))
-try:
-    import network_xy_raster_utils as xy_rast  # type: ignore
-    from network_label_utils import (  # type: ignore
-        NETWORK_TYPES,
-        LoadedNetworkGraph,
-        edge_euclidean_distances,
-    )
-except ImportError:  # pragma: no cover
-    from pointcept.datasets.preprocessing.malibu3d import (  # type: ignore
-        network_xy_raster_utils as xy_rast,
-    )
-    from pointcept.datasets.preprocessing.malibu3d.network_label_utils import (  # type: ignore
-        NETWORK_TYPES,
-        LoadedNetworkGraph,
-        edge_euclidean_distances,
-    )
+from pointcept.evaluation.network import xy_raster_utils as xy_rast
+from pointcept.evaluation.network.label_utils import (
+    NETWORK_TYPES,
+    LoadedNetworkGraph,
+    edge_euclidean_distances,
+)
 
 # --- Fixed APLS protocol -------------------------------------------------------------
 # Do not make these configurable: they define the metric. Bump APLS_PROTOCOL_VERSION if

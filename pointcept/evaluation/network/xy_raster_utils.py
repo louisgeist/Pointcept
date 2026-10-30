@@ -1,7 +1,7 @@
 """1 m XY rasters aligned to Lambert-93 meters, and pixel graphs of linear networks.
 
 Used to rasterize the ground-truth network graphs (rasterize_network.py) and to turn
-predicted masks back into graphs (network_graph_pipeline.py). Coordinates are
+predicted masks back into graphs (graph_pipeline.py). Coordinates are
 EPSG:2154 meters. Pixel (i, j) covers the world cell::
 
     [origin_x + i * pixel_m, origin_x + (i + 1) * pixel_m)

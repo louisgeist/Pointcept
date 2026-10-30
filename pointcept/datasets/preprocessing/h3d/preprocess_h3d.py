@@ -36,30 +36,15 @@ from __future__ import annotations
 
 import argparse
 import os
-import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from typing import Dict, List, Tuple
 
 import numpy as np
 
-try:
-    from pointcept.datasets.preprocessing.h3d.h3d_class_map import (
-        CLASS_NAMES,
-        NUM_CLASSES,
-    )
-    from pointcept.datasets.preprocessing.xy_grid_chunking import (
-        split_scene_xy_by_chunk_size,
-    )
-except ModuleNotFoundError:
-    THIS_DIR = os.path.dirname(os.path.abspath(__file__))
-    if THIS_DIR not in sys.path:
-        sys.path.insert(0, THIS_DIR)
-    from h3d_class_map import CLASS_NAMES, NUM_CLASSES
-
-    _PREPROCESSING_DIR = os.path.dirname(THIS_DIR)
-    if _PREPROCESSING_DIR not in sys.path:
-        sys.path.insert(0, _PREPROCESSING_DIR)
-    from xy_grid_chunking import split_scene_xy_by_chunk_size
+from pointcept.datasets.preprocessing.h3d.h3d_class_map import CLASS_NAMES, NUM_CLASSES
+from pointcept.datasets.preprocessing.xy_grid_chunking import (
+    split_scene_xy_by_chunk_size,
+)
 
 # Fixed basenames under dataset_root/LiDAR/.
 MAR18_FILES_PER_SPLIT: Dict[str, Tuple[str, ...]] = {
@@ -79,7 +64,6 @@ def read_las_laz(filepath: str) -> Dict[str, np.ndarray]:
         ) from err
 
     las = laspy.read(filepath)
-    n = len(las.points)
     coord = np.column_stack(
         (
             np.asarray(las.x, dtype=np.float64),

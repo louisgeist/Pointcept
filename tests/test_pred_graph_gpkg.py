@@ -1,5 +1,5 @@
 """Predicted road graphs: PixelGraph -> GeoPackage -> load_roi_exported_network_graph round trip, output
-paths, and the per-ROI APLS JSON written next to each predicted graph by eval_network_apls.
+paths, and the per-ROI APLS JSON written next to each predicted graph by eval_apls.
 
 Run with: PYTHONPATH=. pytest tests/test_pred_graph_gpkg.py
 """
@@ -7,7 +7,6 @@ Run with: PYTHONPATH=. pytest tests/test_pred_graph_gpkg.py
 from __future__ import annotations
 
 import json
-import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -22,26 +21,18 @@ try:
 except ImportError:
     HAS_OGR = False
 
-from pointcept.datasets.preprocessing.malibu3d.apls_metric import AplsResult
-from pointcept.datasets.preprocessing.malibu3d.network_label_utils import (
+from pointcept.evaluation.network import eval_apls
+from pointcept.evaluation.network.apls_metric import AplsResult
+from pointcept.evaluation.network.label_utils import (
     load_roi_exported_network_graph,
     pred_graph_output_stem_paths,
     write_pixel_graph_gpkg,
 )
-from pointcept.datasets.preprocessing.malibu3d.network_xy_raster_utils import (
+from pointcept.evaluation.network.xy_raster_utils import (
     GridSpec,
     PixelGraph,
     pixel_centers_xy,
 )
-
-
-def _import_eval_network_apls():
-    tools_dir = str(Path(__file__).resolve().parents[1] / "tools")
-    if tools_dir not in sys.path:
-        sys.path.insert(0, tools_dir)
-    import eval_network_apls
-
-    return eval_network_apls
 
 
 def _grid() -> GridSpec:
@@ -130,8 +121,7 @@ class TestPredGraphPaths(unittest.TestCase):
         self.assertEqual(sidecar.name, "D075_UU-S1-4_ROADS_apls.json")
 
     def test_no_save_pred_gpkg_cli(self):
-        eval_network_apls = _import_eval_network_apls()
-        parser = eval_network_apls.build_argparser()
+        parser = eval_apls.build_argparser()
         args = parser.parse_args(
             [
                 "--data_root",
@@ -153,7 +143,6 @@ class TestPredGraphPaths(unittest.TestCase):
 @unittest.skipUnless(HAS_OGR, "GDAL/OGR not installed")
 class TestPredGraphDump(unittest.TestCase):
     def test_dump_writes_gpkg_sidecar_and_metadata(self):
-        eval_network_apls = _import_eval_network_apls()
         graph = _line_graph()
         result = AplsResult(
             roi="UU-S1-4",
@@ -174,7 +163,7 @@ class TestPredGraphDump(unittest.TestCase):
             tmp_path = Path(tmp)
             roi = _roi_dir(tmp_path)
             out_dir = tmp_path / "result"
-            gpkg_path, json_path = eval_network_apls.dump_pred_graph_artifacts(
+            gpkg_path, json_path = eval_apls.dump_pred_graph_artifacts(
                 out_dir,
                 roi,
                 "D075-2021",

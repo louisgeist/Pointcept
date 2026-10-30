@@ -164,7 +164,7 @@ min_points = {"train": 1000}
 
 # Opt-in APLS scoring of the PreciseEvaluator test logits (NetworkAPLSEvaluator /
 # tools/test.py). The mask -> graph parameters keep the defaults of
-# tools/eval_network_apls.py::run; ground-truth road graphs are read from each ROI
+# pointcept/evaluation/network/eval_apls.py::run; ground-truth road graphs are read from each ROI
 # directory (Hugging Face layout of the dataset).
 network_apls_eval = dict(split="test")
 

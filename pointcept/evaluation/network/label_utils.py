@@ -23,7 +23,7 @@ from shapely.geometry import LineString, MultiLineString, Point
 from shapely.geometry.base import BaseGeometry
 
 if TYPE_CHECKING:
-    from network_xy_raster_utils import PixelGraph  # type: ignore
+    from pointcept.evaluation.network.xy_raster_utils import PixelGraph
 
 CRS_EPSG = "EPSG:2154"
 _OGR_EPSG = 2154

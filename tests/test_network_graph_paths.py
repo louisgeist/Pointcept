@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from pointcept.datasets.preprocessing.malibu3d import network_label_utils as nlu
+from pointcept.evaluation.network import label_utils as nlu
 
 
 class TestGraphPaths(unittest.TestCase):

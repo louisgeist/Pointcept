@@ -1,14 +1,10 @@
-"""Shared helper: run tools/eval_network_apls.py from within the training/testing engines.
+"""Shared helper: run the network APLS evaluation from within the training/testing engines.
 
 Used by both the standalone `tools/test.py` entrypoint and the `NetworkAPLSEvaluator` training
 hook (`pointcept/engines/hooks/misc.py`) so the config/guard/error-handling logic lives in one
-place. `tools/eval_network_apls.py` is a standalone script (not a package module, no
-`__init__.py` under `tools/`), so it's imported here via a `sys.path` insert -- the same pattern
-`eval_network_apls.py` itself uses to import its `pointcept/datasets/preprocessing/malibu3d/`
-dependencies.
+place. The evaluation itself is `pointcept/evaluation/network/eval_apls.py`.
 """
 
-import sys
 from pathlib import Path
 
 from pointcept.utils.comm import is_main_process
@@ -33,7 +29,7 @@ def validate_network_apls_eval_cfg(cfg):
     if stale:
         raise ValueError(
             f"network_apls_eval: {stale} can no longer be set. The APLS metric parameters "
-            "are fixed (see APLS_PROTOCOL in pointcept/datasets/preprocessing/malibu3d/"
+            "are fixed (see APLS_PROTOCOL in pointcept/evaluation/network/"
             "apls_metric.py); remove these keys from the config. Only the mask->graph "
             "parameters (threshold, morphology, merge, ...) remain configurable."
         )
@@ -42,7 +38,7 @@ def validate_network_apls_eval_cfg(cfg):
 def run_network_apls_eval_if_configured(cfg, logger):
     """Score network APLS after a test pass if ``cfg.network_apls_eval`` is set.
 
-    ``cfg.network_apls_eval`` is a dict of keyword arguments for ``eval_network_apls.run``
+    ``cfg.network_apls_eval`` is a dict of keyword arguments for ``eval_apls.run``
     (plus optional ``network_graphs_root`` and ``out_dir``); no-op when absent, and on
     non-main ranks. Reads the ``{patch_id}_logits_network.npy`` files that
     ``MultiTaskTester`` wrote to ``cfg.save_path/result``, stitches them per ROI and scores
@@ -67,15 +63,12 @@ def run_network_apls_eval_if_configured(cfg, logger):
     # None: GT graphs sit in each ROI directory (Hugging Face layout of the dataset).
     network_graphs_root = opts.pop("network_graphs_root", None)
 
-    tools_dir = str(Path(__file__).resolve().parents[2] / "tools")
-    if tools_dir not in sys.path:
-        sys.path.insert(0, tools_dir)
-    import eval_network_apls
+    from pointcept.evaluation.network import eval_apls
 
     save_path = Path(cfg.save_path) / "result"
     out_dir = Path(opts.pop("out_dir", save_path))
     try:
-        return eval_network_apls.run(
+        return eval_apls.run(
             Path(cfg.data_root),
             save_path,
             Path(network_graphs_root) if network_graphs_root else None,

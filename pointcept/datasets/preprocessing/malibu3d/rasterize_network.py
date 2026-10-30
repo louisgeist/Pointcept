@@ -1,7 +1,7 @@
 """Write the ``network.npy`` (1, H, W) road masks of every MALiBU3D tile from the road graphs.
 
 Driven by the tile CSV (``tiles.csv`` or an older split manifest, read via
-``tile_catalog.py``): each tile must already exist under ``data_root`` with
+``pointcept/datasets/tile_catalog.py``): each tile must already exist under ``data_root`` with
 ``coord.npy`` (a missing tile is an error).
 
 Ground-truth roads are graphs (``{dept}_{roi}_ROADS_graph.gpkg``, one per ROI, read from
@@ -26,112 +26,25 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 from tqdm import tqdm
 
-# Prefer sibling imports so this script runs without the full Pointcept stack
-# (e.g. in a geopandas environment without torch).
-_HERE = Path(__file__).resolve().parent
-if str(_HERE) not in sys.path:
-    sys.path.insert(0, str(_HERE))
-try:
-    from network_label_utils import (  # type: ignore
-        NETWORK_TYPES,
-        load_roi_exported_networks,
-    )
-    from tile_catalog import iter_tiles, tile_csv_columns  # type: ignore
-    from network_xy_raster_utils import (  # type: ignore
-        abs_xy_bounds_from_coord,
-        densify_segments_to_absolute_cells,
-        grid_from_xy_bounds,
-        mask_from_absolute_cells,
-    )
-except ImportError:  # pragma: no cover
-    from pointcept.datasets.preprocessing.malibu3d.network_label_utils import (
-        NETWORK_TYPES,
-        load_roi_exported_networks,
-    )
-    from pointcept.datasets.preprocessing.malibu3d.tile_catalog import (
-        iter_tiles,
-        tile_csv_columns,
-    )
-    from pointcept.datasets.preprocessing.malibu3d.network_xy_raster_utils import (
-        abs_xy_bounds_from_coord,
-        densify_segments_to_absolute_cells,
-        grid_from_xy_bounds,
-        mask_from_absolute_cells,
-    )
-
-
-REQUIRED_MANIFEST_COLUMNS = frozenset(
-    {"split", "dept_year", "roi", "tile_id", "has_roads_graph"}
+from pointcept.datasets.tile_catalog import ManifestPatch, load_manifest_patches
+from pointcept.evaluation.network.label_utils import (
+    NETWORK_TYPES,
+    load_roi_exported_networks,
 )
-
-
-@dataclass(frozen=True)
-class ManifestPatch:
-    """One LiDAR tile listed in the tile CSV."""
-
-    split: str
-    dept_year: str
-    roi: str
-    patch_id: str
-    flags: Tuple[Tuple[str, bool], ...]  # frozen catalog flags (ROADS only)
-
-    @property
-    def flags_dict(self) -> Dict[str, bool]:
-        return dict(self.flags)
-
-    def patch_dir(self, data_root: Path) -> Path:
-        return (
-            data_root
-            / self.split
-            / f"{self.dept_year}_LIDARHD"
-            / self.roi
-            / self.patch_id
-        )
-
-    def roi_dir(self, data_root: Path) -> Path:
-        return data_root / self.split / f"{self.dept_year}_LIDARHD" / self.roi
-
-
-def load_manifest_patches(
-    split_manifest_csv: Path,
-    *,
-    splits: Optional[Sequence[str]] = None,
-) -> List[ManifestPatch]:
-    """Load the tiles of ``tiles.csv`` / an older manifest (optionally filtered by split),
-    each with its ROADS catalog flag."""
-    if not split_manifest_csv.is_file():
-        raise FileNotFoundError(f"split_manifest_csv not found: {split_manifest_csv}")
-    missing_cols = sorted(
-        REQUIRED_MANIFEST_COLUMNS - tile_csv_columns(split_manifest_csv)
-    )
-    if missing_cols:
-        raise ValueError(
-            f"split_manifest_csv missing columns {missing_cols} (expected tiles.csv)."
-        )
-
-    patches: List[ManifestPatch] = []
-    for tile in iter_tiles(split_manifest_csv, splits):
-        flags = (("ROADS", bool(tile.has_roads_graph)),)
-        patches.append(
-            ManifestPatch(
-                split=tile.split,
-                dept_year=tile.dept_year,
-                roi=tile.roi,
-                patch_id=tile.tile_id,
-                flags=flags,
-            )
-        )
-    return patches
+from pointcept.evaluation.network.xy_raster_utils import (
+    abs_xy_bounds_from_coord,
+    densify_segments_to_absolute_cells,
+    grid_from_xy_bounds,
+    mask_from_absolute_cells,
+)
 
 
 def group_by_roi(

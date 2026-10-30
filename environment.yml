@@ -30,7 +30,7 @@ dependencies:
   - lazrs-python
   - geopandas  # MALiBU3D road graphs (rasterize_network.py, APLS)
   - gdal  # predicted road graphs written as GeoPackage
-  - scikit-image  # road mask skeletonization (network_graph_pipeline.py)
+  - scikit-image  # road mask skeletonization (pointcept/evaluation/network/graph_pipeline.py)
   - scikit-learn  # PureForest linear probe (tools/probe_pureforest.py)
   - pip:
     - --extra-index-url https://download.pytorch.org/whl/cu124

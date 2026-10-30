@@ -838,7 +838,7 @@ class PreciseEvaluator(HookBase):
 @HOOKS.register_module()
 class NetworkAPLSEvaluator(HookBase):
     """After training, score the network-prediction task with APLS (see
-    tools/eval_network_apls.py). Opt-in via cfg.network_apls_eval; no-op otherwise.
+    pointcept/evaluation/network/eval_apls.py). Opt-in via cfg.network_apls_eval; no-op otherwise.
 
     Reuses the `{patch_id}_logits_network.npy` rasters written by `PreciseEvaluator`'s
     in-process test run -- must be listed *after* `PreciseEvaluator` in `cfg.hooks` so those

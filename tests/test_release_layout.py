@@ -11,7 +11,7 @@ import unittest
 import numpy as np
 
 from pointcept.datasets.malibu3d import MALiBU3DDataset, RELEASE_RASTER_PIXEL_M
-from pointcept.datasets.preprocessing.malibu3d.tile_catalog import iter_tiles
+from pointcept.datasets.tile_catalog import iter_tiles
 
 HEADER = [
     "split",

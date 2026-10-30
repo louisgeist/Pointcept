@@ -18,7 +18,7 @@ data/malibu3d/<split>/<DEPT_YEAR>_LIDARHD/<ROI>/<TILE_ID>/
 
 with `TILE_ID = <DEPT_YEAR>_<ROI>_<I-J>`, e.g. `D010-2019_AA-S1-1_1-1`. The 1 m rasters are south-up (row 0 is
 the southern edge) on a grid snapped to whole Lambert-93 meters. Commands are run from the repository root and
-driven by `tiles.csv` (read through `tile_catalog.py`).
+driven by `tiles.csv` (read through `pointcept/datasets/tile_catalog.py`).
 
 The road masks of the `network` target are not shipped: they are rasterized from the road graphs of each ROI.
 
@@ -48,17 +48,16 @@ python pointcept/datasets/preprocessing/malibu3d/rasterize_network.py \
 
 ## Network graph and APLS modules
 
-The network task is evaluated with APLS on graphs, not only on masks. These modules are imported by
-`tools/eval_network_apls.py`, `pointcept/utils/network_apls.py` and the tests; they have no command line.
+The network task is evaluated with APLS on graphs, not only on masks. The graph and APLS code lives in
+`pointcept/evaluation/network/` (command line: `tools/eval_network_apls.py`):
 
 | Module | Role |
 |---|---|
-| `network_xy_raster_utils.py` | 1 m Lambert-93 grids (`GridSpec`), segment densification, masks, pixel graphs, RDP simplification, endpoint repair |
-| `network_label_utils.py` | Read the ground-truth `*_graph.gpkg` (segments or full topology), write predicted graphs to GeoPackage |
-| `network_graph_pipeline.py` | Predicted mask -> graph: opening/closing, small-object removal, skeletonization, pixel graph, endpoint fix, RDP, node merge, small-component removal |
-| `network_prediction_stitch.py` | Stitch the per-tile predicted probability rasters (`<tile_id>_logits_network.npy`) of a ROI onto one ROI raster |
+| `xy_raster_utils.py` | 1 m Lambert-93 grids (`GridSpec`), segment densification, masks, pixel graphs, RDP simplification, endpoint repair |
+| `label_utils.py` | Read the ground-truth `*_graph.gpkg` (segments or full topology), write predicted graphs to GeoPackage |
+| `graph_pipeline.py` | Predicted mask -> graph: opening/closing, small-object removal, skeletonization, pixel graph, endpoint fix, RDP, node merge, small-component removal |
+| `prediction_stitch.py` | Stitch the per-tile predicted probability rasters (`<tile_id>_logits_network.npy`) of a ROI onto one ROI raster |
 | `apls_metric.py` | APLS between a ground-truth and a predicted graph (fixed protocol, `APLS_PROTOCOL`) and dataset aggregation |
+| `eval_apls.py` | Dataset-level evaluation: stitch, build the predicted graphs, score APLS, write the metrics JSON |
 
-## Other modules
-
-- `tile_catalog.py`: reads `tiles.csv` into `Tile` records.
+`tiles.csv` is read by `pointcept/datasets/tile_catalog.py`.

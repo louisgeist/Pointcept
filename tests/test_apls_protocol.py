@@ -8,18 +8,16 @@ from __future__ import annotations
 
 import inspect
 import re
-import sys
 import unittest
 from pathlib import Path
 
 import numpy as np
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
-
-from pointcept.datasets.preprocessing.malibu3d import apls_metric as apls
+from pointcept.evaluation.network import apls_metric as apls
+from pointcept.evaluation.network import eval_apls
 from pointcept.utils.network_apls import validate_network_apls_eval_cfg
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 _REMOVED_KEYS = (
     "apls_densify",
@@ -67,16 +65,11 @@ class TestPublicApiHasNoKnobs(unittest.TestCase):
             self.assertEqual(params, {"gt", "pred", "roi", "network_type"}, fn.__name__)
 
     def test_eval_entrypoint_has_no_apls_params(self):
-        sys.path.insert(0, str(REPO_ROOT / "tools"))
-        try:
-            import eval_network_apls
-        finally:
-            sys.path.pop(0)
-        params = set(inspect.signature(eval_network_apls.run).parameters)
+        params = set(inspect.signature(eval_apls.run).parameters)
         self.assertFalse(params & set(_REMOVED_KEYS), params & set(_REMOVED_KEYS))
         parser_opts = {
             o
-            for a in eval_network_apls.build_argparser()._actions
+            for a in eval_apls.build_argparser()._actions
             for o in a.option_strings
         }
         for key in _REMOVED_KEYS:
@@ -94,7 +87,7 @@ class TestPublicApiHasNoKnobs(unittest.TestCase):
 
 
 class TestPredictionDefaultsMatchConfigs(unittest.TestCase):
-    """eval_network_apls.run() defaults == the mask->graph recipe of the paper.
+    """eval_apls.run() defaults == the mask->graph recipe of the paper.
 
     The MALiBU3D configs only set ``network_apls_eval = dict(split="test")`` and rely on
     these defaults, so changing one changes the APLS reported by every config.
@@ -119,14 +112,9 @@ class TestPredictionDefaultsMatchConfigs(unittest.TestCase):
     )
 
     def test_defaults_equal_paper_recipe(self):
-        sys.path.insert(0, str(REPO_ROOT / "tools"))
-        try:
-            import eval_network_apls
-        finally:
-            sys.path.pop(0)
         defaults = {
             k: v.default
-            for k, v in inspect.signature(eval_network_apls.run).parameters.items()
+            for k, v in inspect.signature(eval_apls.run).parameters.items()
         }
         for key, value in self.PAPER_RECIPE.items():
             self.assertEqual(defaults[key], value, key)

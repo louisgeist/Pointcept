@@ -1,4 +1,4 @@
-"""Preprocessing helper of rasterize_network.py (network_xy_raster_utils.py):
+"""Preprocessing helper of rasterize_network.py (pointcept/evaluation/network/xy_raster_utils.py):
 abs_xy_bounds_from_coord.
 
 Run with: PYTHONPATH=. pytest tests/test_network_xy_raster_shared_utils.py
@@ -11,7 +11,7 @@ from pathlib import Path
 
 import numpy as np
 
-from pointcept.datasets.preprocessing.malibu3d.network_xy_raster_utils import (
+from pointcept.evaluation.network.xy_raster_utils import (
     abs_xy_bounds_from_coord,
 )
 

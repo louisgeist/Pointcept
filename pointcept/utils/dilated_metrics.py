@@ -15,6 +15,8 @@ from typing import Tuple
 
 import numpy as np
 
+from pointcept.evaluation.network.xy_raster_utils import morph_dilate_mask
+
 
 def dilated_precision_recall_counts(
     pred_fg: np.ndarray,
@@ -31,13 +33,6 @@ def dilated_precision_recall_counts(
 
     Returns ``(precision_num, precision_denom, recall_num, recall_denom)``.
     """
-    # Deferred import: pointcept.datasets.__init__ pulls in models/engines, which
-    # import this module, so importing morph_dilate_mask at module load time would
-    # create a circular import.
-    from pointcept.datasets.preprocessing.malibu3d.network_xy_raster_utils import (
-        morph_dilate_mask,
-    )
-
     pred_fg = np.asarray(pred_fg, dtype=bool)
     gt_fg = np.asarray(gt_fg, dtype=bool)
     valid = np.asarray(valid, dtype=bool)

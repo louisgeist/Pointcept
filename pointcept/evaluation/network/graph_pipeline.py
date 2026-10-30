@@ -8,20 +8,20 @@ The graph steps follow the preset used to build the ground-truth graphs of the
 dataset from the vector networks.
 
 Depends on numpy and scikit-image (no geopandas / GDAL; GeoPackage output is in
-``network_label_utils``).
+``label_utils``).
 """
 
 from __future__ import annotations
 
-import sys
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Iterator
 
 import numpy as np
 from skimage.morphology import remove_small_objects, skeletonize
+
+from pointcept.evaluation.network import xy_raster_utils as xy_rast
 
 
 class StageTimer:
@@ -48,18 +48,6 @@ class StageTimer:
             self.timings[name] = self.timings.get(name, 0.0) + (
                 time.perf_counter() - t0
             )
-
-
-# Prefer sibling imports so this module runs without the full Pointcept stack.
-_HERE = Path(__file__).resolve().parent
-if str(_HERE) not in sys.path:
-    sys.path.insert(0, str(_HERE))
-try:
-    import network_xy_raster_utils as xy_rast  # type: ignore
-except ImportError:  # pragma: no cover
-    from pointcept.datasets.preprocessing.malibu3d import (  # type: ignore
-        network_xy_raster_utils as xy_rast,
-    )
 
 
 @dataclass(frozen=True)

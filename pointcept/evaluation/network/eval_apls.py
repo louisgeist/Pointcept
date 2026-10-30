@@ -19,7 +19,7 @@ By default also writes ``{stem}_{NETWORK}_pred_graph.gpkg`` (same schema as GT) 
 ``{stem}_{NETWORK}_apls.json`` (score, G→G', G'→G) next to the dataset-wide metrics.
 Pass ``--no_save_pred_gpkg`` / ``network_apls_eval.save_pred_gpkg=False`` to skip those dumps.
 
-Example::
+Command line: ``tools/eval_network_apls.py``. Example::
 
     python tools/eval_network_apls.py \\
         --data_root data/malibu3d \\
@@ -36,7 +36,6 @@ import csv
 import inspect
 import json
 import os
-import sys
 import time
 from collections import defaultdict
 from contextlib import contextmanager
@@ -46,15 +45,11 @@ from typing import Dict, Iterator, List, Optional
 import numpy as np
 from tqdm import tqdm
 
-_HERE = Path(__file__).resolve().parent
-_PREPROC_DIR = _HERE.parent / "pointcept" / "datasets" / "preprocessing" / "malibu3d"
-if str(_PREPROC_DIR) not in sys.path:
-    sys.path.insert(0, str(_PREPROC_DIR))
-
-import apls_metric as apls  # type: ignore
-import network_graph_pipeline as ngp  # type: ignore
-import network_label_utils as nlu  # type: ignore
-import network_prediction_stitch as nps  # type: ignore
+from pointcept.datasets.tile_catalog import load_manifest_patches
+from pointcept.evaluation.network import apls_metric as apls
+from pointcept.evaluation.network import graph_pipeline as ngp
+from pointcept.evaluation.network import label_utils as nlu
+from pointcept.evaluation.network import prediction_stitch as nps
 
 NETWORK_TYPES = nlu.NETWORK_TYPES
 
@@ -305,7 +300,7 @@ def run(
     types = NETWORK_TYPES
     profiler = _ProfileAggregator() if profile else None
 
-    patches = nps.load_manifest_patches(split_manifest_csv, splits=[split])
+    patches = load_manifest_patches(split_manifest_csv, splits=[split])
     roi_items, excluded_rois = nps.group_by_roi_complete_only(patches, data_root)
     if excluded_rois:
         print(
@@ -811,7 +806,3 @@ def main(argv: Optional[List[str]] = None) -> None:
         profile=bool(args.profile),
         save_pred_gpkg=not args.no_save_pred_gpkg,
     )
-
-
-if __name__ == "__main__":
-    main()

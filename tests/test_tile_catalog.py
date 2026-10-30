@@ -10,7 +10,7 @@ import pathlib
 import tempfile
 import unittest
 
-from pointcept.datasets.preprocessing.malibu3d.tile_catalog import (
+from pointcept.datasets.tile_catalog import (
     Tile,
     read_tiles,
 )

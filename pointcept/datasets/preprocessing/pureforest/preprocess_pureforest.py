@@ -42,7 +42,6 @@ import argparse
 import ast
 import csv
 import os
-import sys
 import traceback
 from collections import Counter
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -52,23 +51,12 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 from tqdm import tqdm
 
-try:
-    from pointcept.datasets.preprocessing.pureforest.pureforest_classes import (
-        NUM_CLASSES,
-        SPLITS,
-        build_laz_path,
-        parse_class_id_from_patch_stem,
-    )
-except ModuleNotFoundError:
-    THIS_DIR = os.path.dirname(os.path.abspath(__file__))
-    if THIS_DIR not in sys.path:
-        sys.path.insert(0, THIS_DIR)
-    from pureforest_classes import (
-        NUM_CLASSES,
-        SPLITS,
-        build_laz_path,
-        parse_class_id_from_patch_stem,
-    )
+from pointcept.datasets.preprocessing.pureforest.pureforest_classes import (
+    NUM_CLASSES,
+    SPLITS,
+    build_laz_path,
+    parse_class_id_from_patch_stem,
+)
 
 REQUIRED_MANIFEST_COLUMNS = frozenset({"patch_id", "split", "class_index"})
 COORD_SCALE_M = 25.0

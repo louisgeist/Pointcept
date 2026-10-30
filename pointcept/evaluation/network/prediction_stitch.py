@@ -11,37 +11,16 @@ multiples of ``pixel_m``), so stitching is integer-offset placement, no resampli
 from __future__ import annotations
 
 import json
-import sys
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List, Sequence, Tuple
+from typing import TYPE_CHECKING, Dict, List, Sequence, Tuple
 
 import numpy as np
 
-_HERE = Path(__file__).resolve().parent
-if str(_HERE) not in sys.path:
-    sys.path.insert(0, str(_HERE))
-try:
-    from network_xy_raster_utils import GridSpec  # type: ignore
-except ImportError:  # pragma: no cover
-    from pointcept.datasets.preprocessing.malibu3d.network_xy_raster_utils import (  # type: ignore
-        GridSpec,
-    )
+from pointcept.evaluation.network.xy_raster_utils import GridSpec
 
-# Re-exported so that tools/eval_network_apls.py imports tile loading and grouping
-# from this single module.
-try:
-    from rasterize_network import (  # type: ignore  # noqa: F401
-        ManifestPatch,
-        group_by_roi,
-        load_manifest_patches,
-    )
-except ImportError:  # pragma: no cover
-    from pointcept.datasets.preprocessing.malibu3d.rasterize_network import (  # type: ignore  # noqa: F401
-        ManifestPatch,
-        group_by_roi,
-        load_manifest_patches,
-    )
+if TYPE_CHECKING:
+    from pointcept.datasets.tile_catalog import ManifestPatch
 
 
 def group_by_roi_complete_only(
