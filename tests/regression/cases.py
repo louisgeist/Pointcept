@@ -11,11 +11,11 @@ import glob
 BUILD_GLOBS = [
     "configs/_base_/**/*.py",
     "configs/malibu3d/**/*.py",
-    "configs/dales/*.py",
-    "configs/h3d/*.py",
+    "configs/dales/**/*.py",
+    "configs/h3d/**/*.py",
     "configs/eclair/**/*.py",
-    "configs/opengf/*.py",
-    "configs/pureforest/*.py",
+    "configs/opengf/**/*.py",
+    "configs/pureforest/**/*.py",
     "configs/experiment/**/*.py",
 ]
 
@@ -57,7 +57,7 @@ JOB_TO_CKPT = {
 }
 # Probe configs whose `weight` is unset (filled in at launch time).
 PROBE_CKPT_OVERRIDE = {
-    "malibu3d/probe/sonata-v1m2-malibu3d-lin-grid": "sonata-pretrained",
+    "malibu3d/probe/sonata-v1m2-malibu3d-lin-grid-enc": "sonata-pretrained",
     "malibu3d/probe/sonata-v1m2-malibu3d-lin": "sonata-pretrained",
 }
 
@@ -102,8 +102,8 @@ def probe_cases():
     """GridProbe configs: frozen-backbone features on one val sample. name = config basename."""
     out = {}
     for d in PROBE_DIRS:
-        for p in sorted(glob.glob(f"{d}/*.py")):
-            if "grid" in p or "lin_" in p:
+        for p in sorted(glob.glob(f"{d}/**/*.py", recursive=True)):
+            if "-lin-grid" in p:
                 out[p.split("configs/", 1)[1][:-3]] = p
     return out
 
@@ -168,14 +168,6 @@ TRAIN = {
         "configs/malibu3d/multi-sonata-ft-v1m0-malibu3d.py",
         _FLAIR_SMALL + [f"weight={CKPT['sonata-pretrained']}"],
     ),
-    "train-segment-litept-b": (
-        "configs/malibu3d/segment/litept-b-v1m0-malibu3d.py",
-        _FLAIR_SMALL,
-    ),
-    "train-network-litept": (
-        "configs/malibu3d/network/litept-v1m0-malibu3d.py",
-        _FLAIR_SMALL,
-    ),
     "train-pretrain-sonata": (
         "configs/malibu3d/pretrain-sonata-v1m2-malibu3d.py",
         [
@@ -189,7 +181,7 @@ TRAIN = {
         ],
     ),
     "train-probe-h3d-litept-b": (
-        "configs/h3d/litept-b-v1m0-h3d-lin_enc.py",
+        "configs/h3d/litept-b-v1m0-h3d-lin-grid-enc.py",
         _PROBE_SMALL + [f"weight={CKPT['litept-b']}"],
     ),
     "train-probe-opengf-spunet": (
@@ -213,7 +205,7 @@ TRAIN = {
         _FLAIR_SMALL,
     ),
     "train-probe-malibu3d-sonata": (
-        "configs/malibu3d/probe/sonata-v1m2-malibu3d-lin-grid.py",
+        "configs/malibu3d/probe/sonata-v1m2-malibu3d-lin-grid-enc.py",
         _FLAIR_SMALL + [f"weight={CKPT['sonata-pretrained']}"],
     ),
 }

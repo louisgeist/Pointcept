@@ -48,7 +48,7 @@ MODELS = {
         "supervised",
     ),
     "sonata": (
-        "configs/malibu3d/probe/sonata-v1m2-malibu3d-lin-grid.py",
+        "configs/malibu3d/probe/sonata-v1m2-malibu3d-lin-grid-enc.py",
         "ckpt/malibu3d/sonata_outdoor/epoch_120.pth",
         "ssl",
     ),

@@ -19,10 +19,10 @@ from tools.sweep_then_seeds import (
 
 # A representative grid-probe config: loop-built `probes`, a `_base_`, unicode
 # class names, PT-v3m2 enc_mode backbone.
-GRID_CONFIG = "configs/h3d/sonata-v1m2-h3d-lin-grid.py"
+GRID_CONFIG = "configs/h3d/sonata-v1m2-h3d-lin-grid-enc.py"
 
 # ...and a MALiBU3D one (dict-comprehension `probes`, iter-limited schedule).
-GRID_CONFIG_MALIBU3D = "configs/malibu3d/probe/sonata-v1m2-malibu3d-lin-grid.py"
+GRID_CONFIG_MALIBU3D = "configs/malibu3d/probe/sonata-v1m2-malibu3d-lin-grid-enc.py"
 
 # DALES: no held-out val, so every config points data.val and data.test at split="test"
 GRID_CONFIG_DALES = "configs/dales/spunet-v1m0-dales-lin-grid-enc.py"

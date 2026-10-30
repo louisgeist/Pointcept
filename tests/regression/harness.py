@@ -17,8 +17,9 @@ Stages (cases in tests/regression/cases.py):
   forward  released checkpoints on fixed local samples: multitask heads, GridProbe backbone features
   train    short tools/train.py runs (train + val + test), seed 0: loss curve and metrics
 
---map json: {"paths": [[old, new], ...], "strings": [[old, new], ...]} substring replacements applied to
-the reference (config paths / config values) so renamed configs still line up.
+--map json: {"paths": [[old, new], ...], "strings": [[old, new], ...]} applied to the reference so renamed
+configs still line up: "paths" renames whole config paths / case names, "strings" are substring replacements
+in config values.
 """
 
 import argparse
@@ -526,7 +527,11 @@ def apply_map(s, pairs):
 
 
 def compare(ref, new, mapping, rtol, atol):
-    paths_map, str_map = mapping.get("paths", []), mapping.get("strings", [])
+    renames, str_map = dict(mapping.get("paths", [])), mapping.get("strings", [])
+
+    def rename(key):
+        return renames.get(key, key)
+
     fails, notes = [], []
 
     # build
@@ -536,7 +541,7 @@ def compare(ref, new, mapping, rtol, atol):
     if r and n:
         gone = []
         for p, rr in r.items():
-            np_ = apply_map(p, paths_map)
+            np_ = rename(p)
             if np_ not in n:
                 gone.append(p)
                 continue
@@ -585,11 +590,9 @@ def compare(ref, new, mapping, rtol, atol):
     for key, rr in r.items():
         if "error" in rr or "skipped" in rr:
             continue
-        nkey = apply_map(key, paths_map)
+        nkey = rename(key)
         nn = n.get(nkey)
-        if nn is None and not os.path.isfile(
-            apply_map(rr.get("config", ""), paths_map)
-        ):
+        if nn is None and not os.path.isfile(rename(rr.get("config", ""))):
             notes.append(f"forward {key}: config removed")
             continue
         if nn is None or "error" in nn:
@@ -638,8 +641,8 @@ def compare(ref, new, mapping, rtol, atol):
     if not n:
         r = {}
     for key, rr in r.items():
-        nn = n.get(apply_map(key, paths_map))
-        if nn is None and apply_map(key, paths_map) not in cases.TRAIN:
+        nn = n.get(rename(key))
+        if nn is None and rename(key) not in cases.TRAIN:
             notes.append(f"train {key}: case removed")
             continue
         if nn is None:

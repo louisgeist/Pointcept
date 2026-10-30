@@ -27,7 +27,7 @@ just re-runs this script.
 Typical use (``--save-root`` defaults to ``$JOB_DIR`` under Slurm)::
 
     python tools/sweep_then_seeds.py \\
-      --grid-config configs/h3d/sonata-v1m2-h3d-lin-grid.py \\
+      --grid-config configs/h3d/sonata-v1m2-h3d-lin-grid-enc.py \\
       --weight ckpt/sonata-pretrained/model.pth \\
       --save-root exp/h3d/sonata_gts --n-seeds 10
 
@@ -93,7 +93,7 @@ def _utc_now() -> str:
 
 def resolve_config_path(spec: str) -> Path:
     """Mirror scripts/train.sh: accept an absolute/relative file path, or a
-    name resolved under ``configs/`` (e.g. ``h3d/sonata-v1m2-h3d-lin-grid``)."""
+    name resolved under ``configs/`` (e.g. ``h3d/sonata-v1m2-h3d-lin-grid-enc``)."""
     p = Path(spec)
     if p.is_file():
         return p.resolve()

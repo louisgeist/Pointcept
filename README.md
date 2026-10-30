@@ -122,7 +122,6 @@ predictions). `scripts/test.sh -d malibu3d -n <name>` tests a finished run again
 | `multi-kpconvx-v1m0-malibu3d.py` | KPConvX (6 GPUs) | Tab. 2 |
 | `pretrain-sonata-v1m2-malibu3d.py` | Sonata self-supervised pretraining (24 GPUs), the starting point of Sonata-FT | Tab. 2 |
 | `ablations/*.py` | LitePT-B without loss balancing, with GradNorm, natural habitat trained per point, land cover only, tested without RGB | Tab. 4 |
-| `segment/`, `network/` | single-task baselines | |
 | `probe/sonata-v1m2-malibu3d-lin*.py` | linear probes of a frozen Sonata on land cover | |
 
 The multitask runs use 200k iterations, a global batch of 12 tiles (24 for KPConvX) and AMP; the GPU count is the one

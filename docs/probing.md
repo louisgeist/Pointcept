@@ -44,15 +44,15 @@ DALES has no validation split: its configs validate on the test split, as is com
 ## Linear probing protocol
 
 The paper probes the encoder multi-scale features of the frozen backbone:
-`configs/<dataset>/<backbone>-v1m0-<dataset>-lin-grid-enc.py` (`litept-b-v1m0-<dataset>-lin_enc.py` on H3D and
-ECLAIR, `sonata-v1m2-<dataset>-lin-grid.py` for Sonata). Each config trains 12 linear heads (CE + Lovasz, one per
+`configs/<dataset>/<backbone>-<version>-<dataset>-lin-grid-enc.py`, with `<backbone>-<version>` one of
+`litept-b-v1m0`, `ptv3-v1m0`, `spunet-v1m0`, `kpconvx-v1m0` and `sonata-v1m2`. Each config trains 12 linear heads (CE + Lovasz, one per
 learning rate from 1e-4 to 5e-1) on one shared backbone forward pass. The head with the best validation
 metric (macro-F1 on H3D, mIoU elsewhere) is then retrained with 10 seeds, and the test metric is reported as mean
 ± std. `tools/sweep_then_seeds.py` runs both steps (sweep, then seeds):
 
 ```bash
 python tools/sweep_then_seeds.py \
-    --grid-config configs/h3d/litept-b-v1m0-h3d-lin_enc.py \
+    --grid-config configs/h3d/litept-b-v1m0-h3d-lin-grid-enc.py \
     --weight ckpt/litept-b/model.pth \
     --save-root exp/h3d/litept-b_probe
 # -> exp/h3d/litept-b_probe/.../seed_ensemble_results.json (test metrics, mean +/- std over the seeds)
@@ -64,15 +64,17 @@ already exists and resumes an interrupted one from its last checkpoint.
 
 The configs load the released checkpoints from `ckpt/<name>/model.pth` (see [checkpoints.md](checkpoints.md)).
 Other backbones of the same architecture (e.g. the ablation backbones of Tab. 4) are probed with the same
-configs and `--weight` (or `--options weight=...` with `tools/train.py`). `sonata-v1m1-*` configs probe the
-official indoor Sonata release (`ckpt/sonata/pretrain-sonata-v1m1-0-base.pth`).
+configs and `--weight` (or `--options weight=...` with `tools/train.py`).
 
-Other files in the dataset folders:
+`semseg-litept-b-v1m0-<dataset>.py` trains LitePT-B from scratch (`tools/train.py`). The `ablations/` folder of
+each dataset holds the probes of the appendix ablations:
 
-- `*-lin-grid-dec*`, `*-lin_dec*`, `*-enc-dec*`: other feature taps of the same backbones (decoder, decoder
+- `*-lin-grid-dec*`, `*-lin-grid-enc-dec*`: other feature taps of the same backbones (decoder, decoder
   hypercolumn, encoder + decoder), for the feature-source ablation.
 - `*-norgb*`: probes with the RGB input masked (no-RGB ablation).
-- `semseg-litept-b-v1m0-<dataset>.py`: LitePT-B trained from scratch (`tools/train.py`).
+- `sonata-v1m1-*`: probes of the official indoor Sonata release (`ckpt/sonata/pretrain-sonata-v1m1-0-base.pth`).
+- ECLAIR only: `pretrain-sonata-v1m2-eclair.py` (Sonata pretrained on ECLAIR, Tab. 4) and its linear probe
+  `sonata-v1m2-eclair-lin.py`.
 
 ## PureForest
 
@@ -87,4 +89,5 @@ python tools/probe_pureforest.py --config-file configs/pureforest/probe-litept-b
 
 The pooled features are reused when the command is run again (`--force-extract` recomputes them); another
 checkpoint is probed with `--options weight=...`. LitePT-B from scratch:
-`configs/pureforest/cls-litept-b-v1m0-pureforest.py`.
+`configs/pureforest/cls-litept-b-v1m0-pureforest.py`. `configs/pureforest/ablations/` holds the no-RGB probe and
+the probe of the official indoor Sonata.

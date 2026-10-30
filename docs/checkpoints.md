@@ -104,10 +104,10 @@ Sonata, the grid alone, then the full grid → seed-ensemble protocol of the pap
 
 ```bash
 export PYTHONPATH=$PWD
-python tools/train.py --config-file configs/h3d/sonata-v1m2-h3d-lin-grid.py --num-gpus 1 \
+python tools/train.py --config-file configs/h3d/sonata-v1m2-h3d-lin-grid-enc.py --num-gpus 1 \
     --options weight=ckpt/sonata-pretrained/model.pth
 
-python tools/sweep_then_seeds.py --grid-config configs/h3d/sonata-v1m2-h3d-lin-grid.py \
+python tools/sweep_then_seeds.py --grid-config configs/h3d/sonata-v1m2-h3d-lin-grid-enc.py \
     --save-root exp/h3d/sonata_sweep_then_seeds
 ```
 

@@ -34,7 +34,7 @@ CONFIGS = {  # released folder -> default config of this repository
     "ptv3": "configs/malibu3d/multi-ptv3-v1m0-malibu3d.py",
     "spunet": "configs/malibu3d/multi-spunet-v1m0-malibu3d.py",
     "kpconvx": "configs/malibu3d/multi-kpconvx-v1m0-malibu3d.py",
-    "sonata-pretrained": "configs/malibu3d/probe/sonata-v1m2-malibu3d-lin-grid.py",
+    "sonata-pretrained": "configs/malibu3d/probe/sonata-v1m2-malibu3d-lin-grid-enc.py",
 }
 
 

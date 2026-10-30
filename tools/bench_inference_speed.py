@@ -26,7 +26,7 @@ configs/malibu3d/multi-{litept-b,ptv3,kpconvx,spunet}-v1m0-malibu3d.py
 (MultiTaskSegmentorV2) and configs/malibu3d/probe/sonata-v1m2-malibu3d-lin.py
 (DefaultSegmentorV2, PT-v3m2 encoder + linear head). The single-probe Sonata
 config has no data.test; its test pipeline is taken from
-sonata-v1m2-malibu3d-lin-grid.py (same tiles and voxelization). Configs are
+sonata-v1m2-malibu3d-lin-grid-enc.py (same tiles and voxelization). Configs are
 loaded with Config.fromfile exactly like tools/train.py / tools/test.py and
 are not modified.
 
@@ -90,7 +90,7 @@ DEFAULT_CONFIGS = {
 # sonata-v1m2-malibu3d-lin.py has train/val only; reuse the grid-probe test
 # pipeline (same MALiBU3D tiles, test_single_fragment=True, no max_sample).
 TEST_PIPELINE_FALLBACK = {
-    "sonata": "configs/malibu3d/probe/sonata-v1m2-malibu3d-lin-grid.py",
+    "sonata": "configs/malibu3d/probe/sonata-v1m2-malibu3d-lin-grid-enc.py",
 }
 
 PER_TILE_FIELDS = [
