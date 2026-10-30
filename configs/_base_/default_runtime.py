@@ -8,7 +8,6 @@ tester. Each config overrides what it needs.
 weight = None  # path to model weight
 resume = False  # whether to resume training process
 evaluate = True  # evaluate after each epoch training process
-test_only = False  # test process
 
 seed = None  # train process will init a random seed and record
 save_path = "exp/default"
@@ -53,11 +52,8 @@ clip_grad = None  # disable with None, enable with a float
 skip_nan_grad = False
 # The global L2 grad norm (train/gradient/global) and the weight-update norm
 # (train/gradient/weight_update) are always logged as epoch averages.
-# log_task_gradient_norms=True also logs them every step (train_batch/...) and
-# adds a costly per-task breakdown: per-task L2 grad norms on the shared backbone
-# and on each task head, and pairwise backbone cosine similarities between tasks
-# (train/gradient/backbone_cos/{task_a}__{task_b}).
-log_task_gradient_norms = False
+# log_grad_norm_every_step=True also logs them every step (train_batch/...).
+log_grad_norm_every_step = False
 
 # GradNormLite (multitask loss balancing): every grad_norm_lite_interval steps
 # (the first time at that step, not at 0), measure each task's L2 grad norm on the
@@ -109,7 +105,7 @@ hooks = [
     dict(type="InformationWriter"),
     dict(type="SemSegEvaluator"),
     dict(type="CheckpointSaver", save_freq=None),
-    dict(type="PreciseEvaluator", test_last=False),
+    dict(type="PreciseEvaluator"),
 ]
 
 # Trainer

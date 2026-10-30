@@ -23,7 +23,7 @@ _base_ = ["../_base_/default_runtime.py"]
 grp_exp = 1
 num_exp = 1
 
-log_task_gradient_norms = False
+log_grad_norm_every_step = False
 grad_norm_lite = True
 grad_norm_lite_interval = 100
 grad_norm_lite_ema_alpha = 0.1
@@ -114,7 +114,7 @@ hooks = [
     dict(type="InformationWriter", log_interval=100),
     dict(type="MultiTaskEvaluator", write_cls_iou=True),
     dict(type="CheckpointSaver", save_freq=None),
-    dict(type="PreciseEvaluator", test_last=False),
+    dict(type="PreciseEvaluator"),
     # Must follow PreciseEvaluator: scores its saved test logits with APLS (never on val).
     dict(type="NetworkAPLSEvaluator"),
 ]

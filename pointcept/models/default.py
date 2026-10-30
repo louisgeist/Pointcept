@@ -145,23 +145,6 @@ class LearnedMaskedFeatMixin:
                 filled = filled + learned_mask_value.sum() * 0.0
             feat[:, start:end] = filled
 
-    def _print_learned_masked_feat(self):
-        """Print the learned fill values (called by the trainer at the end of training)."""
-        if not self.enable_learned_masked_feat:
-            print("Learned masked feat is not enabled.")
-            return
-        print(f"Learned masked feat keys: {self.learned_masked_feat_keys}")
-        for feat_key in self.learned_masked_feat_keys:
-            if hasattr(self, f"{feat_key}_mask_value"):
-                value = (
-                    getattr(self, f"{feat_key}_mask_value")
-                    .detach()
-                    .cpu()
-                    .flatten()
-                    .tolist()
-                )
-                print(f"{feat_key.capitalize()} mask value: " f"{value}")
-
 
 @MODELS.register_module()
 class DefaultSegmentorV2(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeatMixin):
@@ -423,25 +406,11 @@ class MultiTaskSegmentorV2(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeat
                 p.requires_grad = False
             self._pin_frozen_backbone_eval()
 
-    # The three accessors below are used by the GradNorm loss balancing and the
-    # per-task gradient-norm logging (pointcept/utils/gradient_norm.py).
-    def backbone_parameters(self):
-        return [p for p in self.backbone.parameters() if p.requires_grad]
-
+    # Used by the GradNorm loss balancing (pointcept/utils/gradient_norm.py).
     def last_backbone_layer_parameters(self):
         from pointcept.utils.gradient_norm import resolve_last_backbone_layer_params
 
         return resolve_last_backbone_layer_params(self.backbone)
-
-    def task_head_parameters(self, task_name):
-        params = []
-        if task_name in self.seg_heads:
-            params.extend(self.seg_heads[task_name].parameters())
-        if task_name in self.pixel_seg_heads:
-            params.extend(self.pixel_seg_heads[task_name].parameters())
-        if task_name in self.reg_heads:
-            params.extend(self.reg_heads[task_name].parameters())
-        return [p for p in params if p.requires_grad]
 
     @classmethod
     def _task_type(cls, task_config):

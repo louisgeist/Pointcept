@@ -62,7 +62,7 @@ hooks = [
     dict(type="InformationWriter", log_interval=100),
     dict(type="ClsEvaluator", metric="mIoU"),
     dict(type="CheckpointSaver", save_freq=None),
-    dict(type="PreciseEvaluator", test_last=False),
+    dict(type="PreciseEvaluator"),
 ]
 
 test = dict(type="ClsTester")

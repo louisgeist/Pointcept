@@ -75,9 +75,7 @@ _HISTORY_CSV_FIELDNAMES = (
 def _atomic_write_history_csv(path, rows):
     tmp_path = path + ".tmp"
     with open(tmp_path, "w", newline="", encoding="utf-8") as f:
-        # restval="" lets rows without the f1_macro keys be written; unknown keys
-        # still raise (extrasaction default).
-        writer = csv.DictWriter(f, fieldnames=_HISTORY_CSV_FIELDNAMES, restval="")
+        writer = csv.DictWriter(f, fieldnames=_HISTORY_CSV_FIELDNAMES)
         writer.writeheader()
         writer.writerows(rows)
     os.replace(tmp_path, path)
@@ -182,13 +180,12 @@ class GridProbeEvaluator(HookBase):
     probe: mIoU, f1_macro and their running bests), rewritten after every evaluation.
     """
 
-    def __init__(self, write_cls_iou=False, select_metric="mIoU"):
+    def __init__(self, select_metric="mIoU"):
         assert select_metric in _SELECT_METRICS, (
             f"GridProbeEvaluator.select_metric must be one of {_SELECT_METRICS}, "
             f"got {select_metric!r}"
         )
         self.select_metric = select_metric
-        self.write_cls_iou = write_cls_iou
         # Checkpointed state: running best of both metrics per probe (whatever
         # select_metric is), per-class IoU/accuracy/F1 at each probe's best epoch
         # for the selected metric (the epoch whose weights GridProbeCheckpointSaver
@@ -277,8 +274,8 @@ class GridProbeEvaluator(HookBase):
     def load_state_dict(self, state):
         # Called by CheckpointLoader (the first hook) on resume, so raising here
         # aborts before any training step.
-        persisted = state.get("select_metric")
-        if persisted is not None and persisted != self.select_metric:
+        persisted = state["select_metric"]
+        if persisted != self.select_metric:
             raise RuntimeError(
                 f"GridProbeEvaluator.select_metric changed on resume: checkpoint "
                 f"was trained with select_metric={persisted!r}, config now says "
@@ -287,43 +284,12 @@ class GridProbeEvaluator(HookBase):
                 f"reinterpreted. Start a fresh run (new save_path) or restore "
                 f"select_metric={persisted!r}."
             )
-        if persisted is None and self.select_metric != "mIoU":
-            raise RuntimeError(
-                f"Resuming a checkpoint without macro-F1 tracking state with "
-                f"select_metric={self.select_metric!r}: validation macro-F1 "
-                f"history for epochs before this checkpoint is unavailable, so "
-                f"probe_best_*.pth selection would be wrong. Start a fresh run, "
-                f"or set select_metric='mIoU' to resume."
-            )
-        self._best_miou_by_probe = dict(state.get("best_miou_by_probe", {}))
-        self._best_f1_by_probe = dict(state.get("best_f1_by_probe", {}))
-        self._best_cls_iou_by_probe = dict(state.get("best_cls_iou_by_probe", {}))
-        self._best_cls_acc_by_probe = dict(state.get("best_cls_acc_by_probe", {}))
-        self._best_cls_f1_by_probe = dict(state.get("best_cls_f1_by_probe", {}))
-        self._history = list(state.get("history", []))
-
-    def before_train(self):
-        # A resumed checkpoint without GridProbeEvaluator state never calls
-        # load_state_dict (so the select_metric check is skipped), and its restored
-        # trainer.best_metric_value may be on another metric's scale. With
-        # select_metric="macro_f1", reset it so best-checkpoint selection restarts
-        # on the configured metric.
-        best = getattr(self.trainer, "best_metric_value", None)
-        if (
-            getattr(self.trainer.cfg, "resume", False)
-            and self.select_metric != "mIoU"
-            and not self._best_f1_by_probe
-            and best is not None
-            and best != float("-inf")
-        ):
-            self.trainer.logger.warning(
-                "GridProbeEvaluator: resumed a checkpoint with no macro-F1 "
-                "tracking state; resetting trainer.best_metric_value (%.4f, "
-                "likely mIoU-scale) to -inf so selection restarts on %s.",
-                best,
-                self.select_metric,
-            )
-            self.trainer.best_metric_value = float("-inf")
+        self._best_miou_by_probe = dict(state["best_miou_by_probe"])
+        self._best_f1_by_probe = dict(state["best_f1_by_probe"])
+        self._best_cls_iou_by_probe = dict(state["best_cls_iou_by_probe"])
+        self._best_cls_acc_by_probe = dict(state["best_cls_acc_by_probe"])
+        self._best_cls_f1_by_probe = dict(state["best_cls_f1_by_probe"])
+        self._history = list(state["history"])
 
     def after_epoch(self):
         if self.should_evaluate():
@@ -692,17 +658,15 @@ class GridProbeWinnerSelector(HookBase):
                 key=lambda row: row["epoch"],
             )
             for row in winner_history:
-                log_row = {
-                    "Epoch": row["epoch"],
-                    "val/mIoU/winner": row["mIoU"],
-                    "val/mIoU_best/winner": row["mIoU_best"],
-                }
-                # Rows restored from a checkpoint may lack the f1_macro keys.
-                if row.get("f1_macro") is not None:
-                    log_row["val/f1_macro/winner"] = row["f1_macro"]
-                if row.get("f1_macro_best") is not None:
-                    log_row["val/f1_macro_best/winner"] = row["f1_macro_best"]
-                wandb.log(log_row)
+                wandb.log(
+                    {
+                        "Epoch": row["epoch"],
+                        "val/mIoU/winner": row["mIoU"],
+                        "val/mIoU_best/winner": row["mIoU_best"],
+                        "val/f1_macro/winner": row["f1_macro"],
+                        "val/f1_macro_best/winner": row["f1_macro_best"],
+                    }
+                )
 
             names = list(getattr(cfg.data, "names", []) or [])
 

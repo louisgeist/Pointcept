@@ -10,7 +10,6 @@ Please cite our work if the code is helpful to you.
 import os
 import sys
 import argparse
-import warnings
 import multiprocessing as mp
 from torch.nn.parallel import DistributedDataParallel
 
@@ -21,28 +20,20 @@ from pointcept.utils.config import Config, ConfigDict, DictAction
 from pointcept.utils.network_apls import validate_network_apls_eval_cfg
 
 
-def create_ddp_model(model, *, fp16_compression=False, **kwargs):
+def create_ddp_model(model, **kwargs):
     """
     Create a DistributedDataParallel model if there are >1 processes.
     Args:
         model: a torch.nn.Module
-        fp16_compression: add fp16 compression hooks to the ddp object.
-            See more at https://pytorch.org/docs/stable/ddp_comm_hooks.html#torch.distributed.algorithms.ddp_comm_hooks.default_hooks.fp16_compress_hook
         kwargs: other arguments of :module:`torch.nn.parallel.DistributedDataParallel`.
     """
     if comm.get_world_size() == 1:
         return model
-    # kwargs['find_unused_parameters'] = True
     if "device_ids" not in kwargs:
         kwargs["device_ids"] = [comm.get_local_rank()]
         if "output_device" not in kwargs:
             kwargs["output_device"] = [comm.get_local_rank()]
-    ddp = DistributedDataParallel(model, **kwargs)
-    if fp16_compression:
-        from torch.distributed.algorithms.ddp_comm_hooks import default as comm_hooks
-
-        ddp.register_comm_hook(state=None, hook=comm_hooks.fp16_compress_hook)
-    return ddp
+    return DistributedDataParallel(model, **kwargs)
 
 
 def worker_init_fn(worker_id, num_workers, rank, seed):
@@ -107,25 +98,6 @@ def default_argument_parser(epilog=None):
     return parser
 
 
-def _apply_sphere_crop_point_max(obj, point_max: int) -> int:
-    """Recursively set ``point_max`` on every ``type=="SphereCrop"`` dict.
-
-    Applied when the config sets ``override_point_max`` (e.g. to measure peak
-    memory at a given crop size). Returns the number of transforms patched.
-    """
-    n = 0
-    if isinstance(obj, dict):
-        if obj.get("type") == "SphereCrop":
-            obj["point_max"] = int(point_max)
-            n += 1
-        for value in obj.values():
-            n += _apply_sphere_crop_point_max(value, point_max)
-    elif isinstance(obj, (list, tuple)):
-        for value in obj:
-            n += _apply_sphere_crop_point_max(value, point_max)
-    return n
-
-
 def default_config_parser(file_path, options):
     """Load a config file, apply ``--options`` overrides and resolve the training schedule.
 
@@ -158,21 +130,6 @@ def default_config_parser(file_path, options):
 
     if options is not None:
         cfg.merge_from_dict(options)
-
-    cfg_dict = object.__getattribute__(cfg, "_cfg_dict")
-    if "override_point_max" in cfg_dict:
-        point_max = int(cfg_dict["override_point_max"])
-        cfg.point_max = point_max
-        n_patched = _apply_sphere_crop_point_max(cfg_dict, point_max)
-        if n_patched == 0:
-            warnings.warn(
-                f"override_point_max={point_max} was set but no SphereCrop "
-                "transform was found in the config; crop size is unchanged "
-                "(e.g. Sonata SSL uses max_size, and most val/test pipelines "
-                "have no SphereCrop).",
-                UserWarning,
-                stacklevel=2,
-            )
 
     if cfg.seed is None:
         cfg.seed = get_random_seed()

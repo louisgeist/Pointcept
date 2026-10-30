@@ -83,21 +83,20 @@ class IterationTimer(HookBase):
 
 @HOOKS.register_module()
 class InformationWriter(HookBase):
-    def __init__(self, log_interval=1, wandb_log_every_step=False, write_cls_iou=True):
+    def __init__(self, log_interval=1, write_cls_iou=True):
         """
         Args:
             log_interval: Log to console/file every N steps (default 1).
-                          TensorBoard/W&B are still updated every step.
-            wandb_log_every_step: If True, log train_batch/* and params/lr to wandb
-                                  every step. If False (default), log only at epoch
-                                  level to keep .wandb small.
+                          TensorBoard is still updated every step; W&B gets
+                          epoch-level metrics only (plus the per-step gradient
+                          scalars enabled by log_grad_norm_every_step,
+                          grad_norm_lite or grad_norm).
             write_cls_iou: If True, log per-class train IoU to TensorBoard/W&B each
                            epoch (rank-0 minibatches only; same scope as train/mIoU).
         """
         self.curr_iter = 0
         self.model_output_keys = []
         self.log_interval = log_interval
-        self.wandb_log_every_step = wandb_log_every_step
         self.write_cls_iou = write_cls_iou
         # task_name -> running (intersection, union) tensors on CUDA
         self._train_seg_stats = {}
@@ -227,32 +226,25 @@ class InformationWriter(HookBase):
     _GLOBAL_GRAD_STEP_KEYS = frozenset({"gradient/global", "gradient/weight_update"})
 
     @classmethod
-    def _include_in_train_batch(cls, key, log_task_gradient_norms):
-        """Whether key should be written to per-step train_batch (TB/W&B).
+    def _include_in_train_batch(cls, key, log_grad_norm_every_step):
+        """Whether key should be written to per-step train_batch (TensorBoard).
 
         gradient/global and gradient/weight_update are always put_scalar'd for
         epoch averages, but only appear in train_batch when
-        log_task_gradient_norms is True.
+        log_grad_norm_every_step is True.
         """
         if key in cls._GLOBAL_GRAD_STEP_KEYS:
-            return bool(log_task_gradient_norms)
+            return bool(log_grad_norm_every_step)
         return True
 
     @classmethod
-    def _wandb_step_keys(
-        cls, model_output_keys, log_all_steps, log_task_grads, log_lite, log_gn=False
-    ):
-        """Select keys for per-step W&B train_batch logging."""
-        if log_all_steps:
-            return [
-                k
-                for k in model_output_keys
-                if cls._include_in_train_batch(k, log_task_grads)
-            ]
+    def _wandb_step_keys(cls, model_output_keys, log_step_grads, log_lite, log_gn):
+        """Select keys for per-step W&B train_batch logging (W&B otherwise only
+        gets epoch-level metrics, to keep the run small)."""
         step_keys = []
         for key in model_output_keys:
             if key in cls._GLOBAL_GRAD_STEP_KEYS:
-                if log_task_grads:
+                if log_step_grads:
                     step_keys.append(key)
             elif key.startswith("grad_norm/"):
                 if log_gn:
@@ -260,10 +252,7 @@ class InformationWriter(HookBase):
             elif key.startswith("gradient/last_layer/") or key.startswith(
                 "loss_scale/"
             ):
-                if log_lite or log_task_grads:
-                    step_keys.append(key)
-            elif key.startswith("gradient/"):
-                if log_task_grads:
+                if log_lite or log_step_grads:
                     step_keys.append(key)
         return step_keys
 
@@ -304,35 +293,6 @@ class InformationWriter(HookBase):
                     subkey = f"loss/{task_name}"
                     self.trainer.storage.put_scalar(subkey, float(v))
                     scalar_keys.append(subkey)
-
-            task_gradient_norms = self.trainer.comm_info.get("task_gradient_norms")
-            if isinstance(task_gradient_norms, dict):
-                norms_by_task = task_gradient_norms.get("norms")
-                if norms_by_task is None:
-                    norms_by_task = {
-                        task_name: value
-                        for task_name, value in task_gradient_norms.items()
-                        if isinstance(value, dict) and "backbone" in value
-                    }
-                for task_name, norms in norms_by_task.items():
-                    if not isinstance(norms, dict):
-                        continue
-                    for part in ("backbone", "head"):
-                        value = norms.get(part)
-                        if value is None:
-                            continue
-                        subkey = f"gradient/{part}/{task_name}"
-                        self.trainer.storage.put_scalar(subkey, float(value))
-                        scalar_keys.append(subkey)
-
-                backbone_cos = task_gradient_norms.get("backbone_cos", {})
-                if isinstance(backbone_cos, dict):
-                    for pair_key, value in backbone_cos.items():
-                        if value is None:
-                            continue
-                        subkey = f"gradient/backbone_cos/{pair_key}"
-                        self.trainer.storage.put_scalar(subkey, float(value))
-                        scalar_keys.append(subkey)
 
             grad_norm_lite = self.trainer.comm_info.get("grad_norm_lite")
             if isinstance(grad_norm_lite, dict):
@@ -479,14 +439,14 @@ class InformationWriter(HookBase):
             self.trainer.logger.info(self.trainer.comm_info["iter_info"])
         self.trainer.comm_info["iter_info"] = ""  # reset iter info
         if self.trainer.writer is not None:
-            log_task_grads = getattr(self.trainer.cfg, "log_task_gradient_norms", False)
+            log_step_grads = getattr(self.trainer.cfg, "log_grad_norm_every_step", False)
             log_lite = getattr(self.trainer.cfg, "grad_norm_lite", False)
             log_gn = getattr(self.trainer.cfg, "grad_norm", False)
             for name, lr in lrs.items():
                 tag = "params/lr" if name == "" else f"params/lr/{name}"
                 self.trainer.writer.add_scalar(tag, lr, self.curr_iter)
             for key in self.model_output_keys:
-                if not self._include_in_train_batch(key, log_task_grads):
+                if not self._include_in_train_batch(key, log_step_grads):
                     continue
                 self.trainer.writer.add_scalar(
                     "train_batch/" + key,
@@ -494,19 +454,10 @@ class InformationWriter(HookBase):
                     self.curr_iter,
                 )
             if self.trainer.cfg.enable_wandb:
-                log_all_steps = self.wandb_log_every_step
-                if log_all_steps or log_task_grads or log_lite or log_gn:
+                if log_step_grads or log_lite or log_gn:
                     wandb_payload = {"Iter": self.curr_iter}
-                    if log_all_steps:
-                        for name, lr in lrs.items():
-                            key = "params/lr" if name == "" else f"params/lr/{name}"
-                            wandb_payload[key] = lr
                     step_keys = self._wandb_step_keys(
-                        self.model_output_keys,
-                        log_all_steps,
-                        log_task_grads,
-                        log_lite,
-                        log_gn,
+                        self.model_output_keys, log_step_grads, log_lite, log_gn
                     )
                     for key in step_keys:
                         wandb_payload[f"train_batch/{key}"] = (
@@ -820,21 +771,9 @@ class CheckpointLoader(HookBase):
             if self.trainer.cfg.enable_amp:
                 ckpt_scaler = checkpoint["scaler"]
                 if isinstance(self.trainer.scaler, dict):
-                    # Per-probe GradScalers. A checkpoint holding a single
-                    # shared scaler state is broadcast to every probe.
-                    if isinstance(ckpt_scaler, dict) and all(
-                        isinstance(v, dict) and "scale" in v
-                        for v in ckpt_scaler.values()
-                    ):
-                        for name, sc in self.trainer.scaler.items():
-                            sc.load_state_dict(ckpt_scaler[name])
-                    else:
-                        for sc in self.trainer.scaler.values():
-                            sc.load_state_dict(ckpt_scaler)
-                        self.trainer.logger.info(
-                            "=> Restored a single shared GradScaler state into "
-                            "every per-probe scaler"
-                        )
+                    # Per-probe GradScalers (GridProbeTrainer).
+                    for name, sc in self.trainer.scaler.items():
+                        sc.load_state_dict(ckpt_scaler[name])
                 else:
                     self.trainer.scaler.load_state_dict(ckpt_scaler)
 
@@ -865,8 +804,7 @@ class CheckpointLoader(HookBase):
 
 @HOOKS.register_module()
 class PreciseEvaluator(HookBase):
-    def __init__(self, test_last=False):
-        self.test_last = test_last
+    """Run the configured tester on model_best.pth after training."""
 
     def after_train(self):
         from pointcept.engines.test import TESTERS
@@ -882,23 +820,18 @@ class PreciseEvaluator(HookBase):
         cfg = self.trainer.cfg
         test_cfg = dict(cfg=cfg, model=self.trainer.model, **cfg.test)
         tester = TESTERS.build(test_cfg)
-        if self.test_last:
-            self.trainer.logger.info("=> Testing on model_last ...")
-        else:
-            self.trainer.logger.info("=> Testing on model_best ...")
-            best_path = os.path.join(
-                self.trainer.cfg.save_path, "model", "model_best.pth"
-            )
-            checkpoint = torch.load(best_path, weights_only=False)
-            weight = OrderedDict()
-            for key, value in checkpoint["state_dict"].items():
-                if not key.startswith("module."):
-                    key = "module." + key  # xxx.xxx -> module.xxx.xxx
-                # Now all keys contain "module." no matter DDP or not.
-                if comm.get_world_size() == 1:
-                    key = key[7:]  # module.xxx.xxx -> xxx.xxx
-                weight[key] = value
-            tester.model.load_state_dict(weight, strict=True)
+        self.trainer.logger.info("=> Testing on model_best ...")
+        best_path = os.path.join(self.trainer.cfg.save_path, "model", "model_best.pth")
+        checkpoint = torch.load(best_path, weights_only=False)
+        weight = OrderedDict()
+        for key, value in checkpoint["state_dict"].items():
+            if not key.startswith("module."):
+                key = "module." + key  # xxx.xxx -> module.xxx.xxx
+            # Now all keys contain "module." no matter DDP or not.
+            if comm.get_world_size() == 1:
+                key = key[7:]  # module.xxx.xxx -> xxx.xxx
+            weight[key] = value
+        tester.model.load_state_dict(weight, strict=True)
         tester.test()
 
 

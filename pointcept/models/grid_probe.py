@@ -314,9 +314,6 @@ class GridProbeSegmentorV2(nn.Module, LearnedMaskedFeatMixin):
             self.backbone.eval()
         return self
 
-    def backbone_parameters(self):
-        return [p for p in self.backbone.parameters() if p.requires_grad]
-
     def probe_head_parameters(self, name):
         """Trainable parameters of one probe (GridProbeTrainer builds one
         optimizer per probe from them)."""

@@ -16,7 +16,6 @@ import torch
 import torch.distributed as dist
 import torch.nn as nn
 import torch.utils.data
-from packaging import version
 from functools import partial
 
 if sys.version_info >= (3, 10):
@@ -42,7 +41,6 @@ from pointcept.utils.gradient_norm import (
     all_reduce_mean_task_norms,
     build_grad_norm_state,
     combine_weighted_task_losses,
-    compute_task_gradient_norms,
     compute_task_last_layer_grad_norms,
     group_task_losses,
     resolve_grad_norm_lite_scales,
@@ -88,7 +86,6 @@ class TrainerBase:
         self.epoch = 0
         self.start_epoch = 0
         self.max_epoch = 0
-        self.max_iter = 0
         self.comm_info = dict()
         self.data_iterator: Iterator = enumerate([])
         self.storage: EventStorage
@@ -106,29 +103,6 @@ class TrainerBase:
             # See http://engineering.hearsaysocial.com/2013/06/16/circular-references-in-python/
             h.trainer = weakref.proxy(self)
         self.hooks.extend(hooks)
-
-    def train(self):
-        with EventStorage() as self.storage:
-            # => before train
-            self.before_train()
-            for self.epoch in range(self.start_epoch, self.max_epoch):
-                # => before epoch
-                self.before_epoch()
-                # => run_epoch
-                for (
-                    self.comm_info["iter"],
-                    self.comm_info["input_dict"],
-                ) in self.data_iterator:
-                    # => before_step
-                    self.before_step()
-                    # => run_step
-                    self.run_step()
-                    # => after_step
-                    self.after_step()
-                # => after epoch
-                self.after_epoch()
-            # => after train
-            self.after_train()
 
     def before_train(self):
         for h in self.hooks:
@@ -190,12 +164,6 @@ class TrainerBase:
                 "Total end-to-end runtime (all segments, model init -> test end): "
                 f"{total_runtime_seconds:.2f}s ({total_runtime_seconds / 3600.0:.4f}h)"
             )
-        if comm.is_main_process() and hasattr(self, "model"):
-            model_for_debug = (
-                self.model.module if hasattr(self.model, "module") else self.model
-            )
-            if hasattr(model_for_debug, "_print_learned_masked_feat"):
-                model_for_debug._print_learned_masked_feat()
         if comm.is_main_process():
             self.writer.close()
 
@@ -291,12 +259,6 @@ class Trainer(TrainerBase):
             self.after_train()
 
     def run_step(self):
-        if version.parse(torch.__version__) >= version.parse("2.4"):
-            auto_cast = partial(torch.amp.autocast, device_type="cuda")
-        else:
-            # deprecated warning
-            auto_cast = torch.cuda.amp.autocast
-
         input_dict = self.comm_info["input_dict"]
         for key in input_dict.keys():
             if isinstance(input_dict[key], torch.Tensor):
@@ -307,7 +269,8 @@ class Trainer(TrainerBase):
             self.optimizer.zero_grad()
 
         # Forward pass
-        with auto_cast(
+        with torch.amp.autocast(
+            "cuda",
             enabled=self.cfg.enable_amp, dtype=AMP_DTYPE[self.cfg.amp_dtype]
         ):
             output_dict = self.model(input_dict)
@@ -324,11 +287,6 @@ class Trainer(TrainerBase):
                     raise AttributeError(
                         "grad_norm_lite requires a model with "
                         "last_backbone_layer_parameters() (e.g. MultiTaskSegmentorV2)."
-                    )
-                if self._grad_norm_lite_ema is None:
-                    self._grad_norm_lite_ema = GradNormLiteEMA(
-                        alpha=getattr(self.cfg, "grad_norm_lite_ema_alpha", 0.1),
-                        eps=getattr(self.cfg, "grad_norm_lite_eps", 1e-3),
                     )
                 interval = int(getattr(self.cfg, "grad_norm_lite_interval", 100))
                 lite_info = {}
@@ -398,8 +356,6 @@ class Trainer(TrainerBase):
                         "grad_norm requires a model with "
                         "last_backbone_layer_parameters() (e.g. MultiTaskSegmentorV2)."
                     )
-                if self._grad_norm_state is None:
-                    self._grad_norm_state = build_grad_norm_state(self.cfg, model)
                 gn_state = self._grad_norm_state
                 task_groups = getattr(self.cfg, "grad_norm_task_groups", None)
                 interval = int(getattr(self.cfg, "grad_norm_interval", 1))
@@ -452,31 +408,6 @@ class Trainer(TrainerBase):
                 self.comm_info.pop("grad_norm", None)
         else:
             self.comm_info.pop("grad_norm", None)
-
-        if getattr(self.cfg, "log_task_gradient_norms", False):
-            if isinstance(loss_by_task, dict) and loss_by_task:
-                if hasattr(model, "backbone_parameters"):
-                    task_weights = getattr(model, "task_weights", {})
-                    amp_probe_scale = float(
-                        getattr(
-                            self.cfg,
-                            "grad_norm_amp_probe_scale",
-                            1024.0 if self.cfg.enable_amp else 1.0,
-                        )
-                    )
-                    self.comm_info["task_gradient_norms"] = compute_task_gradient_norms(
-                        model,
-                        loss_by_task,
-                        task_weights,
-                        self.cfg.gradient_accumulation_steps,
-                        probe_scale=amp_probe_scale,
-                    )
-                else:
-                    self.comm_info.pop("task_gradient_norms", None)
-            else:
-                self.comm_info.pop("task_gradient_norms", None)
-        else:
-            self.comm_info.pop("task_gradient_norms", None)
 
         # Backward pass
         if self.cfg.enable_amp:
@@ -715,13 +646,7 @@ class Trainer(TrainerBase):
         return build_scheduler(self.cfg.scheduler, self.optimizer)
 
     def build_scaler(self):
-        if version.parse(torch.__version__) >= version.parse("2.4"):
-            grad_scaler = partial(torch.amp.GradScaler, device="cuda")
-        else:
-            # deprecated warning
-            grad_scaler = torch.cuda.amp.GradScaler
-        scaler = grad_scaler() if self.cfg.enable_amp else None
-        return scaler
+        return torch.amp.GradScaler("cuda") if self.cfg.enable_amp else None
 
 
 @TRAINERS.register_module("GridProbeTrainer")
@@ -744,7 +669,7 @@ class GridProbeTrainer(Trainer):
     an 80 GB GPU), which bounds the grid size.
 
     The multitask-only options (grad_norm_lite, grad_norm,
-    log_task_gradient_norms, skip_nan_grad) are ignored by this trainer.
+    log_grad_norm_every_step, skip_nan_grad) are ignored by this trainer.
     """
 
     def _raw_model(self):
@@ -796,19 +721,11 @@ class GridProbeTrainer(Trainer):
     def build_scaler(self):
         if not self.cfg.enable_amp:
             return None
-        if version.parse(torch.__version__) >= version.parse("2.4"):
-            grad_scaler = partial(torch.amp.GradScaler, device="cuda")
-        else:
-            grad_scaler = torch.cuda.amp.GradScaler
-        return {name: grad_scaler() for name in self._raw_model().probe_names}
+        return {
+            name: torch.amp.GradScaler("cuda") for name in self._raw_model().probe_names
+        }
 
     def run_step(self):
-        if version.parse(torch.__version__) >= version.parse("2.4"):
-            auto_cast = partial(torch.amp.autocast, device_type="cuda")
-        else:
-            # deprecated warning
-            auto_cast = torch.cuda.amp.autocast
-
         input_dict = self.comm_info["input_dict"]
         for key in input_dict.keys():
             if isinstance(input_dict[key], torch.Tensor):
@@ -823,7 +740,8 @@ class GridProbeTrainer(Trainer):
         # every active probe's (optionally AMP-scaled) loss. This is faster than
         # one backward per probe; see the class docstring for the memory cost.
         raw_model = self._raw_model()
-        with auto_cast(
+        with torch.amp.autocast(
+            "cuda",
             enabled=self.cfg.enable_amp, dtype=AMP_DTYPE[self.cfg.amp_dtype]
         ):
             feat_by_norm, point, active = raw_model.prepare_batch(input_dict)

@@ -24,9 +24,7 @@ clip_grad = 3.0
 # Skip optimizer/scheduler when global grad L2 is NaN/Inf (all-reduced across ranks).
 skip_nan_grad = True
 # Log the global gradient norm and weight update every iteration (helps catch divergence).
-# The per-task breakdown this flag also enables needs model.backbone_parameters, which
-# Sonata does not have, so it is skipped.
-log_task_gradient_norms = True
+log_grad_norm_every_step = True
 empty_cache = False
 enable_amp = True
 amp_dtype = "bfloat16"

@@ -209,73 +209,6 @@ class TestGridProbeSelectMetric(unittest.TestCase):
         self.assertTrue(hasattr(GridProbeCheckpointSaver, "after_epoch"))
 
 
-class _FakeLogger:
-    def info(self, *a, **k):
-        pass
-
-    def warning(self, *a, **k):
-        pass
-
-
-class _FakeCfg:
-    def __init__(self, resume=False):
-        self.resume = resume
-
-
-class _FakeTrainer:
-    def __init__(self, resume=False, best_metric_value=float("-inf")):
-        self.logger = _FakeLogger()
-        self.cfg = _FakeCfg(resume=resume)
-        self.best_metric_value = best_metric_value
-
-
-class TestGridProbeResumeDesyncRobustness(unittest.TestCase):
-    """A checkpoint without macro-F1 state, resumed under select_metric='mIoU', restores
-    _best_miou_by_probe but leaves _best_f1_by_probe empty (the reverse cannot happen).
-    Reporting must not KeyError on that."""
-
-    def test_best_helpers_return_nan_when_untracked(self):
-        hook = GridProbeEvaluator()  # mIoU
-        hook._best_miou_by_probe = {"p0": 0.5}
-        self.assertEqual(hook.best_miou("p0"), 0.5)
-        self.assertTrue(np.isnan(hook.best_macro_f1("p0")))
-        self.assertTrue(np.isnan(hook.best_miou("absent")))
-
-    def test_after_train_does_not_crash_with_empty_f1_dict(self):
-        hook = GridProbeEvaluator()  # mIoU selection
-        hook.trainer = _FakeTrainer()
-        hook._best_miou_by_probe = {"p0": 0.4, "p1": 0.6}
-        hook._best_f1_by_probe = {}  # checkpoint without F1 state, no eval since resume
-        hook.after_train()  # must not raise
-
-    def test_before_train_resets_stale_best_metric_value(self):
-        # resume, macro_f1 selection, no restored F1 state, finite (mIoU-scale)
-        # best_metric_value -> reset to -inf.
-        hook = GridProbeEvaluator(select_metric="macro_f1")
-        hook.trainer = _FakeTrainer(resume=True, best_metric_value=0.55)
-        hook.before_train()
-        self.assertEqual(hook.trainer.best_metric_value, float("-inf"))
-
-    def test_before_train_noop_on_fresh_run(self):
-        hook = GridProbeEvaluator(select_metric="macro_f1")
-        hook.trainer = _FakeTrainer(resume=False, best_metric_value=float("-inf"))
-        hook.before_train()
-        self.assertEqual(hook.trainer.best_metric_value, float("-inf"))
-
-    def test_before_train_noop_when_f1_state_present(self):
-        hook = GridProbeEvaluator(select_metric="macro_f1")
-        hook.trainer = _FakeTrainer(resume=True, best_metric_value=0.7)
-        hook._best_f1_by_probe = {"p0": 0.7}  # genuine macro_f1 resume
-        hook.before_train()
-        self.assertEqual(hook.trainer.best_metric_value, 0.7)
-
-    def test_before_train_noop_under_miou_selection(self):
-        hook = GridProbeEvaluator()  # default mIoU
-        hook.trainer = _FakeTrainer(resume=True, best_metric_value=0.5)
-        hook.before_train()
-        self.assertEqual(hook.trainer.best_metric_value, 0.5)
-
-
 class TestGridProbeHistoryCsvFieldnames(unittest.TestCase):
     def test_fieldnames_order_is_append_only(self):
         from pointcept.engines.hooks.grid_probe import _HISTORY_CSV_FIELDNAMES
@@ -285,7 +218,7 @@ class TestGridProbeHistoryCsvFieldnames(unittest.TestCase):
             ("epoch", "probe_name", "mIoU", "mIoU_best", "f1_macro", "f1_macro_best"),
         )
 
-    def test_short_row_without_f1_keys_does_not_raise(self):
+    def test_writes_header(self):
         import tempfile
 
         from pointcept.engines.hooks.grid_probe import _atomic_write_history_csv
@@ -294,7 +227,6 @@ class TestGridProbeHistoryCsvFieldnames(unittest.TestCase):
             _atomic_write_history_csv(
                 f.name,
                 [
-                    {"epoch": 1, "probe_name": "p0", "mIoU": 0.5, "mIoU_best": 0.5},
                     {
                         "epoch": 2,
                         "probe_name": "p0",

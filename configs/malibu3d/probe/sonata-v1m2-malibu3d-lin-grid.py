@@ -321,7 +321,7 @@ hooks = [
     ),
     dict(type="IterationTimer", warmup_iter=2),
     dict(type="InformationWriter"),
-    dict(type="GridProbeEvaluator", write_cls_iou=True),
+    dict(type="GridProbeEvaluator"),
     dict(type="GridProbeCheckpointSaver"),
     dict(type="CheckpointSaver", save_freq=None),
     dict(type="MetricsJsonWriter"),

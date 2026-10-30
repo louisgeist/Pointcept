@@ -229,7 +229,7 @@ class TesterBase:
 
     @staticmethod
     def collate_fn(batch):
-        raise collate_fn(batch)
+        return collate_fn(batch)
 
 
 @TESTERS.register_module()
@@ -554,12 +554,10 @@ class SemSegTester(TesterBase):
                 pred=batch_pred[b_idx],
                 segment=batch_segments[b_idx],
                 data_name=batch_data_names[b_idx],
-                save_path=save_path,
                 intersection_meter=intersection_meter,
                 union_meter=union_meter,
                 target_meter=target_meter,
                 record=record,
-                log_scene=False,
             )
         prog.step(cached=all(batch_cached))
 
@@ -568,17 +566,10 @@ class SemSegTester(TesterBase):
         pred,
         segment,
         data_name,
-        save_path,
         intersection_meter,
         union_meter,
         target_meter,
         record,
-        logger=None,
-        loader_idx=0,
-        start=None,
-        batch_time=None,
-        update_batch_time=True,
-        log_scene=True,
     ):
         intersection, union, target = intersection_and_union(
             pred, segment, self.cfg.data.num_classes, self.cfg.data.ignore_index
@@ -587,36 +578,6 @@ class SemSegTester(TesterBase):
         union_meter.update(union)
         target_meter.update(target)
         record[data_name] = dict(intersection=intersection, union=union, target=target)
-
-        if not log_scene:
-            return
-
-        mask = union != 0
-        iou_class = intersection / (union + 1e-10)
-        iou = np.mean(iou_class[mask])
-        acc = sum(intersection) / (sum(target) + 1e-10)
-
-        m_iou = np.mean(intersection_meter.sum / (union_meter.sum + 1e-10))
-        m_acc = np.mean(intersection_meter.sum / (target_meter.sum + 1e-10))
-
-        if update_batch_time and batch_time is not None and start is not None:
-            batch_time.update(time.time() - start)
-        logger.info(
-            "Test: {} [{}/{}]-{} "
-            "Batch {batch_time.val:.3f} ({batch_time.avg:.3f}) "
-            "Accuracy {acc:.4f} ({m_acc:.4f}) "
-            "mIoU {iou:.4f} ({m_iou:.4f})".format(
-                data_name,
-                loader_idx + 1,
-                len(self.test_loader),
-                segment.size if hasattr(segment, "size") else len(segment),
-                batch_time=batch_time,
-                acc=acc,
-                m_acc=m_acc,
-                iou=iou,
-                m_iou=m_iou,
-            )
-        )
 
     @staticmethod
     def collate_fn(batch):

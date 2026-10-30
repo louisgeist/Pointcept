@@ -68,7 +68,7 @@ hooks = [
     dict(type="InformationWriter", log_interval=100),
     dict(type="SemSegEvaluator", write_cls_iou=True),
     dict(type="CheckpointSaver", save_freq=None),
-    dict(type="PreciseEvaluator", test_last=False),
+    dict(type="PreciseEvaluator"),
 ]
 
 test = dict(type="SemSegTester", verbose=True)
