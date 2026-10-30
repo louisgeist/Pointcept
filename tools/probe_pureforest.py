@@ -164,7 +164,7 @@ def build_extractor(cfg, device):
 
         install_sdpa_flash_shim(module)
     elif backbone_type == "PT-v3-malibu":
-        import pointcept.models.point_transformer_v3.point_transformer_v3_malibu as module
+        import pointcept.models.point_transformer_v3.point_transformer_v3m2_sonata as module
 
         install_sdpa_flash_shim(module)
     model = build_model(model_cfg)

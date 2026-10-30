@@ -735,7 +735,7 @@ def main():
         os.makedirs(args.out, exist_ok=True)
         if args.stage == "all":
             # One process per stage: building every config leaves global CUDA/spconv state behind that shifts
-            # PT-v3m1 forwards by ~1e-3 relative when the forward stage runs in the same process.
+            # PTv3 forwards by ~1e-3 relative when the forward stage runs in the same process.
             for stage in ("build", "forward", "train"):
                 cmd = [
                     sys.executable,
