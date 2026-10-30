@@ -9,7 +9,6 @@ returned under ``category``.
 
 import os
 from copy import deepcopy
-from functools import lru_cache
 
 import numpy as np
 from torch.utils.data import Dataset
@@ -26,23 +25,19 @@ from pointcept.datasets.preprocessing.pureforest.preprocess_pureforest import (
     COORD_SCALE_M,
 )
 
-# PureForest test patches excluded with ``exclude_malibu3d_leakage_tiles=True``: every
-# patch of a forest (BD Foret polygon) that overlaps a MALiBU3D train/val tile, so that
-# backbones trained on MALiBU3D are not tested on areas they saw. See the file header.
-MALIBU3D_LEAKAGE_EXCLUDE_FILE = os.path.join(
-    os.path.dirname(__file__),
-    "preprocessing",
-    "pureforest",
-    "malibu3d_leakage_excluded_test_tiles.txt",
-)
+# PureForest test patches excluded with ``exclude_malibu3d_leakage_tiles=True``, so that
+# backbones trained on MALiBU3D are not tested on areas they saw. PureForest splits at
+# the forest level (BD Foret polygon, ``bdforetv2_id``) to control spatial
+# autocorrelation; the same logic is applied across datasets. Intersecting (EPSG:2154)
+# the PureForest test patches (metadata/PureForest-patches.gpkg) with the footprints of
+# the MALiBU3D train/val tiles flags 2 forests, bdforetv2_id 275 (Quercus_pubescens-C0-730,
+# dept 046) and 442 (Quercus_robur-C0-389, dept 032): every test patch of these forests
+# (2170 / 52935, 4.10%) is excluded. Patch ids are ``<forest>_<row>_<col>``.
+MALIBU3D_LEAKAGE_FORESTS = ("Quercus_pubescens-C0-730", "Quercus_robur-C0-389")
 
 
-@lru_cache(maxsize=1)
-def _load_malibu3d_leakage_excluded_tiles():
-    with open(MALIBU3D_LEAKAGE_EXCLUDE_FILE) as f:
-        return frozenset(
-            line.strip() for line in f if line.strip() and not line.startswith("#")
-        )
+def _is_malibu3d_leakage_tile(name):
+    return name.startswith(tuple(f"{forest}_" for forest in MALIBU3D_LEAKAGE_FORESTS))
 
 
 @DATASETS.register_module()
@@ -106,8 +101,7 @@ class PureForestDataset(Dataset):
         if not names:
             raise FileNotFoundError(f"No preprocessed scenes under {split_dir}.")
         if self.exclude_malibu3d_leakage_tiles:
-            excluded = _load_malibu3d_leakage_excluded_tiles()
-            filtered = [name for name in names if name not in excluded]
+            filtered = [name for name in names if not _is_malibu3d_leakage_tile(name)]
             logger = get_root_logger()
             logger.info(
                 "PureForest {} set: excluded {} / {} MALiBU3D-trainval-leaking tile(s).".format(

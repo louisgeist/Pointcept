@@ -42,7 +42,7 @@ python pointcept/datasets/preprocessing/malibu3d/rasterize_network.py \
 - A tile with `has_roads_graph` (`ROADS`) = True whose ROADS graph is missing is an error.
 - A tile without any positive pixel gets no `network.npy`, only its grid in `meta.json["network"]` with
   `"empty": true`; `MALiBU3DDataset` then uses an all-zero mask.
-- A tile without `coord.npy` is an error, unless it is listed in `--missing_tiles_file`. Other options:
+- A tile without `coord.npy` is an error. Other options:
   `--splits`, `--pixel_m`, `--force_reload_bounds` (recompute the tile bounding box instead of reading it from
   `meta.json`), `--max_rois` (debug).
 

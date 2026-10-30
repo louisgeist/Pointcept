@@ -694,36 +694,11 @@ class ChromaticJitter(object):
         return data_dict
 
 
-@TRANSFORMS.register_module()
-class RandomColorGrayScale(object):
-    def __init__(self, p):
-        self.p = p
-
-    @staticmethod
-    def rgb_to_grayscale(color, num_output_channels=1):
-        if color.shape[-1] < 3:
-            raise TypeError(
-                "Input color should have at least 3 dimensions, but found {}".format(
-                    color.shape[-1]
-                )
-            )
-
-        if num_output_channels not in (1, 3):
-            raise ValueError("num_output_channels should be either 1 or 3")
-
-        r, g, b = color[..., 0], color[..., 1], color[..., 2]
-        gray = (0.2989 * r + 0.587 * g + 0.114 * b).astype(color.dtype)
-        gray = np.expand_dims(gray, axis=-1)
-
-        if num_output_channels == 3:
-            gray = np.broadcast_to(gray, color.shape)
-
-        return gray
-
-    def __call__(self, data_dict):
-        if np.random.rand() < self.p:
-            data_dict["color"] = self.rgb_to_grayscale(data_dict["color"], 3)
-        return data_dict
+def _rgb_to_grayscale(color):
+    """(N, 3+) color -> (N, 1) luma (ITU-R 601-2 weights), same dtype."""
+    r, g, b = color[..., 0], color[..., 1], color[..., 2]
+    gray = (0.2989 * r + 0.587 * g + 0.114 * b).astype(color.dtype)
+    return np.expand_dims(gray, axis=-1)
 
 
 @TRANSFORMS.register_module()
@@ -832,7 +807,7 @@ class RandomColorJitter(object):
             raise ValueError(
                 "contrast_factor ({}) is not non-negative.".format(contrast_factor)
             )
-        mean = np.mean(RandomColorGrayScale.rgb_to_grayscale(color))
+        mean = np.mean(_rgb_to_grayscale(color))
         return self.blend(color, mean, contrast_factor)
 
     def adjust_saturation(self, color, saturation_factor):
@@ -840,7 +815,7 @@ class RandomColorJitter(object):
             raise ValueError(
                 "saturation_factor ({}) is not non-negative.".format(saturation_factor)
             )
-        gray = RandomColorGrayScale.rgb_to_grayscale(color)
+        gray = _rgb_to_grayscale(color)
         return self.blend(color, gray, saturation_factor)
 
     def adjust_hue(self, color, hue_factor):
@@ -907,74 +882,6 @@ class RandomColorJitter(object):
                 )
             elif fn_id == 3 and hue_factor is not None and np.random.rand() < self.p:
                 data_dict["color"] = self.adjust_hue(data_dict["color"], hue_factor)
-        return data_dict
-
-
-@TRANSFORMS.register_module()
-class HueSaturationTranslation(object):
-    @staticmethod
-    def rgb_to_hsv(rgb):
-        # Translated from source of colorsys.rgb_to_hsv
-        # r,g,b should be a numpy arrays with values between 0 and 255
-        # rgb_to_hsv returns an array of floats between 0.0 and 1.0.
-        rgb = rgb.astype("float")
-        hsv = np.zeros_like(rgb)
-        # in case an RGBA array was passed, just copy the A channel
-        hsv[..., 3:] = rgb[..., 3:]
-        r, g, b = rgb[..., 0], rgb[..., 1], rgb[..., 2]
-        maxc = np.max(rgb[..., :3], axis=-1)
-        minc = np.min(rgb[..., :3], axis=-1)
-        hsv[..., 2] = maxc
-        mask = maxc != minc
-        hsv[mask, 1] = (maxc - minc)[mask] / maxc[mask]
-        rc = np.zeros_like(r)
-        gc = np.zeros_like(g)
-        bc = np.zeros_like(b)
-        rc[mask] = (maxc - r)[mask] / (maxc - minc)[mask]
-        gc[mask] = (maxc - g)[mask] / (maxc - minc)[mask]
-        bc[mask] = (maxc - b)[mask] / (maxc - minc)[mask]
-        hsv[..., 0] = np.select(
-            [r == maxc, g == maxc], [bc - gc, 2.0 + rc - bc], default=4.0 + gc - rc
-        )
-        hsv[..., 0] = (hsv[..., 0] / 6.0) % 1.0
-        return hsv
-
-    @staticmethod
-    def hsv_to_rgb(hsv):
-        # Translated from source of colorsys.hsv_to_rgb
-        # h,s should be a numpy arrays with values between 0.0 and 1.0
-        # v should be a numpy array with values between 0.0 and 255.0
-        # hsv_to_rgb returns an array of uints between 0 and 255.
-        rgb = np.empty_like(hsv)
-        rgb[..., 3:] = hsv[..., 3:]
-        h, s, v = hsv[..., 0], hsv[..., 1], hsv[..., 2]
-        i = (h * 6.0).astype("uint8")
-        f = (h * 6.0) - i
-        p = v * (1.0 - s)
-        q = v * (1.0 - s * f)
-        t = v * (1.0 - s * (1.0 - f))
-        i = i % 6
-        conditions = [s == 0.0, i == 1, i == 2, i == 3, i == 4, i == 5]
-        rgb[..., 0] = np.select(conditions, [v, q, p, p, t, v], default=v)
-        rgb[..., 1] = np.select(conditions, [v, v, v, q, p, p], default=t)
-        rgb[..., 2] = np.select(conditions, [v, p, t, v, v, q], default=p)
-        return rgb.astype("uint8")
-
-    def __init__(self, hue_max=0.5, saturation_max=0.2):
-        self.hue_max = hue_max
-        self.saturation_max = saturation_max
-
-    def __call__(self, data_dict):
-        if "color" in data_dict.keys():
-            # Assume color[:, :3] is rgb
-            hsv = HueSaturationTranslation.rgb_to_hsv(data_dict["color"][:, :3])
-            hue_val = (np.random.rand() - 0.5) * 2 * self.hue_max
-            sat_ratio = 1 + (np.random.rand() - 0.5) * 2 * self.saturation_max
-            hsv[..., 0] = np.remainder(hue_val + hsv[..., 0] + 1, 1)
-            hsv[..., 1] = np.clip(sat_ratio * hsv[..., 1], 0, 1)
-            data_dict["color"][:, :3] = np.clip(
-                HueSaturationTranslation.hsv_to_rgb(hsv), 0, 255
-            )
         return data_dict
 
 
@@ -1091,30 +998,19 @@ class GridSample(object):
         return_inverse=False,
         return_grid_coord=False,
         return_min_coord=False,
-        return_displacement=False,
-        project_displacement=False,
         test_single_fragment=False,
-        voxel_repr="point",
     ):
         # test_single_fragment (test mode only): one fragment with one point per voxel
         # instead of count.max() fragments; an inverse map is always returned.
-        # voxel_repr (test mode only):
-        # - "point": keep one real point per voxel (i-th after hash sort; first if
-        #   test_single_fragment=True).
-        # - "centroid": replace coord/color/strength by their per-voxel mean
-        #   (requires test_single_fragment=True).
-        self.grid_size = grid_size
-        self.hash = self.fnv_hash_vec if hash_type == "fnv" else self.ravel_hash_vec
+        assert hash_type == "fnv", "only the FNV-1a voxel hash is supported"
         assert mode in ["train", "test"]
-        assert voxel_repr in ["point", "centroid"]
+        self.grid_size = grid_size
+        self.hash = self.fnv_hash_vec
         self.mode = mode
         self.return_inverse = return_inverse
         self.return_grid_coord = return_grid_coord
         self.return_min_coord = return_min_coord
-        self.return_displacement = return_displacement
-        self.project_displacement = project_displacement
         self.test_single_fragment = test_single_fragment
-        self.voxel_repr = voxel_repr
 
     def __call__(self, data_dict):
         assert "coord" in data_dict.keys()
@@ -1129,7 +1025,6 @@ class GridSample(object):
         grid_coord = np.floor(scaled_coord).astype(int)
         min_coord = grid_coord.min(0)
         grid_coord -= min_coord
-        scaled_coord -= min_coord
         min_coord = min_coord * np.array(self.grid_size)
         key = self.hash(grid_coord)
         idx_sort = np.argsort(key)
@@ -1141,19 +1036,7 @@ class GridSample(object):
                 + np.random.randint(0, count.max(), count.size) % count
             )
             idx_unique = idx_sort[idx_select]
-            if "sampled_index" in data_dict:
-                # for ScanNet data efficient, we need to make sure labeled point is sampled.
-                idx_unique = np.unique(
-                    np.append(idx_unique, data_dict["sampled_index"])
-                )
-                mask = np.zeros_like(data_dict["segment"]).astype(bool)
-                mask[data_dict["sampled_index"]] = True
-                data_dict["sampled_index"] = np.where(mask[idx_unique])[0]
             data_dict = index_operator(data_dict, idx_unique)
-            if "frame_pcd_offset" in data_dict:
-                data_dict["frame_pcd_offset"] = self._recompute_offsets(
-                    data_dict["frame_pcd_offset"], idx_unique
-                )
             if self.return_inverse:
                 data_dict["inverse"] = np.zeros_like(inverse)
                 data_dict["inverse"][idx_sort] = inverse
@@ -1164,59 +1047,19 @@ class GridSample(object):
                     data_dict["index_valid_keys"].append("grid_coord")
             if self.return_min_coord:
                 data_dict["min_coord"] = min_coord.reshape([1, 3])
-            if self.return_displacement:
-                displacement = (
-                    scaled_coord - grid_coord - 0.5
-                )  # [0, 1] -> [-0.5, 0.5] displacement to center
-                if self.project_displacement:
-                    displacement = np.sum(
-                        displacement * data_dict["normal"], axis=-1, keepdims=True
-                    )
-                data_dict["displacement"] = displacement[idx_unique]
-                if "displacement" not in data_dict["index_valid_keys"]:
-                    data_dict["index_valid_keys"].append("displacement")
             return data_dict
 
-        elif self.mode == "test":  # test mode
+        else:  # test mode
             # When test_single_fragment=True: one point per voxel, one fragment; inverse
             # maps each full-scene point to its voxel id so test can broadcast label.
-            if self.voxel_repr == "centroid" and not self.test_single_fragment:
-                raise ValueError(
-                    "voxel_repr='centroid' requires test_single_fragment=True "
-                    "(centroid is a single representative per voxel)."
-                )
             num_fragments = 1 if self.test_single_fragment else count.max()
             data_part_list = []
             starts = np.cumsum(np.insert(count, 0, 0)[0:-1])
-            mean_feats = None
-            if self.voxel_repr == "centroid":
-                # Mean continuous features per voxel (coord, color, strength).
-                count_f = count.astype(np.float64)
-                mean_feats = {}
-                for key in ("coord", "color", "strength"):
-                    if key not in data_dict:
-                        continue
-                    vals = data_dict[key][idx_sort]
-                    if vals.ndim == 1:
-                        mean_feats[key] = (
-                            np.add.reduceat(vals, starts) / count_f
-                        ).astype(vals.dtype, copy=False)
-                    else:
-                        mean_feats[key] = (
-                            np.add.reduceat(vals, starts, axis=0) / count_f[:, None]
-                        ).astype(vals.dtype, copy=False)
             for i in range(num_fragments):
                 idx_select = starts + i % count
                 idx_part = idx_sort[idx_select]
                 data_part = index_operator(data_dict, idx_part, duplicate=True)
                 data_part["index"] = idx_part
-                if mean_feats is not None:
-                    for key, mean_val in mean_feats.items():
-                        data_part[key] = mean_val.copy()
-                if "frame_pcd_offset" in data_dict:
-                    data_part["frame_pcd_offset"] = self._recompute_offsets(
-                        data_dict["frame_pcd_offset"], idx_part
-                    )
                 if self.return_inverse or self.test_single_fragment:
                     data_part["inverse"] = np.zeros_like(inverse)
                     data_part["inverse"][idx_sort] = inverse
@@ -1229,62 +1072,8 @@ class GridSample(object):
                         data_part["index_valid_keys"].append("grid_coord")
                 if self.return_min_coord:
                     data_part["min_coord"] = min_coord.reshape([1, 3])
-                if self.return_displacement:
-                    displacement = (
-                        scaled_coord - grid_coord - 0.5
-                    )  # [0, 1] -> [-0.5, 0.5] displacement to center
-                    if self.project_displacement:
-                        displacement = np.sum(
-                            displacement * data_dict["normal"], axis=-1, keepdims=True
-                        )
-                    data_part["displacement"] = displacement[idx_part]
-                    if "displacement" not in data_part["index_valid_keys"]:
-                        data_part["index_valid_keys"].append("displacement")
                 data_part_list.append(data_part)
             return data_part_list
-        else:
-            raise NotImplementedError
-
-    @staticmethod
-    def _recompute_offsets(origin_offsets, sampled_indices):
-        """
-        Args:
-            origin_offsets (np.ndarray) [N1, N1+N2, ...]
-            sampled_indices (np.ndarray)
-
-        Returns:
-            np.ndarray: [C1, C1+C2, ...]。
-        """
-        if len(origin_offsets) == 0:
-            return np.array([], dtype=origin_offsets.dtype)
-
-        standard_format_offsets = np.insert(origin_offsets, 0, 0)
-        frame_assignment = np.searchsorted(
-            standard_format_offsets, sampled_indices, side="right"
-        )
-        new_offset_dict = {}
-        for frame_id in range(1, len(origin_offsets) + 1):
-            new_offset_dict[frame_id - 1] = np.where(frame_assignment == frame_id)[0]
-        return new_offset_dict
-
-    @staticmethod
-    def ravel_hash_vec(arr):
-        """
-        Ravel the coordinates after subtracting the min coordinates.
-        """
-        assert arr.ndim == 2
-        arr = arr.copy()
-        arr -= arr.min(0)
-        arr = arr.astype(np.uint64, copy=False)
-        arr_max = arr.max(0).astype(np.uint64) + 1
-
-        keys = np.zeros(arr.shape[0], dtype=np.uint64)
-        # Fortran style indexing
-        for j in range(arr.shape[1] - 1):
-            keys += arr[:, j]
-            keys *= arr_max[j + 1]
-        keys += arr[:, -1]
-        return keys
 
     @staticmethod
     def fnv_hash_vec(arr):
@@ -1306,45 +1095,18 @@ class GridSample(object):
 
 @TRANSFORMS.register_module()
 class SphereCrop(object):
-    def __init__(self, point_max=80000, sample_rate=None, mode="random"):
+    """Keep the point_max points nearest to a random point of the scene."""
+
+    def __init__(self, point_max=80000, mode="random"):
+        assert mode == "random"
         self.point_max = point_max
-        self.sample_rate = sample_rate
-        assert mode in ["random", "center", "all", "given"]
-        self.mode = mode
 
     def __call__(self, data_dict):
-        point_max = (
-            int(self.sample_rate * data_dict["coord"].shape[0])
-            if self.sample_rate is not None
-            else self.point_max
-        )
-
         assert "coord" in data_dict.keys()
-        if data_dict["coord"].shape[0] > point_max:
-            if self.mode == "random":
-                center = data_dict["coord"][
-                    np.random.randint(data_dict["coord"].shape[0])
-                ]
-            elif self.mode == "center":
-                center = data_dict["coord"][data_dict["coord"].shape[0] // 2]
-            elif self.mode == "given":
-                given_index = data_dict["correspondence"].reshape(
-                    data_dict["correspondence"].shape[0], -1
-                )
-                given_index = np.all(
-                    given_index != np.ones_like(given_index[0]) * -1, axis=1
-                )
-                given_coord = data_dict["coord"][given_index]
-                if given_coord.shape[0] == 0:
-                    center = data_dict["coord"][
-                        np.random.randint(data_dict["coord"].shape[0])
-                    ]
-                else:
-                    center = np.mean(given_coord, axis=0)
-            else:
-                raise NotImplementedError
+        if data_dict["coord"].shape[0] > self.point_max:
+            center = data_dict["coord"][np.random.randint(data_dict["coord"].shape[0])]
             idx_crop = np.argsort(np.sum(np.square(data_dict["coord"] - center), 1))[
-                :point_max
+                : self.point_max
             ]
             data_dict = index_operator(data_dict, idx_crop)
         return data_dict
@@ -1362,6 +1124,8 @@ class ShufflePoint(object):
 
 @TRANSFORMS.register_module()
 class MultiViewGenerator(object):
+    """Sonata global/local view sampling (point-only: no image correspondences)."""
+
     def __init__(
         self,
         global_view_num=2,
@@ -1372,13 +1136,9 @@ class MultiViewGenerator(object):
         global_transform=None,
         local_transform=None,
         max_size=65536,
-        enc2d_max_size=102400,
-        enc2d_scale=(0.8, 1),
         center_height_scale=(0, 1),
-        shared_global_view=False,
-        view_keys=("coord", "origin_coord", "color", "normal", "correspondence"),
-        static_view_keys=("name", "img_num"),
-        if_frame_selected=False,
+        view_keys=("coord", "origin_coord", "color", "normal"),
+        static_view_keys=("name",),
     ):
         self.global_view_num = global_view_num
         self.global_view_scale = global_view_scale
@@ -1388,53 +1148,23 @@ class MultiViewGenerator(object):
         self.global_transform = Compose(global_transform)
         self.local_transform = Compose(local_transform)
         self.max_size = max_size
-        self.enc2d_max_size = enc2d_max_size
-        self.enc2d_scale = enc2d_scale
         self.center_height_scale = center_height_scale
-        self.shared_global_view = shared_global_view
         self.view_keys = view_keys
         self.static_view_keys = static_view_keys
-        self.if_frame_selected = if_frame_selected
         assert "coord" in view_keys
 
-    def get_view(
-        self, point, center, scale, if_enc2d=False, frame_num=1, if_frame_selected=False
-    ):
+    def get_view(self, point, center, scale):
         coord = point["coord"]
         max_size = min(self.max_size, coord.shape[0])
-        enc2d_max_size = min(self.enc2d_max_size, coord.shape[0])
         size = 0
         for _ in range(10):
-            if if_enc2d:
-                size = enc2d_max_size
-            else:
-                size = int(np.random.uniform(*scale) * max_size)
+            size = int(np.random.uniform(*scale) * max_size)
             if size > 0:
                 break
         if size == 0:
             size = max(10, scale[-1] * max_size)
         assert size > 0
         index = np.argsort(np.sum(np.square(coord - center), axis=-1))[:size]
-        origin_index = copy.deepcopy(index)
-        if if_frame_selected and "frame_pcd_offset" in point:
-            input_frame_num = len(point["frame_pcd_offset"])
-            for _ in range(10):
-                if input_frame_num - frame_num == 0:
-                    frame_id = 0
-                else:
-                    frame_id = np.random.randint(0, input_frame_num)
-                single_frame_index = point["frame_pcd_offset"][frame_id]
-                index = list(set(origin_index) & set(single_frame_index))
-                if len(index) > 0:
-                    break
-            if len(index) == 0:
-                permutation = random.sample(range(input_frame_num), input_frame_num)
-                for idx in permutation:
-                    single_frame_index = point["frame_pcd_offset"][idx]
-                    index = list(set(origin_index) & set(single_frame_index))
-                    if len(index) > 0:
-                        break
-            assert len(index) > 0
         view = dict(index=index)
         for key in point.keys():
             if key in self.view_keys:
@@ -1446,20 +1176,6 @@ class MultiViewGenerator(object):
             view["index_valid_keys"] = point["index_valid_keys"]
         return view
 
-    @staticmethod
-    def match_point_image(major_view, data_dict):
-        major_correspondence = major_view["correspondence"].transpose(1, 0, 2)
-        correspondence = data_dict["correspondence"].transpose(1, 0, 2)
-        is_all_neg1 = np.any(major_correspondence != np.array([-1, -1]), axis=(1, 2))
-        indices = np.where(is_all_neg1)[0]
-        img_dict = {
-            "images": data_dict["images"][indices],
-            "img_num": indices.shape[0],
-            "major_correspondence": major_correspondence[indices].transpose(1, 0, 2),
-            "correspondence": correspondence[indices].transpose(1, 0, 2),
-        }
-        return img_dict
-
     def __call__(self, data_dict):
         coord = data_dict["coord"]
         point = self.global_shared_transform(copy.deepcopy(data_dict))
@@ -1467,51 +1183,20 @@ class MultiViewGenerator(object):
         z_max = coord[:, 2].max()
         z_min_ = z_min + (z_max - z_min) * self.center_height_scale[0]
         z_max_ = z_min + (z_max - z_min) * self.center_height_scale[1]
-        if "correspondence" not in data_dict.keys():
-            center_mask = np.logical_and(coord[:, 2] >= z_min_, coord[:, 2] <= z_max_)
-            major_center = coord[np.random.choice(np.where(center_mask)[0])]
-            major_view = self.get_view(point, major_center, self.global_view_scale)
-        else:
-            given_index = data_dict["correspondence"].reshape(
-                data_dict["correspondence"].shape[0], -1
-            )
-            given_index = np.all(
-                given_index != np.ones_like(given_index[0]) * -1, axis=1
-            )
-            given_coord = data_dict["coord"][given_index]
-            if given_coord.shape[0] == 0:
-                center_mask = np.logical_and(
-                    coord[:, 2] >= z_min_, coord[:, 2] <= z_max_
-                )
-                major_center = coord[np.random.choice(np.where(center_mask)[0])]
-            else:
-                major_center = np.mean(given_coord, axis=0)
-            major_view = self.get_view(
-                point, major_center, self.global_view_scale, if_enc2d=True
-            )
-            img_dict = self.match_point_image(major_view, data_dict)
-            major_view["correspondence"] = img_dict["major_correspondence"]
-            data_dict["correspondence"] = img_dict["correspondence"]
-            point["correspondence"] = img_dict["correspondence"]
-            data_dict["img_num"] = img_dict["img_num"]
-            data_dict["images"] = img_dict["images"]
+        center_mask = np.logical_and(coord[:, 2] >= z_min_, coord[:, 2] <= z_max_)
+        major_center = coord[np.random.choice(np.where(center_mask)[0])]
+        major_view = self.get_view(point, major_center, self.global_view_scale)
         major_coord = major_view["coord"]
 
         # get global views: restrict the center of left global view within the major global view
-        if not self.shared_global_view:
-            global_views = [
-                self.get_view(
-                    point=point,
-                    center=major_coord[np.random.randint(major_coord.shape[0])],
-                    scale=self.global_view_scale,
-                )
-                for _ in range(self.global_view_num - 1)
-            ]
-        else:
-            global_views = [
-                {key: value.copy() for key, value in major_view.items()}
-                for _ in range(self.global_view_num - 1)
-            ]
+        global_views = [
+            self.get_view(
+                point=point,
+                center=major_coord[np.random.randint(major_coord.shape[0])],
+                scale=self.global_view_scale,
+            )
+            for _ in range(self.global_view_num - 1)
+        ]
 
         global_views = [major_view] + global_views
 
@@ -1526,7 +1211,6 @@ class MultiViewGenerator(object):
                 point=data_dict,
                 center=major_coord[np.random.choice(np.where(~cover_mask)[0])],
                 scale=self.local_view_scale,
-                if_frame_selected=self.if_frame_selected,
             )
             local_views.append(local_view)
             cover_mask[np.isin(major_view["index"], local_view["index"])] = True
@@ -1585,7 +1269,3 @@ class Compose(object):
             with record_function(f"transform.{i}_{type(t).__name__}"):
                 data_dict = t(data_dict)
         return data_dict
-
-
-IMAGENET_DEFAULT_MEAN = (0.485, 0.456, 0.406)
-IMAGENET_DEFAULT_STD = (0.229, 0.224, 0.225)

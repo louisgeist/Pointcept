@@ -16,7 +16,6 @@ Depends on numpy only.
 
 from __future__ import annotations
 
-import csv
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -28,14 +27,6 @@ DEFAULT_PIXEL_M = 1.0
 # thin diagonals still touch every crossed cell.
 DEFAULT_CENTERLINE_SAMPLE_STEP_M = 0.01
 DEFAULT_RDP_EPSILON_M = 2.0
-# Distinct marker color for retained RDP nodes (edges keep network color).
-DEFAULT_NODE_MARKER_RGB = np.array([255, 140, 0], dtype=np.uint8)  # orange
-# Single-pixel markers (radius 0) so edges stay readable between nodes.
-DEFAULT_NODE_MARKER_RADIUS_PX = 0
-# Edge stroke color for RDP graph overlays (distinct from LiDAR RGB).
-DEFAULT_EDGE_RGB = np.array([255, 220, 40], dtype=np.uint8)  # yellow
-# Densification for drawing graph edges only (independent of centerline mask step).
-DEFAULT_EDGE_SAMPLE_STEP_M = 0.5
 
 # 4-connectivity (von Neumann) and 8-connectivity (Moore), excluding (0, 0).
 _NEIGH4_OFFSETS = np.array(
@@ -149,56 +140,6 @@ def abs_xy_bounds_from_coord(patch_dir: Path) -> tuple[float, float, float, floa
     return float(x.min()), float(y.min()), float(x.max()), float(y.max())
 
 
-def load_known_missing_tiles(path: Path | None) -> set[tuple[str, str]]:
-    """Load the ``(split, patch_id)`` pairs of tiles known to lack coord.npy.
-
-    Accepts either a CSV with a ``reason`` column (rows whose reason is not
-    ``missing_coord_file`` are ignored) or a plain ``split,patch_id,...`` text file.
-    """
-    if path is None:
-        return set()
-    path = Path(path)
-    if not path.is_file():
-        raise FileNotFoundError(f"missing tiles file not found: {path}")
-
-    out: set[tuple[str, str]] = set()
-    with path.open("r", encoding="utf-8", newline="") as f:
-        sample = f.read(2048)
-        f.seek(0)
-        if "reason" in sample.splitlines()[0] if sample else False:
-            reader = csv.DictReader(f)
-            for row in reader:
-                if row.get("reason") and row.get("reason") != "missing_coord_file":
-                    continue
-                split = (row.get("split") or "").strip().lower()
-                patch_id = (row.get("patch_id") or "").strip()
-                if split and patch_id:
-                    out.add((split, patch_id))
-        else:
-            for line in f:
-                stripped = line.strip()
-                if not stripped or stripped.startswith("#"):
-                    continue
-                parts = [p.strip() for p in stripped.split(",", 2)]
-                if len(parts) < 2:
-                    continue
-                split, patch_id = parts[0].lower(), parts[1]
-                if split and patch_id:
-                    out.add((split, patch_id))
-    return out
-
-
-def default_missing_coord_details_csv() -> Path:
-    """Default known-missing tiles file: ``<repo>/data/malibu3d/missing_coord_tiles.details.csv``."""
-    # network_xy_raster_utils.py -> .../preprocessing/malibu3d -> repo root = parents[4]
-    return (
-        Path(__file__).resolve().parents[4]
-        / "data"
-        / "malibu3d"
-        / "missing_coord_tiles.details.csv"
-    )
-
-
 def xy_to_indices(
     xy: np.ndarray,
     grid: GridSpec,
@@ -310,58 +251,6 @@ def sample_segments_xy_with_width(
     return np.concatenate(pieces, axis=0)
 
 
-def mean_rgb_raster(
-    points_xy: np.ndarray,
-    rgb: np.ndarray,
-    grid: GridSpec,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Average RGB per grid cell.
-
-    Returns
-    -------
-    mean_rgb : (H, W, 3) float32 — 0 where ``count == 0``
-    count : (H, W) int32
-    """
-    h, w = grid.height, grid.width
-    mean = np.zeros((h, w, 3), dtype=np.float32)
-    count = np.zeros((h, w), dtype=np.int32)
-    pts = np.asarray(points_xy, dtype=np.float64)
-    colors = np.asarray(rgb)
-    if pts.size == 0:
-        return mean, count
-    if pts.shape[0] != colors.shape[0]:
-        raise ValueError(
-            f"points_xy length ({pts.shape[0]}) != rgb length ({colors.shape[0]})"
-        )
-    if colors.ndim != 2 or colors.shape[1] != 3:
-        raise ValueError(f"rgb must have shape (N, 3), got {colors.shape}")
-
-    finite = np.isfinite(pts[:, :2]).all(axis=1)
-    if not np.any(finite):
-        return mean, count
-    ix, iy = xy_to_indices(pts[finite, :2], grid)
-    inside = _in_grid_mask(ix, iy, grid)
-    if not np.any(inside):
-        return mean, count
-    ix = ix[inside]
-    iy = iy[inside]
-    cols = colors[finite][inside].astype(np.float64, copy=False)
-    flat = iy * w + ix
-    n_cells = h * w
-    sum_r = np.bincount(flat, weights=cols[:, 0], minlength=n_cells)
-    sum_g = np.bincount(flat, weights=cols[:, 1], minlength=n_cells)
-    sum_b = np.bincount(flat, weights=cols[:, 2], minlength=n_cells)
-    count_flat = np.bincount(flat, minlength=n_cells).astype(np.int32)
-    count = count_flat.reshape(h, w)
-    nz = count_flat > 0
-    mean_flat = np.zeros((n_cells, 3), dtype=np.float32)
-    if np.any(nz):
-        mean_flat[nz, 0] = (sum_r[nz] / count_flat[nz]).astype(np.float32)
-        mean_flat[nz, 1] = (sum_g[nz] / count_flat[nz]).astype(np.float32)
-        mean_flat[nz, 2] = (sum_b[nz] / count_flat[nz]).astype(np.float32)
-    return mean_flat.reshape(h, w, 3), count
-
-
 def absolute_meter_cells_from_xy(
     xy: np.ndarray,
     pixel_m: float = DEFAULT_PIXEL_M,
@@ -431,18 +320,6 @@ def mask_from_absolute_cells(
         return mask
     mask[local_iy[inside], local_ix[inside]] = True
     return mask
-
-
-def centerline_pixel_mask(
-    segments: np.ndarray,
-    grid: GridSpec,
-    sample_step_m: float = DEFAULT_CENTERLINE_SAMPLE_STEP_M,
-) -> np.ndarray:
-    """Boolean mask of pixels touched by densified centerline samples."""
-    cells = densify_segments_to_absolute_cells(
-        segments, pixel_m=grid.pixel_m, sample_step_m=sample_step_m
-    )
-    return mask_from_absolute_cells(cells, grid)
 
 
 def _shift_with_false_pad(mask: np.ndarray, dr: int, dc: int) -> np.ndarray:
@@ -1361,84 +1238,3 @@ def simplify_pixel_graph_rdp(
         edge_weights=edge_weights,
         grid=graph.grid,
     )
-
-
-def _paint_disks(
-    rgba: np.ndarray,
-    ix: np.ndarray,
-    iy: np.ndarray,
-    color: np.ndarray,
-    radius_px: int,
-) -> None:
-    """Paint filled disks of ``radius_px`` (Chebyshev) at valid (ix, iy) in-place."""
-    h, w = rgba.shape[:2]
-    r = max(0, int(radius_px))
-    color = np.asarray(color, dtype=np.uint8).reshape(3)
-    for x, y in zip(ix.tolist(), iy.tolist()):
-        y0 = max(0, y - r)
-        y1 = min(h, y + r + 1)
-        x0 = max(0, x - r)
-        x1 = min(w, x + r + 1)
-        rgba[y0:y1, x0:x1, :3] = color
-        rgba[y0:y1, x0:x1, 3] = 255
-
-
-def rasterize_graph_edges(
-    graph: PixelGraph,
-    grid: GridSpec | None = None,
-    color_rgb: np.ndarray | None = None,
-    node_color_rgb: np.ndarray | None = None,
-    node_radius_px: int = DEFAULT_NODE_MARKER_RADIUS_PX,
-    sample_step_m: float = DEFAULT_EDGE_SAMPLE_STEP_M,
-) -> np.ndarray:
-    """Rasterize graph edges + small node markers (no centerline fill).
-
-    Draws only straight edge strokes between graph nodes (``color_rgb``, yellow
-    by default) and orange markers at retained nodes. Does **not** paint the
-    original dense centerline mask.
-    """
-    g = grid if grid is not None else graph.grid
-    rgba = np.zeros((g.height, g.width, 4), dtype=np.uint8)
-    n_nodes = int(graph.node_xy.shape[0])
-    if n_nodes == 0:
-        return rgba
-    edge_color = (
-        np.asarray(color_rgb, dtype=np.uint8).reshape(3)
-        if color_rgb is not None
-        else DEFAULT_EDGE_RGB.copy()
-    )
-    node_color = (
-        np.asarray(node_color_rgb, dtype=np.uint8).reshape(3)
-        if node_color_rgb is not None
-        else DEFAULT_NODE_MARKER_RGB.copy()
-    )
-
-    if graph.edges.size > 0:
-        segs = []
-        for u, v in np.asarray(graph.edges, dtype=np.int64):
-            segs.append([graph.node_xy[int(u)], graph.node_xy[int(v)]])
-        segments = np.asarray(segs, dtype=np.float64)  # (E, 2, 2)
-        segments3 = np.concatenate(
-            [segments, np.zeros((segments.shape[0], 2, 1), dtype=np.float64)],
-            axis=2,
-        )
-        samples = sample_segments_xy(segments3, sample_step_m=sample_step_m)
-        if samples.shape[0] > 0:
-            ix, iy = xy_to_indices(samples, g)
-            inside = _in_grid_mask(ix, iy, g)
-            if np.any(inside):
-                rgba[iy[inside], ix[inside], :3] = edge_color
-                rgba[iy[inside], ix[inside], 3] = 255
-
-    # Node markers on top of edges (1 px orange by default).
-    nix, niy = xy_to_indices(graph.node_xy, g)
-    n_inside = _in_grid_mask(nix, niy, g)
-    if np.any(n_inside):
-        _paint_disks(
-            rgba,
-            nix[n_inside],
-            niy[n_inside],
-            node_color,
-            radius_px=node_radius_px,
-        )
-    return rgba

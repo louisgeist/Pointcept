@@ -55,7 +55,11 @@ if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 try:
     import network_xy_raster_utils as xy_rast  # type: ignore
-    from network_label_utils import NETWORK_TYPES, LoadedNetworkGraph  # type: ignore
+    from network_label_utils import (  # type: ignore
+        NETWORK_TYPES,
+        LoadedNetworkGraph,
+        edge_euclidean_distances,
+    )
 except ImportError:  # pragma: no cover
     from pointcept.datasets.preprocessing.malibu3d import (  # type: ignore
         network_xy_raster_utils as xy_rast,
@@ -63,6 +67,7 @@ except ImportError:  # pragma: no cover
     from pointcept.datasets.preprocessing.malibu3d.network_label_utils import (  # type: ignore
         NETWORK_TYPES,
         LoadedNetworkGraph,
+        edge_euclidean_distances,
     )
 
 # --- Fixed APLS protocol -------------------------------------------------------------
@@ -100,14 +105,10 @@ class AplsGraph:
 
 def apls_graph_from_pixel_graph(graph: "xy_rast.PixelGraph") -> AplsGraph:
     """Predicted-graph adapter: edge length from XY, NOT ``graph.edge_weights`` (hop count)."""
-    from network_graph_pipeline import (
-        edge_length_m as _edge_length_m,
-    )  # local import: avoid cycle
-
     return AplsGraph(
         node_xy=np.asarray(graph.node_xy, dtype=np.float64),
         edges=np.asarray(graph.edges, dtype=np.int64),
-        edge_length_m=_edge_length_m(graph),
+        edge_length_m=edge_euclidean_distances(graph),
     )
 
 

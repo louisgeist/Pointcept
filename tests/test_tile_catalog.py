@@ -130,8 +130,7 @@ class TestTileCatalog(unittest.TestCase):
             load_manifest_patches,
         )
 
-        patches, n_skipped = load_manifest_patches(pathlib.Path(self.tiles_csv))
-        self.assertEqual(n_skipped, 0)
+        patches = load_manifest_patches(pathlib.Path(self.tiles_csv))
         self.assertEqual(
             [(p.patch_id, p.flags_dict) for p in patches],
             [

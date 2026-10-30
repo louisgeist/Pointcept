@@ -291,7 +291,6 @@ def run(
     remove_small_objects_min_size_px: int = 8,
     skeletonize_enabled: bool = True,
     min_component_nodes: int = 5,
-    missing_tiles_file: Optional[Path] = None,
     show_progress: bool = True,
     profile: bool = False,
     save_pred_gpkg: bool = True,
@@ -306,32 +305,7 @@ def run(
     types = NETWORK_TYPES
     profiler = _ProfileAggregator() if profile else None
 
-    # Same known-missing exclusions as rasterize_network / MALiBU3DDataset hardcoded set.
-    if missing_tiles_file is None:
-        missing_tiles_file = nps.default_missing_coord_details_csv()
-    else:
-        missing_tiles_file = Path(missing_tiles_file)
-    known_missing = nps.load_known_missing_tiles(
-        missing_tiles_file if missing_tiles_file.is_file() else None
-    )
-    if known_missing:
-        print(f"Known missing tiles: {len(known_missing)} from {missing_tiles_file}")
-    elif missing_tiles_file is not None and not missing_tiles_file.is_file():
-        print(
-            f"Warning: missing-tiles file not found ({missing_tiles_file}); "
-            "unexpected absences will be reported as [partial]."
-        )
-
-    patches, n_skipped_known_missing = nps.load_manifest_patches(
-        split_manifest_csv,
-        splits=[split],
-        known_missing=known_missing,
-    )
-    if n_skipped_known_missing:
-        print(
-            f"Skipped {n_skipped_known_missing} known-missing tile(s) from "
-            f"{missing_tiles_file}"
-        )
+    patches = nps.load_manifest_patches(split_manifest_csv, splits=[split])
     roi_items, excluded_rois = nps.group_by_roi_complete_only(patches, data_root)
     if excluded_rois:
         print(
@@ -585,9 +559,6 @@ def run(
             "split_manifest_csv": str(split_manifest_csv),
             "network_types": list(types),
             "max_rois": max_rois,
-            "missing_tiles_file": str(missing_tiles_file),
-            "n_known_missing": len(known_missing),
-            "n_skipped_known_missing": int(n_skipped_known_missing),
             "profile": bool(profile),
             "save_pred_gpkg": bool(save_pred_gpkg),
         },
@@ -786,16 +757,6 @@ def build_argparser() -> argparse.ArgumentParser:
         help="Zhang-Suen skeletonize wide masks to 1px centerlines (default: true)",
     )
     p.add_argument(
-        "--missing_tiles_file",
-        type=str,
-        default=None,
-        help=(
-            "Exclusion list of known-missing (split, patch_id), same role as "
-            "MALiBU3DDataset / rasterize_network. Default: "
-            "data/malibu3d/missing_coord_tiles.details.csv"
-        ),
-    )
-    p.add_argument(
         "--no_progress",
         action="store_true",
         help="Disable the tqdm ROI progress bar (useful for CI / captured logs).",
@@ -823,9 +784,6 @@ def build_argparser() -> argparse.ArgumentParser:
 
 def main(argv: Optional[List[str]] = None) -> None:
     args = build_argparser().parse_args(argv)
-    missing = (
-        Path(args.missing_tiles_file).resolve() if args.missing_tiles_file else None
-    )
     run(
         Path(args.data_root).resolve(),
         Path(args.save_path).resolve(),
@@ -849,7 +807,6 @@ def main(argv: Optional[List[str]] = None) -> None:
         remove_small_objects_min_size_px=args.remove_small_objects_min_size_px,
         skeletonize_enabled=args.skeletonize_enabled,
         min_component_nodes=args.min_component_nodes,
-        missing_tiles_file=missing,
         show_progress=not args.no_progress,
         profile=bool(args.profile),
         save_pred_gpkg=not args.no_save_pred_gpkg,

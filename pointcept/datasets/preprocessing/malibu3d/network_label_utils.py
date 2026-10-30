@@ -44,14 +44,6 @@ def dept_code_from_lidarhd_dirname(dirname: str) -> Optional[str]:
     return stem.split("-", 1)[0]
 
 
-def dept_code_from_dept_year(dept_year: str) -> str:
-    """``D075-2021`` → ``D075``."""
-    text = str(dept_year).strip()
-    if not text:
-        return ""
-    return text.split("-", 1)[0]
-
-
 def graph_output_stem(roi_dir: Path | str) -> Optional[str]:
     """``D075_UU-S1-4`` style stem from a ROI directory, or None if unknown."""
     roi_path = Path(roi_dir)
@@ -151,20 +143,6 @@ def load_graph_edge_segments(gpkg_path: Path | str) -> np.ndarray:
     if not pieces:
         return empty
     return np.concatenate(pieces, axis=0)
-
-
-def parse_bool_flag(value: object) -> bool:
-    """Parse CSV / JSON style bools."""
-    if isinstance(value, bool):
-        return value
-    if value is None:
-        return False
-    text = str(value).strip().lower()
-    if text in {"true", "1", "yes"}:
-        return True
-    if text in {"false", "0", "no", ""}:
-        return False
-    raise ValueError(f"Cannot parse boolean flag from {value!r}")
 
 
 @dataclass(frozen=True)

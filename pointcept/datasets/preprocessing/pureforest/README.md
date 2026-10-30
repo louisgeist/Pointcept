@@ -82,9 +82,10 @@ python pointcept/datasets/preprocessing/pureforest/preprocess_pureforest.py \
 
 ## 3. MALiBU3D leakage exclusion
 
-`malibu3d_leakage_excluded_test_tiles.txt` lists the PureForest test patches whose forest (BD Forêt
-polygon) overlaps a MALiBU3D train/val tile. Configs evaluating MALiBU3D backbones set
-`exclude_malibu3d_leakage_tiles=True` on `PureForestDataset` to drop them.
+Two PureForest test forests (BD Forêt polygons `Quercus_pubescens-C0-730` and `Quercus_robur-C0-389`,
+2170 of the 52,935 test patches) overlap MALiBU3D train/val tiles. Configs evaluating MALiBU3D backbones
+set `exclude_malibu3d_leakage_tiles=True` on `PureForestDataset` to drop every patch of these forests
+(`MALIBU3D_LEAKAGE_FORESTS` in `pointcept/datasets/pureforest.py`).
 
 ## 4. Training and probing
 

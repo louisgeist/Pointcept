@@ -28,21 +28,17 @@ except ImportError:  # pragma: no cover
         GridSpec,
     )
 
-# Re-exported so that tools/eval_network_apls.py imports tile grouping and
-# known-missing handling from this single module.
+# Re-exported so that tools/eval_network_apls.py imports tile loading and grouping
+# from this single module.
 try:
     from rasterize_network import (  # type: ignore  # noqa: F401
         ManifestPatch,
-        default_missing_coord_details_csv,
-        load_known_missing_tiles,
         group_by_roi,
         load_manifest_patches,
     )
 except ImportError:  # pragma: no cover
     from pointcept.datasets.preprocessing.malibu3d.rasterize_network import (  # type: ignore  # noqa: F401
         ManifestPatch,
-        default_missing_coord_details_csv,
-        load_known_missing_tiles,
         group_by_roi,
         load_manifest_patches,
     )

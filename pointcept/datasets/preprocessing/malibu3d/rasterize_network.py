@@ -2,8 +2,7 @@
 
 Driven by the tile CSV (``tiles.csv`` or an older split manifest, read via
 ``tile_catalog.py``): each tile must already exist under ``data_root`` with
-``coord.npy`` (missing tiles are errors, except those listed in the known-missing file,
-default ``data/malibu3d/missing_coord_tiles.details.csv``).
+``coord.npy`` (a missing tile is an error).
 
 Ground-truth roads are graphs (``{dept}_{roi}_ROADS_graph.gpkg``, one per ROI, read from
 each ROI directory, which is the Hugging Face layout, or from ``--network_graphs_root``).
@@ -50,10 +49,8 @@ try:
     from tile_catalog import iter_tiles, tile_csv_columns  # type: ignore
     from network_xy_raster_utils import (  # type: ignore
         abs_xy_bounds_from_coord,
-        default_missing_coord_details_csv,
         densify_segments_to_absolute_cells,
         grid_from_xy_bounds,
-        load_known_missing_tiles,
         mask_from_absolute_cells,
     )
 except ImportError:  # pragma: no cover
@@ -67,10 +64,8 @@ except ImportError:  # pragma: no cover
     )
     from pointcept.datasets.preprocessing.malibu3d.network_xy_raster_utils import (
         abs_xy_bounds_from_coord,
-        default_missing_coord_details_csv,
         densify_segments_to_absolute_cells,
         grid_from_xy_bounds,
-        load_known_missing_tiles,
         mask_from_absolute_cells,
     )
 
@@ -111,13 +106,9 @@ def load_manifest_patches(
     split_manifest_csv: Path,
     *,
     splits: Optional[Sequence[str]] = None,
-    known_missing: Optional[set[Tuple[str, str]]] = None,
-) -> Tuple[List[ManifestPatch], int]:
-    """Load the tiles of ``tiles.csv`` / an older manifest (optionally filtered by split).
-
-    Skips ``(split, patch_id)`` in ``known_missing``. Returns
-    ``(patches, n_skipped_known_missing)``, each patch with its ROADS catalog flag.
-    """
+) -> List[ManifestPatch]:
+    """Load the tiles of ``tiles.csv`` / an older manifest (optionally filtered by split),
+    each with its ROADS catalog flag."""
     if not split_manifest_csv.is_file():
         raise FileNotFoundError(f"split_manifest_csv not found: {split_manifest_csv}")
     missing_cols = sorted(
@@ -128,13 +119,8 @@ def load_manifest_patches(
             f"split_manifest_csv missing columns {missing_cols} (expected tiles.csv)."
         )
 
-    skip = known_missing or set()
     patches: List[ManifestPatch] = []
-    n_skipped = 0
     for tile in iter_tiles(split_manifest_csv, splits):
-        if (tile.split, tile.tile_id) in skip:
-            n_skipped += 1
-            continue
         flags = (("ROADS", bool(tile.has_roads_graph)),)
         patches.append(
             ManifestPatch(
@@ -145,7 +131,7 @@ def load_manifest_patches(
                 flags=flags,
             )
         )
-    return patches, n_skipped
+    return patches
 
 
 def group_by_roi(
@@ -187,8 +173,7 @@ def group_by_roi(
         preview = "\n  ".join(missing[:20])
         more = f"\n  ... and {len(missing) - 20} more" if len(missing) > 20 else ""
         raise FileNotFoundError(
-            f"{len(missing)} manifest patch(es) missing coord.npy under {data_root} "
-            f"(not listed in the missing-tiles exclusion file):\n"
+            f"{len(missing)} manifest patch(es) missing coord.npy under {data_root}:\n"
             f"  {preview}{more}"
         )
     return out
@@ -392,27 +377,9 @@ def run(
     line_width_m: float = 0.2,
     force_reload_bounds: bool = False,
     max_rois: Optional[int] = None,
-    missing_tiles_file: Optional[Path] = None,
     num_workers: int = 1,
 ) -> None:
-    if missing_tiles_file is None:
-        missing_tiles_file = default_missing_coord_details_csv()
-    known_missing = load_known_missing_tiles(
-        missing_tiles_file if missing_tiles_file.is_file() else None
-    )
-    if known_missing:
-        print(f"Known missing tiles: {len(known_missing)} from {missing_tiles_file}")
-    elif missing_tiles_file is not None:
-        print(
-            f"Warning: missing-tiles file not found ({missing_tiles_file}); "
-            "unexpected absences will hard-fail."
-        )
-
-    patches, n_skipped = load_manifest_patches(
-        split_manifest_csv,
-        splits=splits,
-        known_missing=known_missing,
-    )
+    patches = load_manifest_patches(split_manifest_csv, splits=splits)
     roi_items = group_by_roi(patches, data_root)
     if max_rois is not None:
         roi_items = roi_items[: max(0, int(max_rois))]
@@ -420,8 +387,7 @@ def run(
     n_patches = sum(len(pdirs) for _, _, pdirs in roi_items)
     workers = max(1, int(num_workers))
     print(
-        f"Manifest: {len(patches) + n_skipped} LIDARHD rows "
-        f"({n_skipped} known-missing skipped) → "
+        f"Manifest: {len(patches)} tiles → "
         f"{n_patches} on disk in {len(roi_items)} ROIs under {data_root}"
     )
     print(f"network_graphs_root: {network_graphs_root}")
@@ -546,15 +512,6 @@ def build_argparser() -> argparse.ArgumentParser:
         help="Optional limit on number of ROIs (debug)",
     )
     p.add_argument(
-        "--missing_tiles_file",
-        type=str,
-        default=None,
-        help=(
-            "Tiles known to lack coord.npy, as (split, patch_id) rows. Default: "
-            "data/malibu3d/missing_coord_tiles.details.csv"
-        ),
-    )
-    p.add_argument(
         "--num_workers",
         type=int,
         default=1,
@@ -565,9 +522,6 @@ def build_argparser() -> argparse.ArgumentParser:
 
 def main(argv: Optional[List[str]] = None) -> None:
     args = build_argparser().parse_args(argv)
-    missing = (
-        Path(args.missing_tiles_file).resolve() if args.missing_tiles_file else None
-    )
     run(
         Path(args.data_root).resolve(),
         Path(args.network_graphs_root).resolve() if args.network_graphs_root else None,
@@ -578,7 +532,6 @@ def main(argv: Optional[List[str]] = None) -> None:
         line_width_m=float(args.line_width_m),
         force_reload_bounds=bool(args.force_reload_bounds),
         max_rois=args.max_rois,
-        missing_tiles_file=missing,
         num_workers=int(args.num_workers),
     )
 
