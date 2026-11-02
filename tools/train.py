@@ -12,10 +12,12 @@ from pointcept.engines.defaults import (
 )
 from pointcept.engines.train import TRAINERS
 from pointcept.engines.launch import launch
+from pointcept.utils.slurm_requeue import install_slurm_timeout_requeue_handler
 
 
 def main_worker(cfg):
     cfg = default_setup(cfg)
+    install_slurm_timeout_requeue_handler()
     trainer = TRAINERS.build(dict(type=cfg.train.type, cfg=cfg))
     trainer.train()
 

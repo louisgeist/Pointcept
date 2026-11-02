@@ -1,8 +1,8 @@
 """
-Persistent cumulative runtime across resumed segments of a run.
+Persistent cumulative runtime across Slurm requeue segments.
 
 Tracks active compute time per segment in ``${save_path}/runtime_state.json``.
-Wait time between segments (e.g. a requeued cluster job) is excluded.
+Queue wait time between requeued segments is excluded.
 """
 
 import json
@@ -14,6 +14,14 @@ RUNTIME_STATE_FILENAME = "runtime_state.json"
 
 def runtime_state_path(save_path):
     return os.path.join(save_path, RUNTIME_STATE_FILENAME)
+
+
+def resolve_save_path_for_runtime():
+    for key in ("JOB_DIR", "POINTCEPT_SAVE_PATH"):
+        value = os.environ.get(key)
+        if value and os.path.isdir(value):
+            return value
+    return None
 
 
 def _load_state(path):
@@ -71,4 +79,14 @@ def flush_runtime_segment(save_path):
 
 def get_total_runtime_s(save_path):
     """Flush the current segment and return cumulative runtime in seconds."""
+    return flush_runtime_segment(save_path)
+
+
+def flush_runtime_segment_from_env():
+    """Flush runtime state using JOB_DIR or POINTCEPT_SAVE_PATH, if available."""
+    save_path = resolve_save_path_for_runtime()
+    if save_path is None:
+        return None
+    if not os.path.isfile(runtime_state_path(save_path)):
+        return None
     return flush_runtime_segment(save_path)
