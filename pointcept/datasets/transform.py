@@ -95,6 +95,8 @@ class Collect(object):
         key_scales: per-key multipliers applied to entries listed in keys (e.g. elevation).
         For color/normal/strength in feat_keys, an existing ``<key>_mask`` is collected
         too, with ``<key>_feat_start/_end`` giving that modality's columns in ``feat``.
+        Prefixed feats (e.g. ``global_feat_keys=(global_coord, global_color)`` of the Sonata
+        views) do the same with ``global_color_mask`` and ``global_color_feat_start/_end``.
         ``origin_offset`` is added when any ``origin_*`` key is present.
         """
         if offset_keys_dict is None:
@@ -149,6 +151,8 @@ class Collect(object):
             # Allow for tensors to be of shape (N,) and (N, D)
             tensors = []
             feat_offset = 0
+            # "feat" or a view feat such as "global_feat": its keys share the prefix.
+            prefix = name[: -len("feat")] if name.endswith("feat") else None
             for key in keys:
                 t = data_dict[key].float()
                 if key in self.feat_scales:
@@ -156,8 +160,13 @@ class Collect(object):
                 if t.dim() == 1:
                     t = t.unsqueeze(1)
                 tensors.append(t)
-                if name == "feat" and key in mask_keys:
-                    mask_key = mask_keys[key]
+                base_key = (
+                    key[len(prefix) :]
+                    if prefix is not None and key.startswith(prefix)
+                    else None
+                )
+                if base_key in mask_keys:
+                    mask_key = prefix + mask_keys[base_key]
                     if mask_key in data_dict:
                         mask = data_dict[mask_key]
                         if isinstance(mask, np.ndarray):

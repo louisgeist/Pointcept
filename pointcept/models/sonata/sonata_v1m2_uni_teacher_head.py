@@ -22,6 +22,7 @@ import pointops
 from pointcept.models.utils.structure import Point
 from pointcept.models.builder import MODELS, build_model
 from pointcept.models.modules import PointModel
+from pointcept.models.default import LearnedMaskedFeatMixin
 from pointcept.models.utils import offset2batch, offset2bincount, batch2offset
 from pointcept.utils.comm import get_world_size, all_gather
 from pointcept.utils.scheduler import CosineScheduler
@@ -78,7 +79,7 @@ class OnlineCluster(nn.Module):
 
 
 @MODELS.register_module("Sonata-v1m2")
-class Sonata(PointModel):
+class Sonata(PointModel, LearnedMaskedFeatMixin):
     def __init__(
         self,
         backbone,
@@ -108,8 +109,14 @@ class Sonata(PointModel):
         match_max_k=8,
         match_max_r=0.08,
         up_cast_level=2,
+        feature_mask_values=None,
     ):
         super(Sonata, self).__init__()
+        # MALiBU3D addition: learned fill values of the masked color / intensity inputs
+        # (LearnedMaskedFeatMixin), shared by the student and the teacher and stored at the
+        # model root (color_mask_value, strength_mask_value), where the probe and
+        # fine-tuning models load them from.
+        self._init_learned_masked_feat(feature_mask_values=feature_mask_values)
         self.mask_loss_weight = mask_loss_weight
         self.roll_mask_loss_weight = roll_mask_loss_weight
         self.unmask_loss_weight = unmask_loss_weight
@@ -431,6 +438,18 @@ class Sonata(PointModel):
             point = parent
         return point
 
+    def _fill_view_masked_feat(self, data_dict, view):
+        """Fill ``{view}_feat`` in place with the learned mask values, using the
+        ``{view}_<key>_mask`` and ``{view}_<key>_feat_start/_end`` entries of Collect."""
+        prefix = f"{view}_"
+        view_dict = {"feat": data_dict[f"{view}_feat"]}
+        for key, value in data_dict.items():
+            if key.startswith(prefix) and key.endswith(
+                ("_mask", "_feat_start", "_feat_end")
+            ):
+                view_dict[key[len(prefix) :]] = value
+        self._fill_masked_feat_with_learned_value(view_dict)
+
     def forward(self, data_dict, return_point=False):
         if return_point:
             point = self.teacher.backbone(data_dict)
@@ -442,6 +461,10 @@ class Sonata(PointModel):
                 parent.feat = torch.cat([parent.feat, point.feat[inverse]], dim=-1)
                 point = parent
             return dict(point=point)
+
+        # Outside no_grad: the student loss trains the learned fill values.
+        for view in ("global", "local"):
+            self._fill_view_masked_feat(data_dict, view)
 
         # prepare global_point, mask_global_point, local_point
         with torch.no_grad():

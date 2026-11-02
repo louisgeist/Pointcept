@@ -4,6 +4,10 @@ split, with coord + color + intensity inputs. 150k iterations (150 epochs of 100
 batch 96 (4 per GPU on 24 GPUs), bf16 AMP. The matching radius and mask sizes are rescaled from
 the upstream Sonata defaults to the coarser 0.1 m grid (see below). No online validation: saved
 checkpoints are evaluated with the linear probes in probe/.
+Inputs follow the supervised MALiBU3D models: coord features scaled by 0.01, z measured from the
+lowest point of the tile (Z_MinShift + a random offset), and learned fill values for the RGB /
+intensity removed by the scene-level modality dropout (stored at the model root, loaded by the
+probe and fine-tuning configs).
 Released checkpoint (epoch 120): ckpt/sonata-pretrained/model.pth (see docs/checkpoints.md).
 """
 
@@ -30,6 +34,10 @@ find_unused_parameters = False
 grid_size = 0.1
 stride = (3, 3, 3, 3)
 max_size = 65_536  # max points per view (MultiViewGenerator); bounds the GPU memory
+
+# Features: same scaling and learned masked-modality values as the supervised models.
+coord_feat_scale = 0.01
+learned_masked_feat = True
 
 # match_max_r must scale with the point spacing at the matching level (grid_size
 # after up_cast_level=2 pooling stages), not be an absolute distance. Upstream Sonata
@@ -124,6 +132,10 @@ model = dict(
     match_max_k=8,
     match_max_r=match_max_r,
     up_cast_level=2,
+    feature_mask_values=dict(
+        enable=learned_masked_feat,
+        masked_feat_keys=["color", "strength"],
+    ),
 )
 
 # -----------------------------------------------------------------------------
@@ -165,11 +177,37 @@ csv_manifest = "data/malibu3d/tiles.csv"
 min_points = {"train": 1000}
 
 transform = [
+    # Vertical registration of the whole tile, as in the supervised models: lowest point at
+    # z = 0 plus one random offset. The views below recenter x, y only.
+    dict(type="CenterShift", apply_z=True),
+    dict(type="Z_MinShift"),
+    dict(type="Z_RandomOffset"),
     dict(type="GridSample", grid_size=grid_size, hash_type="fnv", mode="train"),
     dict(type="Copy", keys_dict={"coord": "origin_coord"}),
+    # All-False color / strength masks, so that every view carries them: the local views are
+    # cut from the tile without the (global) modality dropout below.
+    dict(
+        type="RandomDropColor",
+        drop_ratio=0.0,
+        drop_application_ratio=0.0,
+        keep_mask=True,
+    ),
+    dict(
+        type="RandomDropStrength",
+        drop_ratio=0.0,
+        drop_application_ratio=0.0,
+        keep_mask=True,
+    ),
     dict(
         type="MultiViewGenerator",
-        view_keys=("coord", "origin_coord", "color", "strength"),
+        view_keys=(
+            "coord",
+            "origin_coord",
+            "color",
+            "strength",
+            "color_mask",
+            "strength_mask",
+        ),
         global_view_num=2,
         global_view_scale=(0.4, 1.0),
         local_view_num=4,
@@ -186,20 +224,23 @@ transform = [
             dict(type="ChromaticTranslation", p=0.95, ratio=0.05),
             dict(type="NormalizeColor"),
             # Scene-level modality dropout (shared by both global views): robustness
-            # when transferring to datasets missing color and/or strength.
+            # when transferring to datasets missing color and/or strength. The dropped
+            # values are replaced by the learned fill values (keep_mask).
             dict(
                 type="RandomDropColor",
                 drop_ratio=1.0,
                 drop_application_ratio=0.2,
+                keep_mask=True,
             ),
             dict(
                 type="RandomDropStrength",
                 drop_ratio=1.0,
                 drop_application_ratio=0.2,
+                keep_mask=True,
             ),
         ],
         global_transform=[
-            dict(type="CenterShift", apply_z=True),
+            dict(type="CenterShift", apply_z=False),
             dict(type="RandomScale", scale=[0.9, 1.1]),
             dict(type="RandomRotate", angle=[-1, 1], axis="z", center=[0, 0, 0], p=0.8),
             dict(type="RandomRotate", angle=[-1 / 64, 1 / 64], axis="x", p=0.8),
@@ -208,7 +249,7 @@ transform = [
             dict(type="RandomJitter", sigma=0.005, clip=0.02),
         ],
         local_transform=[
-            dict(type="CenterShift", apply_z=True),
+            dict(type="CenterShift", apply_z=False),
             dict(type="RandomScale", scale=[0.9, 1.1]),
             dict(type="RandomRotate", angle=[-1, 1], axis="z", center=[0, 0, 0], p=0.8),
             dict(type="RandomRotate", angle=[-1 / 64, 1 / 64], axis="x", p=0.8),
@@ -249,6 +290,7 @@ transform = [
         offset_keys_dict=dict(),
         global_feat_keys=("global_coord", "global_color", "global_strength"),
         local_feat_keys=("local_coord", "local_color", "local_strength"),
+        feat_scales=dict(global_coord=coord_feat_scale, local_coord=coord_feat_scale),
     ),
 ]
 

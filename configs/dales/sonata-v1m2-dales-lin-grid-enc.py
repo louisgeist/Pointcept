@@ -10,8 +10,7 @@ GridProbe: 12 linear probes (CE + Lovasz, AdamW, wd=0, OneCycleLR, lr from 1e-4 
 frozen-backbone forward; tools/sweep_then_seeds.py then re-trains the probe with the best validation
 mIoU with 10 seeds.
 
-DALES has no RGB: color is zero-filled, as in Sonata pretraining (modality dropout with zeros, no
-learned mask value); raw intensity is scaled by 1/60000. DALES has no validation split, so
+DALES has no RGB: color is replaced by the checkpoint's learned mask value; raw intensity is scaled by 1/60000. DALES has no validation split, so
 validation runs on the test split.
 """
 
@@ -72,6 +71,7 @@ hooks = [
     dict(type="GridProbeWinnerSelector", skip_test=True),
 ]
 
+coord_feat_scale = 0.01  # must match the Sonata pretraining (coord features x 0.01)
 feat_keys = ["coord", "color", "strength"]
 
 names = [
@@ -148,7 +148,7 @@ model = dict(
     backbone_out_channels=backbone_out_channels,
     backbone=dict(
         type="PT-v3m2",
-        in_channels=7,  # coord(3) + color(3, absent: zero-filled) + strength(1)
+        in_channels=7,  # coord(3) + color(3, absent: learned fill value) + strength(1)
         order=("z", "z-trans", "hilbert", "hilbert-trans"),
         stride=(3, 3, 3, 3),
         enc_depths=(3, 3, 3, 12, 3),
@@ -171,6 +171,10 @@ model = dict(
         mask_token=False,
         enc_mode=True,
         freeze_encoder=False,
+    ),
+    feature_mask_values=dict(
+        enable=True,
+        masked_feat_keys=["color", "strength"],
     ),
     freeze_backbone=True,
 )
@@ -223,7 +227,7 @@ data = dict(
                 type="Collect",
                 keys=("coord", "grid_coord", "segment", "grid_size"),
                 feat_keys=feat_keys,
-                feat_scales=dict(strength=strength_feat_scale),
+                feat_scales=dict(coord=coord_feat_scale, strength=strength_feat_scale),
             ),
         ],
         test_mode=False,
@@ -251,7 +255,7 @@ data = dict(
                 type="Collect",
                 keys=("coord", "grid_coord", "segment", "origin_segment", "inverse"),
                 feat_keys=feat_keys,
-                feat_scales=dict(strength=strength_feat_scale),
+                feat_scales=dict(coord=coord_feat_scale, strength=strength_feat_scale),
             ),
         ],
         test_mode=False,
@@ -284,7 +288,7 @@ data = dict(
                     keys=("coord", "grid_coord", "index"),
                     optional_keys=("inverse",),  # for test_single_fragment broadcast
                     feat_keys=feat_keys,
-                    feat_scales=dict(strength=strength_feat_scale),
+                    feat_scales=dict(coord=coord_feat_scale, strength=strength_feat_scale),
                 ),
             ],
             aug_transform=[

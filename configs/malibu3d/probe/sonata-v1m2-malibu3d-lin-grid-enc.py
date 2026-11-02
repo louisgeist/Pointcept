@@ -35,6 +35,7 @@ total_iters = 1000
 iter_per_epoch = 100
 eval_every = 2
 
+coord_feat_scale = 0.01  # must match the Sonata pretraining (coord features x 0.01)
 feat_keys = ["coord", "color", "strength"]
 
 wandb_project = "malibu3d_sonata"
@@ -149,6 +150,10 @@ model = dict(
         enc_mode=True,
         freeze_encoder=False,
     ),
+    feature_mask_values=dict(
+        enable=True,
+        masked_feat_keys=["color", "strength"],
+    ),
     freeze_backbone=True,
 )
 
@@ -220,6 +225,7 @@ data = dict(
                 type="Collect",
                 keys=("coord", "grid_coord", "segment"),
                 feat_keys=feat_keys,
+                feat_scales=dict(coord=coord_feat_scale),
             ),
         ],
         test_mode=False,
@@ -253,6 +259,7 @@ data = dict(
                 type="Collect",
                 keys=("coord", "grid_coord", "segment", "origin_segment", "inverse"),
                 feat_keys=feat_keys,
+                feat_scales=dict(coord=coord_feat_scale),
             ),
         ],
         test_mode=False,
@@ -289,6 +296,7 @@ data = dict(
                     keys=("coord", "grid_coord", "index"),
                     optional_keys=("inverse",),
                     feat_keys=feat_keys,
+                    feat_scales=dict(coord=coord_feat_scale),
                 ),
             ],
             aug_transform=[

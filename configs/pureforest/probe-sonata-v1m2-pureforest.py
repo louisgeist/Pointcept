@@ -7,8 +7,7 @@ stages, 1232 channels), mean- and max-pooled per tile. A multinomial logistic re
 for every pooling in ``probe.aggs`` and every ``C`` in ``probe.Cs``; the best pair on validation
 mIoU is tested.
 
-PureForest has RGB but no intensity: strength is zero-filled, as in Sonata pretraining (modality
-dropout with zeros). Test tiles overlapping MALiBU3D train/val forests are excluded
+PureForest has RGB but no intensity: strength is replaced by the checkpoint's learned mask value. Test tiles overlapping MALiBU3D train/val forests are excluded
 (exclude_malibu3d_leakage_tiles=True).
 """
 
@@ -21,6 +20,7 @@ weight = "ckpt/sonata-pretrained/model.pth"
 # Released Sonata checkpoints store the student backbone as student.backbone.*
 weight_key_map = {"student.backbone.": "backbone."}
 
+coord_feat_scale = 0.01  # must match the Sonata pretraining (coord features x 0.01)
 feat_keys = ["coord", "color", "strength"]
 
 class_names = [
@@ -69,6 +69,10 @@ model = dict(
         enc_mode=True,
         freeze_encoder=False,
     ),
+    feature_mask_values=dict(
+        enable=True,
+        masked_feat_keys=["color", "strength"],
+    ),
 )
 
 # Linear probe fitted by tools/probe_pureforest.py on the pooled features.
@@ -103,6 +107,7 @@ transform = [
         type="Collect",
         keys=("coord", "grid_coord", "grid_size", "category"),
         feat_keys=feat_keys,
+        feat_scales=dict(coord=coord_feat_scale),
         optional_keys=("name",),
     ),
 ]
