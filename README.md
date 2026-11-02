@@ -129,9 +129,9 @@ python tools/train.py --config-file configs/malibu3d/multi-litept-b-v1m0-malibu3
 ```
 
 The configs validate on a fixed subset of 2,000 validation tiles (`val_subset_2000tiles.csv`, see
-[docs/data.md](docs/data.md#validation-subset)). At the end of training, the best checkpoint is evaluated on the test split, including APLS on the predicted road
-graphs (`network_apls_eval` in the configs; `tools/eval_network_apls.py` recomputes it from the saved
-predictions). `scripts/test.sh -d malibu3d -n <name>` tests a finished run again.
+[docs/data.md](docs/data.md#validation-subset)). At the end of training, the best checkpoint is evaluated on the
+test split, including APLS on the predicted road graphs (`network_apls_eval` in the configs;
+`tools/eval_network_apls.py` recomputes it from the saved predictions). `scripts/test.sh -d malibu3d -n <name>` tests a finished run again.
 
 | Config | Model | Paper |
 |---|---|---|

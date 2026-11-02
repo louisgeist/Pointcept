@@ -16,7 +16,7 @@ Synthèse des trois inventaires détaillés, rangés dans `local/release_invento
 | Résultat | Origine | Config dans le repo |
 |---|---|---|
 | Tab. 2 (5 modèles multitâches) | runs `era2p5gs`, `uzhxltcv`, `wznbvbgm`, `8t6q5nnv`, `u3j665te` (= checkpoints HF) | `configs/flair3d_default/multi-*` (équivalentes à l'entraînement) ✅ |
-| Tab. 2 débit d'inférence | pas dans wandb ; le bench local du 2026-08-27 donne d'autres valeurs | `scripts/bench_inference_speed.py` |
+| Tab. 2 débit d'inférence | pas dans wandb ; le bench local du 2026-08-27 donne d'autres valeurs | `tools/bench_inference_speed.py` |
 | Tab. 3 H3D | jobs 139391–139395 | `configs/h3d/*` ✅ (sauf LitePT, voir §2) |
 | Tab. 3 DALES / ECLAIR | anciennes seeds à lr fixé (`w110/2/grid_seed_*`) | **pas** les configs canoniques (voir §2) |
 | Tab. 3 OpenGF | probes sans Mix3D (`w116/1/opengf_lin_nomix`) | les configs canoniques ont encore `mix_prob=0.8` |
