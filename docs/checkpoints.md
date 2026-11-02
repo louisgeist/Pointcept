@@ -11,15 +11,13 @@ mIoU table: see that page). Every checkpoint is rebuilt from a **default config 
 | `ptv3/` | 46.2 M | `multi-ptv3-v1m0-malibu3d.py` | 4 GPUs, batch 12 (3/GPU), SyncBN |
 | `spunet/` | 42.3 M | `multi-spunet-v1m0-malibu3d.py` | 1 GPU, batch 12 |
 | `kpconvx/` | 13.6 M | `multi-kpconvx-v1m0-malibu3d.py` | 6 GPUs, batch 24 (4/GPU), SyncBN |
-| `sonata-pretrained/` | 108.5 M | `probe/sonata-v1m2-malibu3d-lin-grid.py` (backbone only) | SSL pre-training, `pretrain-sonata-v1m2-malibu3d.py` |
+| `sonata-pretrained/` | 108.5 M | `probe/sonata-v1m2-malibu3d-lin-grid-enc.py` (backbone only) | SSL pre-training, `pretrain-sonata-v1m2-malibu3d.py` |
 
 The five multitask models (all but `sonata-pretrained`) hold a backbone and the heads of the eight targets
 (`segment`, `forest_2d`, `elevation`, four `nathab_*` axes, `network`). `sonata-pretrained` is the Sonata
 student backbone without any head. All supervised runs: 200k iterations, AMP.
 
 ## 1. Download
-
-The repo is private for now: log in once (`hf auth login`, token with read access).
 
 One model, into `ckpt/` (the path expected by `multi-sonata-ft-v1m0-malibu3d.py` for `sonata-pretrained`):
 
@@ -59,21 +57,24 @@ result per task:
 ```bash
 export PYTHONPATH=$PWD
 python tools/forward_example.py --model litept-b \
-    --tile D067-2021_AU-S1-21_3-6 --split val \
-    --csv-manifest data/malibu3d/tiles.csv --max-points 30000 \
+    --tile D075-2021_UU-S1-4_3-3 --split test \
+    --csv-manifest data/malibu3d/tiles_toy.csv --max-points 30000 \
     --save out_litept_b.npz
 ```
 
 ```
 litept-b: 30000 points after voxelisation, 45.1 M params
-segment                    classes predicted: 8 | acc=0.936 mIoU(present classes)=0.713
+segment                    classes predicted: 5 | acc=0.909 mIoU(present classes)=0.846
 nathab_habitat_type        classes predicted: 4
-...
-elevation                  mean=0.83 std=1.96 min=-0.30 max=10.67
+nathab_moisture_regime     classes predicted: 3
+nathab_soil_chemistry      classes predicted: 2
+nathab_bioclimatic_zone    classes predicted: 2
+elevation                  mean=6.51 std=7.11 min=-0.35 max=24.55
 ```
 
 - `--tile` is the tile directory name as listed in `tiles.csv` (or in a CSV with a subset of its rows, passed with
-  `--csv-manifest`); the tile must be on disk under `data/malibu3d/` (see *Data* in the [README](../README.md)).
+  `--csv-manifest`); the tile must be on disk under `data/malibu3d/`. The example uses the toy region installed by
+  the *Quick start* of the [README](../README.md).
 - `--model` is one of `sonata-ft litept-b ptv3 spunet kpconvx sonata-pretrained`. `sonata-pretrained` has no head:
   the script prints the backbone features (`(N, 1232)`).
 - `--max-points N` keeps the N voxels nearest the tile centre (fits any GPU); `0` runs the whole tile.
@@ -95,7 +96,8 @@ model.load_state_dict(sd)          # strict: every key matches
 out = model(inp)                   # out["seg_logits"], out["seg_logits_by_task"], out["reg_pred_by_task"]
 ```
 
-Regression test of the released weights (needs the local D067 tiles): `pytest tests/test_checkpoint_forward.py`.
+Regression test of the released weights on two toy tiles (needs `ckpt/<model>/model.pth` and the toy region; each
+model is skipped otherwise): `PYTHONPATH=. pytest tests/test_checkpoint_forward.py -v`.
 
 ## 3. Frozen-backbone probing (downstream datasets)
 
@@ -126,4 +128,5 @@ sh scripts/train.sh -g 1 -d malibu3d -c malibu3d/multi-sonata-ft-v1m0-malibu3d -
 
 The other configs reproduce the supervised runs; use the GPU count of the table above, e.g.
 `sh scripts/train.sh -g 4 -d malibu3d -c malibu3d/multi-ptv3-v1m0-malibu3d -n ptv3_multi`. They read the
-full tile table, so they need the whole dataset on disk.
+full tile table, so they need the whole dataset on disk (the *Quick start* of the [README](../README.md) shows how
+to point them at the toy region instead).

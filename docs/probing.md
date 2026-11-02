@@ -4,42 +4,9 @@ The backbones trained on MALiBU3D are evaluated on five other aerial LiDAR datas
 frozen features (Tab. 3 of the paper), next to a LitePT-B trained from scratch on each dataset. Commands are run
 from the repository root with `export PYTHONPATH=./`.
 
-## Datasets
-
-| Dataset | Task | Metric | Source |
-|---|---|---|---|
-| DALES | semantic segmentation, 8 classes | mIoU | [University of Dayton](https://www.udayton.edu/engineering/centers/vision_lab/research/was_data_analysis_and_processing/dale.php) (`DALESObjects` PLY release) |
-| H3D | semantic segmentation, 11 classes | macro-F1 | [IFP, University of Stuttgart](https://ifpwww.ifp.uni-stuttgart.de/benchmark/hessigheim/default.aspx) (epoch March 2018) |
-| ECLAIR | semantic segmentation, 11 classes | mIoU | [SharperShape/eclair-dataset](https://github.com/SharperShape/eclair-dataset) |
-| OpenGF | ground filtering | IoU of the ground class (Test II, without outliers) | [Nathan-UW/OpenGF](https://github.com/Nathan-UW/OpenGF) |
-| PureForest | tile classification, 13 tree species | mIoU | [IGNF/PureForest](https://huggingface.co/datasets/IGNF/PureForest) |
-
-Preprocessing writes Pointcept scene folders under `data/<dataset>/{train,val,test}/` (the path read by the
-configs). `laspy` and `lazrs` read the LAZ files of H3D, ECLAIR, OpenGF and PureForest.
-
-```bash
-# DALES: extract the archive so that data/dales/raw/DALESObjects/{train,test}/*.ply exists
-python pointcept/datasets/preprocessing/dales/preprocess_dales.py \
-    --dataset_root data/dales/raw/DALESObjects --output_root data/dales --num_workers 8
-
-# H3D: data/h3d/Epoch_March2018/LiDAR/Mar18_{train,val}.laz and Mar18_test_GroundTruth.las
-python pointcept/datasets/preprocessing/h3d/preprocess_h3d.py \
-    --dataset_root data/h3d/Epoch_March2018 --output_root data/h3d --chunk-size 100 --num_workers 8
-
-# ECLAIR: data/eclair/raw/{labels.json, pointclouds/*.laz}
-python pointcept/datasets/preprocessing/eclair/preprocess_eclair.py \
-    --dataset_root data/eclair/raw --output_root data/eclair --num_workers 8
-
-# OpenGF: data/opengf/raw/{Training,Validation,Test}/...
-python pointcept/datasets/preprocessing/opengf/preprocess_opengf.py \
-    --dataset_root data/opengf/raw --output_root data/opengf --num_workers 8
-```
-
-PureForest: see [its preprocessing README](../pointcept/datasets/preprocessing/pureforest/README.md). Its test
-tiles whose forest overlaps a MALiBU3D train/val tile are excluded from the evaluation of MALiBU3D backbones
-(`exclude_malibu3d_leakage_tiles=True`).
-
-DALES has no validation split: its configs validate on the test split, as is common practice on this dataset.
+The datasets (DALES, H3D, ECLAIR, OpenGF, PureForest), their metrics and their preprocessing are described in
+[data.md](data.md#downstream-datasets). On PureForest, the test tiles whose forest overlaps a MALiBU3D train/val tile
+are excluded when probing MALiBU3D backbones (`exclude_malibu3d_leakage_tiles=True`).
 
 ## Linear probing protocol
 

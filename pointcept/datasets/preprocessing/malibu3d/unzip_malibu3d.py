@@ -5,7 +5,9 @@ Each ``data/{split}/{dept}_LIDARHD/{roi}.zip`` is flat (``{tile_id}/coord.npy``,
 optional road graph at the zip root). Extract into
 ``{output_root}/{split}/{dept}_LIDARHD/{roi}/`` and copy ``tiles.csv``, ``labels.json``,
 ``palettes.json`` and ``val_subset_2000tiles.csv`` to ``{output_root}``, the layout the configs expect
-with ``data_root = "data/malibu3d"``.
+with ``data_root = "data/malibu3d"``. The ``toy/`` region of the Hub (one extracted ROI) is put in
+the same layout, with its rows of ``tiles.csv`` in ``{output_root}/tiles_toy.csv``; it is enough to
+try the code without the zips (download ``toy/*`` and the metadata files only).
 
 Resume: skip a zip when every member already exists with the same uncompressed
 size. If a path that should be a directory exists as a file (interrupted unzip),
@@ -21,6 +23,7 @@ Example::
 from __future__ import annotations
 
 import argparse
+import csv
 import shutil
 import sys
 import zipfile
@@ -140,7 +143,7 @@ def _worker(payload: tuple[str, str, bool]) -> tuple[str, str, str]:
 def list_zips(zip_root: Path, splits: list[str] | None) -> list[Path]:
     data = zip_root / "data"
     if not data.is_dir():
-        raise FileNotFoundError(f"no data/ under {zip_root}")
+        return []
     zips = sorted(data.rglob("*.zip"))
     if splits:
         keep = set(splits)
@@ -156,12 +159,39 @@ def copy_meta(zip_root: Path, output_root: Path) -> list[Path]:
         if src.is_file():
             shutil.copy2(src, output_root / name)
             copied.append(output_root / name)
-    toy = zip_root / "toy"
-    dest_toy = output_root / "toy"
-    if toy.is_dir() and not dest_toy.exists():
-        shutil.copytree(toy, dest_toy)
-        copied.append(dest_toy)
     return copied
+
+
+def install_toy(zip_root: Path, output_root: Path) -> list[Path]:
+    """Copy the flat ``toy/{tile_id}/`` tiles (and the ROI road graph) into the dataset layout and
+    write their ``tiles.csv`` rows to ``tiles_toy.csv``."""
+    toy = zip_root / "toy"
+    if not toy.is_dir():
+        return []
+    with (zip_root / "tiles.csv").open(newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        fields = reader.fieldnames
+        rows = {row["tile_id"]: row for row in reader}
+    toy_rows = [rows[p.name] for p in sorted(toy.iterdir()) if p.is_dir()]
+    roi_dirs = set()
+    for row in toy_rows:
+        roi_dir = (
+            output_root / row["split"] / f"{row['dept_year']}_LIDARHD" / row["roi"]
+        )
+        roi_dirs.add(roi_dir)
+        dest = roi_dir / row["tile_id"]
+        if not dest.exists():
+            shutil.copytree(toy / row["tile_id"], dest)
+    assert len(roi_dirs) == 1, roi_dirs
+    roi_dir = roi_dirs.pop()
+    for graph in toy.glob("*.gpkg"):
+        shutil.copy2(graph, roi_dir / graph.name)
+    toy_csv = output_root / "tiles_toy.csv"
+    with toy_csv.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fields)
+        writer.writeheader()
+        writer.writerows(toy_rows)
+    return [roi_dir, toy_csv]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -205,13 +235,15 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit("--workers must be >= 1")
 
     zips = list_zips(zip_root, args.split)
-    if not zips:
+    if not zips and not (zip_root / "toy").is_dir():
         raise SystemExit(f"no .zip under {zip_root / 'data'}")
 
     if not args.skip_meta:
-        copied = copy_meta(zip_root, output_root)
+        copied = copy_meta(zip_root, output_root) + install_toy(zip_root, output_root)
         for path in copied:
             print(f"copied {path.relative_to(output_root)}")
+    if not zips:
+        return 0
 
     jobs = [
         (str(path), str(zip_dest_dir(path, zip_root, output_root)), args.overwrite)

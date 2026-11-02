@@ -60,7 +60,7 @@ conda env create -f environment.yml   # PyTorch 2.5.0, CUDA 12.4 (toolkit includ
 conda activate malibu3d
 
 # CUDA extensions, built against the installed PyTorch
-pip install --no-build-isolation ./libs/pointops ./libs/pointrope   # KPConvX, LitePT
+pip install --no-build-isolation ./libs/pointops ./libs/pointrope   # pointops: KPConvX, Sonata; pointrope: LitePT
 pip install --no-build-isolation flash-attn==2.7.3                  # PTv3, Sonata, LitePT
 
 # KPConvX C++ helpers (in place)
@@ -72,31 +72,50 @@ flash-attention downloads a prebuilt wheel when one matches PyTorch and CUDA, an
 the parallel jobs with `MAX_JOBS=8`). Run every command below from the repository root with `export PYTHONPATH=./`;
 `pytest tests/` checks the installation.
 
+## ⚡ Quick start
+
+The dataset ships one extracted region, `toy/` (25 tiles of Paris, 170 MB), enough to try the code without the full
+download. `unzip_malibu3d.py` puts it in the dataset layout and lists its tiles in `data/malibu3d/tiles_toy.csv`:
+
+```bash
+hf download LouisGeist/MALiBU3D --repo-type dataset --local-dir data/malibu3d_zip \
+    --include "toy/*" --include "*.csv" --include "*.json"
+python pointcept/datasets/preprocessing/malibu3d/unzip_malibu3d.py \
+    --zip-root data/malibu3d_zip --output-root data/malibu3d
+python pointcept/datasets/preprocessing/malibu3d/rasterize_network.py \
+    --data_root data/malibu3d --split_manifest_csv data/malibu3d/tiles_toy.csv
+
+# run a released checkpoint on one tile
+python tools/forward_example.py --model litept-b --split test --tile D075-2021_UU-S1-4_3-3
+
+# a few hundred training iterations, then validation, test and APLS, on the toy region
+python tools/train.py --config-file configs/malibu3d/multi-litept-b-v1m0-malibu3d.py --num-gpus 1 \
+    --options save_path=exp/malibu3d/quickstart enable_wandb=False \
+    total_iters=200 iter_per_epoch=100 eval_every=1 batch_size=4 \
+    csv_manifest=data/malibu3d/tiles_toy.csv data.train.csv_manifest=data/malibu3d/tiles_toy.csv \
+    data.val.csv_manifest=data/malibu3d/tiles_toy.csv data.test.csv_manifest=data/malibu3d/tiles_toy.csv \
+    data.train.split=test data.val.split=test data.val.stratified_subset_manifest=False
+```
+
+The toy region belongs to the test split, so this run trains and evaluates on the same tiles: it checks the setup,
+not a result. Training logs to [Weights & Biases](https://wandb.ai) by default (`wandb_project` in each config);
+`enable_wandb=False` turns it off.
+
 ## 📦 Data
 
-Download the dataset from Hugging Face (790 GB of zipped regions, 1.6 TB once extracted) and extract it into `data/malibu3d`, the path read by the configs:
+Download the dataset from Hugging Face (790 GB of zipped regions, 1.6 TB once extracted), extract it into
+`data/malibu3d`, the path read by the configs, and rasterize the road masks once from the road graphs:
 
 ```bash
 hf download LouisGeist/MALiBU3D --repo-type dataset --local-dir data/malibu3d_zip
 python pointcept/datasets/preprocessing/malibu3d/unzip_malibu3d.py \
     --zip-root data/malibu3d_zip --output-root data/malibu3d --workers 8
-```
-
-The [dataset card](https://huggingface.co/datasets/LouisGeist/MALiBU3D) describes the files of each tile and
-`tiles.csv`, the table of all tiles read by `MALiBU3DDataset`. A single region can be downloaded with
-`--include "data/train/D075-2021_LIDARHD/*"` and the same table.
-
-The road masks are not shipped: rasterize them once from the road graphs of each region (`network.npy` per tile):
-
-```bash
 python pointcept/datasets/preprocessing/malibu3d/rasterize_network.py \
     --data_root data/malibu3d --split_manifest_csv data/malibu3d/tiles.csv --num_workers 16
 ```
 
-**Validation subset.** The training configs validate on `val_subset_2000tiles.csv` (shipped with the dataset): a
-fixed subset of 2,000 validation tiles, representative of the label distribution of the whole validation split.
-Test metrics always use the full test split. To validate on the whole validation split, add
-`--options data.val.stratified_subset_manifest=False`.
+[docs/data.md](docs/data.md) describes the files of each tile, the options of these scripts and the preparation of
+the downstream datasets.
 
 ## 🚀 Training and evaluation on MALiBU3D
 
@@ -109,7 +128,8 @@ python tools/train.py --config-file configs/malibu3d/multi-litept-b-v1m0-malibu3
     --options save_path=exp/malibu3d/litept-b
 ```
 
-At the end of training, the best checkpoint is evaluated on the test split, including APLS on the predicted road
+The configs validate on a fixed subset of 2,000 validation tiles (`val_subset_2000tiles.csv`, see
+[docs/data.md](docs/data.md#validation-subset)). At the end of training, the best checkpoint is evaluated on the test split, including APLS on the predicted road
 graphs (`network_apls_eval` in the configs; `tools/eval_network_apls.py` recomputes it from the saved
 predictions). `scripts/test.sh -d malibu3d -n <name>` tests a finished run again.
 
@@ -151,7 +171,28 @@ to download them, run them on a tile, probe or fine-tune them.
 ## 🔁 Downstream evaluation
 
 The frozen backbones are probed on DALES, H3D, ECLAIR, OpenGF and PureForest, next to a LitePT-B trained from
-scratch on each dataset (Tab. 3). Preprocessing, configs and the probing protocol: [docs/probing.md](docs/probing.md).
+scratch on each dataset (Tab. 3). Preprocessing: [docs/data.md](docs/data.md#downstream-datasets); configs and
+probing protocol: [docs/probing.md](docs/probing.md).
+
+## 🗂️ Repository layout
+
+```text
+configs/            one standalone config per experiment
+  _base_/           runtime defaults shared by all configs
+  malibu3d/         multitask baselines (Tab. 2), Sonata pretraining, ablations/ (Tab. 4), probe/
+  dales/ h3d/ eclair/ opengf/ pureforest/   downstream probes (Tab. 3) and their ablations/
+pointcept/
+  datasets/         MALiBU3D and downstream datasets, transforms, preprocessing/ (data preparation scripts)
+  models/           LitePT, PTv3, Sonata, SpUNet, KPConvX, multitask and GridProbe heads, losses
+  engines/          trainers, testers and hooks (evaluation, checkpointing, logging)
+  evaluation/       road network evaluation (mask -> graph, APLS)
+  utils/            config, logging, metrics, optimizers and schedulers, multitask loss balancing
+tools/              command lines: train, test, APLS, downstream probing, checkpoint demo, speed benchmark
+scripts/            train.sh / test.sh wrappers
+libs/               CUDA extensions (pointops, pointrope)
+docs/               data preparation, checkpoints, downstream probing
+tests/              unit tests (pytest tests/)
+```
 
 ## 📊 Results
 
@@ -209,4 +250,4 @@ control points, symmetric score). The GradNorm ablation implements [Chen et al.,
 The downstream evaluation uses [DALES](https://arxiv.org/abs/2004.11985), [H3D](https://arxiv.org/abs/2102.05346),
 [ECLAIR](https://arxiv.org/abs/2404.10699), [OpenGF](https://github.com/Nathan-UW/OpenGF) and
 [PureForest](https://arxiv.org/abs/2404.12064), each under the license of its authors (sources in
-[docs/probing.md](docs/probing.md)).
+[docs/data.md](docs/data.md#downstream-datasets)).

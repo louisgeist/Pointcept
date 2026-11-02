@@ -1,6 +1,6 @@
 """Run one released MALiBU3D backbone on one preprocessed tile and print what it predicts.
 
-Weights come from the Hugging Face repo (``hf auth login`` first while it is private) or from a local file:
+Weights come from the Hugging Face repo or from a local file:
 
     export PYTHONPATH=$PWD
     python tools/forward_example.py --model litept-b --tile <tile_name> --split val

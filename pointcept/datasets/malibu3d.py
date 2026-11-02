@@ -219,11 +219,8 @@ class MALiBU3DDataset(DefaultDataset):
     def _load_pixel_semantic_label(self, data_dict, scene, target_key="network"):
         """Load ``{target_key}.npy`` and grid meta for a pixel semantic task.
 
-        The task trains on the ``channel_names`` of its task config (ROADS for
-        ``network``). Rasters written by an older ``rasterize_network.py`` may have more
-        channels (ROADS, RAILROADS, TRANSMISSION_LINES); the trained ones are selected by
-        name via ``meta.{target_key}.channel_order`` when present, else the first
-        channels are kept.
+        The raster has one channel per ``channel_names`` entry of the task config (ROADS
+        for ``network``).
 
         Tiles without any positive pixel have no ``{target_key}.npy``, only
         ``meta.{target_key}`` (``empty: true`` + width/height); they get an all-zero
@@ -266,14 +263,11 @@ class MALiBU3DDataset(DefaultDataset):
                     f"{target_key}.npy expected shape (C, H, W), got {raster.shape} "
                     f"under scene: {scene}"
                 )
-            raster = self._select_pixel_semantic_channels(
-                raster,
-                r=r,
-                channel_names=channel_names,
-                channel_order=raster_meta.get("channel_order"),
-                scene=scene,
-                target_key=target_key,
-            )
+            if raster.shape[0] != r:
+                raise ValueError(
+                    f"{target_key}.npy has {raster.shape[0]} channels but the task expects "
+                    f"{r} ({channel_names}) under scene: {scene}"
+                )
             raster = raster.astype(np.uint8, copy=False)
         elif raster_meta:
             # Empty mask: rasterize_network.py wrote the grid size in meta.json only.
@@ -310,32 +304,6 @@ class MALiBU3DDataset(DefaultDataset):
         data_dict[f"{target_key}_origin_y"] = np.asarray([origin_y], dtype=np.float64)
         data_dict[f"{target_key}_pixel_m"] = np.asarray([pixel_m], dtype=np.float64)
         return data_dict
-
-    @staticmethod
-    def _select_pixel_semantic_channels(
-        raster, *, r, channel_names, channel_order, scene, target_key
-    ):
-        """Reduce on-disk ``(C, H, W)`` to the ``r`` training channels."""
-        c = int(raster.shape[0])
-        if c == r:
-            return raster
-        if c < r:
-            raise ValueError(
-                f"{target_key}.npy has {c} channels but task expects {r} "
-                f"({channel_names}) under scene: {scene}"
-            )
-        if isinstance(channel_order, (list, tuple)) and len(channel_order) == c:
-            name_to_idx = {str(name): i for i, name in enumerate(channel_order)}
-            missing = [name for name in channel_names if name not in name_to_idx]
-            if missing:
-                raise ValueError(
-                    f"{target_key}.npy channel_order {list(channel_order)} missing "
-                    f"{missing} under scene: {scene}"
-                )
-            indices = [name_to_idx[name] for name in channel_names]
-            return raster[indices]
-        # No channel_order: assume rasterize_network.py's order (ROADS, RAILROADS, ...).
-        return raster[:r]
 
     def get_data(self, idx):
         """Load a tile and attach its targets, keyed by task name.

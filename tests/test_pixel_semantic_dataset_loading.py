@@ -1,5 +1,5 @@
 """MALiBU3DDataset._load_pixel_semantic_label for "network" and "forest_2d": raster + georeferencing from
-meta.json, empty-tile and missing-raster handling, channel slicing. The dataset is built with object.__new__
+meta.json, empty-tile and missing-raster handling, channel count check. The dataset is built with object.__new__
 (its __init__ needs on-disk manifests) and only optional_target_keys is set.
 
 Run with: PYTHONPATH=. pytest tests/test_pixel_semantic_dataset_loading.py
@@ -89,7 +89,7 @@ class TestLoadPixelSemanticLabelForestTwoD(unittest.TestCase):
             self.assertEqual(out["forest_2d"].shape[0], 1)
 
 
-class TestNetworkStillWorksUnchanged(unittest.TestCase):
+class TestNetworkRaster(unittest.TestCase):
     def test_default_target_key_loads_network(self):
         ds = _bare_dataset()
         with tempfile.TemporaryDirectory() as scene:
@@ -100,20 +100,23 @@ class TestNetworkStillWorksUnchanged(unittest.TestCase):
                     "pixel_m": 1.0,
                     "width": 2,
                     "height": 2,
-                    "channel_order": ["ROADS", "RAILROADS", "TRANSMISSION_LINES"],
+                    "channel_order": ["ROADS"],
                 }
             }
             with open(os.path.join(scene, "meta.json"), "w") as f:
                 json.dump(meta, f)
-            raster = np.zeros((3, 2, 2), dtype=np.uint8)
-            raster[0] = 1  # ROADS channel
-            data_dict = {"network": raster}
+            raster = np.ones((1, 2, 2), dtype=np.uint8)
+            out = ds._load_pixel_semantic_label({"network": raster}, scene)
+            np.testing.assert_array_equal(out["network"], raster)
+            self.assertEqual(out["network_origin_x"], [1.0])
 
-            out = ds._load_pixel_semantic_label(data_dict, scene)
-
-            # Only the ROADS channel is kept.
-            self.assertEqual(out["network"].shape, (1, 2, 2))
-            np.testing.assert_array_equal(out["network"][0], np.ones((2, 2)))
+    def test_channel_count_mismatch_raises(self):
+        ds = _bare_dataset()
+        with tempfile.TemporaryDirectory() as scene:
+            with self.assertRaises(ValueError):
+                ds._load_pixel_semantic_label(
+                    {"network": np.zeros((3, 2, 2), dtype=np.uint8)}, scene
+                )
 
 
 if __name__ == "__main__":
