@@ -6,6 +6,7 @@ Please cite our work if the code is helpful to you.
 """
 
 from contextlib import nullcontext
+import json
 import os
 import time
 import traceback
@@ -210,6 +211,22 @@ class TesterBase:
                 "test/s": float(total_s),
                 "test/h": float(total_s / 3600.0),
             }
+            # Same metrics as wandb (per-class included), so offline runs can be read
+            # back without syncing them.
+            if extra_log_dict:
+                with open(os.path.join(self.cfg.save_path, "test_metrics.json"), "w") as f:
+                    json.dump(
+                        {
+                            "weight": getattr(self.cfg, "weight", None),
+                            "epoch": self.checkpoint_epoch,
+                            **extra_log_dict,
+                            **timing,
+                        },
+                        f,
+                        indent=2,
+                        sort_keys=True,
+                        default=float,
+                    )
             if getattr(self.cfg, "enable_wandb", False) and wandb.run is not None:
                 from pointcept.utils.wandb_resume import write_local_last_step
 
