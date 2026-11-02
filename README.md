@@ -85,6 +85,9 @@ python pointcept/datasets/preprocessing/malibu3d/unzip_malibu3d.py \
 python pointcept/datasets/preprocessing/malibu3d/rasterize_network.py \
     --data_root data/malibu3d --split_manifest_csv data/malibu3d/tiles_toy.csv
 
+# look at the toy region in 3D, every input and label (pip install viser), then open http://localhost:8080
+python tools/visualize_viser.py data/malibu3d/test/D075-2021_LIDARHD/UU-S1-4
+
 # run a released checkpoint on one tile
 python tools/forward_example.py --model litept-b --split test --tile D075-2021_UU-S1-4_3-3
 
