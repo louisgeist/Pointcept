@@ -25,7 +25,7 @@ import torch
 import matplotlib.pyplot as plt
 from matplotlib import cm
 from os import makedirs
-from os.path import join, exists
+from os.path import abspath, dirname, join, exists
 
 class bcolors:
     HEADER = '\033[95m'
@@ -125,7 +125,7 @@ def spherical_Lloyd_gpu(radius, num_cells, num_kernels=1, dimension=3, fixed='ce
 
     # Radius used for optimization (points are rescaled afterwards)
     radius0 = 1.0
-    device = init_gpu()
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     #######################
     # Kernel initialization
@@ -450,7 +450,7 @@ def shell_kernel_generator(radius, shell_n_pts, num_kernels=1, dimension=3, verb
     assert n_shell > 1
     assert shell_n_pts[0] == 1
 
-    device = init_gpu()
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Radius used for optimization (points are rescaled afterwards)
     radius0 = 1
@@ -582,7 +582,7 @@ def shell_kernel_generator(radius, shell_n_pts, num_kernels=1, dimension=3, verb
 def load_kernels(radius, shell_sizes, dimension, fixed, lloyd=False):
 
     # Kernel directory
-    kernel_dir = 'pointcept/models/kpconvx/utils/dispositions'
+    kernel_dir = join(dirname(abspath(__file__)), 'dispositions')
     if not exists(kernel_dir):
         makedirs(kernel_dir)
 
