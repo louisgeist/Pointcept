@@ -57,10 +57,11 @@ each tile's grid.
 
 - Graphs are read from each ROI directory, or from `--network_graphs_root` when given.
 - A tile with `has_roads_graph = True` whose graph is missing, or a tile without `coord.npy`, is an error.
-- A tile without any road pixel gets no `network.npy`, only its grid in `meta.json["network"]` with
-  `"empty": true`; `MALiBU3DDataset` then uses an all-zero mask.
-- Other options: `--splits`, `--pixel_m`, `--force_reload_bounds` (recompute the tile bounding box instead of
-  reading it from `meta.json`), `--max_rois` (debug).
+- Each mask lies on the tile's 1 m grid of `tiles.csv` (`forest_origin_x/y`, `forest_width/height`), the grid of
+  `forest_2d.npy`.
+- Every tile gets a `network.npy`, all zeros when no road crosses it (most tiles: the graph covers the whole ROI).
+  A missing `network.npy` therefore means the masks were not rasterized, and `MALiBU3DDataset` raises an error.
+- Other options: `--splits`, `--max_rois` (debug).
 
 The mask -> graph post-processing and the APLS metric live in `pointcept/evaluation/network/`.
 

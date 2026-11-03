@@ -1,4 +1,4 @@
-"""Hugging Face release layout: tiles have no meta.json, so raster georeferencing is read from tiles.csv.
+"""Hugging Face release layout: raster georeferencing is read from tiles.csv.
 
 Run with: PYTHONPATH=. pytest tests/test_release_layout.py
 """
@@ -71,7 +71,7 @@ class TestTileCatalogRasterColumns(unittest.TestCase):
             self.assertEqual((tile.raster_width, tile.raster_height), (103, 103))
 
 
-class TestRasterOriginWithoutMeta(unittest.TestCase):
+class TestRasterOriginFromTilesCsv(unittest.TestCase):
     def _dataset(self, origins):
         ds = object.__new__(MALiBU3DDataset)
         ds.optional_target_keys = ("network",)

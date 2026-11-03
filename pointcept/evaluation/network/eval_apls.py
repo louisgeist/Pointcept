@@ -330,7 +330,8 @@ def run(
     log = pbar.write if use_pbar else print
 
     try:
-        for roi_dir, flags, patch_dirs, coverage in roi_items:
+        for roi_dir, flags, tiles, coverage in roi_items:
+            patch_dirs = [patch_dir for patch_dir, _ in tiles]
             # roi_dir is <data_root>/<split>/<dept_year>_LIDARHD/<roi> -- recover the
             # department/year for the per-ROI CSV (roi names alone don't identify the zone).
             department = roi_dir.parent.name.removesuffix("_LIDARHD")
@@ -338,26 +339,15 @@ def run(
             roi_label = f"{department}/{roi_dir.name}"
             n_total = int(coverage.get("n_subtiles_total", len(patch_dirs)))
             n_disk_missing = int(coverage.get("n_subtiles_missing", 0))
-            missing_pred_dirs = [
-                p
+            # Every tile has a network.npy (all zeros without any road), so the tester
+            # writes a prediction for each one: a missing one is a real coverage gap.
+            missing_pred = [
+                p.name
                 for p in patch_dirs
                 if not (save_path / f"{p.name}_logits_network.npy").is_file()
             ]
-            missing_pred = [p.name for p in missing_pred_dirs]
             n_pred_missing = len(missing_pred)
             n_pred_present = len(patch_dirs) - n_pred_missing
-            # A missing `{patch_id}_logits_network.npy` is usually harmless: the
-            # subtile has zero GT pixels for every scored channel, so upstream
-            # preprocessing (rasterize_network.py) never wrote a `network.npy` /
-            # raster grid to predict onto in the first place -- there's no GT to
-            # miss there either. Split those out so the logged warning reflects
-            # genuine coverage gaps, not this expected case.
-            n_pred_missing_confirmed_empty = sum(
-                1
-                for p in missing_pred_dirs
-                if nps.patch_network_is_confirmed_empty(p, types) is True
-            )
-            n_pred_missing_unexpected = n_pred_missing - n_pred_missing_confirmed_empty
             if n_disk_missing or n_pred_missing:
                 partial = {
                     "roi": roi_dir.name,
@@ -369,38 +359,28 @@ def run(
                     "n_subtiles_missing_disk": n_disk_missing,
                     "n_predictions_present": n_pred_present,
                     "n_predictions_missing": n_pred_missing,
-                    "n_predictions_missing_confirmed_empty_gt": n_pred_missing_confirmed_empty,
-                    "n_predictions_missing_unexpected": n_pred_missing_unexpected,
                     "missing_patch_ids_disk": coverage.get("missing_patch_ids", []),
                     "missing_prediction_ids": missing_pred,
                 }
                 partial_rois.append(partial)
-                if n_disk_missing or n_pred_missing_unexpected:
-                    log(
-                        f"[partial] {roi_label}: scoring with incomplete coverage -- "
-                        f"disk missing {n_disk_missing}/{n_total} subtiles, "
-                        f"predictions missing {n_pred_missing_unexpected}/{len(patch_dirs)} "
-                        f"unexpected (+{n_pred_missing_confirmed_empty} confirmed "
-                        "empty-GT, harmless) "
-                        "(APLS vs full-ROI GT can be pessimistic; see partial_rois in JSON)."
-                    )
+                log(
+                    f"[partial] {roi_label}: scoring with incomplete coverage -- "
+                    f"disk missing {n_disk_missing}/{n_total} subtiles, "
+                    f"predictions missing {n_pred_missing}/{len(patch_dirs)} "
+                    "(APLS vs full-ROI GT can be pessimistic; see partial_rois in JSON)."
+                )
 
             try:
                 roi_timings: Optional[Dict[str, float]] = {} if profile else None
                 with _timed(profiler, "stitch", local=roi_timings):
                     roi_probs, roi_grid = nps.stitch_roi_predictions(
-                        patch_dirs,
+                        tiles,
                         save_path,
                         combine=overlap_combine,
                         allow_missing_predictions=True,
                     )
             except FileNotFoundError as exc:
-                all_confirmed_empty = all(
-                    nps.patch_network_is_confirmed_empty(p, types) is True
-                    for p in patch_dirs
-                )
-                if not all_confirmed_empty:
-                    log(f"[excluded] {roi_label}: no prediction file(s) -- {exc}")
+                log(f"[excluded] {roi_label}: no prediction file(s) -- {exc}")
                 n_rois_skipped += 1
                 excluded_rois.append(
                     {
@@ -408,7 +388,6 @@ def run(
                         "department": department,
                         "reason": "missing_prediction_files",
                         "detail": str(exc),
-                        "all_confirmed_empty_gt": all_confirmed_empty,
                     }
                 )
                 pbar.update(1)

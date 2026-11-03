@@ -1,15 +1,16 @@
 """Write the ``network.npy`` (1, H, W) road masks of every MALiBU3D tile from the road graphs.
 
-Driven by the tile CSV (``tiles.csv`` or an older split manifest, read via
+Driven by the tile CSV (``tiles.csv`` or a subset of its rows, read via
 ``pointcept/datasets/tile_catalog.py``): each tile must already exist under ``data_root`` with
-``coord.npy`` (a missing tile is an error).
+``coord.npy`` (a missing tile is an error). Each mask is written on the tile's 1 m grid given by
+the ``forest_origin_x/y`` and ``forest_width/height`` columns, the grid of ``forest_2d.npy``.
 
 Ground-truth roads are graphs (``{dept}_{roi}_ROADS_graph.gpkg``, one per ROI, read from
 each ROI directory, which is the Hugging Face layout, or from ``--network_graphs_root``).
 Each ROI graph is densified once into unique 1 m Lambert-93 cells (longitudinal step plus
 optional lateral ``± line_width_m / 2`` offsets), which are then sliced into each tile's
-grid. The single channel is ``NETWORK_TYPES`` (ROADS). Tiles without any positive pixel
-only get ``meta.json["network"]`` (``empty: true``), no ``network.npy``.
+grid. The single channel is ``NETWORK_TYPES`` (ROADS). Every tile gets a ``network.npy``, all
+zeros when no road crosses it, so a missing file always means the masks were not rasterized.
 
 A tile whose catalog flag ``has_roads_graph`` (older ``ROADS``) is ``True`` but whose ROI
 has no ROADS graph is an error.
@@ -25,7 +26,6 @@ Example::
 from __future__ import annotations
 
 import argparse
-import json
 from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
@@ -40,26 +40,28 @@ from pointcept.evaluation.network.label_utils import (
     load_roi_exported_networks,
 )
 from pointcept.evaluation.network.xy_raster_utils import (
-    abs_xy_bounds_from_coord,
+    GridSpec,
     densify_segments_to_absolute_cells,
-    grid_from_xy_bounds,
     mask_from_absolute_cells,
 )
+
+# Pixel size of the tile grids of tiles.csv (forest_* columns).
+PIXEL_M = 1.0
 
 
 def group_by_roi(
     patches: List[ManifestPatch], data_root: Path
-) -> List[Tuple[Path, Dict[str, bool], List[Path]]]:
-    """Group tiles by ROI directory; raise if any tile lacks ``coord.npy``.
+) -> List[Tuple[Path, Dict[str, bool], List[Tuple[Path, GridSpec]]]]:
+    """Group tiles by ROI directory; raise if any tile lacks ``coord.npy`` or its grid.
 
-    Returns a sorted list of ``(roi_dir, flags, patch_dirs)``. Flags must agree within
-    a ROI. All missing tiles are listed in a single error after the full scan.
+    Returns a sorted list of ``(roi_dir, flags, [(patch_dir, grid), ...])``. Flags must
+    agree within a ROI. All missing tiles are listed in a single error after the full scan.
     """
     grouped: Dict[Path, List[ManifestPatch]] = defaultdict(list)
     for patch in patches:
         grouped[patch.roi_dir(data_root)].append(patch)
 
-    out: List[Tuple[Path, Dict[str, bool], List[Path]]] = []
+    out: List[Tuple[Path, Dict[str, bool], List[Tuple[Path, GridSpec]]]] = []
     missing: List[str] = []
     for roi_dir in sorted(grouped.keys(), key=str):
         roi_patches = sorted(grouped[roi_dir], key=lambda p: p.patch_id)
@@ -71,14 +73,28 @@ def group_by_roi(
                     f"{roi_patches[0].patch_id}={flags} vs "
                     f"{p.patch_id}={p.flags_dict}"
                 )
-        patch_dirs: List[Path] = []
+        patch_dirs: List[Tuple[Path, GridSpec]] = []
         for p in roi_patches:
+            if p.raster_grid is None:
+                raise ValueError(
+                    f"Tile {p.patch_id} has no raster grid: the tile CSV needs the "
+                    "forest_origin_x, forest_origin_y, forest_width and forest_height "
+                    "columns of tiles.csv."
+                )
             patch_dir = p.patch_dir(data_root)
             coord = patch_dir / "coord.npy"
             if not coord.is_file():
                 missing.append(str(coord))
             else:
-                patch_dirs.append(patch_dir)
+                origin_x, origin_y, width, height = p.raster_grid
+                grid = GridSpec(
+                    origin_x=float(origin_x),
+                    origin_y=float(origin_y),
+                    width=int(width),
+                    height=int(height),
+                    pixel_m=PIXEL_M,
+                )
+                patch_dirs.append((patch_dir, grid))
         if patch_dirs:
             out.append((roi_dir, flags, patch_dirs))
 
@@ -90,38 +106,6 @@ def group_by_roi(
             f"  {preview}{more}"
         )
     return out
-
-
-def _load_cached_bounds(meta: dict) -> Optional[Tuple[float, float, float, float]]:
-    net = meta.get("network")
-    if not isinstance(net, dict):
-        return None
-    bounds = net.get("abs_xy_bounds")
-    if not isinstance(bounds, (list, tuple)) or len(bounds) != 4:
-        return None
-    try:
-        xmin, ymin, xmax, ymax = (float(v) for v in bounds)
-    except (TypeError, ValueError):
-        return None
-    if not np.isfinite([xmin, ymin, xmax, ymax]).all():
-        return None
-    if xmax < xmin or ymax < ymin:
-        return None
-    return xmin, ymin, xmax, ymax
-
-
-def _read_meta(patch_dir: Path) -> dict:
-    meta_path = patch_dir / "meta.json"
-    if not meta_path.is_file():
-        return {}
-    with open(meta_path, "r", encoding="utf-8") as f:
-        return json.load(f)
-
-
-def _write_meta(patch_dir: Path, meta: dict) -> None:
-    meta_path = patch_dir / "meta.json"
-    with open(meta_path, "w", encoding="utf-8") as f:
-        json.dump(meta, f, indent=2)
 
 
 def _densify_roi_cells(
@@ -147,23 +131,9 @@ def _densify_roi_cells(
 
 
 def process_patch(
-    patch_dir: Path,
-    cells_by_type: Dict[str, np.ndarray],
-    *,
-    flags: Dict[str, bool],
-    pixel_m: float,
-    sample_step_m: float,
-    line_width_m: float,
-    force_reload_bounds: bool = False,
+    patch_dir: Path, grid: GridSpec, cells_by_type: Dict[str, np.ndarray]
 ) -> dict:
-    """Write the tile's network.npy (if non-empty) and its grid in meta.json; return stats."""
-    meta = _read_meta(patch_dir)
-    bounds = None if force_reload_bounds else _load_cached_bounds(meta)
-    if bounds is None:
-        bounds = abs_xy_bounds_from_coord(patch_dir)
-    xmin, ymin, xmax, ymax = bounds
-    grid = grid_from_xy_bounds(xmin, ymin, xmax, ymax, pixel_m=pixel_m)
-
+    """Write the tile's ``(1, H, W)`` network.npy (all zeros without any road); return stats."""
     masks = []
     positive_counts = {}
     for network_type in NETWORK_TYPES:
@@ -171,51 +141,21 @@ def process_patch(
         mask = mask_from_absolute_cells(cells, grid)
         masks.append(mask.astype(np.uint8, copy=False))
         positive_counts[network_type] = int(mask.sum())
-
-    network = np.stack(masks, axis=0)  # (1, H, W)
-    is_empty = all(c == 0 for c in positive_counts.values())
-    npy_path = patch_dir / "network.npy"
-    if is_empty:
-        if npy_path.is_file():
-            npy_path.unlink()
-    else:
-        np.save(npy_path, network)
-
-    meta["network"] = {
-        "source": "export_network_graphs",
-        "origin_x": float(grid.origin_x),
-        "origin_y": float(grid.origin_y),
-        "width": int(grid.width),
-        "height": int(grid.height),
-        "pixel_m": float(grid.pixel_m),
-        "crs": "EPSG:2154",
-        "channel_order": list(NETWORK_TYPES),
-        "sample_step_m": float(sample_step_m),
-        "line_width_m": float(line_width_m),
-        "manifest_flags": {k: bool(v) for k, v in flags.items()},
-        "abs_xy_bounds": [xmin, ymin, xmax, ymax],
-        "positive_pixel_counts": positive_counts,
-        "empty": bool(is_empty),
-    }
-    _write_meta(patch_dir, meta)
+    np.save(patch_dir / "network.npy", np.stack(masks, axis=0))
     return {
         "patch": str(patch_dir),
-        "shape": list(network.shape),
         "positive_pixel_counts": positive_counts,
-        "empty": bool(is_empty),
-        "wrote_npy": not is_empty,
+        "empty": all(c == 0 for c in positive_counts.values()),
     }
 
 
 def _process_roi_task(
     roi_dir: str,
-    patch_dirs: List[str],
+    patches: List[Tuple[str, GridSpec]],
     flags: Dict[str, bool],
     network_graphs_root: Optional[str],
-    pixel_m: float,
     sample_step_m: float,
     line_width_m: float,
-    force_reload_bounds: bool,
 ) -> dict:
     """Worker entry: load and densify the ROI graphs once, then process all its tiles."""
     roi_path = Path(roi_dir)
@@ -227,7 +167,7 @@ def _process_roi_task(
     )
     cells_by_type = _densify_roi_cells(
         segments_by_type,
-        pixel_m=pixel_m,
+        pixel_m=PIXEL_M,
         sample_step_m=sample_step_m,
         line_width_m=line_width_m,
     )
@@ -238,30 +178,17 @@ def _process_roi_task(
     cell_counts = {t: int(cells_by_type[t].shape[0]) for t in NETWORK_TYPES}
 
     patch_stats: List[dict] = []
-    n_wrote = 0
     n_empty = 0
-    for patch_dir_s in patch_dirs:
-        stats = process_patch(
-            Path(patch_dir_s),
-            cells_by_type,
-            flags=flags,
-            pixel_m=pixel_m,
-            sample_step_m=sample_step_m,
-            line_width_m=line_width_m,
-            force_reload_bounds=force_reload_bounds,
-        )
+    for patch_dir_s, grid in patches:
+        stats = process_patch(Path(patch_dir_s), grid, cells_by_type)
         patch_stats.append(stats)
-        if stats["wrote_npy"]:
-            n_wrote += 1
-        else:
-            n_empty += 1
+        n_empty += int(stats["empty"])
 
     return {
         "roi": roi_path.name,
         "roi_dir": str(roi_path),
-        "n_patches": len(patch_dirs),
-        "n_wrote_npy": n_wrote,
-        "n_empty_meta_only": n_empty,
+        "n_patches": len(patches),
+        "n_empty": n_empty,
         "segment_counts": seg_counts,
         "cell_counts": cell_counts,
         "flags": flags,
@@ -272,8 +199,8 @@ def _process_roi_task(
 def _update_roi_pbar(pbar: tqdm, result: dict) -> None:
     pbar.set_postfix(
         roi=result["roi"],
-        wrote=result["n_wrote_npy"],
-        empty=result["n_empty_meta_only"],
+        tiles=result["n_patches"],
+        empty=result["n_empty"],
         refresh=False,
     )
     pbar.update(1)
@@ -285,10 +212,8 @@ def run(
     split_manifest_csv: Path,
     *,
     splits: Optional[List[str]] = None,
-    pixel_m: float = 1.0,
     sample_step_m: float = 0.25,
     line_width_m: float = 0.2,
-    force_reload_bounds: bool = False,
     max_rois: Optional[int] = None,
     num_workers: int = 1,
 ) -> None:
@@ -306,12 +231,12 @@ def run(
     print(f"network_graphs_root: {network_graphs_root}")
     print(f"split_manifest_csv: {split_manifest_csv}")
     print(
-        f"Raster params: pixel_m={pixel_m}, sample_step_m={sample_step_m}, "
+        f"Raster params: pixel_m={PIXEL_M}, sample_step_m={sample_step_m}, "
         f"line_width_m={line_width_m}, num_workers={workers}"
     )
 
     n_rois = len(roi_items)
-    n_wrote = 0
+    n_tiles = 0
     n_empty = 0
 
     with tqdm(total=n_rois, desc="ROIs", unit="roi") as pbar:
@@ -319,16 +244,14 @@ def run(
             for roi_dir, flags, roi_patches in roi_items:
                 result = _process_roi_task(
                     str(roi_dir),
-                    [str(p) for p in roi_patches],
+                    [(str(p), g) for p, g in roi_patches],
                     flags,
                     str(network_graphs_root) if network_graphs_root else None,
-                    pixel_m,
                     sample_step_m,
                     line_width_m,
-                    force_reload_bounds,
                 )
-                n_wrote += int(result["n_wrote_npy"])
-                n_empty += int(result["n_empty_meta_only"])
+                n_tiles += int(result["n_patches"])
+                n_empty += int(result["n_empty"])
                 _update_roi_pbar(pbar, result)
         else:
             futures = {}
@@ -337,13 +260,11 @@ def run(
                     fut = pool.submit(
                         _process_roi_task,
                         str(roi_dir),
-                        [str(p) for p in roi_patches],
+                        [(str(p), g) for p, g in roi_patches],
                         flags,
                         str(network_graphs_root) if network_graphs_root else None,
-                        float(pixel_m),
                         float(sample_step_m),
                         float(line_width_m),
-                        bool(force_reload_bounds),
                     )
                     futures[fut] = roi_dir.name
                 for fut in as_completed(futures):
@@ -354,14 +275,11 @@ def run(
                         raise RuntimeError(
                             f"ROI worker failed for {roi_name}: {exc}"
                         ) from exc
-                    n_wrote += int(result["n_wrote_npy"])
-                    n_empty += int(result["n_empty_meta_only"])
+                    n_tiles += int(result["n_patches"])
+                    n_empty += int(result["n_empty"])
                     _update_roi_pbar(pbar, result)
 
-    print(
-        f"Done. Patches={n_wrote + n_empty} "
-        f"(network.npy={n_wrote}, empty meta-only={n_empty})."
-    )
+    print(f"Done. network.npy written for {n_tiles} tiles ({n_empty} without any road).")
 
 
 def build_argparser() -> argparse.ArgumentParser:
@@ -397,7 +315,6 @@ def build_argparser() -> argparse.ArgumentParser:
         default=None,
         help="Optional split names to keep from the manifest (default: all)",
     )
-    p.add_argument("--pixel_m", type=float, default=1.0)
     p.add_argument(
         "--sample_step_m",
         type=float,
@@ -412,11 +329,6 @@ def build_argparser() -> argparse.ArgumentParser:
             "Total corridor width (meters): sample ± width/2 along the segment "
             "normal (no centerline point). <=0 falls back to centerline-only"
         ),
-    )
-    p.add_argument(
-        "--force_reload_bounds",
-        action="store_true",
-        help="Ignore cached abs_xy_bounds in meta.json",
     )
     p.add_argument(
         "--max_rois",
@@ -440,10 +352,8 @@ def main(argv: Optional[List[str]] = None) -> None:
         Path(args.network_graphs_root).resolve() if args.network_graphs_root else None,
         Path(args.split_manifest_csv).resolve(),
         splits=args.splits,
-        pixel_m=float(args.pixel_m),
         sample_step_m=float(args.sample_step_m),
         line_width_m=float(args.line_width_m),
-        force_reload_bounds=bool(args.force_reload_bounds),
         max_rois=args.max_rois,
         num_workers=int(args.num_workers),
     )

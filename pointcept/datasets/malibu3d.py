@@ -133,10 +133,8 @@ class MALiBU3DDataset(DefaultDataset):
                     "the full test set. Only 'train'/'val' thresholds are allowed."
                 )
         self.min_points = min_points
-        # tile_id -> (origin_x, origin_y) of its 1 m rasters, from tiles.csv. Used when the
-        # tile has no meta.json, which is the case of the Hugging Face release.
+        # tile_id -> (origin_x, origin_y) of its 1 m rasters, from tiles.csv.
         self.raster_origins = {}
-        self._warned_missing_network = False
 
         super().__init__(**kwargs)
         get_root_logger().info(
@@ -217,44 +215,26 @@ class MALiBU3DDataset(DefaultDataset):
         return data_dict
 
     def _load_pixel_semantic_label(self, data_dict, scene, target_key="network"):
-        """Load ``{target_key}.npy`` and grid meta for a pixel semantic task.
+        """Load ``{target_key}.npy`` and georeference it with the tile's grid from tiles.csv.
 
         The raster has one channel per ``channel_names`` entry of the task config (ROADS
-        for ``network``).
-
-        Tiles without any positive pixel have no ``{target_key}.npy``, only
-        ``meta.{target_key}`` (``empty: true`` + width/height); they get an all-zero
-        raster. Grid origin and pixel size come from meta.json, or from tiles.csv
-        (``raster_origins``) when there is no meta.json.
+        for ``network``). Its 1 m grid origin is the ``forest_origin_x/y`` of the tile in
+        tiles.csv (``raster_origins``), shared by ``forest_2d.npy`` and ``network.npy``.
+        ``rasterize_network.py`` writes a ``network.npy`` for every tile (all zeros without
+        any road), so a missing file means the masks were not rasterized.
         """
-        import json
-
         cfg = get_task_config(target_key)
         r = int(cfg["num_networks"])
         channel_names = list(cfg["channel_names"])
 
-        origin_x = 0.0
-        origin_y = 0.0
-        pixel_m = 1.0
-        raster_meta = {}
-        meta_path = os.path.join(scene, "meta.json")
-        if os.path.isfile(meta_path):
-            with open(meta_path, "r", encoding="utf-8") as f:
-                meta = json.load(f)
-            maybe = meta.get(target_key) or {}
-            if isinstance(maybe, dict):
-                raster_meta = maybe
-                origin_x = float(raster_meta.get("origin_x", 0.0))
-                origin_y = float(raster_meta.get("origin_y", 0.0))
-                pixel_m = float(raster_meta.get("pixel_m", 1.0))
-        if (
-            not raster_meta
-            and target_key in data_dict
-            and os.path.basename(scene) in getattr(self, "raster_origins", {})
-        ):
-            # Hugging Face layout: no meta.json; 1 m rasters georeferenced by tiles.csv.
-            origin_x, origin_y = self.raster_origins[os.path.basename(scene)]
-            pixel_m = RELEASE_RASTER_PIXEL_M
+        tile_id = os.path.basename(scene)
+        if tile_id not in self.raster_origins:
+            raise KeyError(
+                f"No raster grid for tile {tile_id!r}: {target_key} needs csv_manifest set "
+                "to tiles.csv (forest_origin_x / forest_origin_y columns)."
+            )
+        origin_x, origin_y = self.raster_origins[tile_id]
+        pixel_m = RELEASE_RASTER_PIXEL_M
 
         if target_key in data_dict:
             raster = np.asarray(data_dict[target_key])
@@ -269,34 +249,22 @@ class MALiBU3DDataset(DefaultDataset):
                     f"{r} ({channel_names}) under scene: {scene}"
                 )
             raster = raster.astype(np.uint8, copy=False)
-        elif raster_meta:
-            # Empty mask: rasterize_network.py wrote the grid size in meta.json only.
-            h = int(raster_meta.get("height", 1))
-            w = int(raster_meta.get("width", 1))
-            raster = np.zeros((r, max(h, 1), max(w, 1)), dtype=np.uint8)
         elif self._is_optional_target(target_key):
-            if target_key == "network" and not getattr(
-                self, "_warned_missing_network", False
-            ):
-                self._warned_missing_network = True
-                get_root_logger().warning(
-                    "network.npy missing under %s: its road labels are ignored. The released "
-                    "dataset ships road graphs, not masks; rasterize them first with "
-                    "pointcept/datasets/preprocessing/malibu3d/rasterize_network.py.",
-                    scene,
-                )
+            # Left unlocated (origin 0): anchored at the tile origin, the (r, 1, 1) fill
+            # would label real points.
             raster = self._missing_target_array(target_key, 0)
+            origin_x = origin_y = 0.0
+        elif target_key == "network":
+            raise FileNotFoundError(
+                f"network.npy missing under {scene}. The released dataset ships road graphs, "
+                "not masks: rasterize them first with "
+                "pointcept/datasets/preprocessing/malibu3d/rasterize_network.py "
+                "(it writes a network.npy for every tile)."
+            )
         else:
             raise FileNotFoundError(
                 f"target key '{target_key}' but {target_key}.npy missing under scene: {scene}"
             )
-
-        # Expand the (r, 1, 1) missing-target fill to the meta grid when it is known.
-        if raster.shape[1] == 1 and raster.shape[2] == 1 and raster_meta:
-            h = int(raster_meta.get("height", 1))
-            w = int(raster_meta.get("width", 1))
-            if h > 1 or w > 1:
-                raster = np.zeros((r, h, w), dtype=np.uint8)
 
         data_dict[target_key] = raster
         # Keep origins in float64 for precise cell binning in NetworkRasterToPointLabels.

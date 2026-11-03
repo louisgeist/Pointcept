@@ -148,6 +148,8 @@ class ManifestPatch:
     roi: str
     patch_id: str
     flags: Tuple[Tuple[str, bool], ...]  # frozen catalog flags (ROADS only)
+    # 1 m raster grid of the tile (forest_* columns of tiles.csv): origin, width, height.
+    raster_grid: Optional[Tuple[float, float, int, int]] = None
 
     @property
     def flags_dict(self) -> Dict[str, bool]:
@@ -186,6 +188,12 @@ def load_manifest_patches(
     patches: List[ManifestPatch] = []
     for tile in iter_tiles(split_manifest_csv, splits):
         flags = (("ROADS", bool(tile.has_roads_graph)),)
+        grid = (
+            tile.raster_origin_x,
+            tile.raster_origin_y,
+            tile.raster_width,
+            tile.raster_height,
+        )
         patches.append(
             ManifestPatch(
                 split=tile.split,
@@ -193,6 +201,7 @@ def load_manifest_patches(
                 roi=tile.roi,
                 patch_id=tile.tile_id,
                 flags=flags,
+                raster_grid=None if None in grid else grid,
             )
         )
     return patches
