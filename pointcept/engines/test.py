@@ -2265,14 +2265,11 @@ class ShapeNetPartSegTester(TesterBase):
     """ShapeNetPart test: instance mIoU and category mIoU with test-time augmentation.
 
     Ported from upstream Pointcept (one shape per step; softmax summed over the
-    ``fragment_list`` of each shape). ``mask_by_category=True`` restricts the argmax
-    to the parts of the shape's category (the usual protocol). Predictions are not
+    ``fragment_list`` of each shape). Reports the plain argmax over the 50 parts
+    (``test/ins_mIoU``, ``test/cat_mIoU``) and the argmax restricted to the parts of
+    the shape's category (``*_catmask``, the usual protocol). Predictions are not
     saved to disk.
     """
-
-    def __init__(self, *args, mask_by_category=False, **kwargs):
-        self.mask_by_category = mask_by_category
-        super().__init__(*args, **kwargs)
 
     def test(self):
         assert self.test_loader.batch_size == 1
@@ -2302,16 +2299,15 @@ class ShapeNetPartSegTester(TesterBase):
                 segment = data_dict["origin_segment"]
             category_index = int(fragment_list[0]["cls_token"])
             parts = dataset.category2part[dataset.categories[category_index]]
-            if self.mask_by_category:
-                pred = masked_part_argmax(prob, parts)
-            else:
-                pred = prob.argmax(dim=1)
-            iou = shape_part_miou(pred.cpu().numpy(), segment, parts)
-            record[data_name] = dict(category_index=category_index, iou=iou)
+            ious = [
+                shape_part_miou(pred.cpu().numpy(), segment, parts)
+                for pred in (prob.argmax(dim=1), masked_part_argmax(prob, parts))
+            ]
+            record[data_name] = dict(category_index=category_index, ious=ious)
             if (idx + 1) % 100 == 0 or idx + 1 == len(self.test_loader):
                 logger.info(
                     "Test: [{}/{}] {} mIoU {:.4f}".format(
-                        idx + 1, len(self.test_loader), data_name, iou
+                        idx + 1, len(self.test_loader), data_name, ious[0]
                     )
                 )
 
@@ -2323,33 +2319,41 @@ class ShapeNetPartSegTester(TesterBase):
             record = {}
             for r in record_sync:
                 record.update(r)
-            iou_sum = np.zeros(num_categories, dtype=np.float64)
+            # row 0: plain argmax, row 1: argmax restricted to the category's parts
+            iou_sum = np.zeros((2, num_categories), dtype=np.float64)
             iou_count = np.zeros(num_categories, dtype=np.float64)
             for meters in record.values():
-                iou_sum[meters["category_index"]] += meters["iou"]
+                iou_sum[:, meters["category_index"]] += meters["ious"]
                 iou_count[meters["category_index"]] += 1
-            ins_miou = iou_sum.sum() / (iou_count.sum() + 1e-10)
+            ins_miou = iou_sum.sum(1) / (iou_count.sum() + 1e-10)
             iou_per_cat = iou_sum / (iou_count + 1e-10)
-            cat_miou = float(np.mean(iou_per_cat[iou_count > 0]))
+            cat_miou = iou_per_cat[:, iou_count > 0].mean(1)
             logger.info(
-                "Test result: ins.mIoU/cat.mIoU {:.4f}/{:.4f}.".format(
-                    ins_miou, cat_miou
+                "Test result: ins.mIoU/cat.mIoU {:.4f}/{:.4f}, with category "
+                "masking {:.4f}/{:.4f}.".format(
+                    ins_miou[0], cat_miou[0], ins_miou[1], cat_miou[1]
                 )
             )
-            log_dict = {"test/ins_mIoU": float(ins_miou), "test/cat_mIoU": cat_miou}
+            log_dict = {
+                "test/ins_mIoU": float(ins_miou[0]),
+                "test/cat_mIoU": float(cat_miou[0]),
+                "test/ins_mIoU_catmask": float(ins_miou[1]),
+                "test/cat_mIoU_catmask": float(cat_miou[1]),
+            }
             for i in range(num_categories):
                 if iou_count[i] == 0:
                     continue
                 logger.info(
-                    "Class_{idx}-{name} Result: iou_cat/num_sample "
-                    "{iou:.4f}/{n:.0f}".format(
+                    "Class_{idx}-{name} Result: iou_cat/iou_cat_masked/num_sample "
+                    "{iou:.4f}/{iou_m:.4f}/{n:.0f}".format(
                         idx=i,
                         name=dataset.categories[i],
-                        iou=iou_per_cat[i],
+                        iou=iou_per_cat[0, i],
+                        iou_m=iou_per_cat[1, i],
                         n=iou_count[i],
                     )
                 )
-                log_dict[f"test/iou_{dataset.categories[i]}"] = float(iou_per_cat[i])
+                log_dict[f"test/iou_{dataset.categories[i]}"] = float(iou_per_cat[0, i])
         self.test_metrics = log_dict
         self.end_test_timing_and_log(extra_log_dict=log_dict)
         if comm.is_main_process():

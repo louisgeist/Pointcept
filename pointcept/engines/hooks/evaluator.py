@@ -499,19 +499,19 @@ class ShapeNetPartSegEvaluator(HookBase):
     """ShapeNetPart validation: instance mIoU and category mIoU.
 
     Ported from upstream Pointcept. Unlike upstream, validation batches may hold
-    several shapes (split with ``offset`` / ``origin_offset``). With
-    ``mask_by_category=True`` the argmax is restricted to the parts of the shape's
-    category (the usual protocol). The saver metric is ``metric`` (``ins_mIoU`` or
-    ``cat_mIoU``).
+    several shapes (split with ``offset`` / ``origin_offset``). Both protocols are
+    reported: plain argmax over the 50 parts (``ins_mIoU``, ``cat_mIoU``, as
+    upstream) and argmax restricted to the parts of the shape's category
+    (``ins_mIoU_catmask``, ``cat_mIoU_catmask``, the usual protocol of the
+    literature). The saver metric is ``metric``, one of these four.
     """
 
-    _METRICS = ("ins_mIoU", "cat_mIoU")
+    _METRICS = ("ins_mIoU", "cat_mIoU", "ins_mIoU_catmask", "cat_mIoU_catmask")
 
-    def __init__(self, metric="ins_mIoU", mask_by_category=False, write_cls_iou=False):
+    def __init__(self, metric="ins_mIoU", write_cls_iou=False):
         if metric not in self._METRICS:
             raise ValueError(f"metric must be one of {self._METRICS}, got {metric!r}")
         self.metric = metric
-        self.mask_by_category = mask_by_category
         self.write_cls_iou = write_cls_iou
 
     def after_epoch(self):
@@ -527,7 +527,8 @@ class ShapeNetPartSegEvaluator(HookBase):
         self.trainer.model.eval()
         dataset = self.trainer.val_loader.dataset
         num_categories = len(dataset.categories)
-        iou_sum = np.zeros(num_categories, dtype=np.float64)
+        # row 0: plain argmax, row 1: argmax restricted to the category's parts
+        iou_sum = np.zeros((2, num_categories), dtype=np.float64)
         iou_count = np.zeros(num_categories, dtype=np.float64)
         loss_sum, loss_count = 0.0, 0
         for input_dict in self.trainer.val_loader:
@@ -556,56 +557,65 @@ class ShapeNetPartSegEvaluator(HookBase):
                 shape_logits = logits[v0:v1]
                 if inverse is not None:
                     shape_logits = shape_logits[inverse[p0:p1]]
-                if self.mask_by_category:
-                    pred = masked_part_argmax(shape_logits, parts)
-                else:
-                    pred = shape_logits.argmax(dim=1)
-                iou_sum[cls_token] += shape_part_miou(
-                    pred.cpu().numpy(), segment[p0:p1].cpu().numpy(), parts
+                target = segment[p0:p1].cpu().numpy()
+                preds = (
+                    shape_logits.argmax(dim=1),
+                    masked_part_argmax(shape_logits, parts),
                 )
+                for row, pred in enumerate(preds):
+                    iou_sum[row, cls_token] += shape_part_miou(
+                        pred.cpu().numpy(), target, parts
+                    )
                 iou_count[cls_token] += 1
                 v0, p0 = v1, p1
         if comm.get_world_size() > 1:
             totals = torch.tensor(
-                np.stack([iou_sum, iou_count]), device="cuda", dtype=torch.float64
+                np.concatenate([iou_sum, iou_count[None]]),
+                device="cuda",
+                dtype=torch.float64,
             )
             dist.all_reduce(totals)
-            iou_sum, iou_count = totals.cpu().numpy()
+            totals = totals.cpu().numpy()
+            iou_sum, iou_count = totals[:2], totals[2]
         loss_avg = loss_sum / max(loss_count, 1)
-        ins_miou = iou_sum.sum() / (iou_count.sum() + 1e-10)
+        ins_miou = iou_sum.sum(1) / (iou_count.sum() + 1e-10)
         iou_per_cat = iou_sum / (iou_count + 1e-10)
-        cat_miou = float(np.mean(iou_per_cat[iou_count > 0]))
-        metrics = {"ins_mIoU": ins_miou, "cat_mIoU": cat_miou}
+        cat_miou = iou_per_cat[:, iou_count > 0].mean(1)
+        metrics = {
+            "ins_mIoU": ins_miou[0],
+            "cat_mIoU": cat_miou[0],
+            "ins_mIoU_catmask": ins_miou[1],
+            "cat_mIoU_catmask": cat_miou[1],
+        }
         if comm.is_main_process():
             self.trainer.logger.info(
-                "Val result: ins.mIoU/cat.mIoU {:.4f}/{:.4f}.".format(
-                    ins_miou, cat_miou
+                "Val result: ins.mIoU/cat.mIoU {:.4f}/{:.4f}, with category "
+                "masking {:.4f}/{:.4f}.".format(
+                    ins_miou[0], cat_miou[0], ins_miou[1], cat_miou[1]
                 )
             )
             for i in range(num_categories):
                 if iou_count[i] > 0:
                     self.trainer.logger.info(
-                        "Class_{idx}-{name} Result: iou_cat/num_sample "
-                        "{iou:.4f}/{n:.0f}".format(
+                        "Class_{idx}-{name} Result: iou_cat/iou_cat_masked/num_sample "
+                        "{iou:.4f}/{iou_m:.4f}/{n:.0f}".format(
                             idx=i,
                             name=dataset.categories[i],
-                            iou=iou_per_cat[i],
+                            iou=iou_per_cat[0, i],
+                            iou_m=iou_per_cat[1, i],
                             n=iou_count[i],
                         )
                     )
         current_epoch = self.trainer.epoch + 1
         metric_best = max(self.trainer.best_metric_value, metrics[self.metric])
         if self.trainer.writer is not None:
-            scalars = {
-                "val/loss": loss_avg,
-                "val/ins_mIoU": ins_miou,
-                "val/cat_mIoU": cat_miou,
-                f"val/{self.metric}_best": metric_best,
-            }
+            scalars = {"val/loss": loss_avg}
+            scalars.update({f"val/{k}": v for k, v in metrics.items()})
+            scalars[f"val/{self.metric}_best"] = metric_best
             if self.write_cls_iou:
                 for i in range(num_categories):
                     if iou_count[i] > 0:
-                        scalars[f"val/iou_{dataset.categories[i]}"] = iou_per_cat[i]
+                        scalars[f"val/iou_{dataset.categories[i]}"] = iou_per_cat[0, i]
             for tag, value in scalars.items():
                 self.trainer.writer.add_scalar(tag, value, current_epoch)
             wandb_log = None
