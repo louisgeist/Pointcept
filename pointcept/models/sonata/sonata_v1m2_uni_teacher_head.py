@@ -110,6 +110,7 @@ class Sonata(PointModel, LearnedMaskedFeatMixin):
         match_max_r=0.08,
         up_cast_level=2,
         feature_mask_values=None,
+        schedule_iters=None,
     ):
         super(Sonata, self).__init__()
         # MALiBU3D addition: learned fill values of the masked color / intensity inputs
@@ -160,6 +161,14 @@ class Sonata(PointModel, LearnedMaskedFeatMixin):
         # up cast level
         self.up_cast_level = up_cast_level
 
+        # Hybrid-SSL addition: horizon (in iterations) of the mask size, mask ratio,
+        # teacher temperature and momentum schedules. None = the lr scheduler's
+        # total_steps (upstream behaviour). Set it to decouple these schedules from the
+        # run length (e.g. a run stopped at a probe plateau): warmups then last
+        # warmup_ratio * schedule_iters iterations, and past the horizon every schedule
+        # stays at its final value.
+        self.schedule_iters = schedule_iters
+
         # one of unmask, mask, roll mask loss enable
         assert unmask_loss_weight + mask_loss_weight + roll_mask_loss_weight > 0
         # roll mask loss need more than one global view
@@ -209,7 +218,7 @@ class Sonata(PointModel, LearnedMaskedFeatMixin):
 
     def before_train(self):
         # make ModelHook after CheckPointLoader
-        total_steps = self.trainer.cfg.scheduler.total_steps
+        total_steps = self.schedule_iters or self.trainer.cfg.scheduler.total_steps
         curr_step = self.trainer.start_epoch * len(self.trainer.train_loader)
         # mask size scheduler
         self.mask_size_scheduler = CosineScheduler(
