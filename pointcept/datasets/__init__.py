@@ -9,3 +9,6 @@ from .eclair import ECLAIRDataset
 from .h3d import H3DDataset
 from .opengf import OpenGFDataset
 from .pureforest import PureForestDataset
+
+# objects
+from .shapenet_part import ShapeNetPartDataset

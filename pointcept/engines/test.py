@@ -35,9 +35,11 @@ from pointcept.utils.misc import (
     intersection_and_union_gpu,
     kl_divergence_rows,
     make_dirs,
+    masked_part_argmax,
     mean_acc_from_hist,
     mean_iou_from_hist,
     pool_axis_distribution_from_probs,
+    shape_part_miou,
     tv_from_abs_errors,
 )
 from pointcept.utils.dilated_metrics import (
@@ -2256,3 +2258,103 @@ class ClsTester(TesterBase):
     @staticmethod
     def collate_fn(batch):
         return collate_fn(batch)
+
+
+@TESTERS.register_module()
+class ShapeNetPartSegTester(TesterBase):
+    """ShapeNetPart test: instance mIoU and category mIoU with test-time augmentation.
+
+    Ported from upstream Pointcept (one shape per step; softmax summed over the
+    ``fragment_list`` of each shape). ``mask_by_category=True`` restricts the argmax
+    to the parts of the shape's category (the usual protocol). Predictions are not
+    saved to disk.
+    """
+
+    def __init__(self, *args, mask_by_category=False, **kwargs):
+        self.mask_by_category = mask_by_category
+        super().__init__(*args, **kwargs)
+
+    def test(self):
+        assert self.test_loader.batch_size == 1
+        logger = get_root_logger()
+        logger.info(">>>>>>>>>>>>>>>> Start Evaluation >>>>>>>>>>>>>>>>")
+        self.begin_test_timing()
+        dataset = self.test_loader.dataset
+        num_categories = len(dataset.categories)
+        record = {}
+        self.model.eval()
+        for idx, data_dict in enumerate(self.test_loader):
+            data_dict = data_dict[0]  # one shape per step
+            fragment_list = data_dict.pop("fragment_list")
+            segment = data_dict.pop("segment")
+            data_name = data_dict.pop("name")
+            prob = torch.zeros((segment.size, self.cfg.data.num_classes)).cuda()
+            for fragment in fragment_list:
+                input_dict = collate_fn([fragment])
+                for key in input_dict.keys():
+                    if isinstance(input_dict[key], torch.Tensor):
+                        input_dict[key] = input_dict[key].cuda(non_blocking=True)
+                with torch.no_grad():
+                    logits = self.model(input_dict)["seg_logits"]
+                prob[input_dict["index"]] += F.softmax(logits, -1)
+            if "origin_segment" in data_dict.keys():
+                prob = prob[data_dict["inverse"]]
+                segment = data_dict["origin_segment"]
+            category_index = int(fragment_list[0]["cls_token"])
+            parts = dataset.category2part[dataset.categories[category_index]]
+            if self.mask_by_category:
+                pred = masked_part_argmax(prob, parts)
+            else:
+                pred = prob.argmax(dim=1)
+            iou = shape_part_miou(pred.cpu().numpy(), segment, parts)
+            record[data_name] = dict(category_index=category_index, iou=iou)
+            if (idx + 1) % 100 == 0 or idx + 1 == len(self.test_loader):
+                logger.info(
+                    "Test: [{}/{}] {} mIoU {:.4f}".format(
+                        idx + 1, len(self.test_loader), data_name, iou
+                    )
+                )
+
+        logger.info("Syncing ...")
+        comm.synchronize()
+        record_sync = comm.gather(record, dst=0)
+        log_dict = None
+        if comm.is_main_process():
+            record = {}
+            for r in record_sync:
+                record.update(r)
+            iou_sum = np.zeros(num_categories, dtype=np.float64)
+            iou_count = np.zeros(num_categories, dtype=np.float64)
+            for meters in record.values():
+                iou_sum[meters["category_index"]] += meters["iou"]
+                iou_count[meters["category_index"]] += 1
+            ins_miou = iou_sum.sum() / (iou_count.sum() + 1e-10)
+            iou_per_cat = iou_sum / (iou_count + 1e-10)
+            cat_miou = float(np.mean(iou_per_cat[iou_count > 0]))
+            logger.info(
+                "Test result: ins.mIoU/cat.mIoU {:.4f}/{:.4f}.".format(
+                    ins_miou, cat_miou
+                )
+            )
+            log_dict = {"test/ins_mIoU": float(ins_miou), "test/cat_mIoU": cat_miou}
+            for i in range(num_categories):
+                if iou_count[i] == 0:
+                    continue
+                logger.info(
+                    "Class_{idx}-{name} Result: iou_cat/num_sample "
+                    "{iou:.4f}/{n:.0f}".format(
+                        idx=i,
+                        name=dataset.categories[i],
+                        iou=iou_per_cat[i],
+                        n=iou_count[i],
+                    )
+                )
+                log_dict[f"test/iou_{dataset.categories[i]}"] = float(iou_per_cat[i])
+        self.test_metrics = log_dict
+        self.end_test_timing_and_log(extra_log_dict=log_dict)
+        if comm.is_main_process():
+            logger.info("<<<<<<<<<<<<<<<<< End Evaluation <<<<<<<<<<<<<<<<<")
+
+    @staticmethod
+    def collate_fn(batch):
+        return batch

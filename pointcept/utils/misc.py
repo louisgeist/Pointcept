@@ -71,6 +71,26 @@ def intersection_and_union_gpu(output, target, k, ignore_index=-1):
     return area_intersection, area_union, area_target
 
 
+def shape_part_miou(pred, target, parts):
+    """Mean part IoU of one shape (ShapeNetPart protocol).
+
+    ``pred`` and ``target`` are the shape's part labels, ``parts`` the part ids of
+    its category. A part absent from both prediction and target counts as IoU 1.
+    """
+    ious = []
+    for part in parts:
+        p, t = pred == part, target == part
+        union = (p | t).sum()
+        ious.append(1.0 if union == 0 else float((p & t).sum()) / float(union))
+    return float(np.mean(ious))
+
+
+def masked_part_argmax(logits, parts):
+    """Argmax restricted to the category's part ids (standard ShapeNetPart masking)."""
+    parts = torch.as_tensor(parts, device=logits.device)
+    return parts[logits[:, parts].argmax(dim=1)]
+
+
 def accumulate_regression_errors(pred, target):
     """Accumulate MAE and MSE sums for point-wise regression.
 

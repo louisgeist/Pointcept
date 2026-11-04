@@ -16,9 +16,11 @@ from pointcept.utils.misc import (
     accumulate_regression_errors,
     intersection_and_union_gpu,
     kl_divergence_rows,
+    masked_part_argmax,
     mean_acc_from_hist,
     mean_iou_from_hist,
     pool_axis_distribution_from_probs,
+    shape_part_miou,
     tv_from_abs_errors,
 )
 from pointcept.utils.epoch_timing import (
@@ -489,6 +491,143 @@ class SemSegEvaluator(HookBase):
     def after_train(self):
         self.trainer.logger.info(
             "Best {}: {:.4f}".format("mIoU", self.trainer.best_metric_value)
+        )
+
+
+@HOOKS.register_module()
+class ShapeNetPartSegEvaluator(HookBase):
+    """ShapeNetPart validation: instance mIoU and category mIoU.
+
+    Ported from upstream Pointcept. Unlike upstream, validation batches may hold
+    several shapes (split with ``offset`` / ``origin_offset``). With
+    ``mask_by_category=True`` the argmax is restricted to the parts of the shape's
+    category (the usual protocol). The saver metric is ``metric`` (``ins_mIoU`` or
+    ``cat_mIoU``).
+    """
+
+    _METRICS = ("ins_mIoU", "cat_mIoU")
+
+    def __init__(self, metric="ins_mIoU", mask_by_category=False, write_cls_iou=False):
+        if metric not in self._METRICS:
+            raise ValueError(f"metric must be one of {self._METRICS}, got {metric!r}")
+        self.metric = metric
+        self.mask_by_category = mask_by_category
+        self.write_cls_iou = write_cls_iou
+
+    def after_epoch(self):
+        if self.should_evaluate():
+            self.eval()
+
+    def eval(self):
+        val_start = begin_val_epoch_timing()
+        if comm.is_main_process():
+            self.trainer.logger.info(
+                ">>>>>>>>>>>>>>>> Start Part Segmentation Evaluation >>>>>>>>>>>>>>>>"
+            )
+        self.trainer.model.eval()
+        dataset = self.trainer.val_loader.dataset
+        num_categories = len(dataset.categories)
+        iou_sum = np.zeros(num_categories, dtype=np.float64)
+        iou_count = np.zeros(num_categories, dtype=np.float64)
+        loss_sum, loss_count = 0.0, 0
+        for input_dict in self.trainer.val_loader:
+            for key in input_dict.keys():
+                if isinstance(input_dict[key], torch.Tensor):
+                    input_dict[key] = input_dict[key].cuda(non_blocking=True)
+            with torch.no_grad():
+                output_dict = self.trainer.model(input_dict)
+            logits = output_dict["seg_logits"]
+            loss_sum += output_dict["loss"].item()
+            loss_count += 1
+            voxel_ends = _offset_to_list(input_dict["offset"])
+            if "inverse" in input_dict.keys():
+                assert "origin_segment" in input_dict.keys()
+                segment = input_dict["origin_segment"]
+                inverse = input_dict["inverse"]
+                point_ends = _offset_to_list(
+                    input_dict.get("origin_offset", [segment.shape[0]])
+                )
+            else:
+                segment, inverse, point_ends = input_dict["segment"], None, voxel_ends
+            cls_tokens = input_dict["cls_token"].view(-1).tolist()
+            v0 = p0 = 0
+            for cls_token, v1, p1 in zip(cls_tokens, voxel_ends, point_ends):
+                parts = dataset.category2part[dataset.categories[cls_token]]
+                shape_logits = logits[v0:v1]
+                if inverse is not None:
+                    shape_logits = shape_logits[inverse[p0:p1]]
+                if self.mask_by_category:
+                    pred = masked_part_argmax(shape_logits, parts)
+                else:
+                    pred = shape_logits.argmax(dim=1)
+                iou_sum[cls_token] += shape_part_miou(
+                    pred.cpu().numpy(), segment[p0:p1].cpu().numpy(), parts
+                )
+                iou_count[cls_token] += 1
+                v0, p0 = v1, p1
+        if comm.get_world_size() > 1:
+            totals = torch.tensor(
+                np.stack([iou_sum, iou_count]), device="cuda", dtype=torch.float64
+            )
+            dist.all_reduce(totals)
+            iou_sum, iou_count = totals.cpu().numpy()
+        loss_avg = loss_sum / max(loss_count, 1)
+        ins_miou = iou_sum.sum() / (iou_count.sum() + 1e-10)
+        iou_per_cat = iou_sum / (iou_count + 1e-10)
+        cat_miou = float(np.mean(iou_per_cat[iou_count > 0]))
+        metrics = {"ins_mIoU": ins_miou, "cat_mIoU": cat_miou}
+        if comm.is_main_process():
+            self.trainer.logger.info(
+                "Val result: ins.mIoU/cat.mIoU {:.4f}/{:.4f}.".format(
+                    ins_miou, cat_miou
+                )
+            )
+            for i in range(num_categories):
+                if iou_count[i] > 0:
+                    self.trainer.logger.info(
+                        "Class_{idx}-{name} Result: iou_cat/num_sample "
+                        "{iou:.4f}/{n:.0f}".format(
+                            idx=i,
+                            name=dataset.categories[i],
+                            iou=iou_per_cat[i],
+                            n=iou_count[i],
+                        )
+                    )
+        current_epoch = self.trainer.epoch + 1
+        metric_best = max(self.trainer.best_metric_value, metrics[self.metric])
+        if self.trainer.writer is not None:
+            scalars = {
+                "val/loss": loss_avg,
+                "val/ins_mIoU": ins_miou,
+                "val/cat_mIoU": cat_miou,
+                f"val/{self.metric}_best": metric_best,
+            }
+            if self.write_cls_iou:
+                for i in range(num_categories):
+                    if iou_count[i] > 0:
+                        scalars[f"val/iou_{dataset.categories[i]}"] = iou_per_cat[i]
+            for tag, value in scalars.items():
+                self.trainer.writer.add_scalar(tag, value, current_epoch)
+            wandb_log = None
+            if self.trainer.cfg.enable_wandb:
+                wandb_log = {"Epoch": current_epoch, **scalars}
+            finalize_val_epoch_timing(
+                self.trainer, val_start, current_epoch, wandb_dict=wandb_log
+            )
+            if wandb_log is not None:
+                wandb.log(wandb_log)
+        else:
+            finalize_val_epoch_timing(self.trainer, val_start, current_epoch)
+        if comm.is_main_process():
+            self.trainer.logger.info(
+                "<<<<<<<<<<<<<<<<< End Evaluation <<<<<<<<<<<<<<<<<"
+            )
+        self.trainer.comm_info["current_metric_value"] = metrics[self.metric]
+        self.trainer.comm_info["current_metric_name"] = self.metric
+
+    def after_train(self):
+        self.trainer.logger.info(
+            "Best {}: {:.4f}".format(self.metric, self.trainer.best_metric_value)
         )
 
 

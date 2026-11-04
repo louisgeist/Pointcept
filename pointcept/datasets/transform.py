@@ -315,6 +315,36 @@ class CenterShift(object):
 
 
 @TRANSFORMS.register_module()
+class NormalizeCoord(object):
+    """Center on the centroid and scale into the unit sphere (from upstream)."""
+
+    def __call__(self, data_dict):
+        if "coord" in data_dict.keys():
+            # modified from pointnet2
+            centroid = np.mean(data_dict["coord"], axis=0)
+            data_dict["coord"] -= centroid
+            m = np.max(np.sqrt(np.sum(data_dict["coord"] ** 2, axis=1)))
+            data_dict["coord"] = data_dict["coord"] / m
+        return data_dict
+
+
+@TRANSFORMS.register_module()
+class RandomShift(object):
+    """Shift the whole cloud by a uniform offset per axis (from upstream)."""
+
+    def __init__(self, shift=((-0.2, 0.2), (-0.2, 0.2), (0, 0))):
+        self.shift = shift
+
+    def __call__(self, data_dict):
+        if "coord" in data_dict.keys():
+            shift_x = np.random.uniform(self.shift[0][0], self.shift[0][1])
+            shift_y = np.random.uniform(self.shift[1][0], self.shift[1][1])
+            shift_z = np.random.uniform(self.shift[2][0], self.shift[2][1])
+            data_dict["coord"] += [shift_x, shift_y, shift_z]
+        return data_dict
+
+
+@TRANSFORMS.register_module()
 class ExtractAbsXY(object):
     """Save absolute Lambert-93 XY (``abs_xy``) before augmentations move the points.
 
