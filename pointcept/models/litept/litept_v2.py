@@ -14,6 +14,12 @@ blocks). LitePT-v2 adds the others, each behind an option:
 (c) ``mask_token=True``: a learned token replaces the stem output of the points
     flagged by ``point.mask`` (Sonata masking). It is applied after the stem, so
     with ``stem="conv"`` the stem still mixes masked and visible neighbours.
+    Unlike PT-v3m2 (zeros), the token is initialised with ``trunc_normal_(std=0.02)``:
+    LitePT's conv blocks have no MLP and zero-initialised biases, so a zero token
+    keeps the inside of masked patches exactly zero through the conv stages, and
+    each LayerNorm of a zero row multiplies its gradient by 1 / sqrt(eps) (~316).
+    The mask-token gradient then reaches ~1e17 in fp32 and overflows to NaN under
+    AMP (bf16 or fp16).
 (d) ``init="trunc_normal"``: ``trunc_normal_(std=0.02)`` for the weights of every
     ``nn.Linear`` and ``SubMConv3d``, zero biases (``"default"`` = v1: PyTorch and
     spconv defaults).
@@ -339,7 +345,10 @@ class Embedding(PointModule):
             self.stem.add(act_layer(), name="act")
 
         if mask_token:
-            self.mask_token = nn.Parameter(torch.zeros(1, embed_channels))
+            # not zeros: see (c) in the module docstring
+            self.mask_token = nn.Parameter(
+                trunc_normal_(torch.empty(1, embed_channels), std=0.02)
+            )
         else:
             self.mask_token = None
 
