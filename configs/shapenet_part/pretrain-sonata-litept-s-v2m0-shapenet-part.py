@@ -7,11 +7,13 @@ token, trunc_normal init). Teacher and student heads read the encoder features u
 the last up_cast_level + 1 stages: 144 + 252 + 504 = 900 channels for LitePT-S.
 
 Data: the object recipe of Utonia (upstream configs/utonia/pretrain-utonia-v1m1-0-base_stagev1.py,
-obj_transform): NormalizeCoord (unit sphere), random scale, 0.01 grid, global views of 80-100 %
-and local views of 60-80 % of the points, full rotations, elastic distortion.
+obj_transform): NormalizeCoord (unit sphere), random scale, global views of 80-100 % and local
+views of 60-80 % of the points, full rotations. Two departures from it: a 0.02 grid instead of
+0.01 (at 0.01, finer than the ~0.04 point spacing of the shapes, the first poolings barely
+reduce the points and the heads run on half of them), and no elastic distortion by default.
 
 Scales: the Sonata mask sizes (meters, see Sonata.generate_mask) and the matching radius are
-rescaled from the upstream Sonata values (0.02 grid, stride 2) to the 0.01 grid, as in
+rescaled from the upstream Sonata values (0.02 grid, stride 2) to grid_size, as in
 configs/malibu3d/pretrain-sonata-v1m2-malibu3d.py: mask patches cover as many voxels as
 upstream, and match_max_r keeps upstream's 4x margin over the voxel size at the matching
 level (grid_size * stride ** up_cast_level).
@@ -40,35 +42,35 @@ enable_amp = True
 amp_dtype = "bfloat16"
 find_unused_parameters = False
 
-grid_size = 0.01
+grid_size = 0.02
 stride = (2, 2, 2, 2)
 up_cast_level = 2
 max_size = 65_536  # max points per view; ShapeNetPart shapes have ~2.6k points
 
 # Matching radius at the up-cast level, upstream Sonata margin (0.32 m for 0.08 m voxels).
 match_max_r_factor = 4
-match_max_r = match_max_r_factor * grid_size * stride[0] * stride[1]  # 0.16
+match_max_r = match_max_r_factor * grid_size * stride[0] * stride[1]  # 0.32
 # Mask sizes in coordinate units, scaled from the upstream 0.02 grid.
 grid_size_factor = grid_size / 0.02
-mask_size_start = 0.1 * grid_size_factor  # 0.05
-mask_size_base = 0.4 * grid_size_factor  # 0.2
-mask_jitter = 0.01 * grid_size_factor  # 0.005
+mask_size_start = 0.1 * grid_size_factor  # 0.1
+mask_size_base = 0.4 * grid_size_factor  # 0.4
+mask_jitter = 0.01 * grid_size_factor  # 0.01
 
 # Iter-limited schedule (1 trainer epoch = iter_per_epoch optimizer steps, ~1 pass over
 # the 14k shapes at batch 32). total_iters is the run length; schedule_iters the nominal
 # horizon of the Sonata warmups (5 % of it).
-total_iters = 30_000
+total_iters = 10_000  # POC; schedule_iters stays the nominal horizon
 iter_per_epoch = 500
 schedule_iters = 30_000
 lr_warmup_iters = 1_500
 
 evaluate = False
 eval_every = 1  # also the checkpoint frequency in epochs (CheckpointSaver below)
-checkpoint_save_freq = 10
+checkpoint_save_freq = 5  # 2500 iterations
 
-# Elastic distortion of the views (Utonia object recipe; displaces points by ~0.1 on
-# unit-sphere objects). None disables it.
-elastic_distortion_params = [[0.2, 0.4], [0.8, 1.6]]
+# Elastic distortion of the views, off by default. Utonia's object recipe uses
+# [[0.2, 0.4], [0.8, 1.6]], which displaces points by ~0.14 on unit-sphere objects.
+elastic_distortion_params = None
 
 wandb_project = "hybrid_ssl"
 wandb_run_name = (

@@ -6,7 +6,7 @@ iterations), validation on the test split; reports instance / category mIoU with
 category masking of the logits. The best ins_mIoU_catmask is written to save_path/metrics.json
 (read by PeriodicProbeHook). Pass the checkpoint with --options weight=<path>.
 
-The input pipeline matches the pretraining: NormalizeCoord, 0.01 grid, coord features.
+The input pipeline matches the pretraining: NormalizeCoord, 0.02 grid, coord features.
 probe_branch selects the student or the EMA teacher backbone of the Sonata checkpoint.
 """
 
@@ -24,7 +24,7 @@ clip_grad = 3.0
 enable_amp = True
 evaluate = True
 
-grid_size = 0.01
+grid_size = 0.02
 feat_keys = ["coord"]
 
 # 2000 steps / 200 per epoch -> 10 trainer epochs, validation every 5
