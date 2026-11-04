@@ -141,7 +141,9 @@ model = dict(
 # -----------------------------------------------------------------------------
 # Optimizer / scheduler
 # -----------------------------------------------------------------------------
-base_lr = 0.004  # upstream Sonata default
+# Half the upstream Sonata default (0.004): at 0.004 with batch 96, 3 of 4 MALiBU3D pretrainings
+# went NaN shortly after the warmup (iters 4-8k) and the 4th collapsed there before recovering.
+base_lr = 0.002
 lr_decay = 0.9  # layer-wise lr decay
 
 base_wd = 0.04
