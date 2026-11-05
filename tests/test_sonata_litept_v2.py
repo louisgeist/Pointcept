@@ -188,3 +188,74 @@ def test_geom_probe_ridge():
     metrics = geom_metrics(predict(x), normal, height)
     assert metrics["height_r2"] > 0.999 and metrics["height_mae"] < 1e-2
     assert metrics["normal_abs_cos"] > 0.8
+
+
+FINO_CONFIG = (
+    "configs/shapenet_part/pretrain-sonata-fino-litept-s-v2m0-shapenet-part.py"
+)
+
+
+def _small_model_and_batch(config, **model_overrides):
+    cfg = Config.fromfile(config)
+    cfg.model.head_hidden_channels = 256
+    cfg.model.head_num_prototypes = 256
+    cfg.model.update(model_overrides)
+    torch.manual_seed(0)
+    model = build_model(cfg.model).cuda().train()
+    transform = Compose(cfg.data.train.transform)
+    rng = np.random.default_rng(0)
+    np.random.seed(0)
+    shapes = []
+    for i in range(4):
+        shape = synthetic_shape(rng)
+        shape["cls_token"] = i % 3
+        shapes.append(transform(shape))
+    batch = collate_fn(shapes)
+    batch = {k: v.cuda() if torch.is_tensor(v) else v for k, v in batch.items()}
+    return model, batch
+
+
+def _seeded_loss(model, batch):
+    torch.manual_seed(1)
+    with torch.no_grad():
+        return model(dict(batch))["loss"]
+
+
+def test_empty_meta_guidance_is_sonata():
+    plain, batch = _small_model_and_batch(CONFIG)
+    empty, _ = _small_model_and_batch(CONFIG, meta_guidance=[], sigreg=None)
+    assert plain.meta is None and empty.meta is None
+    assert list(plain.state_dict()) == list(empty.state_dict())
+    empty.load_state_dict(plain.state_dict())
+    assert torch.equal(_seeded_loss(plain, batch), _seeded_loss(empty, batch))
+
+
+@pytest.mark.parametrize("student_view", ["masked_global", "global", "local"])
+def test_fino_forward_backward(student_view):
+    model, batch = _small_model_and_batch(FINO_CONFIG)
+    model.meta_student_view = student_view
+    assert batch["cls_token"].tolist() == [0, 1, 2, 0]
+    proto_before = model.meta.branches["category"].prototype.clone()
+    with torch.autocast("cuda", dtype=torch.bfloat16):
+        out = model(dict(batch))
+    assert torch.isfinite(out["loss"]) and torch.isfinite(out["meta_category_loss"])
+    assert 0 <= out["meta_category_acc"] <= 1
+    out["loss"].backward()
+    assert all(p.grad is None for p in model.teacher.parameters())
+    assert any(
+        p.grad is not None and p.grad.abs().sum() > 0
+        for p in model.student.backbone.parameters()
+    )
+    bank = model.meta.branches["category"]
+    assert bank.initialised.tolist()[:3] == [True, True, True]
+    assert not torch.equal(bank.prototype, proto_before)
+    assert torch.allclose(bank.prototype.norm(dim=1), torch.ones(16, device="cuda"))
+    assert int(model.meta.step) == 1
+
+
+def test_sigreg_option():
+    model, batch = _small_model_and_batch(FINO_CONFIG, sigreg=dict(weight=0.05))
+    with torch.autocast("cuda", dtype=torch.bfloat16):
+        out = model(dict(batch))
+    assert torch.isfinite(out["sigreg_loss"])
+    out["loss"].backward()

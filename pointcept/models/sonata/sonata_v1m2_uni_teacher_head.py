@@ -27,6 +27,8 @@ from pointcept.models.utils import offset2batch, offset2bincount, batch2offset
 from pointcept.utils.comm import get_world_size, all_gather
 from pointcept.utils.scheduler import CosineScheduler
 
+from .meta_guidance import MetaGuidance, pool_views, sigreg_loss
+
 # MALiBU3D addition (non-finite loss diagnostics, see _warn_empty_match_groups).
 # get_root_logger() sets the "pointcept" logger to ERROR on non-zero ranks; this
 # module logger keeps WARNING so the diagnostic is visible on every rank.
@@ -70,11 +72,14 @@ class OnlineCluster(nn.Module):
             if isinstance(m, nn.Linear) and m.bias is not None:
                 nn.init.constant_(m.bias, 0)
 
-    def forward(self, feat):
-        feat = self.mlp(feat)
-        eps = 1e-6 if feat.dtype == torch.float16 else 1e-12
-        feat = nn.functional.normalize(feat, dim=-1, p=2, eps=eps)
+    def forward(self, feat, return_embedding=False):
+        embedding = self.mlp(feat)
+        eps = 1e-6 if embedding.dtype == torch.float16 else 1e-12
+        feat = nn.functional.normalize(embedding, dim=-1, p=2, eps=eps)
         similarity = self.prototype(feat)
+        if return_embedding:
+            # Hybrid-SSL addition: the pre-normalisation embedding, for SIGReg
+            return similarity, embedding
         return similarity
 
 
@@ -113,6 +118,9 @@ class Sonata(PointModel, LearnedMaskedFeatMixin):
         schedule_iters=None,
         log_target_stats=False,
         head_point_ratio=None,
+        meta_guidance=None,
+        meta_guidance_cfg=None,
+        sigreg=None,
     ):
         super(Sonata, self).__init__()
         # MALiBU3D addition: learned fill values of the masked color / intensity inputs
@@ -225,6 +233,33 @@ class Sonata(PointModel, LearnedMaskedFeatMixin):
         # (tile name, points per view) of the last iterations, printed by
         # _dump_nan_debug_buffer when the loss becomes non-finite.
         self._nan_debug_buffer = collections.deque(maxlen=5)
+
+        # Hybrid-SSL addition: FINO metadata guidance (see meta_guidance.py). Each
+        # branch reads phi, the per-view pooling (meta_guidance_cfg["pooling"]: "mean"
+        # or "max") of the up-cast encoder features (head_in_channels). The student
+        # phi comes from meta_guidance_cfg["student_view"]: "masked_global" (default:
+        # the masked global views the student already encodes), "global" (the
+        # unmasked global views, one more student forward per step) or "local"; the
+        # teacher phi (prototype updates) from the teacher's global views. None: no
+        # branch, Sonata unchanged.
+        self.meta = None
+        if meta_guidance:
+            meta_cfg = dict(meta_guidance_cfg or {})
+            self.meta_pooling = meta_cfg.pop("pooling", "mean")
+            self.meta_student_view = meta_cfg.pop("student_view", "masked_global")
+            assert self.meta_pooling in ("mean", "max"), self.meta_pooling
+            assert self.meta_student_view in ("masked_global", "global", "local")
+            if self.meta_student_view == "masked_global":
+                assert self.mask_loss_weight > 0 or self.roll_mask_loss_weight > 0
+            if self.meta_student_view == "local":
+                assert self.unmask_loss_weight > 0
+            self.meta = MetaGuidance(head_in_channels, meta_guidance, **meta_cfg)
+        # Hybrid-SSL addition: optional SIGReg (LeJEPA) on the pre-normalisation
+        # embedding of the student mask head, dict(weight=0.05, num_slices=256,
+        # num_points=4096) (random points of the batch).
+        self.sigreg = dict(sigreg) if sigreg else None
+        if self.sigreg:
+            assert self.mask_loss_weight > 0 or self.roll_mask_loss_weight > 0
 
     def before_train(self):
         # make ModelHook after CheckPointLoader
@@ -572,6 +607,10 @@ class Sonata(PointModel, LearnedMaskedFeatMixin):
             # teacher backbone forward (shared with mask and unmask)
             global_point_ = self.teacher.backbone(global_point)
             global_point_ = self.up_cast(global_point_)
+            if self.meta is not None:
+                teacher_phi = pool_views(
+                    global_point_.feat, global_point_.offset, self.meta_pooling
+                )
             # teacher head forward
             # only use one shared head for both mask and unmask
             # priority: mask (global) > unmask (local)
@@ -583,10 +622,29 @@ class Sonata(PointModel, LearnedMaskedFeatMixin):
         if self.mask_loss_weight > 0 or self.roll_mask_loss_weight > 0:
             # student forward
             mask_global_point_ = self.student.backbone(mask_global_point)
-            mask_global_point_ = self._subsample_points(
-                self.up_cast(mask_global_point_)
-            )
-            mask_pred_sim = self.student.mask_head(mask_global_point_.feat)
+            mask_global_point_ = self.up_cast(mask_global_point_)
+            if self.meta is not None and self.meta_student_view == "masked_global":
+                student_phi = pool_views(
+                    mask_global_point_.feat,
+                    mask_global_point_.offset,
+                    self.meta_pooling,
+                )
+            mask_global_point_ = self._subsample_points(mask_global_point_)
+            if self.sigreg:
+                mask_pred_sim, mask_embedding = self.student.mask_head(
+                    mask_global_point_.feat, return_embedding=True
+                )
+                pick = torch.randperm(
+                    mask_embedding.shape[0], device=mask_embedding.device
+                )[: self.sigreg.get("num_points", 4096)]
+                sigreg = sigreg_loss(
+                    mask_embedding[pick],
+                    num_slices=self.sigreg.get("num_slices", 256),
+                )
+                result_dict["sigreg_loss"] = sigreg
+                result_dict["loss"].append(sigreg * self.sigreg.get("weight", 0.05))
+            else:
+                mask_pred_sim = self.student.mask_head(mask_global_point_.feat)
 
             if self.mask_loss_weight > 0:
                 with torch.no_grad():
@@ -663,7 +721,12 @@ class Sonata(PointModel, LearnedMaskedFeatMixin):
         if self.unmask_loss_weight > 0:
             # student forward
             local_point_ = self.student.backbone(local_point)
-            local_point_ = self._subsample_points(self.up_cast(local_point_))
+            local_point_ = self.up_cast(local_point_)
+            if self.meta is not None and self.meta_student_view == "local":
+                student_phi = pool_views(
+                    local_point_.feat, local_point_.offset, self.meta_pooling
+                )
+            local_point_ = self._subsample_points(local_point_)
             unmask_pred_sim = self.student.unmask_head(local_point_.feat)
             with torch.no_grad():
                 principal_view_mask = global_point_.batch % self.num_global_view == 0
@@ -705,6 +768,39 @@ class Sonata(PointModel, LearnedMaskedFeatMixin):
                     )
                 )
             result_dict["loss"].append(unmask_loss * self.unmask_loss_weight)
+        if self.meta is not None:
+            if self.meta_student_view == "global":
+                student_global = self.up_cast(
+                    self.student.backbone(
+                        Point(
+                            feat=data_dict["global_feat"],
+                            coord=data_dict["global_coord"],
+                            origin_coord=data_dict["global_origin_coord"],
+                            offset=data_dict["global_offset"],
+                            grid_size=data_dict["grid_size"][0],
+                        )
+                    )
+                )
+                student_phi = pool_views(
+                    student_global.feat, student_global.offset, self.meta_pooling
+                )
+            views = (
+                self.num_local_view
+                if self.meta_student_view == "local"
+                else self.num_global_view
+            )
+            student_meta, teacher_meta = {}, {}
+            for spec in self.meta.specs:
+                value = data_dict[spec["key"]].view(-1)
+                student_meta[spec["key"]] = value.repeat_interleave(views)
+                teacher_meta[spec["key"]] = value.repeat_interleave(
+                    self.num_global_view
+                )
+            meta_loss, meta_logs = self.meta(
+                student_phi, teacher_phi.detach(), student_meta, teacher_meta
+            )
+            result_dict.update(meta_logs)
+            result_dict["loss"].append(meta_loss)
         result_dict["loss"] = sum(result_dict["loss"])
 
         if get_world_size() > 1:

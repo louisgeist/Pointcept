@@ -225,6 +225,7 @@ transform = [
             "local_offset",
             "grid_size",
             "name",
+            "cls_token",  # shape category (0-15): metadata of the FINO configs
         ),
         offset_keys_dict=dict(),
         global_feat_keys=("global_coord",),
