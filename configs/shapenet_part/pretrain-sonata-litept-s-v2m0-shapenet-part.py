@@ -12,11 +12,11 @@ views of 60-80 % of the points, full rotations. Two departures from it: a 0.02 g
 0.01 (at 0.01, finer than the ~0.04 point spacing of the shapes, the first poolings barely
 reduce the points and the heads run on half of them), and no elastic distortion by default.
 
-Scales: the Sonata mask sizes (meters, see Sonata.generate_mask) and the matching radius are
-rescaled from the upstream Sonata values (0.02 grid, stride 2) to grid_size, as in
-configs/malibu3d/pretrain-sonata-v1m2-malibu3d.py: mask patches cover as many voxels as
-upstream, and match_max_r keeps upstream's 4x margin over the voxel size at the matching
-level (grid_size * stride ** up_cast_level).
+Scales: match_max_r keeps upstream Sonata's 4x margin over the voxel size at the matching level
+(grid_size * stride ** up_cast_level), as in configs/malibu3d/pretrain-sonata-v1m2-malibu3d.py.
+The mask sizes (coordinate units, see Sonata.generate_mask) are set for objects rather than
+scaled from upstream's room-scale values: 0.05 -> 0.2 on shapes normalised to the unit
+sphere (the upstream 0.1 -> 0.4 leaves the student a few pieces of each object).
 
 Schedule: no cosine. Linear lr warmup then constant lr (LinearLR), constant weight decay,
 constant EMA momentum. The Sonata warmups (mask size, mask ratio, teacher temperature) are
@@ -50,11 +50,11 @@ max_size = 65_536  # max points per view; ShapeNetPart shapes have ~2.6k points
 # Matching radius at the up-cast level, upstream Sonata margin (0.32 m for 0.08 m voxels).
 match_max_r_factor = 4
 match_max_r = match_max_r_factor * grid_size * stride[0] * stride[1]  # 0.32
-# Mask sizes in coordinate units, scaled from the upstream 0.02 grid.
-grid_size_factor = grid_size / 0.02
-mask_size_start = 0.1 * grid_size_factor  # 0.1
-mask_size_base = 0.4 * grid_size_factor  # 0.4
-mask_jitter = 0.01 * grid_size_factor  # 0.01
+# Mask sizes in coordinate units, at the scale of unit-sphere objects (half the upstream
+# Sonata values, which are meant for rooms).
+mask_size_start = 0.05
+mask_size_base = 0.2
+mask_jitter = 0.005
 
 # Iter-limited schedule (1 trainer epoch = iter_per_epoch optimizer steps, ~1 pass over
 # the 14k shapes at batch 32). total_iters is the run length; schedule_iters the nominal
@@ -152,7 +152,10 @@ model = dict(
 # -----------------------------------------------------------------------------
 # Optimizer / scheduler
 # -----------------------------------------------------------------------------
-base_lr = 0.002
+# 0.002 (the MALiBU3D value, at batch 96) collapsed at batch 32 when the warmup passed
+# ~0.0016: all losses stuck at ln(4096), probes below a random backbone. 0.0007 is the
+# MALiBU3D value scaled linearly to batch 32.
+base_lr = 0.0007
 lr_decay = 0.9  # layer-wise lr decay
 weight_decay = 0.04  # constant
 
