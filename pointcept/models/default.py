@@ -170,9 +170,13 @@ class DefaultSegmentorV2(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeatMi
         criteria=None,
         freeze_backbone=False,
         feature_mask_values=None,
+        hypercolumn_bottleneck=True,
     ):
         super().__init__()
         self.num_classes = num_classes
+        # Decoder hypercolumn (traceable decoder): include the encoder bottleneck
+        # (the coarsest link) or only the decoder stages.
+        self.hypercolumn_bottleneck = hypercolumn_bottleneck
         self.seg_head = (
             nn.Linear(backbone_out_channels, num_classes)
             if num_classes > 0
@@ -227,6 +231,8 @@ class DefaultSegmentorV2(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeatMi
             point_list = [point]
             while "unpooling_parent" in point_list[-1].keys():
                 point_list.append(point_list[-1].pop("unpooling_parent"))
+            if not self.hypercolumn_bottleneck and len(point_list) > 1:
+                point_list = point_list[:-1]
             for i in reversed(range(1, len(point_list))):
                 child, parent = point_list[i], point_list[i - 1]
                 assert "pooling_inverse" in child.keys()

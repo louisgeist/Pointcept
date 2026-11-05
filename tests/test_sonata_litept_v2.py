@@ -227,7 +227,10 @@ def test_empty_meta_guidance_is_sonata():
     assert plain.meta is None and empty.meta is None
     assert list(plain.state_dict()) == list(empty.state_dict())
     empty.load_state_dict(plain.state_dict())
-    assert torch.equal(_seeded_loss(plain, batch), _seeded_loss(empty, batch))
+    # same seeds; flash-attn / scatter atomics make two GPU forwards differ by ~1e-5
+    assert torch.allclose(
+        _seeded_loss(plain, batch), _seeded_loss(empty, batch), rtol=1e-4, atol=0
+    )
 
 
 @pytest.mark.parametrize(
