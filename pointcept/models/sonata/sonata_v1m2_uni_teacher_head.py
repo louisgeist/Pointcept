@@ -119,6 +119,7 @@ class Sonata(PointModel, LearnedMaskedFeatMixin):
         log_target_stats=False,
         head_point_ratio=None,
         feature_source="upcast",
+        feature_stage=2,
         meta_guidance=None,
         meta_guidance_cfg=None,
         sigreg=None,
@@ -192,12 +193,17 @@ class Sonata(PointModel, LearnedMaskedFeatMixin):
         # outputs of every decoder stage of a traceable decoder (dec_traceable=True)
         # and the encoder bottleneck, gathered onto the finest points (up_cast_level
         # unused). "dec_hypercolumn_no_bottleneck": the same without the bottleneck.
+        # "dec_pooled": the outputs of the decoder stages from the finest one up to
+        # stage feature_stage, the finer ones averaged onto the stage-feature_stage
+        # points (scatter mean over the pooling clusters), concatenated there.
         assert feature_source in (
             "upcast",
             "dec_hypercolumn",
             "dec_hypercolumn_no_bottleneck",
+            "dec_pooled",
         ), feature_source
         self.feature_source = feature_source
+        self.feature_stage = feature_stage
 
         # one of unmask, mask, roll mask loss enable
         assert unmask_loss_weight + mask_loss_weight + roll_mask_loss_weight > 0
@@ -425,6 +431,34 @@ class Sonata(PointModel, LearnedMaskedFeatMixin):
             )
         return point_list[0]
 
+    @staticmethod
+    def dec_pooled(point, stage):
+        """Decoder outputs of the stages finer than or at ``stage`` of a traceable
+        decoder, averaged onto the stage-``stage`` points through the pooling
+        clusters and concatenated (coarsest first). Returns the stage-``stage`` point
+        (its origin_coord, offset and batch are those of the encoder stage)."""
+        levels = [point]  # finest decoder output first
+        while "unpooling_parent" in levels[-1].keys():
+            levels.append(levels[-1].pop("unpooling_parent"))
+        assert len(levels) > stage, "dec_pooled needs dec_traceable=True"
+        target = levels[stage]
+        feats = [target.feat]
+        index = None  # maps the points of level k to the stage-``stage`` points
+        for k in reversed(range(stage)):
+            inverse = levels[k + 1].pooling_inverse  # level k -> level k + 1
+            index = inverse if index is None else index[inverse]
+            feats.append(
+                torch_scatter.scatter(
+                    levels[k].feat,
+                    index,
+                    dim=0,
+                    dim_size=target.feat.shape[0],
+                    reduce="mean",
+                )
+            )
+        target.feat = torch.cat(feats, dim=-1)
+        return target
+
     def _meta_student_view_is(self, view):
         return self.meta is not None and self.meta_student_view == view
 
@@ -578,6 +612,8 @@ class Sonata(PointModel, LearnedMaskedFeatMixin):
         return Point(data_dict)
 
     def up_cast(self, point):
+        if self.feature_source == "dec_pooled":
+            return self.dec_pooled(point, self.feature_stage)
         if self.feature_source != "upcast":
             return self.dec_hypercolumn(
                 point, bottleneck=self.feature_source == "dec_hypercolumn"

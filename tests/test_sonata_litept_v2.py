@@ -307,3 +307,57 @@ def test_unet_hypercolumn_fino():
         assert torch.isfinite(out[key]), key
     out["loss"].backward()
     assert all(p.grad is None for p in model.teacher.parameters())
+
+
+UNET_D012_FINO_CONFIG = "configs/shapenet_part/pretrain-sonata-fino-litept-s-v2m0-unet-d012-shapenet-part.py"
+
+
+def test_dec_pooled_matches_a_manual_pooling():
+    """dec_pooled: D2 with D1 and D0 averaged onto the stage-2 points."""
+    model, batch = _small_model_and_batch(UNET_D012_FINO_CONFIG)
+    assert model.head_point_ratio is None
+    assert model.match_max_r == pytest.approx(0.32)
+    with torch.no_grad():
+        point = model.student.backbone(
+            dict(
+                feat=batch["global_feat"],
+                coord=batch["global_coord"],
+                origin_coord=batch["global_origin_coord"],
+                offset=batch["global_offset"],
+                grid_size=batch["grid_size"][0],
+            )
+        )
+        d0 = point.feat.clone()
+        stage1 = point.unpooling_parent
+        stage2 = stage1.unpooling_parent
+        d1, d2 = stage1.feat.clone(), stage2.feat.clone()
+        to2 = stage2.pooling_inverse[stage1.pooling_inverse]  # stage 0 -> stage 2
+        out = model.up_cast(point)
+    assert out is stage2 and out.feat.shape[1] == 288
+    assert float(out.grid_size) == pytest.approx(0.08)
+    expected_d0 = (
+        torch.zeros(d2.shape[0], d0.shape[1], device="cuda").index_add_(0, to2, d0)
+        / torch.bincount(to2, minlength=d2.shape[0])[:, None]
+    )
+    assert torch.allclose(out.feat[:, :144], d2)
+    assert torch.allclose(out.feat[:, 216:], expected_d0, atol=1e-5)
+
+
+def test_unet_d012_fino_losses():
+    model, batch = _small_model_and_batch(UNET_D012_FINO_CONFIG)
+    assert model.student.mask_head.mlp[0].in_features == 288
+    assert model.meta.branches["category"].prototype.shape == (16, 504)
+    with torch.autocast("cuda", dtype=torch.bfloat16):
+        out = model(dict(batch))
+    for key in ("loss", "mask_loss", "unmask_loss", "meta_category_loss"):
+        assert torch.isfinite(out[key]), key
+    out["loss"].backward()
+    decoder = {
+        n: p
+        for n, p in model.student.backbone.named_parameters()
+        if n.startswith("dec.")
+    }
+    assert all(
+        p.grad is not None for p in decoder.values()
+    ), "every decoder stage is trained"
+    assert all(p.grad is None for p in model.teacher.parameters())
