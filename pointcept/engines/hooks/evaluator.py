@@ -16,11 +16,9 @@ from pointcept.utils.misc import (
     accumulate_regression_errors,
     intersection_and_union_gpu,
     kl_divergence_rows,
-    masked_part_argmax,
     mean_acc_from_hist,
     mean_iou_from_hist,
     pool_axis_distribution_from_probs,
-    shape_part_miou,
     tv_from_abs_errors,
 )
 from pointcept.utils.epoch_timing import (
@@ -43,6 +41,8 @@ from pointcept.utils.gradient_norm import (
     combine_weighted_task_losses,
     resolve_grad_norm_lite_scales,
 )
+
+from pointcept.utils.partseg_metrics import PartSegMetrics
 
 from .default import HookBase
 from .builder import HOOKS
@@ -496,19 +496,27 @@ class SemSegEvaluator(HookBase):
 
 @HOOKS.register_module()
 class ShapeNetPartSegEvaluator(HookBase):
-    """ShapeNetPart validation: instance mIoU and category mIoU.
+    """ShapeNetPart validation (see pointcept/utils/partseg_metrics.py).
 
-    Ported from upstream Pointcept. Unlike upstream, validation batches may hold
-    several shapes (split with ``offset`` / ``origin_offset``). Both protocols are
-    reported: plain argmax over the 50 parts (``ins_mIoU``, ``cat_mIoU``, as
-    upstream) and argmax restricted to the parts of the shape's category
-    (``ins_mIoU_catmask``, ``cat_mIoU_catmask``, the usual protocol of the
-    literature). The saver metric is ``metric``, one of these four.
+    Main metrics: semantic segmentation over the 50 parts (argmax over the 50
+    classes, confusion accumulated over every original point of the split): mIoU,
+    mAcc, allAcc. Secondary: the per-shape protocol, ins_mIoU / cat_mIoU, plain and
+    with category masking (``*_catmask``). Validation batches may hold several
+    shapes (split with ``offset`` / ``origin_offset``). The saver metric is
+    ``metric``, any of these seven.
     """
 
-    _METRICS = ("ins_mIoU", "cat_mIoU", "ins_mIoU_catmask", "cat_mIoU_catmask")
+    _METRICS = (
+        "mIoU",
+        "mAcc",
+        "allAcc",
+        "ins_mIoU",
+        "cat_mIoU",
+        "ins_mIoU_catmask",
+        "cat_mIoU_catmask",
+    )
 
-    def __init__(self, metric="ins_mIoU", write_cls_iou=False):
+    def __init__(self, metric="mIoU", write_cls_iou=False):
         if metric not in self._METRICS:
             raise ValueError(f"metric must be one of {self._METRICS}, got {metric!r}")
         self.metric = metric
@@ -526,10 +534,11 @@ class ShapeNetPartSegEvaluator(HookBase):
             )
         self.trainer.model.eval()
         dataset = self.trainer.val_loader.dataset
-        num_categories = len(dataset.categories)
-        # row 0: plain argmax, row 1: argmax restricted to the category's parts
-        iou_sum = np.zeros((2, num_categories), dtype=np.float64)
-        iou_count = np.zeros(num_categories, dtype=np.float64)
+        meter = PartSegMetrics(
+            dataset.categories,
+            dataset.category2part,
+            self.trainer.cfg.data.num_classes,
+        )
         loss_sum, loss_count = 0.0, 0
         for input_dict in self.trainer.val_loader:
             for key in input_dict.keys():
@@ -537,85 +546,39 @@ class ShapeNetPartSegEvaluator(HookBase):
                     input_dict[key] = input_dict[key].cuda(non_blocking=True)
             with torch.no_grad():
                 output_dict = self.trainer.model(input_dict)
-            logits = output_dict["seg_logits"]
             loss_sum += output_dict["loss"].item()
             loss_count += 1
-            voxel_ends = _offset_to_list(input_dict["offset"])
-            if "inverse" in input_dict.keys():
-                assert "origin_segment" in input_dict.keys()
-                segment = input_dict["origin_segment"]
-                inverse = input_dict["inverse"]
-                point_ends = _offset_to_list(
-                    input_dict.get("origin_offset", [segment.shape[0]])
-                )
-            else:
-                segment, inverse, point_ends = input_dict["segment"], None, voxel_ends
-            cls_tokens = input_dict["cls_token"].view(-1).tolist()
-            v0 = p0 = 0
-            for cls_token, v1, p1 in zip(cls_tokens, voxel_ends, point_ends):
-                parts = dataset.category2part[dataset.categories[cls_token]]
-                shape_logits = logits[v0:v1]
-                if inverse is not None:
-                    shape_logits = shape_logits[inverse[p0:p1]]
-                target = segment[p0:p1].cpu().numpy()
-                preds = (
-                    shape_logits.argmax(dim=1),
-                    masked_part_argmax(shape_logits, parts),
-                )
-                for row, pred in enumerate(preds):
-                    iou_sum[row, cls_token] += shape_part_miou(
-                        pred.cpu().numpy(), target, parts
-                    )
-                iou_count[cls_token] += 1
-                v0, p0 = v1, p1
-        if comm.get_world_size() > 1:
-            totals = torch.tensor(
-                np.concatenate([iou_sum, iou_count[None]]),
-                device="cuda",
-                dtype=torch.float64,
-            )
-            dist.all_reduce(totals)
-            totals = totals.cpu().numpy()
-            iou_sum, iou_count = totals[:2], totals[2]
+            update_partseg_metrics(meter, output_dict["seg_logits"], input_dict)
+        meter.sync()
+        metrics = meter.compute()
         loss_avg = loss_sum / max(loss_count, 1)
-        ins_miou = iou_sum.sum(1) / (iou_count.sum() + 1e-10)
-        iou_per_cat = iou_sum / (iou_count + 1e-10)
-        cat_miou = iou_per_cat[:, iou_count > 0].mean(1)
-        metrics = {
-            "ins_mIoU": ins_miou[0],
-            "cat_mIoU": cat_miou[0],
-            "ins_mIoU_catmask": ins_miou[1],
-            "cat_mIoU_catmask": cat_miou[1],
-        }
+        names = self.trainer.cfg.data.names
         if comm.is_main_process():
             self.trainer.logger.info(
-                "Val result: ins.mIoU/cat.mIoU {:.4f}/{:.4f}, with category "
-                "masking {:.4f}/{:.4f}.".format(
-                    ins_miou[0], cat_miou[0], ins_miou[1], cat_miou[1]
+                "Val result: mIoU/mAcc/allAcc {:.4f}/{:.4f}/{:.4f} (50 parts); "
+                "ins.mIoU/cat.mIoU {:.4f}/{:.4f}, with category masking "
+                "{:.4f}/{:.4f}.".format(
+                    *(metrics[k] for k in self._METRICS),
                 )
             )
-            for i in range(num_categories):
-                if iou_count[i] > 0:
-                    self.trainer.logger.info(
-                        "Class_{idx}-{name} Result: iou_cat/iou_cat_masked/num_sample "
-                        "{iou:.4f}/{iou_m:.4f}/{n:.0f}".format(
-                            idx=i,
-                            name=dataset.categories[i],
-                            iou=iou_per_cat[0, i],
-                            iou_m=iou_per_cat[1, i],
-                            n=iou_count[i],
-                        )
+            for i, name in enumerate(names):
+                self.trainer.logger.info(
+                    "Class_{idx}-{name} Result: iou/accuracy {iou:.4f}/{acc:.4f}".format(
+                        idx=i,
+                        name=name,
+                        iou=metrics["iou_class"][i],
+                        acc=metrics["acc_class"][i],
                     )
+                )
         current_epoch = self.trainer.epoch + 1
         metric_best = max(self.trainer.best_metric_value, metrics[self.metric])
         if self.trainer.writer is not None:
             scalars = {"val/loss": loss_avg}
-            scalars.update({f"val/{k}": v for k, v in metrics.items()})
+            scalars.update({f"val/{k}": metrics[k] for k in self._METRICS})
             scalars[f"val/{self.metric}_best"] = metric_best
             if self.write_cls_iou:
-                for i in range(num_categories):
-                    if iou_count[i] > 0:
-                        scalars[f"val/iou_{dataset.categories[i]}"] = iou_per_cat[0, i]
+                for i, name in enumerate(names):
+                    scalars[f"val/iou_{name}"] = metrics["iou_class"][i]
             for tag, value in scalars.items():
                 self.trainer.writer.add_scalar(tag, value, current_epoch)
             wandb_log = None
@@ -639,6 +602,30 @@ class ShapeNetPartSegEvaluator(HookBase):
         self.trainer.logger.info(
             "Best {}: {:.4f}".format(self.metric, self.trainer.best_metric_value)
         )
+
+
+def update_partseg_metrics(meter, logits, input_dict):
+    """Add every shape of a validation batch to a PartSegMetrics, at the original
+    points (through ``inverse`` / ``origin_segment`` when the batch was voxelised)."""
+    voxel_ends = _offset_to_list(input_dict["offset"])
+    if "inverse" in input_dict.keys():
+        assert "origin_segment" in input_dict.keys()
+        segment = input_dict["origin_segment"]
+        inverse = input_dict["inverse"]
+        point_ends = _offset_to_list(
+            input_dict.get("origin_offset", [segment.shape[0]])
+        )
+    else:
+        segment, inverse, point_ends = input_dict["segment"], None, voxel_ends
+    cls_tokens = input_dict["cls_token"].view(-1).tolist()
+    assert len(cls_tokens) == len(voxel_ends) == len(point_ends)
+    v0 = p0 = 0
+    for cls_token, v1, p1 in zip(cls_tokens, voxel_ends, point_ends):
+        shape_logits = logits[v0:v1]
+        if inverse is not None:
+            shape_logits = shape_logits[inverse[p0:p1]]
+        meter.update(shape_logits, segment[p0:p1], cls_token)
+        v0, p0 = v1, p1
 
 
 @HOOKS.register_module()

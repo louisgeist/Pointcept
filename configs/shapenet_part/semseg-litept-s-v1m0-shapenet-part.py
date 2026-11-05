@@ -2,8 +2,9 @@
 LitePT-S part segmentation on ShapeNetPart (50 parts, 16 categories), trained from scratch.
 
 Phase 0 sanity check of the hybrid-SSL project: the ShapeNetPart port (dataset, evaluator,
-tester) trains and reports instance mIoU and category mIoU. Input features: coord only
-(in_channels=3). Trained on train + val, validated on test (upstream Pointcept convention).
+tester) trains and reports mIoU over the 50 parts (plus the per-shape instance and category
+mIoU). Input features: coord only (in_channels=3). Trained on train + val, validated on test
+(upstream Pointcept convention).
 The backbone (LitePT-v1, or LitePT-v2 with its norm/stem options) is set by the variables
 below, for the BN vs LN reference of phase 1.
 
@@ -56,7 +57,7 @@ hooks = [
     dict(type="ModelHook"),
     dict(type="IterationTimer", warmup_iter=2),
     dict(type="InformationWriter", log_interval=50),
-    dict(type="ShapeNetPartSegEvaluator", metric="ins_mIoU", write_cls_iou=True),
+    dict(type="ShapeNetPartSegEvaluator", metric="mIoU", write_cls_iou=True),
     dict(type="CheckpointSaver", save_freq=None),
     dict(type="PreciseEvaluator"),
 ]

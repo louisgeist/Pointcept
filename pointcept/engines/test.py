@@ -35,11 +35,9 @@ from pointcept.utils.misc import (
     intersection_and_union_gpu,
     kl_divergence_rows,
     make_dirs,
-    masked_part_argmax,
     mean_acc_from_hist,
     mean_iou_from_hist,
     pool_axis_distribution_from_probs,
-    shape_part_miou,
     tv_from_abs_errors,
 )
 from pointcept.utils.dilated_metrics import (
@@ -47,6 +45,7 @@ from pointcept.utils.dilated_metrics import (
     dilated_precision_recall_counts,
     precision_recall_f1,
 )
+from pointcept.utils.partseg_metrics import PartSegMetrics
 from pointcept.utils.progress import EvaluationProgressBar
 from pointcept.utils.wandb_metrics import class_name_slug, iou_class_tag, metric_tag
 
@@ -2262,13 +2261,13 @@ class ClsTester(TesterBase):
 
 @TESTERS.register_module()
 class ShapeNetPartSegTester(TesterBase):
-    """ShapeNetPart test: instance mIoU and category mIoU with test-time augmentation.
+    """ShapeNetPart test with test-time augmentation (one shape per step; softmax
+    summed over the ``fragment_list`` of each shape, ported from upstream).
 
-    Ported from upstream Pointcept (one shape per step; softmax summed over the
-    ``fragment_list`` of each shape). Reports the plain argmax over the 50 parts
-    (``test/ins_mIoU``, ``test/cat_mIoU``) and the argmax restricted to the parts of
-    the shape's category (``*_catmask``, the usual protocol). Predictions are not
-    saved to disk.
+    Main metrics: semantic segmentation over the 50 parts at the original points
+    (``test/mIoU``, ``test/mAcc``, ``test/allAcc``); secondary: the per-shape
+    ``test/ins_mIoU``, ``test/cat_mIoU`` and their ``*_catmask`` versions (see
+    pointcept/utils/partseg_metrics.py). Predictions are not saved to disk.
     """
 
     def test(self):
@@ -2277,8 +2276,9 @@ class ShapeNetPartSegTester(TesterBase):
         logger.info(">>>>>>>>>>>>>>>> Start Evaluation >>>>>>>>>>>>>>>>")
         self.begin_test_timing()
         dataset = self.test_loader.dataset
-        num_categories = len(dataset.categories)
-        record = {}
+        meter = PartSegMetrics(
+            dataset.categories, dataset.category2part, self.cfg.data.num_classes
+        )
         self.model.eval()
         for idx, data_dict in enumerate(self.test_loader):
             data_dict = data_dict[0]  # one shape per step
@@ -2297,63 +2297,43 @@ class ShapeNetPartSegTester(TesterBase):
             if "origin_segment" in data_dict.keys():
                 prob = prob[data_dict["inverse"]]
                 segment = data_dict["origin_segment"]
-            category_index = int(fragment_list[0]["cls_token"])
-            parts = dataset.category2part[dataset.categories[category_index]]
-            ious = [
-                shape_part_miou(pred.cpu().numpy(), segment, parts)
-                for pred in (prob.argmax(dim=1), masked_part_argmax(prob, parts))
-            ]
-            record[data_name] = dict(category_index=category_index, ious=ious)
+            meter.update(
+                prob, torch.as_tensor(segment).cuda(), int(fragment_list[0]["cls_token"])
+            )
             if (idx + 1) % 100 == 0 or idx + 1 == len(self.test_loader):
-                logger.info(
-                    "Test: [{}/{}] {} mIoU {:.4f}".format(
-                        idx + 1, len(self.test_loader), data_name, ious[0]
-                    )
-                )
+                logger.info("Test: [{}/{}] {}".format(idx + 1, len(self.test_loader), data_name))
 
         logger.info("Syncing ...")
         comm.synchronize()
-        record_sync = comm.gather(record, dst=0)
+        meter.sync()
+        metrics = meter.compute()
         log_dict = None
         if comm.is_main_process():
-            record = {}
-            for r in record_sync:
-                record.update(r)
-            # row 0: plain argmax, row 1: argmax restricted to the category's parts
-            iou_sum = np.zeros((2, num_categories), dtype=np.float64)
-            iou_count = np.zeros(num_categories, dtype=np.float64)
-            for meters in record.values():
-                iou_sum[:, meters["category_index"]] += meters["ious"]
-                iou_count[meters["category_index"]] += 1
-            ins_miou = iou_sum.sum(1) / (iou_count.sum() + 1e-10)
-            iou_per_cat = iou_sum / (iou_count + 1e-10)
-            cat_miou = iou_per_cat[:, iou_count > 0].mean(1)
-            logger.info(
-                "Test result: ins.mIoU/cat.mIoU {:.4f}/{:.4f}, with category "
-                "masking {:.4f}/{:.4f}.".format(
-                    ins_miou[0], cat_miou[0], ins_miou[1], cat_miou[1]
-                )
+            keys = (
+                "mIoU",
+                "mAcc",
+                "allAcc",
+                "ins_mIoU",
+                "cat_mIoU",
+                "ins_mIoU_catmask",
+                "cat_mIoU_catmask",
             )
-            log_dict = {
-                "test/ins_mIoU": float(ins_miou[0]),
-                "test/cat_mIoU": float(cat_miou[0]),
-                "test/ins_mIoU_catmask": float(ins_miou[1]),
-                "test/cat_mIoU_catmask": float(cat_miou[1]),
-            }
-            for i in range(num_categories):
-                if iou_count[i] == 0:
-                    continue
+            logger.info(
+                "Test result: mIoU/mAcc/allAcc {:.4f}/{:.4f}/{:.4f} (50 parts); "
+                "ins.mIoU/cat.mIoU {:.4f}/{:.4f}, with category masking "
+                "{:.4f}/{:.4f}.".format(*(metrics[k] for k in keys))
+            )
+            log_dict = {f"test/{k}": metrics[k] for k in keys}
+            for i, name in enumerate(self.cfg.data.names):
                 logger.info(
-                    "Class_{idx}-{name} Result: iou_cat/iou_cat_masked/num_sample "
-                    "{iou:.4f}/{iou_m:.4f}/{n:.0f}".format(
+                    "Class_{idx}-{name} Result: iou/accuracy {iou:.4f}/{acc:.4f}".format(
                         idx=i,
-                        name=dataset.categories[i],
-                        iou=iou_per_cat[0, i],
-                        iou_m=iou_per_cat[1, i],
-                        n=iou_count[i],
+                        name=name,
+                        iou=metrics["iou_class"][i],
+                        acc=metrics["acc_class"][i],
                     )
                 )
-                log_dict[f"test/iou_{dataset.categories[i]}"] = float(iou_per_cat[0, i])
+                log_dict[f"test/iou_{name}"] = float(metrics["iou_class"][i])
         self.test_metrics = log_dict
         self.end_test_timing_and_log(extra_log_dict=log_dict)
         if comm.is_main_process():

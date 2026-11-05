@@ -54,3 +54,56 @@ def test_dataset_splits_and_sample():
     # the cache must not be modified by in-place transforms
     sample["coord"] += 1.0
     assert not np.allclose(ds.get_data(0)["coord"], sample["coord"])
+
+
+def _toy_meter():
+    from pointcept.utils.partseg_metrics import PartSegMetrics
+
+    categories = ["A", "B"]
+    category2part = {"A": [0, 1], "B": [2, 3]}
+    return PartSegMetrics(categories, category2part, num_classes=4)
+
+
+def _one_hot(pred, k=4):
+    return torch.nn.functional.one_hot(torch.tensor(pred), k).float()
+
+
+def test_partseg_metrics_confusion_over_points():
+    meter = _toy_meter()
+    # shape of category A: 4 points, one part-1 point predicted as part 2 (a B part),
+    # with part 1 as its second choice
+    logits = _one_hot([0, 0, 1, 2])
+    logits[3, 1] = 0.5
+    meter.update(logits, torch.tensor([0, 0, 1, 1]), 0)
+    # shape of category B: 2 points, all right
+    meter.update(_one_hot([2, 3]), torch.tensor([2, 3]), 1)
+    m = meter.compute()
+    # IoU per class over all 6 points: 0 -> 1, 1 -> 1/2, 2 -> 1/2, 3 -> 1
+    assert m["mIoU"] == pytest.approx((1 + 0.5 + 0.5 + 1) / 4)
+    assert m["allAcc"] == pytest.approx(5 / 6)
+    assert m["mAcc"] == pytest.approx((1 + 0.5 + 1 + 1) / 4)
+    # per-shape protocol: shape A plain argmax mIoU = (1 + 1/2) / 2, masked = 1
+    assert m["ins_mIoU"] == pytest.approx((0.75 + 1) / 2)
+    assert m["ins_mIoU_catmask"] == pytest.approx(1.0)
+
+
+def test_update_partseg_metrics_batch_with_inverse():
+    from pointcept.engines.hooks.evaluator import update_partseg_metrics
+
+    meter = _toy_meter()
+    # two shapes collated: 2 + 1 voxels, 4 + 2 original points
+    logits = _one_hot([0, 1, 3])
+    input_dict = dict(
+        offset=torch.tensor([2, 3]),
+        origin_offset=torch.tensor([4, 6]),
+        inverse=torch.tensor([0, 0, 1, 1, 0, 0]),
+        origin_segment=torch.tensor([0, 0, 1, 1, 3, 2]),
+        segment=torch.tensor([0, 1, 3]),
+        cls_token=torch.tensor([0, 1]),
+    )
+    update_partseg_metrics(meter, logits, input_dict)
+    m = meter.compute()
+    assert meter.target.sum() == 6
+    # class 2: one target point, predicted 3 -> IoU 0; class 3: IoU 1/2
+    assert m["mIoU"] == pytest.approx((1 + 1 + 0 + 0.5) / 4)
+    assert m["allAcc"] == pytest.approx(5 / 6)

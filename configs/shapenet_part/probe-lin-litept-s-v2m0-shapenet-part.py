@@ -2,8 +2,9 @@
 Linear probe of a frozen Sonata LitePT-v2-S encoder (pretrain-sonata-litept-s-v2m0-shapenet-part.py)
 on ShapeNetPart part segmentation: one CE + Lovasz linear head on the encoder features up-cast
 to full resolution (36 + 72 + 144 + 252 + 504 = 1008 channels). Short schedule (2000
-iterations), validation on the test split; reports instance / category mIoU with and without
-category masking of the logits. The best ins_mIoU_catmask is written to save_path/metrics.json
+iterations), validation on the test split. Main metric: semantic segmentation over the 50 parts
+(mIoU / mAcc / allAcc over every original point, no category masking); the per-shape instance /
+category mIoU are logged as secondary metrics. The best mIoU is written to save_path/metrics.json
 (read by PeriodicProbeHook). Pass the checkpoint with --options weight=<path>.
 
 The input pipeline matches the pretraining: NormalizeCoord, 0.02 grid, coord features.
@@ -165,7 +166,40 @@ data = dict(
         ],
         test_mode=False,
     ),
+    test=dict(
+        type=dataset_type,
+        split="test",
+        data_root=data_root,
+        transform=[
+            dict(type="NormalizeCoord"),
+            dict(type="CenterShift", apply_z=True),
+        ],
+        test_mode=True,
+        test_cfg=dict(
+            voxelize=dict(
+                type="GridSample",
+                grid_size=grid_size,
+                hash_type="fnv",
+                mode="test",
+                return_grid_coord=True,
+            ),
+            crop=None,
+            post_transform=[
+                dict(type="ToTensor"),
+                dict(
+                    type="Collect",
+                    keys=("coord", "grid_coord", "index", "cls_token"),
+                    feat_keys=feat_keys,
+                ),
+            ],
+            aug_transform=[
+                [dict(type="RandomScale", scale=[1, 1], anisotropic=True)],
+            ],
+        ),
+    ),
 )
+
+test = dict(type="ShapeNetPartSegTester", verbose=True)
 
 hooks = [
     dict(
@@ -175,7 +209,7 @@ hooks = [
     ),
     dict(type="IterationTimer", warmup_iter=2),
     dict(type="InformationWriter", log_interval=50),
-    dict(type="ShapeNetPartSegEvaluator", metric="ins_mIoU_catmask"),
+    dict(type="ShapeNetPartSegEvaluator", metric="mIoU"),
     dict(type="CheckpointSaver", save_freq=None),
     dict(type="MetricsJsonWriter"),
 ]
