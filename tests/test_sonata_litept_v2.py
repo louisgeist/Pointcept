@@ -274,3 +274,36 @@ def test_sigreg_option():
         out = model(dict(batch))
     assert torch.isfinite(out["sigreg_loss"])
     out["loss"].backward()
+
+
+UNET_HYPER_FINO_CONFIG = "configs/shapenet_part/pretrain-sonata-fino-litept-s-v2m0-unet-hyper-shapenet-part.py"
+
+
+def test_unet_hypercolumn_fino():
+    """U-Net with the losses on D0-D3 + E4 (1044-d) and FINO phi on the bottleneck."""
+    model, batch = _small_model_and_batch(UNET_HYPER_FINO_CONFIG)
+    assert model.student.mask_head.mlp[0].in_features == 1044
+    assert model.meta.branches["category"].prototype.shape == (16, 504)
+    with torch.no_grad():
+        point = model.student.backbone(
+            dict(
+                feat=batch["global_feat"],
+                coord=batch["global_coord"],
+                origin_coord=batch["global_origin_coord"],
+                offset=batch["global_offset"],
+                grid_size=batch["grid_size"][0],
+            )
+        )
+        bottleneck = point
+        while "unpooling_parent" in bottleneck.keys():
+            bottleneck = bottleneck.unpooling_parent
+        phi = model._meta_phi(point, "coarse")
+        hyper = model.up_cast(point)
+    assert bottleneck.feat.shape[1] == 504 and phi.shape == (8, 504)
+    assert hyper.feat.shape == (batch["global_coord"].shape[0], 1044)
+    with torch.autocast("cuda", dtype=torch.bfloat16):
+        out = model(dict(batch))
+    for key in ("loss", "mask_loss", "unmask_loss", "meta_category_loss"):
+        assert torch.isfinite(out[key]), key
+    out["loss"].backward()
+    assert all(p.grad is None for p in model.teacher.parameters())

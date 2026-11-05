@@ -118,6 +118,7 @@ class Sonata(PointModel, LearnedMaskedFeatMixin):
         schedule_iters=None,
         log_target_stats=False,
         head_point_ratio=None,
+        feature_source="upcast",
         meta_guidance=None,
         meta_guidance_cfg=None,
         sigreg=None,
@@ -186,6 +187,17 @@ class Sonata(PointModel, LearnedMaskedFeatMixin):
         # up-cast) for the heads and losses, e.g. when the losses read a full-resolution
         # decoder output; None or 1 keeps every point (upstream behaviour).
         self.head_point_ratio = head_point_ratio
+        # Hybrid-SSL addition: features read by the heads. "upcast" (upstream): the
+        # encoder output up-cast over up_cast_level stages. "dec_hypercolumn": the
+        # outputs of every decoder stage of a traceable decoder (dec_traceable=True)
+        # and the encoder bottleneck, gathered onto the finest points (up_cast_level
+        # unused). "dec_hypercolumn_no_bottleneck": the same without the bottleneck.
+        assert feature_source in (
+            "upcast",
+            "dec_hypercolumn",
+            "dec_hypercolumn_no_bottleneck",
+        ), feature_source
+        self.feature_source = feature_source
 
         # one of unmask, mask, roll mask loss enable
         assert unmask_loss_weight + mask_loss_weight + roll_mask_loss_weight > 0
@@ -237,9 +249,9 @@ class Sonata(PointModel, LearnedMaskedFeatMixin):
         # Hybrid-SSL addition: FINO metadata guidance (see meta_guidance.py). Each
         # branch reads phi, the per-view pooling (meta_guidance_cfg["pooling"]: "mean"
         # or "max") of encoder features chosen by meta_guidance_cfg["pool_source"]:
-        # "coarse" (default: the last encoder stage, before the up-cast,
-        # enc_channels[-1]) or "upcast" (the multi-scale features up-cast for the
-        # heads, head_in_channels). The student
+        # "coarse" (default: the last encoder stage, enc_channels[-1], before the
+        # up-cast; with a traceable decoder, the bottleneck the decoder starts from)
+        # or "upcast" (the features the heads read, head_in_channels). The student
         # phi comes from meta_guidance_cfg["student_view"]: "masked_global" (default:
         # the masked global views the student already encodes), "global" (the
         # unmasked global views, one more student forward per step) or "local"; the
@@ -395,6 +407,24 @@ class Sonata(PointModel, LearnedMaskedFeatMixin):
         point_mask = torch.isin(point_cluster, mask_patch_index)
         return point_mask, point_cluster
 
+    @staticmethod
+    def dec_hypercolumn(point, bottleneck=True):
+        """Decoder hypercolumn of a traceable decoder output: every decoder stage
+        (and the encoder bottleneck) gathered onto the finest points, finest first,
+        as DefaultSegmentorV2 does for probes."""
+        point_list = [point]
+        while "unpooling_parent" in point_list[-1].keys():
+            point_list.append(point_list[-1].pop("unpooling_parent"))
+        assert len(point_list) > 1, "dec_hypercolumn needs dec_traceable=True"
+        if not bottleneck:
+            point_list = point_list[:-1]
+        for i in reversed(range(1, len(point_list))):
+            child, parent = point_list[i], point_list[i - 1]
+            parent.feat = torch.cat(
+                [parent.feat, child.feat[child.pooling_inverse]], dim=-1
+            )
+        return point_list[0]
+
     def _meta_student_view_is(self, view):
         return self.meta is not None and self.meta_student_view == view
 
@@ -404,6 +434,11 @@ class Sonata(PointModel, LearnedMaskedFeatMixin):
         up-cast point with "upcast"); otherwise returns ``phi`` unchanged."""
         if self.meta is None or self.meta_pool_source != source:
             return phi
+        if source == "coarse":
+            # with a traceable decoder the backbone returns the decoder output:
+            # the coarse features are the bottleneck, at the end of its links
+            while "unpooling_parent" in point.keys():
+                point = point.unpooling_parent
         return pool_views(point.feat, point.offset, self.meta_pooling)
 
     def _subsample_points(self, point):
@@ -543,6 +578,10 @@ class Sonata(PointModel, LearnedMaskedFeatMixin):
         return Point(data_dict)
 
     def up_cast(self, point):
+        if self.feature_source != "upcast":
+            return self.dec_hypercolumn(
+                point, bottleneck=self.feature_source == "dec_hypercolumn"
+            )
         for _ in range(self.up_cast_level):
             assert "pooling_parent" in point.keys()
             assert "pooling_inverse" in point.keys()
