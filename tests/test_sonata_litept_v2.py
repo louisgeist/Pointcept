@@ -230,10 +230,22 @@ def test_empty_meta_guidance_is_sonata():
     assert torch.equal(_seeded_loss(plain, batch), _seeded_loss(empty, batch))
 
 
-@pytest.mark.parametrize("student_view", ["masked_global", "global", "local"])
-def test_fino_forward_backward(student_view):
-    model, batch = _small_model_and_batch(FINO_CONFIG)
+@pytest.mark.parametrize(
+    "student_view, pool_source",
+    [
+        ("masked_global", "coarse"),
+        ("masked_global", "upcast"),
+        ("global", "coarse"),
+        ("local", "upcast"),
+    ],
+)
+def test_fino_forward_backward(student_view, pool_source):
+    cfg = Config.fromfile(FINO_CONFIG)
+    meta_cfg = dict(cfg.model.meta_guidance_cfg, pool_source=pool_source)
+    model, batch = _small_model_and_batch(FINO_CONFIG, meta_guidance_cfg=meta_cfg)
     model.meta_student_view = student_view
+    channels = 504 if pool_source == "coarse" else 900
+    assert model.meta.branches["category"].prototype.shape == (16, channels)
     assert batch["cls_token"].tolist() == [0, 1, 2, 0]
     proto_before = model.meta.branches["category"].prototype.clone()
     with torch.autocast("cuda", dtype=torch.bfloat16):

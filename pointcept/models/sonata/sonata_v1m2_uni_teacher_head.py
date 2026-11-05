@@ -236,7 +236,10 @@ class Sonata(PointModel, LearnedMaskedFeatMixin):
 
         # Hybrid-SSL addition: FINO metadata guidance (see meta_guidance.py). Each
         # branch reads phi, the per-view pooling (meta_guidance_cfg["pooling"]: "mean"
-        # or "max") of the up-cast encoder features (head_in_channels). The student
+        # or "max") of encoder features chosen by meta_guidance_cfg["pool_source"]:
+        # "coarse" (default: the last encoder stage, before the up-cast,
+        # enc_channels[-1]) or "upcast" (the multi-scale features up-cast for the
+        # heads, head_in_channels). The student
         # phi comes from meta_guidance_cfg["student_view"]: "masked_global" (default:
         # the masked global views the student already encodes), "global" (the
         # unmasked global views, one more student forward per step) or "local"; the
@@ -247,13 +250,19 @@ class Sonata(PointModel, LearnedMaskedFeatMixin):
             meta_cfg = dict(meta_guidance_cfg or {})
             self.meta_pooling = meta_cfg.pop("pooling", "mean")
             self.meta_student_view = meta_cfg.pop("student_view", "masked_global")
+            self.meta_pool_source = meta_cfg.pop("pool_source", "coarse")
             assert self.meta_pooling in ("mean", "max"), self.meta_pooling
+            assert self.meta_pool_source in ("coarse", "upcast"), self.meta_pool_source
             assert self.meta_student_view in ("masked_global", "global", "local")
             if self.meta_student_view == "masked_global":
                 assert self.mask_loss_weight > 0 or self.roll_mask_loss_weight > 0
             if self.meta_student_view == "local":
                 assert self.unmask_loss_weight > 0
-            self.meta = MetaGuidance(head_in_channels, meta_guidance, **meta_cfg)
+            if self.meta_pool_source == "coarse":
+                phi_channels = backbone["enc_channels"][-1]
+            else:
+                phi_channels = head_in_channels
+            self.meta = MetaGuidance(phi_channels, meta_guidance, **meta_cfg)
         # Hybrid-SSL addition: optional SIGReg (LeJEPA) on the pre-normalisation
         # embedding of the student mask head, dict(weight=0.05, num_slices=256,
         # num_points=4096) (random points of the batch).
@@ -385,6 +394,17 @@ class Sonata(PointModel, LearnedMaskedFeatMixin):
         mask_patch_index = patch_index[:mask_patch_num]
         point_mask = torch.isin(point_cluster, mask_patch_index)
         return point_mask, point_cluster
+
+    def _meta_student_view_is(self, view):
+        return self.meta is not None and self.meta_student_view == view
+
+    def _meta_phi(self, point, source, phi=None):
+        """Per-view pooling of point.feat when ``source`` is the configured
+        pool_source (call it on the coarsest point with "coarse", then on the
+        up-cast point with "upcast"); otherwise returns ``phi`` unchanged."""
+        if self.meta is None or self.meta_pool_source != source:
+            return phi
+        return pool_views(point.feat, point.offset, self.meta_pooling)
 
     def _subsample_points(self, point):
         """Random subset of the student points (Bernoulli(head_point_ratio) per point,
@@ -606,11 +626,9 @@ class Sonata(PointModel, LearnedMaskedFeatMixin):
             result_dict = dict(loss=[])
             # teacher backbone forward (shared with mask and unmask)
             global_point_ = self.teacher.backbone(global_point)
+            teacher_phi = self._meta_phi(global_point_, "coarse")
             global_point_ = self.up_cast(global_point_)
-            if self.meta is not None:
-                teacher_phi = pool_views(
-                    global_point_.feat, global_point_.offset, self.meta_pooling
-                )
+            teacher_phi = self._meta_phi(global_point_, "upcast", teacher_phi)
             # teacher head forward
             # only use one shared head for both mask and unmask
             # priority: mask (global) > unmask (local)
@@ -622,13 +640,11 @@ class Sonata(PointModel, LearnedMaskedFeatMixin):
         if self.mask_loss_weight > 0 or self.roll_mask_loss_weight > 0:
             # student forward
             mask_global_point_ = self.student.backbone(mask_global_point)
+            if self._meta_student_view_is("masked_global"):
+                student_phi = self._meta_phi(mask_global_point_, "coarse")
             mask_global_point_ = self.up_cast(mask_global_point_)
-            if self.meta is not None and self.meta_student_view == "masked_global":
-                student_phi = pool_views(
-                    mask_global_point_.feat,
-                    mask_global_point_.offset,
-                    self.meta_pooling,
-                )
+            if self._meta_student_view_is("masked_global"):
+                student_phi = self._meta_phi(mask_global_point_, "upcast", student_phi)
             mask_global_point_ = self._subsample_points(mask_global_point_)
             if self.sigreg:
                 mask_pred_sim, mask_embedding = self.student.mask_head(
@@ -721,11 +737,11 @@ class Sonata(PointModel, LearnedMaskedFeatMixin):
         if self.unmask_loss_weight > 0:
             # student forward
             local_point_ = self.student.backbone(local_point)
+            if self._meta_student_view_is("local"):
+                student_phi = self._meta_phi(local_point_, "coarse")
             local_point_ = self.up_cast(local_point_)
-            if self.meta is not None and self.meta_student_view == "local":
-                student_phi = pool_views(
-                    local_point_.feat, local_point_.offset, self.meta_pooling
-                )
+            if self._meta_student_view_is("local"):
+                student_phi = self._meta_phi(local_point_, "upcast", student_phi)
             local_point_ = self._subsample_points(local_point_)
             unmask_pred_sim = self.student.unmask_head(local_point_.feat)
             with torch.no_grad():
@@ -770,20 +786,18 @@ class Sonata(PointModel, LearnedMaskedFeatMixin):
             result_dict["loss"].append(unmask_loss * self.unmask_loss_weight)
         if self.meta is not None:
             if self.meta_student_view == "global":
-                student_global = self.up_cast(
-                    self.student.backbone(
-                        Point(
-                            feat=data_dict["global_feat"],
-                            coord=data_dict["global_coord"],
-                            origin_coord=data_dict["global_origin_coord"],
-                            offset=data_dict["global_offset"],
-                            grid_size=data_dict["grid_size"][0],
-                        )
+                student_global = self.student.backbone(
+                    Point(
+                        feat=data_dict["global_feat"],
+                        coord=data_dict["global_coord"],
+                        origin_coord=data_dict["global_origin_coord"],
+                        offset=data_dict["global_offset"],
+                        grid_size=data_dict["grid_size"][0],
                     )
                 )
-                student_phi = pool_views(
-                    student_global.feat, student_global.offset, self.meta_pooling
-                )
+                student_phi = self._meta_phi(student_global, "coarse")
+                student_global = self.up_cast(student_global)
+                student_phi = self._meta_phi(student_global, "upcast", student_phi)
             views = (
                 self.num_local_view
                 if self.meta_student_view == "local"
