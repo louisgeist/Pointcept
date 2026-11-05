@@ -182,3 +182,18 @@ def test_rope_augmentation_train_only():
     out = run(augmented, data)
     out.feat.square().mean().backward()
     assert all(p.grad is not None for p in augmented.parameters())
+
+
+def test_enc_upcast_output_matches_enc_mode():
+    data = make_input()
+    unet = build(enc_upcast_output=True, dec_traceable=True).eval()
+    enc = build(enc_mode=True).eval()
+    enc.load_state_dict(
+        {k: v for k, v in unet.state_dict().items() if not k.startswith("dec.")}
+    )
+    with torch.no_grad():
+        point = run(unet, data)
+        coarse = run(enc, data)
+    finest, expected = enc.encoder_upcast(coarse)
+    assert torch.equal(point["enc_upcast_feat"], expected)
+    assert expected.shape == (data["coord"].shape[0], sum(SMALL["enc_channels"]))

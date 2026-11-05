@@ -23,6 +23,7 @@ from .builder import MODELS, build_model
 
 logger = get_root_logger()
 
+
 def _safe_segment_csr_mean(feat, indptr):
     """Per-scene mean pool in float32 (AMP-safe); empty segments -> 0."""
     pooled = torch_scatter.segment_csr(feat.float(), indptr, reduce="mean")
@@ -243,6 +244,10 @@ class DefaultSegmentorV2(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeatMi
                 inverse = point.pop("pooling_inverse")
                 parent.feat = torch.cat([parent.feat, point.feat[inverse]], dim=-1)
                 point = parent
+            # Encoder features up-cast by a decoder backbone for probing (LitePT-v2
+            # enc_upcast_output=True): appended after the decoder features.
+            if "enc_upcast_feat" in point.keys():
+                point.feat = torch.cat([point.feat, point.pop("enc_upcast_feat")], -1)
             feat = point.feat
         else:
             feat = point

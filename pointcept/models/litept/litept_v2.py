@@ -45,6 +45,11 @@ Defaults are the PT-v3m2 ones: ``norm="ln"``, ``stem="linear"``,
 ``stem="conv"``, ``mask_token=False``, ``init="default"`` (and the other options
 off), LitePT-v2 has the same state_dict keys as LitePT-v1 and gives the same
 outputs for the same weights, so MALiBU3D LitePT-v1 checkpoints load into it.
+
+Probing option (no parameters): with a decoder, ``enc_upcast_output=True`` stores the
+encoder features up-cast to the finest level (all stages concatenated, finest first, as in
+enc_mode probes) under ``enc_upcast_feat`` of the returned point, which DefaultSegmentorV2
+appends to the decoder features.
 """
 
 import math
@@ -405,9 +410,11 @@ class LitePT(PointModule):
         rope_shift=None,
         rope_jitter=None,
         rope_rescale=None,
+        enc_upcast_output=False,
     ):
         super().__init__()
         self.num_stages = len(enc_depths)
+        self.enc_upcast_output = enc_upcast_output
         self.order = [order] if isinstance(order, str) else order
         self.enc_mode = enc_mode
         self.dec_traceable = dec_traceable
@@ -595,6 +602,28 @@ class LitePT(PointModule):
         point = self.enc(point)
 
         if not self.enc_mode:
+            if self.enc_upcast_output:
+                finest, feat = self.encoder_upcast(point)
+                # the decoder returns this finest Point object, key included
+                finest["enc_upcast_feat"] = feat
             point = self.dec(point)
 
         return point
+
+    @staticmethod
+    def encoder_upcast(point):
+        """Encoder features of every stage gathered onto the finest points and
+        concatenated (finest first), without consuming the pooling links that the
+        decoder needs. Returns (finest point, features)."""
+        levels = [point]
+        while "pooling_parent" in levels[-1].keys():
+            levels.append(levels[-1].pooling_parent)
+        finest = levels[-1]
+        index = torch.arange(finest.feat.shape[0], device=finest.feat.device)
+        feats = [finest.feat]
+        # walk from the finest level to the coarsest: each child maps its parent's
+        # points to its own through pooling_inverse
+        for child in reversed(levels[:-1]):
+            index = child.pooling_inverse[index]
+            feats.append(child.feat[index])
+        return finest, torch.cat(feats, dim=-1)
