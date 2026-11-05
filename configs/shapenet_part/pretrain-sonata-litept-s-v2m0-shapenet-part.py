@@ -30,7 +30,10 @@ _base_ = ["../_base_/default_runtime.py"]
 # Run-level settings
 # -----------------------------------------------------------------------------
 num_gpu = 1
-batch_size_per_gpu = 32
+# Batch 64 (one A6000, ~30 GiB): the teacher targets sharpen after the warmup and the
+# linear probe keeps improving (0.766 ins mIoU with category masking at 3k iterations),
+# while at batch 32 the targets stay near-uniform and the probe plateaus at ~0.71.
+batch_size_per_gpu = 64
 batch_size = batch_size_per_gpu * num_gpu
 num_worker = 8 * num_gpu
 mix_prob = 0
@@ -56,8 +59,8 @@ mask_size_start = 0.05
 mask_size_base = 0.2
 mask_jitter = 0.005
 
-# Iter-limited schedule (1 trainer epoch = iter_per_epoch optimizer steps, ~1 pass over
-# the 14k shapes at batch 32). total_iters is the run length; schedule_iters the nominal
+# Iter-limited schedule (1 trainer epoch = iter_per_epoch optimizer steps, ~2 passes over
+# the 14k shapes at batch 64). total_iters is the run length; schedule_iters the nominal
 # horizon of the Sonata warmups (5 % of it).
 total_iters = 10_000  # POC; schedule_iters stays the nominal horizon
 iter_per_epoch = 500
@@ -147,6 +150,7 @@ model = dict(
     match_max_r=match_max_r,
     up_cast_level=up_cast_level,
     schedule_iters=schedule_iters,
+    log_target_stats=True,
 )
 
 # -----------------------------------------------------------------------------
@@ -154,7 +158,7 @@ model = dict(
 # -----------------------------------------------------------------------------
 # 0.002 (the MALiBU3D value, at batch 96) collapsed at batch 32 when the warmup passed
 # ~0.0016: all losses stuck at ln(4096), probes below a random backbone. 0.0007 is the
-# MALiBU3D value scaled linearly to batch 32.
+# MALiBU3D value scaled linearly to batch 32; also stable at batch 64.
 base_lr = 0.0007
 lr_decay = 0.9  # layer-wise lr decay
 weight_decay = 0.04  # constant
