@@ -30,13 +30,18 @@ from pointcept.utils.config import Config
 
 
 def ridge_fit(x, y, lam):
-    """Ridge regression with a bias, on standardised features (float64)."""
+    """Ridge regression with a bias, on standardised features (float64, on the
+    device of x)."""
+    x, y = x.double(), y.double()
     mean, std = x.mean(0), x.std(0).clamp_min(1e-6)
     xs = torch.cat([(x - mean) / std, torch.ones_like(x[:, :1])], 1)
     eye = torch.eye(xs.shape[1], dtype=xs.dtype, device=xs.device)
     eye[-1, -1] = 0  # no penalty on the bias
     w = torch.linalg.solve(xs.T @ xs + lam * xs.shape[0] * eye, xs.T @ y)
-    return lambda z: torch.cat([(z - mean) / std, torch.ones_like(z[:, :1])], 1) @ w
+    return (
+        lambda z: torch.cat([(z.double() - mean) / std, torch.ones_like(z[:, :1])], 1)
+        @ w
+    )
 
 
 def geom_metrics(pred, normal, height):
@@ -77,9 +82,10 @@ def extract(model, dataset, num_shapes, points_per_shape, batch_size, rng):
         begin = 0
         for end in batch["offset"].tolist():
             pick = begin + torch.randperm(end - begin, device="cuda")[:points_per_shape]
-            feats.append(feat[pick].double())
-            normals.append(batch["normal"][pick].double())
-            heights.append(batch["coord"][pick, 2].double())
+            # kept on the CPU: ~4 GB of features for 2000 shapes, next to a training run
+            feats.append(feat[pick].cpu())
+            normals.append(batch["normal"][pick].double().cpu())
+            heights.append(batch["coord"][pick, 2].double().cpu())
             begin = end
     return torch.cat(feats), torch.cat(normals), torch.cat(heights)
 
