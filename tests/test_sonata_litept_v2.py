@@ -129,3 +129,62 @@ def test_target_stats(setup):
         assert 1 <= out[f"{name}_target_ppl"] <= k + 1e-3
         assert 1 <= out[f"{name}_pred_ppl"] <= k + 1e-3
         assert 0 < out[f"{name}_proto_usage"] <= 1
+
+
+UNET_CONFIG = (
+    "configs/shapenet_part/pretrain-sonata-litept-s-v2m0-unet-shapenet-part.py"
+)
+
+
+def test_unet_decoder_losses():
+    """U-Net variant: losses on the 72-d decoder output, on a random subset of points."""
+    cfg = Config.fromfile(UNET_CONFIG)
+    assert cfg.model.head_in_channels == cfg.model.backbone.dec_channels[0] == 72
+    assert cfg.model.up_cast_level == 0 and cfg.model.head_point_ratio == 0.2
+    cfg.model.head_hidden_channels = 256
+    cfg.model.head_num_prototypes = 256
+    torch.manual_seed(0)
+    model = build_model(cfg.model).cuda().train()
+    transform = Compose(cfg.data.train.transform)
+    rng = np.random.default_rng(0)
+    np.random.seed(0)
+    batch = collate_fn([transform(synthetic_shape(rng)) for _ in range(4)])
+    batch = {k: v.cuda() if torch.is_tensor(v) else v for k, v in batch.items()}
+
+    with torch.no_grad():
+        full = model.student.backbone(
+            dict(
+                feat=batch["global_feat"],
+                coord=batch["global_coord"],
+                origin_coord=batch["global_origin_coord"],
+                offset=batch["global_offset"],
+                grid_size=batch["grid_size"][0],
+            )
+        )
+    assert full.feat.shape == (batch["global_coord"].shape[0], 72)
+    sub = model._subsample_points(full)
+    assert 0.1 < sub.feat.shape[0] / full.feat.shape[0] < 0.3
+    assert torch.equal(sub.offset, torch.cumsum(sub.batch.bincount(), 0))
+
+    with torch.autocast("cuda", dtype=torch.bfloat16):
+        out = model(dict(batch))
+    for key in ("loss", "mask_loss", "roll_mask_loss", "unmask_loss"):
+        assert torch.isfinite(out[key]), key
+    out["loss"].backward()
+    decoder = [p for n, p in model.student.backbone.named_parameters() if "dec." in n]
+    assert decoder and all(p.grad is not None for p in decoder)
+
+
+def test_geom_probe_ridge():
+    from tools.geom_probe import geom_metrics, ridge_fit
+
+    g = torch.Generator().manual_seed(0)
+    x = torch.randn(2000, 16, generator=g, dtype=torch.float64)
+    normal = torch.nn.functional.normalize(
+        x[:, :3] @ torch.randn(3, 3, generator=g, dtype=torch.float64), dim=1
+    )
+    height = x[:, 5] * 2 + 1
+    predict = ridge_fit(x, torch.cat([normal, height[:, None]], 1), 1e-6)
+    metrics = geom_metrics(predict(x), normal, height)
+    assert metrics["height_r2"] > 0.999 and metrics["height_mae"] < 1e-2
+    assert metrics["normal_abs_cos"] > 0.8

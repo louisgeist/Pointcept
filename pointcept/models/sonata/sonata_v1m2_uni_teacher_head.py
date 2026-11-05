@@ -112,6 +112,7 @@ class Sonata(PointModel, LearnedMaskedFeatMixin):
         feature_mask_values=None,
         schedule_iters=None,
         log_target_stats=False,
+        head_point_ratio=None,
     ):
         super(Sonata, self).__init__()
         # MALiBU3D addition: learned fill values of the masked color / intensity inputs
@@ -173,6 +174,10 @@ class Sonata(PointModel, LearnedMaskedFeatMixin):
         # targets and of the student predictions, and the fraction of prototypes that
         # are some target's argmax (see _target_stats).
         self.log_target_stats = log_target_stats
+        # Hybrid-SSL addition: keep a random fraction of the student points (after the
+        # up-cast) for the heads and losses, e.g. when the losses read a full-resolution
+        # decoder output; None or 1 keeps every point (upstream behaviour).
+        self.head_point_ratio = head_point_ratio
 
         # one of unmask, mask, roll mask loss enable
         assert unmask_loss_weight + mask_loss_weight + roll_mask_loss_weight > 0
@@ -345,6 +350,22 @@ class Sonata(PointModel, LearnedMaskedFeatMixin):
         mask_patch_index = patch_index[:mask_patch_num]
         point_mask = torch.isin(point_cluster, mask_patch_index)
         return point_mask, point_cluster
+
+    def _subsample_points(self, point):
+        """Random subset of the student points (Bernoulli(head_point_ratio) per point,
+        order kept), with the keys the heads and the matching read."""
+        if self.head_point_ratio is None or self.head_point_ratio >= 1:
+            return point
+        keep = torch.rand(point.feat.shape[0], device=point.feat.device) < (
+            self.head_point_ratio
+        )
+        batch = point.batch[keep]
+        return Point(
+            feat=point.feat[keep],
+            origin_coord=point.origin_coord[keep],
+            batch=batch,
+            offset=batch2offset(batch),
+        )
 
     @torch.no_grad()
     def _target_stats(self, name, target, pred_logits):
@@ -562,7 +583,9 @@ class Sonata(PointModel, LearnedMaskedFeatMixin):
         if self.mask_loss_weight > 0 or self.roll_mask_loss_weight > 0:
             # student forward
             mask_global_point_ = self.student.backbone(mask_global_point)
-            mask_global_point_ = self.up_cast(mask_global_point_)
+            mask_global_point_ = self._subsample_points(
+                self.up_cast(mask_global_point_)
+            )
             mask_pred_sim = self.student.mask_head(mask_global_point_.feat)
 
             if self.mask_loss_weight > 0:
@@ -640,7 +663,7 @@ class Sonata(PointModel, LearnedMaskedFeatMixin):
         if self.unmask_loss_weight > 0:
             # student forward
             local_point_ = self.student.backbone(local_point)
-            local_point_ = self.up_cast(local_point_)
+            local_point_ = self._subsample_points(self.up_cast(local_point_))
             unmask_pred_sim = self.student.unmask_head(local_point_.feat)
             with torch.no_grad():
                 principal_view_mask = global_point_.batch % self.num_global_view == 0
