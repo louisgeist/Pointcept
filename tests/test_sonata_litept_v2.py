@@ -114,3 +114,18 @@ def test_return_point_up_cast(setup):
     with torch.no_grad():
         point = model(data, return_point=True)["point"]
     assert point.feat.shape[1] == 900
+
+
+def test_target_stats(setup):
+    _, model, batch = setup
+    model.log_target_stats = True
+    try:
+        with torch.no_grad():
+            out = model(dict(batch))
+    finally:
+        model.log_target_stats = False
+    k = model.student.mask_head.prototype.out_features
+    for name in ("mask", "unmask"):
+        assert 1 <= out[f"{name}_target_ppl"] <= k + 1e-3
+        assert 1 <= out[f"{name}_pred_ppl"] <= k + 1e-3
+        assert 0 < out[f"{name}_proto_usage"] <= 1

@@ -111,6 +111,7 @@ class Sonata(PointModel, LearnedMaskedFeatMixin):
         up_cast_level=2,
         feature_mask_values=None,
         schedule_iters=None,
+        log_target_stats=False,
     ):
         super(Sonata, self).__init__()
         # MALiBU3D addition: learned fill values of the masked color / intensity inputs
@@ -168,6 +169,10 @@ class Sonata(PointModel, LearnedMaskedFeatMixin):
         # warmup_ratio * schedule_iters iterations, and past the horizon every schedule
         # stays at its final value.
         self.schedule_iters = schedule_iters
+        # Hybrid-SSL addition: also return (and log) the perplexity of the teacher
+        # targets and of the student predictions, and the fraction of prototypes that
+        # are some target's argmax (see _target_stats).
+        self.log_target_stats = log_target_stats
 
         # one of unmask, mask, roll mask loss enable
         assert unmask_loss_weight + mask_loss_weight + roll_mask_loss_weight > 0
@@ -340,6 +345,30 @@ class Sonata(PointModel, LearnedMaskedFeatMixin):
         mask_patch_index = patch_index[:mask_patch_num]
         point_mask = torch.isin(point_cluster, mask_patch_index)
         return point_mask, point_cluster
+
+    @torch.no_grad()
+    def _target_stats(self, name, target, pred_logits):
+        """Diagnostics of a loss term: the loss is H(target) + KL(target || pred).
+
+        ``{name}_target_ppl``: exp of the mean entropy of the teacher targets (K for
+        uniform targets, 1 for one-hot); ``{name}_pred_ppl``: the same for the student
+        predictions; ``{name}_proto_usage``: fraction of the K prototypes that are the
+        argmax of at least one target.
+        """
+        target = target.float()
+        log_pred = F.log_softmax(pred_logits.float() / self.student_temp, dim=-1)
+
+        def entropy(prob, log_prob):
+            return -(prob * log_prob).sum(-1).mean()
+
+        k = target.shape[-1]
+        return {
+            f"{name}_target_ppl": entropy(target, target.clamp_min(1e-12).log()).exp(),
+            f"{name}_pred_ppl": entropy(log_pred.exp(), log_pred).exp(),
+            f"{name}_proto_usage": torch.tensor(
+                target.argmax(-1).unique().numel() / k, device=target.device
+            ),
+        }
 
     def _warn_empty_match_groups(self, name, batch, match_index):
         """Warn about views (batch ids) with no matched point.
@@ -567,6 +596,12 @@ class Sonata(PointModel, LearnedMaskedFeatMixin):
                     reduce="mean",
                 ).mean()
                 result_dict["mask_loss"] = mask_loss
+                if self.log_target_stats:
+                    result_dict.update(
+                        self._target_stats(
+                            "mask", mask_target_sim, mask_pred_sim[match_index[:, 0]]
+                        )
+                    )
                 result_dict["loss"].append(mask_loss * self.mask_loss_weight)
 
             if self.roll_mask_loss_weight > 0:
@@ -640,6 +675,12 @@ class Sonata(PointModel, LearnedMaskedFeatMixin):
                 reduce="mean",
             ).mean()
             result_dict["unmask_loss"] = unmask_loss
+            if self.log_target_stats:
+                result_dict.update(
+                    self._target_stats(
+                        "unmask", unmask_target_sim, unmask_pred_sim[match_index[:, 0]]
+                    )
+                )
             result_dict["loss"].append(unmask_loss * self.unmask_loss_weight)
         result_dict["loss"] = sum(result_dict["loss"])
 
