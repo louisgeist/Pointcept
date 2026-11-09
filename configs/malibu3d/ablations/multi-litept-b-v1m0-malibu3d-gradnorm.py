@@ -1,7 +1,7 @@
 """
 Ablation (Tab. A.2): LitePT-B multitask with GradNorm (Chen et al., 2018) instead of GradNormLite.
 Same as ../multi-litept-b-v1m0-malibu3d.py, which it inherits, except the loss balancer (the 4
-natural-habitat axes form one GradNorm group). Same hardware and schedule (1 GPU, batch 12, lr 1e-3).
+natural-habitat axes form one GradNorm group). Same hardware and schedule (1 GPU, batch 12, lr 5e-4).
 """
 
 _base_ = ["../multi-litept-b-v1m0-malibu3d.py"]

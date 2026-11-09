@@ -49,7 +49,8 @@ mix_prob = 0.8
 patch_size = 1024
 
 # Optimization parameters
-lr = 1e-3
+# lr 5e-4 (was 1e-3): on the coord-fixed data, 4 of 10 LitePT runs at 1e-3 collapsed around epoch 35-45.
+lr = 5e-4
 total_iters = 200_000
 
 # Features

@@ -1,7 +1,7 @@
 """
 Ablation (Tab. 4): LitePT-B trained from scratch on MALiBU3D land-cover segmentation alone
 (`segment`), with a single CE + Lovasz head. Same backbone, inputs (coord, RGB, intensity),
-schedule (200k iterations, batch 12 on 1 GPU, lr 1e-3, AMP) and augmentations as
+schedule (200k iterations, batch 12 on 1 GPU, lr 5e-4, AMP) and augmentations as
 ../multi-litept-b-v1m0-malibu3d.py.
 Self-contained: inherits only from _base_/default_runtime.py.
 """
@@ -38,7 +38,8 @@ mix_prob = 0.8
 patch_size = 1024
 
 # Optimization parameters
-lr = 1e-3
+# lr 5e-4 (was 1e-3): on the coord-fixed data, 4 of 10 LitePT runs at 1e-3 collapsed around epoch 35-45.
+lr = 5e-4
 total_iters = 200_000
 
 # Features

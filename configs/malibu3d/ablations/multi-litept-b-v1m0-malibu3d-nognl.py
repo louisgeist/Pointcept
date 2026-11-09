@@ -1,6 +1,6 @@
 """
 Ablation (Tab. 4 / A.2): LitePT-B multitask without GradNormLite.
-Same as ../multi-litept-b-v1m0-malibu3d.py, which it inherits (1 GPU, batch 12, lr 1e-3), except:
+Same as ../multi-litept-b-v1m0-malibu3d.py, which it inherits (1 GPU, batch 12, lr 5e-4), except:
 grad_norm_lite=False and static task weights (each of the 4 natural-habitat axes weighted 1/4).
 """
 
