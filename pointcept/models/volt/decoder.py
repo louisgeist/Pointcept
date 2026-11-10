@@ -1,11 +1,14 @@
 """
 Ported from Volt (https://github.com/YilmazKadir/Volt, commit 8dcd608, MIT License,
-Copyright (c) 2026 Kadir Yilmaz), pointcept/models/volt/decoder.py. Unchanged.
+Copyright (c) 2026 Kadir Yilmaz), pointcept/models/volt/decoder.py. Only change: optional
+`sparse` detokenizer (same parameters and math, see sparse_patch.py), off by default.
 """
 
 from functools import partial
 import torch
 import torch.nn as nn
+
+from pointcept.models.volt.sparse_patch import sparse_detokenize
 
 
 class Detokenizer(nn.Module):
@@ -14,11 +17,13 @@ class Detokenizer(nn.Module):
         in_channels: int,
         out_channels: int,
         kernel_size: int,
+        sparse: bool = False,
     ):
         super().__init__()
 
         self.kernel_size = kernel_size
         self.out_channels = out_channels
+        self.sparse = sparse
         self.proj = nn.Linear(
             in_channels,
             kernel_size**3 * out_channels,
@@ -28,6 +33,12 @@ class Detokenizer(nn.Module):
 
     def forward(self, coarse_features, inverse, offset_id):
         K = self.kernel_size
+
+        if self.sparse:
+            fine_features = sparse_detokenize(
+                self.proj, coarse_features, inverse, offset_id, K, self.out_channels
+            )
+            return fine_features + self.bias
 
         all_offsets = self.proj(coarse_features)
         all_offsets = all_offsets.view(-1, K**3, self.out_channels)
@@ -44,6 +55,7 @@ class Decoder(nn.Module):
         in_channels: int,
         out_channels: int,
         kernel_size: int,
+        sparse: bool = False,
     ) -> None:
         super().__init__()
         bn_layer = partial(nn.BatchNorm1d, eps=1e-3, momentum=0.01)
@@ -61,6 +73,7 @@ class Decoder(nn.Module):
             out_channels,
             out_channels,
             kernel_size=kernel_size,
+            sparse=sparse,
         )
 
         self.post = nn.Sequential(

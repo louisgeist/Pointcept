@@ -1,20 +1,27 @@
 """
 Ported from Volt (https://github.com/YilmazKadir/Volt, commit 8dcd608, MIT License,
-Copyright (c) 2026 Kadir Yilmaz), pointcept/models/volt/volt_base.py. Only change: RoPE
-patch indices saturate at the table size (1024 x 1024 x 512 patches, i.e. 512 x 512 x 256 m
-at 0.5 m patches) instead of raising an index error, e.g. on a rare outlier point far
-above the ground.
+Copyright (c) 2026 Kadir Yilmaz), pointcept/models/volt/volt_base.py. Changes: RoPE patch
+indices saturate at the table size (1024 x 1024 x 512 patches) instead of raising an index
+error (e.g. a rare outlier point far above the ground); two options, off by default:
+- sparse_patches: tokenizer / detokenizer products over occupied voxels only (same
+  parameters and math, see sparse_patch.py), for large kernel_size on sparse scenes;
+- grid_pool: Volt runs on voxels grid_pool times coarser than the input grid_coord
+  (mean feature per coarse voxel) and broadcasts its outputs back to the input voxels,
+  so that a model at e.g. 0.3 m shares the 0.1 m data pipeline (and distillation
+  teacher) of the other models.
 """
 
 import flash_attn
 import torch
 import torch.nn as nn
+import torch_scatter
 from timm.layers import DropPath, Mlp
 from timm.models.vision_transformer import LayerScale
 from torch.nn.init import trunc_normal_
 
 from pointcept.models.builder import MODELS
 from pointcept.models.volt.decoder import Decoder
+from pointcept.models.volt.sparse_patch import sparse_tokenize
 
 
 class Tokenizer(nn.Module):
@@ -23,11 +30,13 @@ class Tokenizer(nn.Module):
         in_channels: int,
         out_channels: int,
         kernel_size: int,
+        sparse: bool = False,
     ):
         super().__init__()
 
         self.kernel_size = kernel_size
         self.out_channels = out_channels
+        self.sparse = sparse
         self.proj = nn.Linear(kernel_size**3 * in_channels, out_channels)
 
     def forward(self, features, indices):
@@ -44,6 +53,12 @@ class Tokenizer(nn.Module):
 
         offset = indices[:, 1:] % K
         offset_id = offset[:, 0] * K * K + offset[:, 1] * K + offset[:, 2]
+
+        if self.sparse:
+            coarse_features = sparse_tokenize(
+                self.proj, features, inverse, offset_id, coarse_indices.shape[0], K
+            )
+            return coarse_features, coarse_indices, inverse, offset_id
 
         patches = features.new_zeros(
             coarse_indices.shape[0],
@@ -217,6 +232,8 @@ class Volt(nn.Module):
         kernel_size=5,
         up_mlp_dim=256,
         increase_drop_path=True,
+        sparse_patches=False,
+        grid_pool=1,
     ):
         super().__init__()
         norm_layer = nn.LayerNorm
@@ -227,7 +244,9 @@ class Volt(nn.Module):
             in_channels=in_channels,
             out_channels=embed_dim,
             kernel_size=kernel_size,
+            sparse=sparse_patches,
         )
+        self.grid_pool = int(grid_pool)
 
         if increase_drop_path:
             drop_path_list = torch.linspace(0, drop_path, depth).tolist()
@@ -256,6 +275,7 @@ class Volt(nn.Module):
             in_channels=embed_dim,
             out_channels=up_mlp_dim,
             kernel_size=kernel_size,
+            sparse=sparse_patches,
         )
 
         self.apply(self._init_weights)
@@ -285,6 +305,17 @@ class Volt(nn.Module):
         indices = torch.cat(
             [batch.unsqueeze(-1).int(), grid_coord.int()], dim=1
         ).contiguous()
+        pool_inverse = None
+        if self.grid_pool > 1:
+            # Coarser voxels (grid_pool input voxels per axis) on the same input grid:
+            # mean feature per coarse voxel; outputs are broadcast back at the end.
+            indices = indices // indices.new_tensor([1] + [self.grid_pool] * 3)
+            indices, pool_inverse = torch.unique(
+                indices, dim=0, sorted=True, return_inverse=True
+            )
+            feat = torch_scatter.scatter_mean(
+                feat, pool_inverse, dim=0, dim_size=indices.shape[0]
+            )
 
         features, indices, inverse, offset_id = self.tokenizer(feat, indices)
 
@@ -295,5 +326,7 @@ class Volt(nn.Module):
             features = blk(features, freqs_cis, cu_seqlens, max_seqlen)
 
         features = self.decoder(features, inverse, offset_id)
+        if pool_inverse is not None:
+            features = features[pool_inverse]
 
         return features
