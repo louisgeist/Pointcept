@@ -270,6 +270,47 @@ class DefaultSegmentorV2(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeatMi
         return return_dict
 
 
+class MultiTaskTeacher:
+    """Frozen multitask teacher for DeiT-style hard distillation (Volt, ECCV 2026).
+
+    Not an ``nn.Module`` on purpose (as Volt's ``DefaultTeacherWrapper``): it stays
+    out of the student's ``state_dict``, ``parameters()`` (optimizer, DDP, EMA) and
+    ``.train()`` calls. The teacher model is rebuilt from the ``model`` section of
+    its own training ``config`` and loaded strictly from ``weights``; it runs in
+    eval() under no_grad on the same batch as the student.
+    """
+
+    def __init__(self, config, weights):
+        from pointcept.utils.config import Config
+
+        teacher_cfg = Config.fromfile(config)
+        self.model = build_model(teacher_cfg.model)
+        ckpt = torch.load(weights, map_location="cpu", weights_only=False)
+        state_dict = ckpt.get("state_dict", ckpt)
+        state_dict = {
+            k[7:] if k.startswith("module.") else k: v for k, v in state_dict.items()
+        }
+        self.model.load_state_dict(state_dict, strict=True)
+        self.model.requires_grad_(False)
+        self.model.eval()
+        self.model.cuda()
+        logger.info(f"Distillation teacher: {config} <- {weights}")
+
+    @torch.no_grad()
+    def predict_labels(self, input_dict, tasks):
+        """Hard teacher labels (argmax) per point for each task in ``tasks``.
+
+        Works on a shallow copy of ``input_dict`` with a cloned ``feat``: the
+        teacher's learned masked-feat fill (and the student's, which edits
+        ``input_dict["feat"]`` in place) must not leak from one model to the other.
+        """
+        teacher_input = dict(input_dict)
+        teacher_input["feat"] = input_dict["feat"].clone()
+        self.model._fill_masked_feat_with_learned_value(teacher_input)
+        feat, _ = self.model._forward_backbone(teacher_input)
+        return {task: self.model.seg_heads[task](feat).argmax(dim=-1) for task in tasks}
+
+
 @MODELS.register_module()
 class MultiTaskSegmentorV2(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeatMixin):
     """Multi-task model: one shared backbone, one linear head per task (MALiBU3D).
@@ -305,6 +346,15 @@ class MultiTaskSegmentorV2(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeat
     ``_compute_pixel_logits``); ``loss`` and ``loss_by_task`` when any target is
     in the batch; ``pred`` / ``pred_by_task`` in training.
 
+    ``teacher=dict(config=..., weights=..., tasks=("segment",), weight=0.5)``
+    enables DeiT-style hard distillation as in Volt (ECCV 2026): each distilled
+    (semantic) task gets an extra linear ``distill_heads[task]`` trained with the
+    task criteria on the frozen teacher's argmax labels, and in training its loss
+    becomes ``(1 - weight) * L(gt) + weight * L(teacher)`` (Volt: weight=0.5).
+    ``loss_by_task[task]`` holds that mix, so GradNorm(Lite) balances it as one
+    task. Eval/test use ``seg_heads`` only; the teacher is not part of the model
+    state and must be set in the training config only.
+
     freeze_backbone=True means ALL of the following (there is no separate flag):
       * every backbone parameter has requires_grad=False (no gradient, never
         updated by the optimizer);
@@ -335,6 +385,7 @@ class MultiTaskSegmentorV2(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeat
         main_task=None,
         freeze_backbone=False,
         feature_mask_values=None,
+        teacher=None,
     ):
         super().__init__()
         if not isinstance(task_configs, Mapping) or len(task_configs) == 0:
@@ -398,6 +449,27 @@ class MultiTaskSegmentorV2(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeat
                 )
             elif task_type == "regression":
                 self.reg_heads[task_name] = nn.Linear(backbone_out_channels, 1)
+
+        self.teacher = None
+        self.distill_tasks = ()
+        self.distill_weight = 0.0
+        self.distill_heads = nn.ModuleDict()
+        if teacher is not None:
+            teacher = dict(teacher)
+            self.distill_tasks = tuple(teacher.pop("tasks", ("segment",)))
+            self.distill_weight = float(teacher.pop("weight", 0.5))
+            for task_name in self.distill_tasks:
+                if (
+                    task_name not in self.task_configs
+                    or self._task_type(self.task_configs[task_name]) != "semantic"
+                ):
+                    raise ValueError(
+                        f"Distillation only supports semantic tasks, got {task_name!r}."
+                    )
+                self.distill_heads[task_name] = nn.Linear(
+                    backbone_out_channels, int(self.task_configs[task_name]["num_classes"])
+                )
+            self.teacher = MultiTaskTeacher(**teacher)
 
         self._init_learned_masked_feat(feature_mask_values=feature_mask_values)
         self.freeze_backbone = freeze_backbone
@@ -683,8 +755,13 @@ class MultiTaskSegmentorV2(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeat
         input_dict,
         pixel_logits_by_task=None,
         pixel_targets_by_task=None,
+        distill_logits_by_task=None,
+        teacher_labels_by_task=None,
     ):
         """Weighted sum of the losses of the tasks whose target is in the batch.
+
+        Distilled tasks (``teacher_labels_by_task``, training only) mix the GT and
+        teacher losses, see the class docstring.
 
         Returns ``(total_loss, loss_by_task)`` (unweighted per-task losses); raises
         if no task target is present.
@@ -693,6 +770,8 @@ class MultiTaskSegmentorV2(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeat
         loss_by_task = {}
         pixel_logits_by_task = pixel_logits_by_task or {}
         pixel_targets_by_task = pixel_targets_by_task or {}
+        distill_logits_by_task = distill_logits_by_task or {}
+        teacher_labels_by_task = teacher_labels_by_task or {}
         for task_name in self.tasks:
             task_config = self.task_configs[task_name]
             tt = self._task_type(task_config)
@@ -706,6 +785,14 @@ class MultiTaskSegmentorV2(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeat
                 task_loss = self.criteria_by_task[task_name](
                     logits, input_dict[task_name]
                 )
+                if task_name in teacher_labels_by_task:
+                    distill_loss = self.criteria_by_task[task_name](
+                        distill_logits_by_task[task_name],
+                        teacher_labels_by_task[task_name],
+                    )
+                    task_loss = (
+                        1.0 - self.distill_weight
+                    ) * task_loss + self.distill_weight * distill_loss
             elif tt == "tile_distribution":
                 if task_name not in logits_by_task:
                     continue
@@ -768,9 +855,20 @@ class MultiTaskSegmentorV2(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeat
         return total_loss, loss_by_task
 
     def forward(self, input_dict, return_point=False):
+        teacher_labels_by_task = None
+        if self.training and self.teacher is not None:
+            # Before the student's in-place masked-feat fill (see MultiTaskTeacher).
+            teacher_labels_by_task = self.teacher.predict_labels(
+                input_dict, self.distill_tasks
+            )
         self._fill_masked_feat_with_learned_value(input_dict)
         feat, point = self._forward_backbone(input_dict)
         logits_by_task = self._compute_logits(feat)
+        distill_logits_by_task = None
+        if teacher_labels_by_task is not None:
+            distill_logits_by_task = {
+                task_name: head(feat) for task_name, head in self.distill_heads.items()
+            }
         (
             pixel_logits_by_task,
             pixel_targets_by_task,
@@ -812,6 +910,8 @@ class MultiTaskSegmentorV2(FrozenBackboneEvalMixin, nn.Module, LearnedMaskedFeat
                 input_dict,
                 pixel_logits_by_task=pixel_logits_by_task,
                 pixel_targets_by_task=pixel_targets_by_task,
+                distill_logits_by_task=distill_logits_by_task,
+                teacher_labels_by_task=teacher_labels_by_task,
             )
             return_dict["loss"] = total_loss
             return_dict["loss_by_task"] = loss_by_task

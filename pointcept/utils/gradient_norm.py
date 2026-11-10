@@ -112,6 +112,7 @@ def resolve_last_backbone_layer_params(backbone):
     ``reversed(range(num_stages))``).
     PTv3 / LitePT: last Block of ``dec.dec0``, or ``dec.dec0.up`` if no blocks.
     KPConvX: ``head`` (feature neck before external task heads).
+    Volt: ``decoder``.
     """
     if backbone is None:
         raise ValueError("backbone is None")
@@ -149,6 +150,13 @@ def resolve_last_backbone_layer_params(backbone):
             )
         return params
 
+    # Volt: the decoder (BN/MLP + transposed-conv detokenizer) is applied last.
+    if type(backbone).__name__ == "Volt":
+        params = _trainable_params(backbone.decoder)
+        if not params:
+            raise ValueError("Volt: decoder has no trainable params.")
+        return params
+
     # KPConvX: feature neck before external multitask heads.
     if hasattr(backbone, "head") and backbone.head is not None:
         params = _trainable_params(backbone.head)
@@ -160,7 +168,7 @@ def resolve_last_backbone_layer_params(backbone):
 
     raise ValueError(
         "Unsupported backbone for last-layer gradient norms: "
-        f"{type(backbone).__name__}. Supported: SpUNet, PTv3, LitePT, KPConvX."
+        f"{type(backbone).__name__}. Supported: SpUNet, PTv3, LitePT, KPConvX, Volt."
     )
 
 

@@ -1,0 +1,388 @@
+"""
+MALiBU3D multitask benchmark, Volt-S trained from scratch (Volt, Yilmaz et al., ECCV 2026,
+https://github.com/YilmazKadir/Volt), distilled from the multitask SpUNet.
+
+Same five tasks, losses, GradNormLite balancing, data pipeline, grid (0.1 m), batch and
+200k iterations as multi-spunet-v1m0-malibu3d.py; only the model and optimizer change.
+Backbone: Volt "small" as in Volt's nuScenes config (embed 384, depth 12, 6 heads,
+qk_norm, drop_path 0.3, 5x5x5-voxel patches = 0.5 m, decoder 128 ch).
+Distillation (Volt Eq. 2): the `segment` loss is 0.5 * L(GT) + 0.5 * L(teacher argmax),
+through an extra linear head; teacher = the multitask SpUNet checkpoint below.
+Optimizer: Volt's (AdamW lr 2e-3, wd 0.05, no decay on biases/norms, OneCycle with
+pct_start 0.04, final_div 100). Not ported: Volt's EMA of the weights (use_ema).
+Self-contained: inherits only from _base_/default_runtime.py.
+"""
+
+# -----------------------------------------------------------------------------
+# Default
+# -----------------------------------------------------------------------------
+_base_ = ["../_base_/default_runtime.py"]
+
+# -----------------------------------------------------------------------------
+# Run-level settings
+# -----------------------------------------------------------------------------
+
+# Logging parameters
+grp_exp = 1
+num_exp = 1
+
+log_grad_norm_every_step = False
+grad_norm_lite = True
+grad_norm_lite_interval = 100
+grad_norm_lite_ema_alpha = 0.1
+grad_norm_lite_eps = 1e-3
+
+# Hardware parameters
+num_gpu = 1
+num_worker = 8 * num_gpu
+enable_amp = True
+
+# Data parameters
+batch_size = 12  # total batch size across all gpus
+batch_size_val = 8 * num_gpu
+val_voxel_budget = 2_000_000
+# Max scenes per val/test batch; batches are packed up to the voxel budgets.
+batch_size_test = 8 * num_gpu
+test_voxel_budget = 2_000_000
+
+grid_size = 0.1
+point_max = 102400
+mix_prob = 0.8
+
+# Optimization parameters
+lr = 2e-3
+total_iters = 200_000
+
+# Features
+learned_masked_feat = True
+feat_keys = ["coord", "color", "strength"]
+coord_feat_scale = 0.01
+
+# Wandb parameters
+wandb_run_name = f"Volt-S distill multi {grp_exp}.{num_exp} iter={total_iters}"
+wandb_project = "malibu3d_multi"
+
+# -----------------------------------------------------------------------------
+# Multitask configuration: targets, losses, task weights
+# -----------------------------------------------------------------------------
+# The five tasks and their losses (see malibu3d_tasks.init_task_criteria):
+# segment (CE + Lovasz), forest_2d (CE + Lovasz), elevation in meters (SmoothL1),
+# the 4 nathab_* axes (tile-wise weighted KL) and network (ROADS, CE with a 5x weight
+# on road pixels).
+from pointcept.datasets.malibu3d_tasks import (
+    MALIBU3D_TARGET_KEYS,
+    MALIBU3D_TILE_DISTRIBUTION_TASKS,
+    MALIBU3D_COLLECT_PREFIX_GRID,
+    init_multitask_collect_keys,
+    init_task_configs,
+    init_task_criteria,
+)
+
+main_task = "segment"
+target_keys = MALIBU3D_TARGET_KEYS
+task_configs = init_task_configs(target_keys)
+task_criteria = init_task_criteria(task_configs)
+task_weights = {task_name: 1.0 for task_name in task_configs}
+# GradNormLite: pool the 4 nathab axes into one "nathab" group.
+grad_norm_lite_task_groups = {
+    task_name: "nathab" for task_name in MALIBU3D_TILE_DISTRIBUTION_TASKS
+}
+
+# Delete the imported helpers: the config loader turns every non-dunder module
+# attribute into a config entry, and Config.dump (yapf) fails on function objects.
+del (
+    MALIBU3D_TARGET_KEYS,
+    MALIBU3D_TILE_DISTRIBUTION_TASKS,
+    init_task_configs,
+    init_task_criteria,
+)
+
+# main_task drives checkpoint selection; its num_classes / ignore_index / names are
+# also exposed at the top level and in `data` for the hooks that read them there.
+num_classes = task_configs[main_task]["num_classes"]
+ignore_index = task_configs[main_task]["ignore_index"]
+names = task_configs[main_task]["names"]
+
+# -----------------------------------------------------------------------------
+# Hooks
+# -----------------------------------------------------------------------------
+hooks = [
+    dict(type="CheckpointLoader"),
+    dict(type="ModelHook"),
+    dict(type="IterationTimer", warmup_iter=2),
+    dict(type="InformationWriter", log_interval=100),
+    dict(type="MultiTaskEvaluator", write_cls_iou=True),
+    dict(type="CheckpointSaver", save_freq=None),
+    dict(type="PreciseEvaluator"),
+    # Must follow PreciseEvaluator: scores its saved test logits with APLS (never on val).
+    dict(type="NetworkAPLSEvaluator"),
+]
+
+test_single_fragment = True
+test = dict(type="MultiTaskTester", verbose=True, write_cls_iou=True)
+
+# -----------------------------------------------------------------------------
+# Model
+# -----------------------------------------------------------------------------
+# Distillation teacher: the multitask SpUNet (its own training config + checkpoint;
+# loaded strictly, frozen, eval, outside the student's state_dict). This is the paper
+# checkpoint trained on the coord-corrupted data; swap for the coord-fixed retrain
+# (same config) when it is done.
+teacher_config = "configs/malibu3d/multi-spunet-v1m0-malibu3d.py"
+teacher_weights = "ckpt_cleaned/spunet/model.pth"
+
+model = dict(
+    type="MultiTaskSegmentorV2",
+    backbone_out_channels=128,  # Volt up_mlp_dim
+    backbone=dict(
+        type="Volt",
+        in_channels=7,  # coord (3) + color (3) + strength (1)
+        embed_dim=384,
+        depth=12,
+        num_heads=6,
+        mlp_ratio=4,
+        init_values=None,
+        qk_norm=True,
+        drop_path=0.3,
+        stride=5,
+        kernel_size=5,
+        increase_drop_path=True,
+        up_mlp_dim=128,
+    ),
+    teacher=dict(
+        config=teacher_config,
+        weights=teacher_weights,
+        tasks=("segment",),
+        weight=0.5,
+    ),
+    feature_mask_values=dict(
+        enable=learned_masked_feat,
+        masked_feat_keys=["color", "strength"],
+    ),
+    task_configs=task_configs,
+    main_task=main_task,
+    task_criteria=task_criteria,
+    task_weights=task_weights,
+)
+
+
+# -----------------------------------------------------------------------------
+# Optimizer / scheduler
+# -----------------------------------------------------------------------------
+optimizer = dict(type="AdamW", lr=lr, weight_decay=0.05, no_decay_bias_norm=True)
+scheduler = dict(
+    type="OneCycleLR",
+    max_lr=[lr, lr],  # one entry per group: regular + no-decay copy
+    pct_start=0.04,
+    anneal_strategy="cos",
+    div_factor=10.0,
+    final_div_factor=100.0,
+)
+
+# -----------------------------------------------------------------------------
+# Dataset
+# -----------------------------------------------------------------------------
+dataset_type = "MALiBU3DDataset"
+data_root = "data/malibu3d"
+csv_manifest = "data/malibu3d/tiles.csv"
+min_points = {"train": 1000}
+val_stratified_subset_manifest = "data/malibu3d/val_subset_2000tiles.csv"
+
+# Opt-in APLS scoring of the PreciseEvaluator test logits (NetworkAPLSEvaluator /
+# tools/test.py). The mask -> graph parameters keep the defaults of
+# pointcept/evaluation/network/eval_apls.py::run; ground-truth road graphs are read from each ROI
+# directory (Hugging Face layout of the dataset).
+network_apls_eval = dict(split="test")
+
+(
+    train_multitask_keys,
+    val_multitask_keys,
+    test_multitask_keys,
+    multitask_index_valid_keys,
+) = init_multitask_collect_keys(
+    target_keys, collect_prefix_keys=MALIBU3D_COLLECT_PREFIX_GRID
+)
+
+del MALIBU3D_COLLECT_PREFIX_GRID, init_multitask_collect_keys
+
+data = dict(
+    num_classes=num_classes,
+    ignore_index=ignore_index,
+    names=names,
+    task_configs=task_configs,
+    main_task=main_task,
+    train=dict(
+        type=dataset_type,
+        split="train",
+        data_root=data_root,
+        csv_manifest=csv_manifest,
+        min_points=min_points,
+        target_keys=list(target_keys),
+        primary_target_key=main_task,
+        transform=[
+            dict(
+                type="Update",
+                keys_dict={"index_valid_keys": list(multitask_index_valid_keys)},
+            ),
+            # Keep absolute Lambert XY (before recentering and augmentation) for the
+            # raster-target lookup in NetworkRasterToPointLabels.
+            dict(type="ExtractAbsXY"),
+            dict(type="CenterShift", apply_z=True),
+            dict(type="Z_MinShift"),
+            dict(type="Z_RandomOffset"),
+            dict(
+                type="RandomDropout", dropout_ratio=0.2, dropout_application_ratio=0.2
+            ),
+            dict(type="RandomRotate", angle=[-1, 1], axis="z", center=[0, 0, 0], p=0.5),
+            dict(type="RandomScale", scale=[0.9, 1.1]),
+            dict(type="RandomFlip", p=0.5),
+            dict(type="RandomJitter", sigma=0.005, clip=0.02),
+            dict(type="ChromaticAutoContrast", p=0.2, blend_factor=None),
+            dict(type="ChromaticTranslation", p=0.95, ratio=0.05),
+            dict(type="ChromaticJitter", p=0.95, std=0.05),
+            dict(
+                type="GridSample",
+                grid_size=grid_size,
+                hash_type="fnv",
+                mode="train",
+                return_grid_coord=True,
+            ),
+            dict(type="SphereCrop", point_max=point_max, mode="random"),
+            dict(type="CenterShift", apply_z=False),
+            dict(type="NormalizeColor"),
+            dict(
+                type="RandomDropColor",
+                drop_ratio=1.0,
+                drop_application_ratio=0.2,
+                keep_mask=True,
+            ),
+            dict(
+                type="RandomDropColor",
+                drop_ratio=0.1,
+                drop_application_ratio=0.5,
+                keep_mask=True,
+            ),
+            dict(
+                type="RandomDropStrength",
+                drop_ratio=1.0,
+                drop_application_ratio=0.2,
+                keep_mask=True,
+            ),
+            dict(
+                type="RandomDropStrength",
+                drop_ratio=0.1,
+                drop_application_ratio=0.5,
+                keep_mask=True,
+            ),
+            dict(type="NetworkRasterToPointLabels"),
+            dict(type="NetworkRasterToPointLabels", target_key="forest_2d"),
+            dict(type="ShufflePoint"),
+            dict(type="ToTensor"),
+            dict(
+                type="Collect",
+                keys=train_multitask_keys,
+                feat_keys=feat_keys,
+                feat_scales=dict(coord=coord_feat_scale),
+            ),
+        ],
+        test_mode=False,
+    ),
+    val=dict(
+        type=dataset_type,
+        split="val",
+        data_root=data_root,
+        csv_manifest=csv_manifest,
+        min_points=min_points,
+        stratified_subset_manifest=val_stratified_subset_manifest,
+        target_keys=list(target_keys),
+        primary_target_key=main_task,
+        transform=[
+            dict(
+                type="Update",
+                keys_dict={"index_valid_keys": list(multitask_index_valid_keys)},
+            ),
+            dict(type="ExtractAbsXY"),
+            dict(type="CenterShift", apply_z=True),
+            dict(type="Z_MinShift"),
+            dict(
+                type="Copy",
+                keys_dict={t: f"origin_{t}" for t in target_keys},
+            ),
+            dict(
+                type="GridSample",
+                grid_size=grid_size,
+                hash_type="fnv",
+                mode="train",
+                return_grid_coord=True,
+                return_inverse=True,
+            ),
+            dict(type="CenterShift", apply_z=False),
+            dict(type="NormalizeColor"),
+            dict(type="NetworkRasterToPointLabels"),
+            dict(type="NetworkRasterToPointLabels", target_key="forest_2d"),
+            dict(type="ToTensor"),
+            dict(
+                type="Collect",
+                keys=val_multitask_keys,
+                feat_keys=feat_keys,
+                feat_scales=dict(coord=coord_feat_scale),
+            ),
+        ],
+        test_mode=False,
+    ),
+    test=dict(
+        type=dataset_type,
+        split="test",
+        data_root=data_root,
+        csv_manifest=csv_manifest,
+        min_points=min_points,
+        target_keys=list(target_keys),
+        primary_target_key=main_task,
+        transform=[
+            dict(
+                type="Update",
+                keys_dict={"index_valid_keys": list(multitask_index_valid_keys)},
+            ),
+            dict(type="ExtractAbsXY"),
+            dict(type="CenterShift", apply_z=True),
+            dict(type="Z_MinShift"),
+            dict(type="NormalizeColor"),
+        ],
+        test_mode=True,
+        test_cfg=dict(
+            voxelize=dict(
+                type="GridSample",
+                grid_size=grid_size,
+                hash_type="fnv",
+                mode="test",
+                return_grid_coord=True,
+                test_single_fragment=test_single_fragment,
+            ),
+            crop=None,
+            post_transform=[
+                dict(type="CenterShift", apply_z=False),
+                dict(type="NetworkRasterToPointLabels"),
+                dict(type="NetworkRasterToPointLabels", target_key="forest_2d"),
+                dict(type="ToTensor"),
+                dict(
+                    type="Collect",
+                    keys=test_multitask_keys,
+                    optional_keys=("inverse",),
+                    feat_keys=feat_keys,
+                    feat_scales=dict(coord=coord_feat_scale),
+                ),
+            ],
+            aug_transform=[
+                [
+                    dict(
+                        type="RandomRotateTargetAngle",
+                        angle=[0],
+                        axis="z",
+                        center=[0, 0, 0],
+                        p=1,
+                    )
+                ]
+            ],
+        ),
+    ),
+)

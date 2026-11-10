@@ -8,6 +8,7 @@ from .sparse_unet import *
 from .point_transformer_v3 import *
 from .kpconvx import *
 from .litept import *
+from .volt import *
 
 # Pretraining
 from .sonata import *
