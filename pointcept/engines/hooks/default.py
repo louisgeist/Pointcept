@@ -7,6 +7,7 @@ Please cite our work if the code is helpful to you.
 
 import pointcept.utils.comm as comm
 import weakref
+from pointcept.utils.amp import eval_autocast
 from .builder import HOOKS
 
 
@@ -34,6 +35,16 @@ class HookBase:
 
     def after_train(self):
         pass
+
+    def _eval_forward(self, input_dict):
+        """Validation forward: the trainer's EMA weights when cfg.use_ema, else the
+        trained model (see Trainer.eval_model)."""
+        model = getattr(self.trainer, "eval_model", None)
+        if model is None:
+            model = self.trainer.model
+        cfg = self.trainer.cfg
+        with eval_autocast(cfg):
+            return model(input_dict)
 
     def state_dict(self):
         """Hook-local state saved in checkpoints and restored on resume.

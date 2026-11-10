@@ -112,7 +112,7 @@ def resolve_last_backbone_layer_params(backbone):
     ``reversed(range(num_stages))``).
     PTv3 / LitePT: last Block of ``dec.dec0``, or ``dec.dec0.up`` if no blocks.
     KPConvX: ``head`` (feature neck before external task heads).
-    Volt: ``decoder``.
+    Volt: ``decoder.post``.
     """
     if backbone is None:
         raise ValueError("backbone is None")
@@ -150,11 +150,13 @@ def resolve_last_backbone_layer_params(backbone):
             )
         return params
 
-    # Volt: the decoder (BN/MLP + transposed-conv detokenizer) is applied last.
+    # Volt: last BN of the decoder (``decoder.post``), applied after the detokenizer.
+    # Not the whole decoder: the detokenizer's dense (tokens, K^3, C) offsets would make
+    # every probe backward allocate a large gradient.
     if type(backbone).__name__ == "Volt":
-        params = _trainable_params(backbone.decoder)
+        params = _trainable_params(backbone.decoder.post)
         if not params:
-            raise ValueError("Volt: decoder has no trainable params.")
+            raise ValueError("Volt: decoder.post has no trainable params.")
         return params
 
     # KPConvX: feature neck before external multitask heads.

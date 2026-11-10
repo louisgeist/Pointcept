@@ -145,7 +145,7 @@ class TestVoltDistill(unittest.TestCase):
 
     def test_gradnorm_last_layer_is_volt_decoder(self):
         params = self.model.last_backbone_layer_parameters()
-        dec = {id(p) for p in self.model.backbone.decoder.parameters()}
+        dec = {id(p) for p in self.model.backbone.decoder.post.parameters()}
         self.assertTrue(params and all(id(p) in dec for p in params))
 
     def test_optimizer_groups_match_scheduler(self):

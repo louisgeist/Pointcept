@@ -14,6 +14,7 @@ import numpy as np
 import wandb
 from collections import OrderedDict
 import torch
+from pointcept.utils.amp import eval_autocast
 import torch.distributed as dist
 import torch.nn.functional as F
 import torch.utils.data
@@ -90,7 +91,16 @@ class TesterBase:
             self.logger.info(f"Loading weight at: {self.cfg.weight}")
             checkpoint = torch.load(self.cfg.weight, weights_only=False)
             weight = OrderedDict()
-            for key, value in checkpoint["state_dict"].items():
+            state_dict = checkpoint["state_dict"]
+            if getattr(self.cfg, "use_ema", False):
+                # Checkpoints of a use_ema run: test the EMA weights (see Trainer.eval_model).
+                if checkpoint.get("ema_state_dict") is None:
+                    raise KeyError(
+                        f"use_ema=True but {self.cfg.weight} has no ema_state_dict."
+                    )
+                state_dict = checkpoint["ema_state_dict"]
+                self.logger.info("=> Testing the EMA weights")
+            for key, value in state_dict.items():
                 if key.startswith("module."):
                     if comm.get_world_size() == 1:
                         key = key[7:]  # module.xxx.xxx -> xxx.xxx
@@ -1299,7 +1309,7 @@ class MultiTaskTester(TesterBase):
                         input_dict[key] = input_dict[key].cuda(non_blocking=True)
                 idx_part = input_dict["index"]
 
-                with torch.no_grad():
+                with torch.no_grad(), eval_autocast(self.cfg):
                     output_dict = self.model(input_dict)
                     logits_by_task = output_dict.get("seg_logits_by_task") or {}
                     reg_pred_by_task = output_dict.get("reg_pred_by_task") or {}

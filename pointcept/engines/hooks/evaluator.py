@@ -241,7 +241,7 @@ class ClsEvaluator(HookBase):
                 if isinstance(input_dict[key], torch.Tensor):
                     input_dict[key] = input_dict[key].cuda(non_blocking=True)
             with torch.no_grad():
-                output_dict = self.trainer.model(input_dict)
+                output_dict = self._eval_forward(input_dict)
             output = output_dict["cls_logits"]
             loss = output_dict["loss"]
             pred = output.max(1)[1]
@@ -364,7 +364,7 @@ class SemSegEvaluator(HookBase):
                 if isinstance(input_dict[key], torch.Tensor):
                     input_dict[key] = input_dict[key].cuda(non_blocking=True)
             with torch.no_grad():
-                output_dict = self.trainer.model(input_dict)
+                output_dict = self._eval_forward(input_dict)
             output = output_dict["seg_logits"]
             loss = output_dict["loss"]
             pred = output.max(1)[1]
@@ -661,7 +661,7 @@ class MultiTaskEvaluator(HookBase):
                     if isinstance(input_dict[key], torch.Tensor):
                         input_dict[key] = input_dict[key].cuda(non_blocking=True)
                 with torch.no_grad():
-                    output_dict = self.trainer.model(input_dict)
+                    output_dict = self._eval_forward(input_dict)
 
                 loss = output_dict["loss"]
                 loss_by_task = output_dict.get("loss_by_task")

@@ -9,7 +9,9 @@ qk_norm, drop_path 0.3, 5x5x5-voxel patches = 0.5 m, decoder 128 ch).
 Distillation (Volt Eq. 2): the `segment` loss is 0.5 * L(GT) + 0.5 * L(teacher argmax),
 through an extra linear head; teacher = the multitask SpUNet checkpoint below.
 Optimizer: Volt's (AdamW lr 2e-3, wd 0.05, no decay on biases/norms, OneCycle with
-pct_start 0.04, final_div 100). Not ported: Volt's EMA of the weights (use_ema).
+pct_start 0.04, final_div 100), EMA of the weights (decay 0.999) used for validation,
+checkpoint selection and test, label smoothing 0.1 on the segment cross-entropy, fp16
+validation/test (enable_amp_eval).
 Self-contained: inherits only from _base_/default_runtime.py.
 """
 
@@ -51,6 +53,11 @@ mix_prob = 0.8
 
 # Optimization parameters
 lr = 2e-3
+use_ema = True
+ema_decay = 0.999
+# Validation / test forwards in fp16 as in Volt (fp32 decoder offsets of ~0.7M tokens at
+# the 2M-voxel val budget would take ~40 GB).
+enable_amp_eval = True
 total_iters = 200_000
 
 # Features
@@ -82,6 +89,11 @@ main_task = "segment"
 target_keys = MALIBU3D_TARGET_KEYS
 task_configs = init_task_configs(target_keys)
 task_criteria = init_task_criteria(task_configs)
+# Volt: label smoothing 0.1 on the segmentation cross-entropy (GT and teacher terms).
+for _c in task_criteria["segment"]:
+    if _c["type"] == "CrossEntropyLoss":
+        _c["label_smoothing"] = 0.1
+del _c
 task_weights = {task_name: 1.0 for task_name in task_configs}
 # GradNormLite: pool the 4 nathab axes into one "nathab" group.
 grad_norm_lite_task_groups = {

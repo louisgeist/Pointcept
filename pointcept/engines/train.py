@@ -191,6 +191,7 @@ class Trainer(TrainerBase):
         _log_iter_limited_training_mode(cfg, self.logger)
         self.logger.info("=> Building model ...")
         self.model = self.build_model()
+        self.ema = self.build_ema() if getattr(cfg, "use_ema", False) else None
         self.logger.info("=> Building writer ...")
         self.writer = self.build_writer()
         self.logger.info("=> Building train dataset & dataloader ...")
@@ -466,6 +467,7 @@ class Trainer(TrainerBase):
                             l2_model_update_norm(self.model, param_snapshot)
                         )
                         self.scheduler.step()
+                        self.update_ema()
                 else:
                     param_snapshot = snapshot_trainable_params(self.model)
                     self.optimizer.step()
@@ -473,6 +475,7 @@ class Trainer(TrainerBase):
                         l2_model_update_norm(self.model, param_snapshot)
                     )
                     self.scheduler.step()
+                    self.update_ema()
             elif self.cfg.enable_amp:
                 # Still advance GradScaler state after a skipped step.
                 self.scaler.update()
@@ -509,6 +512,42 @@ class Trainer(TrainerBase):
             find_unused_parameters=self.cfg.find_unused_parameters,
         )
         return model
+
+    def build_ema(self):
+        """Frozen eval-mode copy of the (unwrapped) model, see cfg.use_ema.
+
+        A distillation teacher held by the model (``model.teacher``, not an
+        nn.Module) is shared, not copied: the EMA model never runs it (eval only).
+        """
+        model = self.model.module if hasattr(self.model, "module") else self.model
+        memo = {}
+        teacher = getattr(model, "teacher", None)
+        if teacher is not None:
+            memo[id(teacher)] = teacher
+        ema = copy.deepcopy(model, memo)
+        ema.eval()
+        ema.requires_grad_(False)
+        self.logger.info(f"EMA of the weights enabled, decay {self.cfg.ema_decay}")
+        return ema
+
+    @torch.no_grad()
+    def update_ema(self):
+        """theta_ema <- d * theta_ema + (1 - d) * theta after an optimizer step;
+        buffers (BatchNorm running statistics...) are copied, as in Volt."""
+        if self.ema is None:
+            return
+        decay = float(self.cfg.ema_decay)
+        model = self.model.module if hasattr(self.model, "module") else self.model
+        ema_params = list(self.ema.parameters())
+        params = [p.detach().to(e.dtype) for p, e in zip(model.parameters(), ema_params)]
+        torch._foreach_lerp_(ema_params, params, 1.0 - decay)
+        for b_ema, b in zip(self.ema.buffers(), model.buffers()):
+            b_ema.copy_(b)
+
+    @property
+    def eval_model(self):
+        """Model used by the validation hooks: the EMA copy when cfg.use_ema."""
+        return self.ema if getattr(self, "ema", None) is not None else self.model
 
     def build_writer(self):
         writer = SummaryWriter(self.cfg.save_path) if comm.is_main_process() else None
@@ -676,6 +715,8 @@ class GridProbeTrainer(Trainer):
         return self.model.module if hasattr(self.model, "module") else self.model
 
     def before_train(self):
+        if getattr(self.cfg, "use_ema", False):
+            raise ValueError("use_ema is not supported by GridProbeTrainer.")
         super().before_train()
         n_probes = len(self._raw_model().probe_names)
         self.logger.info(

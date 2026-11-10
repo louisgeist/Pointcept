@@ -659,6 +659,11 @@ class CheckpointSaver(HookBase):
                 {
                     "epoch": self.trainer.epoch + 1,
                     "state_dict": self.trainer.model.state_dict(),
+                    "ema_state_dict": (
+                        self.trainer.ema.state_dict()
+                        if getattr(self.trainer, "ema", None) is not None
+                        else None
+                    ),
                     "optimizer": optimizer_state,
                     "scheduler": scheduler_state,
                     "scaler": scaler_state,
@@ -753,6 +758,7 @@ class CheckpointLoader(HookBase):
             weight[key] = value
         load_state_info = self.trainer.model.load_state_dict(weight, strict=self.strict)
         self.trainer.logger.info(f"Missing keys: {load_state_info[0]}")
+        self._load_ema(checkpoint)
         if self.trainer.cfg.resume:
             self.trainer.logger.info(
                 f"Resuming train at eval epoch: {checkpoint['epoch']}"
@@ -802,6 +808,30 @@ class CheckpointLoader(HookBase):
                 self.trainer.logger.info("=> Restored GradNormLite EMA from checkpoint")
 
 
+    def _load_ema(self, checkpoint):
+        """cfg.use_ema: on resume, restore the EMA weights of the checkpoint; for an
+        initial weight (or a checkpoint without EMA) start the EMA from the loaded model."""
+        ema = getattr(self.trainer, "ema", None)
+        if ema is None:
+            return
+        ema_state = checkpoint.get("ema_state_dict") if self.trainer.cfg.resume else None
+        if ema_state is None:
+            if self.trainer.cfg.resume:
+                self.trainer.logger.warning(
+                    "use_ema=True but the checkpoint has no ema_state_dict: "
+                    "restarting the EMA from the resumed weights."
+                )
+            model = self.trainer.model
+            model = model.module if hasattr(model, "module") else model
+            ema.load_state_dict(model.state_dict(), strict=True)
+            return
+        state = OrderedDict(
+            (k[7:] if k.startswith("module.") else k, v) for k, v in ema_state.items()
+        )
+        ema.load_state_dict(state, strict=True)
+        self.trainer.logger.info("=> Restored EMA weights from checkpoint")
+
+
 @HOOKS.register_module()
 class PreciseEvaluator(HookBase):
     """Run the configured tester on model_best.pth after training."""
@@ -824,7 +854,12 @@ class PreciseEvaluator(HookBase):
         best_path = os.path.join(self.trainer.cfg.save_path, "model", "model_best.pth")
         checkpoint = torch.load(best_path, weights_only=False)
         weight = OrderedDict()
-        for key, value in checkpoint["state_dict"].items():
+        state_dict = checkpoint["state_dict"]
+        if getattr(cfg, "use_ema", False):
+            # Test the EMA weights, as selected by the validation (see Trainer.eval_model).
+            state_dict = checkpoint["ema_state_dict"]
+            self.trainer.logger.info("=> Testing the EMA weights of model_best")
+        for key, value in state_dict.items():
             if not key.startswith("module."):
                 key = "module." + key  # xxx.xxx -> module.xxx.xxx
             # Now all keys contain "module." no matter DDP or not.

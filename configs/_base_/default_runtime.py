@@ -47,6 +47,14 @@ iter_per_epoch = (
 eval_every = None  # validate every N epochs (default 5 when total_iters is set)
 
 clip_grad = None  # disable with None, enable with a float
+# Exponential moving average of the model weights (as in Volt): theta_ema <- d * theta_ema
+# + (1 - d) * theta after every optimizer step; validation, checkpoint selection and the
+# final test use the EMA weights. Saved as "ema_state_dict" in the checkpoints.
+use_ema = False
+ema_decay = 0.999
+# Mixed precision (amp_dtype) also in the validation hooks and the MultiTaskTester forward,
+# as Volt does; off by default (the other backbones validate and test in fp32).
+enable_amp_eval = False
 # If True, skip the optimizer and scheduler step when the global grad L2 norm is
 # non-finite (NaN/Inf). The decision is all-reduced so DDP ranks stay in sync.
 skip_nan_grad = False
