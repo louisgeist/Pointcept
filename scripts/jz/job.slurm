@@ -1,5 +1,6 @@
 #!/bin/bash
-# Generic single-node Jean Zay job of the coord-fix retrain campaign (branch retrain-coordfix).
+# Generic single-node Jean Zay job (coord-fix retrain campaign, Volt...). It runs the code of the
+# repo it was submitted from (SLURM_SUBMIT_DIR, kept across requeues).
 # Submitted by scripts/jz/submit.sh, which sets the #SBATCH resources on the command line and
 # passes: MODE RUN_DIR CONFIG WEIGHT NGPU [extra train.py --options ...].
 #   MODE=train       tools/train.py; resumes from RUN_DIR/model/model_last.pth when present
@@ -19,7 +20,11 @@ MODE=$1; RUN_DIR=$2; CONFIG=$3; WEIGHT=$4; NGPU=$5; shift 5
 EXTRA=("$@")
 case $MODE in train|test|sweep|pureforest) ;; *) echo "unknown mode $MODE"; exit 2 ;; esac
 
-REPO=/lustre/fswork/projects/rech/unv/usi32yh/Pointcept-malibu3d
+REPO=$SLURM_SUBMIT_DIR
+if [ ! -f "$REPO/tools/train.py" ]; then
+    echo "SLURM_SUBMIT_DIR=$REPO is not a Pointcept repo root (submit with scripts/jz/submit.sh)"
+    exit 2
+fi
 if [ -f "$RUN_DIR/DONE" ]; then
     echo "[$(date)] $RUN_DIR/DONE exists: nothing to do."
     exit 0
