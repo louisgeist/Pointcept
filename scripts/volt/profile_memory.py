@@ -25,14 +25,18 @@ GiB = 1024**3
 def watched_modules(model):
     out = OrderedDict()
     if getattr(model, "teacher", None) is not None:
-        out["teacher"] = model.teacher
+        # MultiTaskTeacher is a plain object (kept out of the state_dict).
+        out["teacher"] = [model.teacher.model]
     bb = model.backbone
-    for name in ("tokenizer", "rope", "blocks", "decoder"):
+    for name in ("tokenizer", "rope", "decoder"):
         if hasattr(bb, name):
-            out[f"backbone.{name}"] = getattr(bb, name)
+            out[f"backbone.{name}"] = [getattr(bb, name)]
+    if hasattr(bb, "blocks"):
+        # Blocks are called one by one, not through the Sequential.
+        out["backbone.blocks (sum)"] = list(bb.blocks)
     for group in ("seg_heads", "reg_heads", "pixel_seg_heads", "distill_heads"):
         for k, m in getattr(model, group, {}).items():
-            out[f"{group}.{k}"] = m
+            out[f"{group}.{k}"] = [m]
     return out
 
 
@@ -40,9 +44,10 @@ class Recorder:
     def __init__(self, modules):
         self.rows = OrderedDict((k, dict(calls=0, kept=0, peak=0)) for k in modules)
         self._before = {}
-        for name, m in modules.items():
-            m.register_forward_pre_hook(self._pre(name))
-            m.register_forward_hook(self._post(name))
+        for name, ms in modules.items():
+            for m in ms:
+                m.register_forward_pre_hook(self._pre(name))
+                m.register_forward_hook(self._post(name))
 
     def _pre(self, name):
         def f(*_):
@@ -119,9 +124,12 @@ def main():
               f"kept after forward {(after_fwd - base) / GiB:.2f} GiB, backward peak "
               f"{bwd_peak / GiB:.2f} GiB, reserved {torch.cuda.max_memory_reserved() / GiB:.2f} GiB")
         print(f"{'module':40s} {'calls':>5s} {'kept GiB':>9s} {'peak GiB':>9s}")
+        listed = 0
         for name, r in rec.rows.items():
             if r["calls"]:
+                listed += r["kept"]
                 print(f"{name:40s} {r['calls']:5d} {r['kept'] / GiB:9.2f} {r['peak'] / GiB:9.2f}")
+        print(f"{'(outside watched modules)':40s} {'':5s} {(after_fwd - base - listed) / GiB:9.2f}")
         if n_tok:
             print(f"tokens {n_tok[-1]} ({n_tok[-1] / bs:.0f}/crop)")
 
