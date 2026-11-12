@@ -294,7 +294,23 @@ class MultiTaskTeacher:
         self.model.requires_grad_(False)
         self.model.eval()
         self.model.cuda()
-        logger.info(f"Distillation teacher: {config} <- {weights}")
+        # spconv's auto-tuner fails on the teacher ("can't find suitable algorithm",
+        # seen on JZ A100 and hecate); the native algorithm avoids it (forward only).
+        n_native = 0
+        try:
+            import spconv.pytorch as spconv
+            from spconv.pytorch.core import ConvAlgo
+
+            for m in self.model.modules():
+                if isinstance(m, spconv.conv.SparseConvolution):
+                    m.algo = ConvAlgo.Native
+                    n_native += 1
+        except ImportError:
+            pass
+        logger.info(
+            f"Distillation teacher: {config} <- {weights} "
+            f"({n_native} spconv layers on ConvAlgo.Native)"
+        )
 
     @torch.no_grad()
     def predict_labels(self, input_dict, tasks):

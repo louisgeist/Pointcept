@@ -88,7 +88,8 @@ class TestGridPool(unittest.TestCase):
         from pointcept.models.volt.volt_base import Volt
 
         torch.manual_seed(0)
-        kw = dict(in_channels=7, embed_dim=96, depth=2, num_heads=2, drop_path=0.0,
+        # head dim must be 64: Volt's axial RoPE table is 12/12/8 complex frequencies.
+        kw = dict(in_channels=7, embed_dim=128, depth=2, num_heads=2, drop_path=0.0,
                   stride=5, kernel_size=5, up_mlp_dim=32, qk_norm=True)
         pooled = Volt(grid_pool=3, sparse_patches=True, **kw).cuda().eval()
         plain = copy.deepcopy(pooled)
