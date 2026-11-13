@@ -1,6 +1,7 @@
 #!/bin/bash
 # Sonata pretraining of the coord-fix retrain campaign: 6 nodes x 4 H100 = 24 GPUs (as job 862680).
 #   sbatch scripts/jz/sonata_pretrain.slurm runs/<name> [extra train.py --options ...]
+# Another config (ablations): sbatch --export=ALL,CONFIG=<config> --job-name=rc-sonata-<x> ...
 # Resumes from RUN_DIR/model/model_last.pth when present. Requeues itself 120 s before the
 # walltime (same job id), as on flair3d: batch trap on SIGUSR1 + squeue watchdog + in-process
 # handler of tools/train.py (POINTCEPT_SLURM_REQUEUE=1); a crash is retried in place
@@ -23,7 +24,7 @@
 set -o pipefail
 RUN_DIR=$1; shift
 REPO=/lustre/fswork/projects/rech/unv/usi32yh/Pointcept-malibu3d
-CONFIG=configs/malibu3d/pretrain-sonata-v1m2-malibu3d.py
+CONFIG=${CONFIG:-configs/malibu3d/pretrain-sonata-v1m2-malibu3d.py}
 if [ -f "$RUN_DIR/DONE" ]; then echo "DONE exists"; exit 0; fi
 mkdir -p "$RUN_DIR/jobs"
 cp "$0" "$RUN_DIR/jobs/${SLURM_JOB_ID}.slurm"
