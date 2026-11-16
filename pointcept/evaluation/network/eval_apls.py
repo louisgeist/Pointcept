@@ -436,6 +436,13 @@ def run(
                 gt_path = nlu.expected_exported_graph_path(
                     network_graphs_root, roi_dir, network_type
                 )
+                if not gt_path.is_file():
+                    # tiles.csv says this ROI has a graph: scoring against an empty one would
+                    # silently give APLS 0/NaN for every ROI.
+                    raise FileNotFoundError(
+                        f"{roi_label}: ground-truth {network_type} graph {gt_path} is missing "
+                        f"(pass --network_graphs_root if the graphs are not in the ROI directories)"
+                    )
                 with _timed(profiler, "load_gt", local=channel_timings):
                     loaded_gt = nlu.load_roi_exported_network_graph(gt_path)
                 gt_graph = apls.apls_graph_from_loaded_graph(loaded_gt)
