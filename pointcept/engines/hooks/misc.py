@@ -867,6 +867,8 @@ class PreciseEvaluator(HookBase):
                 key = key[7:]  # module.xxx.xxx -> xxx.xxx
             weight[key] = value
         tester.model.load_state_dict(weight, strict=True)
+        # test_metrics.json records cfg.weight; on a resumed run it is model_last.pth.
+        cfg.weight = best_path
         tester.test()
 
 
