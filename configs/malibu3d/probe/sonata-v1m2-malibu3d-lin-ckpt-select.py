@@ -1,15 +1,12 @@
 """
-Mini grid-search linear probe on a frozen Sonata encoder (PT-v3m2, enc_mode, 1232-d multi-scale
-encoder features) for MALiBU3D land-cover segmentation (`segment`): the checkpoint-selection
-protocol of the Flair3D+ Sonata pretrain 862680 (flair3d branch,
-configs/experiment/w109/1/sonata_grid_mini, README_sonata_geist.md "Mini grid-probe sweep").
+Checkpoint selection of a MALiBU3D Sonata pretrain: lr-only linear-probe sweep on a frozen
+Sonata encoder (PT-v3m2, enc_mode, 1232-d) for MALiBU3D land cover (`segment`), val only.
 
-11 CE probes on one shared backbone forward: input_norm {linf, none} x lr {1e-3, 2e-3} x
-wd {0, 1e-3}, plus input_norm l2 at lr {1e-2, 2e-2, 5e-2} (wd 0). 10000 iters
-(iter_per_epoch 1000), val on the stratified 2k subset capped at max_sample=100 every 2
-epochs, no test (GridProbeWinnerSelector(skip_test=True)).
-Backbone, MALiBU3D data pipeline, coord_feat_scale and learned mask values as
-sonata-v1m2-malibu3d-lin-grid-enc.py.
+Same 12 probes (CE + Lovasz, AdamW wd 0, OneCycleLR, lr 1e-4 ... 5e-1), backbone and data
+pipeline as sonata-v1m2-malibu3d-lin-grid-enc.py; differences: 10000 iters (1000 per epoch,
+val every 2 epochs), val on the stratified 2k subset capped at max_sample=100, no test pass
+(GridProbeWinnerSelector(skip_test=True)) and no seed phase. One run per checkpoint:
+  scripts/jz/submit.sh NAME train <this config> --weight runs/sonata-pretrain/model/epoch_N.pth
 """
 
 _base_ = ["../../_base_/default_runtime.py"]
@@ -42,7 +39,7 @@ feat_keys = ["coord", "color", "strength"]
 
 wandb_project = "malibu3d_sonata"
 wandb_run_name = (
-    f"Sonata-v1m2 grid-mini MALiBU3D segment | 11 probes | bs={batch_size} | "
+    f"Sonata-v1m2 ckpt-select lr sweep MALiBU3D segment | bs={batch_size} | "
     f"iters={total_iters}"
 )
 
@@ -71,19 +68,37 @@ names = [
 ]
 
 # -----------------------------------------------------------------------------
-# Grid-search probes: 8 CE (input_norm linf/none x lr 1e-3/2e-3 x wd 0/1e-3) + 3 CE l2 high-lr,
-# as configs/experiment/w109/1/sonata_grid_mini (flair3d branch).
+# Grid-search probes: ce_lovasz, AdamW/wd0/OneCycleLR warmup 5%, lr sweep only (12 probes),
+# as the Sonata probes of the downstream benchmarks (e.g. configs/dales/sonata-v1m2-dales-lin-grid-enc.py).
 # -----------------------------------------------------------------------------
-_ce = [dict(type="CrossEntropyLoss", loss_weight=1.0, ignore_index=ignore_index)]
+_criteria = [
+    dict(type="CrossEntropyLoss", loss_weight=1.0, ignore_index=ignore_index),
+    dict(
+        type="LovaszLoss", mode="multiclass", loss_weight=1.0, ignore_index=ignore_index
+    ),
+]
+_lrs = {
+    "1e-4": 1e-4,
+    "2e-4": 2e-4,
+    "5e-4": 5e-4,
+    "1e-3": 1e-3,
+    "2e-3": 2e-3,
+    "5e-3": 5e-3,
+    "1e-2": 1e-2,
+    "2e-2": 2e-2,
+    "5e-2": 5e-2,
+    "1e-1": 1e-1,
+    "2e-1": 2e-1,
+    "5e-1": 5e-1,
+}
 
-
-def _probe(lr, wd, input_norm):
-    return dict(
-        criteria=_ce,
-        input_norm=input_norm,
+probes = {
+    f"ce_lovasz_lr{lr_name}": dict(
+        criteria=_criteria,
+        input_norm=None,
         feat_norm=None,
         dropout=0.0,
-        optimizer=dict(type="AdamW", lr=lr, weight_decay=wd),
+        optimizer=dict(type="AdamW", lr=lr, weight_decay=0.0),
         scheduler=dict(
             type="OneCycleLR",
             max_lr=lr,
@@ -94,21 +109,9 @@ def _probe(lr, wd, input_norm):
         ),
         grad_clip=3.0,
     )
-
-
-probes = {
-    f"ce_lr{lr_name}_wd{wd_name}_{norm_name}": _probe(lr, wd, norm)
-    for lr_name, lr in {"1e-3": 1e-3, "2e-3": 2e-3}.items()
-    for wd_name, wd in {"0": 0.0, "1e-3": 1e-3}.items()
-    for norm_name, norm in {"linf": "linf", "none": None}.items()
+    for lr_name, lr in _lrs.items()
 }
-probes.update(
-    {
-        f"ce_lr{lr_name}_wd0_l2": _probe(lr, 0.0, "l2")
-        for lr_name, lr in {"1e-2": 1e-2, "2e-2": 2e-2, "5e-2": 5e-2}.items()
-    }
-)
-del _ce, _probe
+del _criteria, _lrs
 
 # -----------------------------------------------------------------------------
 # Model
