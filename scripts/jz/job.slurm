@@ -4,7 +4,8 @@
 # passes: MODE RUN_DIR CONFIG WEIGHT NGPU [extra train.py --options ...].
 #   MODE=train       tools/train.py; resumes from RUN_DIR/model/model_last.pth when present
 #   MODE=test        tools/test.py on WEIGHT (RUN_DIR = output dir)
-#   MODE=sweep       tools/sweep_then_seeds.py (grid -> 10 seeds); resumes on its own
+#   MODE=sweep       tools/sweep_then_seeds.py (grid -> 10 seeds); resumes on its own; on an OpenGF
+#                    config, then re-tests the seeds on regions T3/T2/T1 (RUN_DIR/regions/)
 #   MODE=pureforest  tools/probe_pureforest.py (pooled features + L-BFGS)
 # Walltime: the job requeues itself 120 s before the end (same job id, the next segment resumes),
 # as on flair3d: batch trap on SIGUSR1 + squeue watchdog + in-process handler of tools/train.py
@@ -66,7 +67,15 @@ run_mode() {
         ARGS=(--grid-config "$CONFIG" --save-root "$RUN_DIR" --num-gpus "$NGPU")
         [ "$WEIGHT" != "-" ] && ARGS+=(--weight "$WEIGHT")
         [ ${#EXTRA[@]} -gt 0 ] && ARGS+=(--extra-options "${EXTRA[*]}")
-        python tools/sweep_then_seeds.py "${ARGS[@]}"
+        python tools/sweep_then_seeds.py "${ARGS[@]}" || return $?
+        # OpenGF: also test the seed ensemble on each test region (T2 is float32-quantized in the
+        # published data, T1/T3 are not). Regions already written are skipped after a requeue.
+        case $CONFIG in
+        */opengf/*)
+            python scripts/jz/retest_opengf_regions.py "$RUN_DIR/seeds/config.py" \
+                "$RUN_DIR/seeds/model" "$RUN_DIR/regions" T3_ T2_ T1_
+            ;;
+        esac
         ;;
     pureforest)
         python tools/probe_pureforest.py --config-file "$CONFIG" --work-dir "$RUN_DIR" --options weight=$WEIGHT "${EXTRA[@]}"
