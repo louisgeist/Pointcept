@@ -19,6 +19,10 @@ On-disk layout (after extracting the Hugging Face release):
 tile-local frame: ``GridSample`` voxels them in meters, and
 :class:`MALiBU3DPrepareFeat` copies them into ``coord_feat`` scaled by 0.01
 for the backbone features.
+
+The file also registers :class:`MALiBU3DCrossEntropyLoss` and
+:class:`MALiBU3DLovaszLoss`, the upstream losses with a guard for batches in
+which every point is Void (about 0.4 % of the tiles are entirely Void).
 """
 
 import csv
@@ -30,6 +34,9 @@ import numpy as np
 from pointcept.datasets.builder import DATASETS
 from pointcept.datasets.defaults import DefaultDataset
 from pointcept.datasets.transform import TRANSFORMS
+from pointcept.models.losses.builder import LOSSES
+from pointcept.models.losses.lovasz import LovaszLoss
+from pointcept.models.losses.misc import CrossEntropyLoss
 from pointcept.utils.logger import get_root_logger
 
 # Trainable classes, in id order. Void is the next id (MALIBU3D_IGNORE_INDEX) and
@@ -124,6 +131,37 @@ def _as_column(strength):
     raise ValueError(
         f"strength must have shape (N,) or (N, 1), got {tuple(strength.shape)}."
     )
+
+
+# Upstream CrossEntropyLoss (mean) is NaN and upstream LovaszLoss crashes when every
+# point of a batch is ignore_index. MALiBU3D has entirely Void tiles (4 of the 2,000
+# validation tiles; validation runs one tile per batch), so the config uses these two.
+def _all_ignored(target, ignore_index):
+    return ignore_index is not None and not bool((target != ignore_index).any())
+
+
+@LOSSES.register_module()
+class MALiBU3DCrossEntropyLoss(CrossEntropyLoss):
+    """Upstream ``CrossEntropyLoss`` that returns 0 instead of NaN on an all-Void batch."""
+
+    def __init__(self, ignore_index=-1, **kwargs):
+        super().__init__(ignore_index=ignore_index, **kwargs)
+        self.ignore_index = ignore_index
+
+    def forward(self, pred, target):
+        if _all_ignored(target, self.ignore_index):
+            return pred.sum() * 0.0  # 0-dim, in the graph, zero gradient
+        return super().forward(pred, target)
+
+
+@LOSSES.register_module()
+class MALiBU3DLovaszLoss(LovaszLoss):
+    """Upstream ``LovaszLoss`` that returns 0 instead of crashing on an all-Void batch."""
+
+    def forward(self, y_pred, y_true):
+        if _all_ignored(y_true, self.ignore_index):
+            return y_pred.sum() * 0.0
+        return super().forward(y_pred, y_true)
 
 
 @DATASETS.register_module()

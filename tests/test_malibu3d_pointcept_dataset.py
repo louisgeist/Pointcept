@@ -12,6 +12,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import torch
 
 from pointcept.datasets.builder import DATASETS
 from pointcept.datasets.malibu3d import MALiBU3DDataset as MultitaskMALiBU3DDataset
@@ -182,6 +183,37 @@ def test_prepare_feat_scales_coord_and_reshapes_strength():
     np.testing.assert_allclose(out["coord_feat"], coord * np.float32(0.01))
     assert out["strength"].shape == (2, 1)
     np.testing.assert_allclose(out["strength"][:, 0], strength)
+
+
+@pytest.mark.parametrize(
+    "name", ["MALiBU3DCrossEntropyLoss", "MALiBU3DLovaszLoss"]
+)
+def test_losses_return_zero_on_all_void_batch(name):
+    loss_cls = getattr(pointcept_dataset(), name)
+    kwargs = {"mode": "multiclass"} if "Lovasz" in name else {}
+    loss = loss_cls(ignore_index=15, **kwargs)
+    pred = torch.randn(8, 15, requires_grad=True)
+
+    out = loss(pred, torch.full((8,), 15))
+    out.backward()
+    assert out.shape == ()
+    assert out.item() == 0.0
+    assert pred.grad.abs().sum().item() == 0.0
+
+    target = torch.tensor([0, 3, 15, 7, 7, 14, 15, 1])
+    parent = loss_cls.__mro__[1](ignore_index=15, **kwargs)
+    assert torch.equal(loss(pred, target), parent(pred, target))
+
+
+def test_config_losses_sum_on_all_void_batch():
+    module = pointcept_dataset()
+    criteria = [
+        module.MALiBU3DCrossEntropyLoss(ignore_index=15),
+        module.MALiBU3DLovaszLoss(mode="multiclass", ignore_index=15),
+    ]
+    pred = torch.randn(4, 15)
+    total = sum(c(pred, torch.full((4,), 15)) for c in criteria)
+    assert torch.isfinite(total) and total.item() == 0.0
 
 
 def test_registry_keeps_the_multitask_dataset():

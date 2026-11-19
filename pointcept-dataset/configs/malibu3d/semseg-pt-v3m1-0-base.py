@@ -79,10 +79,13 @@ model = dict(
         pdnorm_affine=True,
         pdnorm_conditions=("ScanNet", "S3DIS", "Structured3D"),
     ),
+    # MALiBU3D* losses: upstream ones fail on all-Void tiles (see datasets/malibu3d.py).
     criteria=[
-        dict(type="CrossEntropyLoss", loss_weight=1.0, ignore_index=ignore_index),
         dict(
-            type="LovaszLoss",
+            type="MALiBU3DCrossEntropyLoss", loss_weight=1.0, ignore_index=ignore_index
+        ),
+        dict(
+            type="MALiBU3DLovaszLoss",
             mode="multiclass",
             loss_weight=1.0,
             ignore_index=ignore_index,

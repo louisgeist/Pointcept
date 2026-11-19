@@ -33,6 +33,8 @@ data/malibu3d/tiles.csv
 
 `coord.npy` is not shifted by `coord_translation.npy`. Class ids `0..14` are the names in `MALIBU3D_CLASS_NAMES`; `15` is Void and the loss `ignore_index`. Nothing is remapped to `-1`.
 
+Some tiles are entirely Void: 520 in train, 56 in val (4 of them in the 2,000-tile subset) and 255 in test, for example glaciers (COSIA snow) or tidal flats where LiDAR HD and COSIA disagree. On such a batch, upstream `LovaszLoss` crashes (`output with shape [] doesn't match the broadcast shape [0, 15]`) and upstream `CrossEntropyLoss` returns NaN. Validation runs one tile per batch, so the first validation hits it. `malibu3d.py` therefore registers `MALiBU3DCrossEntropyLoss` and `MALiBU3DLovaszLoss`. They give the same values as the upstream losses and return 0 on an all-Void batch. The config uses them; keep them in your own configs.
+
 The training repo's `pointcept/datasets/preprocessing/malibu3d/unzip_malibu3d.py` builds this layout from the Hugging Face zips. Land cover does not need `rasterize_network.py`.
 
 `MALiBU3DDataset` reads `tiles.csv` (or the `csv_manifest` you pass). Train drops tiles with `n_points < 1000`. Val and test stay complete. A directory listed in the CSV and missing on disk is an error: point `csv_manifest` at a CSV of only the tiles you extracted (`tiles_toy.csv` for the toy region).
